@@ -36,8 +36,12 @@ import { Button } from '@/components/ui/Button'
 import { ThemeToggle } from './ThemeToggle'
 import { StatusBar } from './StatusBar'
 import { CommandPalette } from './CommandPalette'
+import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
+import { dispatchTaskShortcut, isKeyboardInput, onShortcutFeedback, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
+import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
+import { composerCanSubmit, MASTERMIND_COMPOSER_KEY, setActiveComposer } from '@/lib/voice-dictation-target'
 
 const isWindows = navigator.platform.toLowerCase().startsWith('win') || navigator.userAgent.includes('Windows')
 const isMac = navigator.platform.toLowerCase().includes('mac')
@@ -83,6 +87,8 @@ export function AppLayout() {
 
   // ── Command palette ──
   const [cmdOpen, setCmdOpen] = useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const chordRef = useRef<{ key: 'g' | 'o' | 'y' | 'v'; timer: number } | null>(null)
 
   // ── Update indicator state ──
   const [updateAvailableVersion, setUpdateAvailableVersion] = useState<string | null>(null)
@@ -145,6 +151,8 @@ export function AppLayout() {
     setToast({ message, isError })
     setTimeout(() => setToast(null), isError ? 5000 : 3000)
   }, [])
+
+  useEffect(() => onShortcutFeedback(({ message, isError }) => showToast(message, isError)), [showToast])
 
   // Source-backed tasks ask the user whether to close the task in the source
   // system or only in 20x. `completionDialog` renders that question.
@@ -232,6 +240,126 @@ export function AppLayout() {
   const handleCompleteDashboardPreviewTask = useCallback(async () => {
     if (dashboardPreviewTaskId) await completeTask(dashboardPreviewTaskId)
   }, [completeTask, dashboardPreviewTaskId])
+
+  const activeTaskId = dashboardPreviewTaskId || selectedTaskId || null
+  const runTaskShortcut = useCallback((action: TaskShortcutAction) => {
+    if (!activeTaskId) {
+      showToast('Select a task first', true)
+      return
+    }
+    dispatchTaskShortcut({ action, taskId: activeTaskId })
+  }, [activeTaskId, showToast])
+
+  const navigateVisibleTask = useCallback((direction: 1 | -1) => {
+    const renderedIds = Array.from(document.querySelectorAll<HTMLElement>('[data-keyboard-task-id]'))
+      .filter((element) => element.offsetParent !== null)
+      .map((element) => element.dataset.keyboardTaskId)
+      .filter((id): id is string => !!id)
+    const fallbackIds = tasks
+      .filter((task) => !task.parent_task_id && task.status !== TaskStatus.Completed && !isSnoozed(task.snoozed_until))
+      .map((task) => task.id)
+    const ids = renderedIds.length > 0 ? renderedIds : fallbackIds
+    if (ids.length === 0) return
+    const currentIndex = selectedTaskId ? ids.indexOf(selectedTaskId) : -1
+    const nextIndex = currentIndex < 0
+      ? direction > 0 ? 0 : ids.length - 1
+      : Math.max(0, Math.min(ids.length - 1, currentIndex + direction))
+    if (activeModal === 'settings') closeModal()
+    setSidebarView('tasks')
+    selectTask(ids[nextIndex])
+  }, [activeModal, closeModal, selectTask, selectedTaskId, setSidebarView, tasks])
+
+  const openSelectedTask = useCallback(() => {
+    if (activeTaskId) handleGoToFullView(activeTaskId)
+  }, [activeTaskId, handleGoToFullView])
+
+  const clearTaskSelection = useCallback(() => {
+    if (dashboardPreviewTaskId) closeDashboardPreview()
+    else selectTask(null)
+  }, [closeDashboardPreview, dashboardPreviewTaskId, selectTask])
+
+  const focusSearch = useCallback(() => {
+    if (sidebarView !== 'tasks' && sidebarView !== 'skills') {
+      setCmdOpen(true)
+      return
+    }
+    if (sidebarCollapsed) useUIStore.getState().setSidebarCollapsed(false)
+    window.setTimeout(() => {
+      document.querySelector<HTMLInputElement>(`[data-keyboard-shortcut-search="${sidebarView}"]`)?.focus()
+    }, 0)
+  }, [sidebarCollapsed, sidebarView])
+
+  const completeActiveTask = useCallback(() => {
+    if (dashboardPreviewTaskId) void handleCompleteDashboardPreviewTask()
+    else if (selectedTaskId) void handleCompleteSelectedTask()
+    else showToast('Select a task first', true)
+  }, [dashboardPreviewTaskId, handleCompleteDashboardPreviewTask, handleCompleteSelectedTask, selectedTaskId, showToast])
+
+  const deleteActiveTask = useCallback(() => {
+    if (dashboardPreviewTaskId) handleDeleteDashboardPreviewTask()
+    else if (selectedTaskId) handleDeleteSelectedTask()
+    else showToast('Select a task first', true)
+  }, [dashboardPreviewTaskId, handleDeleteDashboardPreviewTask, handleDeleteSelectedTask, selectedTaskId, showToast])
+
+  const toggleTaskAudio = useCallback(() => {
+    const voice = useVoiceStore.getState()
+    if (!selectVoiceReady(voice)) {
+      showToast('Voice input is not ready', true)
+      return
+    }
+    if (voice.turnId) {
+      void voice.endTurn()
+      return
+    }
+    if (!activeTaskId || !composerCanSubmit(activeTaskId)) {
+      showToast('Open a task with an active message composer first', true)
+      return
+    }
+    setActiveComposer(activeTaskId)
+    const loop = voice.conversation && composerCanSubmit(activeTaskId)
+    void voice.toggleTurn(loop ? 'conversation' : 'dictation')
+  }, [activeTaskId, showToast])
+
+  const toggleMastermindAudio = useCallback(() => {
+    const voice = useVoiceStore.getState()
+    if (!selectVoiceReady(voice)) {
+      showToast('Voice input is not ready', true)
+      return
+    }
+    if (voice.turnId) {
+      void voice.endTurn()
+      return
+    }
+    setShowOrchestrator(true)
+    setActiveComposer(MASTERMIND_COMPOSER_KEY)
+    window.setTimeout(() => {
+      const loop = useVoiceStore.getState().conversation && composerCanSubmit(MASTERMIND_COMPOSER_KEY)
+      void useVoiceStore.getState().toggleTurn(loop ? 'conversation' : 'dictation')
+    }, 0)
+  }, [setShowOrchestrator, showToast])
+
+  const commandActions = useMemo(() => ({
+    nextTask: () => navigateVisibleTask(1),
+    previousTask: () => navigateVisibleTask(-1),
+    openTask: openSelectedTask,
+    clearSelection: clearTaskSelection,
+    focusSearch,
+    completeTask: completeActiveTask,
+    snoozeTask: () => runTaskShortcut(TaskShortcutAction.SNOOZE),
+    runTask: () => runTaskShortcut(TaskShortcutAction.RUN),
+    whipTask: () => runTaskShortcut(TaskShortcutAction.WHIP),
+    deleteTask: deleteActiveTask,
+    showShortcuts: () => setShortcutsOpen(true),
+    openDetails: () => runTaskShortcut(TaskShortcutAction.OPEN_DETAILS),
+    openChanges: () => runTaskShortcut(TaskShortcutAction.OPEN_CHANGES),
+    openOutput: () => runTaskShortcut(TaskShortcutAction.OPEN_OUTPUT),
+    openArtifact: () => runTaskShortcut(TaskShortcutAction.OPEN_ARTIFACT),
+    openPullRequest: () => runTaskShortcut(TaskShortcutAction.OPEN_PR),
+    copyPullRequestUrl: () => runTaskShortcut(TaskShortcutAction.COPY_PR_URL),
+    copyPullRequestBranch: () => runTaskShortcut(TaskShortcutAction.COPY_PR_BRANCH),
+    toggleTaskAudio,
+    toggleMastermindAudio
+  }), [clearTaskSelection, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, openSelectedTask, runTaskShortcut, toggleMastermindAudio, toggleTaskAudio])
   const handleNavigateFromDashboardPreview = useCallback(
     (taskId: string) => {
       closeDashboardPreview()
@@ -302,30 +430,91 @@ export function AppLayout() {
     return () => window.removeEventListener('resize', update)
   }, [])
 
-  // ── Global keyboard shortcuts: ⌘/Ctrl+K command palette, ⌘/Ctrl+1–4 view switch ──
+  // ── Global keyboard shortcuts: command palette, navigation chords, and task actions ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
-      if (e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        setCmdOpen((v) => !v)
-        captureAnalyticsEvent('command_palette_toggled', { source: 'keyboard' })
+      const key = e.key.toLowerCase()
+      if ((e.metaKey || e.ctrlKey) && !e.altKey) {
+        if (key === 'k') {
+          e.preventDefault()
+          setCmdOpen((value) => !value)
+          captureAnalyticsEvent('command_palette_toggled', { source: 'keyboard' })
+          return
+        }
+        const number = Number(e.key)
+        if (Number.isInteger(number) && number >= 1 && number <= NAV_ITEMS.length) {
+          e.preventDefault()
+          if (activeModal === 'settings') closeModal()
+          setSidebarView(NAV_ITEMS[number - 1].key)
+          captureAnalyticsEvent('workspace_view_selected', { view: NAV_ITEMS[number - 1].key, source: 'keyboard' })
+        }
         return
       }
-      const n = Number(e.key)
-      if (Number.isInteger(n) && n >= 1 && n <= NAV_ITEMS.length) {
-        e.preventDefault()
-        if (activeModal === 'settings') closeModal()
-        setSidebarView(NAV_ITEMS[n - 1].key)
-        captureAnalyticsEvent('workspace_view_selected', {
-          view: NAV_ITEMS[n - 1].key,
-          source: 'keyboard'
-        })
+      if (e.metaKey || e.ctrlKey || e.altKey || isKeyboardInput(e.target)) return
+      if (document.querySelector('[role="dialog"]')) return
+
+      const pending = chordRef.current
+      if (pending) {
+        window.clearTimeout(pending.timer)
+        chordRef.current = null
+        const chord = `${pending.key}${key}`
+        const views: Record<string, SidebarView> = { gd: 'dashboard', gc: 'canvas', gt: 'tasks', gs: 'skills' }
+        const taskActions: Record<string, TaskShortcutAction> = {
+          od: TaskShortcutAction.OPEN_DETAILS,
+          oc: TaskShortcutAction.OPEN_CHANGES,
+          oo: TaskShortcutAction.OPEN_OUTPUT,
+          oa: TaskShortcutAction.OPEN_ARTIFACT,
+          op: TaskShortcutAction.OPEN_PR,
+          yp: TaskShortcutAction.COPY_PR_URL,
+          yb: TaskShortcutAction.COPY_PR_BRANCH
+        }
+        if (views[chord]) {
+          e.preventDefault()
+          if (activeModal === 'settings') closeModal()
+          setSidebarView(views[chord])
+        } else if (taskActions[chord]) {
+          e.preventDefault()
+          runTaskShortcut(taskActions[chord])
+        } else if (chord === 'vt') {
+          e.preventDefault()
+          toggleTaskAudio()
+        } else if (chord === 'vm') {
+          e.preventDefault()
+          toggleMastermindAudio()
+        }
+        return
       }
+
+      if (key === 'g' || (sidebarView !== 'canvas' && (key === 'o' || key === 'y' || key === 'v'))) {
+        e.preventDefault()
+        chordRef.current = {
+          key: key as 'g' | 'o' | 'y' | 'v',
+          timer: window.setTimeout(() => { chordRef.current = null }, 1200)
+        }
+        return
+      }
+      if (sidebarView === 'canvas') return
+      if (e.repeat && key !== 'j' && key !== 'k') return
+
+      if (key === 'j') { e.preventDefault(); navigateVisibleTask(1) }
+      else if (key === 'k') { e.preventDefault(); navigateVisibleTask(-1) }
+      else if (e.key === 'Enter' && !(e.target as HTMLElement | null)?.closest('button, a')) { e.preventDefault(); openSelectedTask() }
+      else if (e.key === 'Escape') { e.preventDefault(); if (showOrchestrator) setShowOrchestrator(false); else clearTaskSelection() }
+      else if (key === 'c') { e.preventDefault(); openCreateModal() }
+      else if (key === 'e') { e.preventDefault(); completeActiveTask() }
+      else if (key === 'h') { e.preventDefault(); runTaskShortcut(TaskShortcutAction.SNOOZE) }
+      else if (key === 'r') { e.preventDefault(); runTaskShortcut(TaskShortcutAction.RUN) }
+      else if (key === 'w') { e.preventDefault(); runTaskShortcut(TaskShortcutAction.WHIP) }
+      else if (e.key === '#') { e.preventDefault(); deleteActiveTask() }
+      else if (e.key === '?') { e.preventDefault(); setShortcutsOpen(true) }
+      else if (e.key === '/') { e.preventDefault(); focusSearch() }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [activeModal, closeModal, setSidebarView])
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      if (chordRef.current) window.clearTimeout(chordRef.current.timer)
+    }
+  }, [activeModal, clearTaskSelection, closeModal, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, openCreateModal, openSelectedTask, runTaskShortcut, setShowOrchestrator, setSidebarView, showOrchestrator, sidebarView, toggleMastermindAudio, toggleTaskAudio])
 
   return (
     <>
@@ -680,7 +869,8 @@ export function AppLayout() {
       )}
 
       {/* Command palette (⌘K / Ctrl+K) */}
-      <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
+      <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} actions={commandActions} />
+      <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
 
       {/* Background progress toasts (setup, task progress, etc.) */}
       <ProgressToastStack />

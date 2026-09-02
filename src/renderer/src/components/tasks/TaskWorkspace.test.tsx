@@ -6,6 +6,8 @@ import { useSettingsStore } from '@/stores/settings-store'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, Agent } from '@/types'
+import { dispatchTaskShortcut, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
+import { PinnedArtifactTabId } from '@/stores/artifact-store'
 
 vi.mock('@/components/agents/AgentTranscriptPanel', () => ({
   AgentTranscriptPanel: ({ onSend }: { onSend?: (message: string) => void }) => (
@@ -132,6 +134,20 @@ describe('clampTranscriptWidth', () => {
   it('keeps both split panes visible when a persisted width exceeds the container', () => {
     expect(clampTranscriptWidth(1_200, 900)).toBe(576)
     expect(clampTranscriptWidth(100, 900)).toBe(320)
+  })
+})
+
+describe('TaskWorkspace keyboard actions', () => {
+  it('opens the snooze dialog for the selected task', () => {
+    renderWorkspace(makeRendererTask())
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.SNOOZE, taskId: 'task-1' }))
+    expect(screen.getByText('Snooze Task')).toBeInTheDocument()
+  })
+
+  it('opens the requested task panel', () => {
+    renderWorkspace(makeRendererTask())
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.OPEN_DETAILS, taskId: 'task-1' }))
+    expect(useArtifactStore.getState().getUI('task-1').activeTabId).toBe(PinnedArtifactTabId.DETAILS)
   })
 })
 

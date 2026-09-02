@@ -6,6 +6,7 @@ import {
   CircleCheck,
   CircleDot,
   CircleX,
+  Copy,
   ExternalLink,
   Files,
   GitCommitHorizontal,
@@ -53,7 +54,23 @@ export function PrArtifactView({ artifact, refreshTrigger = 0 }: { artifact: Art
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [copied, setCopied] = useState<'url' | 'branch' | null>(null)
   const settledUrlRef = useRef<string | null>(null)
+  const copyTimerRef = useRef<number | null>(null)
+
+  useEffect(() => () => {
+    if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current)
+  }, [])
+
+  const copy = (kind: 'url' | 'branch', value: string) => {
+    void navigator.clipboard.writeText(value)
+      .then(() => {
+        setCopied(kind)
+        if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current)
+        copyTimerRef.current = window.setTimeout(() => setCopied(null), 2000)
+      })
+      .catch(() => setCopied(null))
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -146,7 +163,17 @@ export function PrArtifactView({ artifact, refreshTrigger = 0 }: { artifact: Art
                 </span>
               </div>
             </div>
-            <Button type="button" size="sm" variant="outline" className="shrink-0" onClick={() => window.electronAPI.shell.openExternal(details.url)}><ExternalLink className="h-3.5 w-3.5" />Open</Button>
+            <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+              <Button type="button" size="sm" variant="outline" onClick={() => copy('url', details.url)}>
+                {copied === 'url' ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                {copied === 'url' ? 'Copied URL' : 'Copy URL'}
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => copy('branch', details.headRefName)}>
+                {copied === 'branch' ? <Check className="h-3.5 w-3.5" /> : <GitCommitHorizontal className="h-3.5 w-3.5" />}
+                {copied === 'branch' ? 'Copied branch' : 'Copy branch'}
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => window.electronAPI.shell.openExternal(details.url)}><ExternalLink className="h-3.5 w-3.5" />Open</Button>
+            </div>
           </div>
           {details.body && <p className="mt-4 line-clamp-4 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{details.body}</p>}
         </div>

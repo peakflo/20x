@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   ArtifactType,
   PullRequestCheckState,
@@ -46,6 +46,10 @@ const details: PullRequestDetails = {
 }
 
 beforeEach(() => {
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: vi.fn().mockResolvedValue(undefined) }
+  })
   Object.defineProperty(window, 'electronAPI', {
     configurable: true,
     value: {
@@ -89,5 +93,16 @@ describe('PrArtifactView', () => {
 
     act(() => resolveRefresh({ ...details, title: 'Updated task artifacts', commentsCount: 4 }))
     expect(await screen.findByText('Updated task artifacts')).toBeInTheDocument()
+  })
+
+  it('copies the PR URL and source branch from the PR view', async () => {
+    render(<PrArtifactView artifact={artifact} />)
+    await screen.findByText('Task artifacts')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy URL' }))
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(details.url))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy branch' }))
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith(details.headRefName))
   })
 })

@@ -36,6 +36,7 @@ import { ArtifactType } from '@shared/artifacts'
 import { ArtifactsPanel } from '@/components/artifacts/ArtifactsPanel'
 import { ArtifactRail } from '@/components/artifacts/ArtifactRail'
 import type { Artifact, ArtifactUIState } from '@shared/artifacts'
+import { dispatchShortcutFeedback, getNextWhipMessage, onTaskShortcut, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 const DEFAULT_ARTIFACT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
@@ -889,6 +890,87 @@ Update existing skills that were helpful or create new ones for patterns worth r
       }, false)
     }
   }, [task?.id, upsertArtifact])
+
+  const newestPullRequest = useCallback(() => {
+    if (!task) return undefined
+    const active = artifacts.find((artifact) => artifact.id === artifactUI.activeTabId && artifact.type === ArtifactType.PR)
+    if (active) return active
+    return artifacts
+      .filter((artifact) => artifact.type === ArtifactType.PR)
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+  }, [artifactUI.activeTabId, artifacts, task])
+
+  const handleRunShortcut = useCallback(() => {
+    if (!task) return
+    const assignedAgent = task.agent_id ? agents.find((agent) => agent.id === task.agent_id) : null
+    const triageAgent = !task.agent_id ? (agents.find((agent) => agent.is_default) || agents[0] || null) : null
+    const idle = session.status === SessionStatus.IDLE
+    if (task.agent_id && isAgentConfigured(assignedAgent) && !task.session_id && !session.sessionId && idle && task.status !== TaskStatus.Completed) {
+      void handleStartSession()
+    } else if (task.agent_id && task.session_id && !session.sessionId && idle && session.messages.length === 0) {
+      void handleResumeSession()
+    } else if (task.agent_id && task.session_id && !session.sessionId && idle && session.messages.length > 0) {
+      void handleStartFreshSession()
+    } else if (!task.agent_id && triageAgent && isAgentConfigured(triageAgent) && idle && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging) {
+      void handleTriage()
+    }
+  }, [agents, handleResumeSession, handleStartFreshSession, handleStartSession, handleTriage, session.messages.length, session.sessionId, session.status, task])
+
+  useEffect(() => onTaskShortcut(({ action, taskId }) => {
+    if (!task || task.id !== taskId) return
+    const workspace = workspaceBodyRef.current
+    if (workspace && window.getComputedStyle(workspace).visibility === 'hidden') return
+    if (action === TaskShortcutAction.RUN) {
+      handleRunShortcut()
+      return
+    }
+    if (action === TaskShortcutAction.SNOOZE) {
+      setShowSnooze(true)
+      return
+    }
+    if (action === TaskShortcutAction.WHIP) {
+      void handleSend(getNextWhipMessage())
+      return
+    }
+    if (action === TaskShortcutAction.OPEN_DETAILS) {
+      selectArtifactTab(task.id, PinnedArtifactTabId.DETAILS, true)
+      return
+    }
+    if (action === TaskShortcutAction.OPEN_CHANGES) {
+      selectArtifactTab(task.id, PinnedArtifactTabId.CHANGES, true)
+      return
+    }
+    if (action === TaskShortcutAction.OPEN_OUTPUT) {
+      if (task.output_fields.length > 0) selectArtifactTab(task.id, PinnedArtifactTabId.OUTPUT, true)
+      else dispatchShortcutFeedback('This task has no output fields', true)
+      return
+    }
+    if (action === TaskShortcutAction.OPEN_ARTIFACT) {
+      const artifact = artifacts
+        .filter((candidate) => candidate.type !== ArtifactType.PR)
+        .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+      if (artifact) selectArtifactTab(task.id, artifact.id, true)
+      else setRailExpanded(task.id, true)
+      return
+    }
+    const pullRequest = newestPullRequest()
+    if (!pullRequest) {
+      dispatchShortcutFeedback('This task has no pull request', true)
+      return
+    }
+    if (action === TaskShortcutAction.OPEN_PR) {
+      selectArtifactTab(task.id, pullRequest.id, true)
+    } else if (action === TaskShortcutAction.COPY_PR_URL && pullRequest.url) {
+      void navigator.clipboard.writeText(pullRequest.url)
+        .then(() => dispatchShortcutFeedback('Pull-request URL copied'))
+        .catch(() => dispatchShortcutFeedback('Could not copy the pull-request URL', true))
+    } else if (action === TaskShortcutAction.COPY_PR_BRANCH && pullRequest.url) {
+      void window.electronAPI.github.fetchPullRequestDetails(pullRequest.url)
+        .then((details) => navigator.clipboard.writeText(details.headRefName))
+        .then(() => dispatchShortcutFeedback('Pull-request branch copied'))
+        .catch(() => dispatchShortcutFeedback('Could not copy the pull-request branch', true))
+    }
+  }), [artifacts, handleRunShortcut, handleSend, newestPullRequest, selectArtifactTab, setRailExpanded, task])
 
   if (!task) {
     return (
