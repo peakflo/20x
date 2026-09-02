@@ -321,23 +321,33 @@ export class WorkfloApiClient {
 
   /**
    * Batch sync skills — push multiple skills in a single API call.
-   * The server upserts by name and returns ALL tenant skills after sync.
+   * The server returns ALL active tenant skills after the sync.
    * Max 200 skills per request; caller must chunk if more.
+   *
+   * `id` is the server skill id we already hold. Sending it makes the server
+   * resolve the skill by identity rather than by name, so a rename stays a
+   * rename instead of creating a second skill.
+   *
+   * `updatedAt` is our last local content-change time. The server refuses to
+   * overwrite a stored skill that is newer than this, and reports those in
+   * `skipped`. Older servers ignore both fields, so this stays compatible.
    */
   async batchSyncSkills(skills: Array<{
+    id?: string
     name: string
     description: string
     content: string
     confidence?: number
     uses?: number
     lastUsed?: string | null
+    updatedAt?: string
     tags?: string[]
-  }>): Promise<{ created: number; updated: number; skills: WorkfloSkill[] }> {
+  }>): Promise<{ created: number; updated: number; skipped?: number; skills: WorkfloSkill[] }> {
     const result = (await this.auth.apiRequest(
       'POST',
       '/api/skills/batch-sync',
       { skills }
-    )) as { created: number; updated: number; skills: WorkfloSkill[] }
+    )) as { created: number; updated: number; skipped?: number; skills: WorkfloSkill[] }
     return result
   }
 

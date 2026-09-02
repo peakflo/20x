@@ -95,12 +95,48 @@ Runs on enterprise connect and before every task sync. Fetches org nodes from wo
 ### Sync Flow
 
 ```
+Phase 1 — node resources
 GET /api/org-nodes → filter by user assignment → for each node:
   ├─ node.agents[]     → upsert local agents
-  ├─ node.skillIds[]   → GET /api/skills → upsert local skills
   ├─ node.mcpServers[] → upsert local mcp_servers (remote type)
   └─ node.taskSources[]→ auto-create local task_sources
+
+Phase 2 — skills, two-way (runs even if phase 1 fails)
+  ├─ collect local tombstones (soft-deleted skills that hold a server id)
+  ├─ POST /api/skills/batch-sync   → push local skills, receive all active
+  │                                   tenant skills back
+  ├─ PUT /api/org-nodes/:id        → MERGE pushed ids into node.skillIds,
+  │                                   minus tombstones; skipped when unchanged
+  └─ pull the returned skills into SQLite, skipping tombstoned ids
 ```
+
+### Skills — identity and conflict rules
+
+These rules are what make the skill sync converge. Read them before changing
+anything in `batchSyncSkills` or `pullServerSkills`.
+
+- **Identity is the server id**, carried locally in `skills.enterprise_skill_id`
+  and sent as `id` in the batch-sync payload. Name is only a fallback for a
+  skill that has never synced. Matching on name alone turns a rename into a
+  second skill, which is what the `cleanup-duplicates` endpoint used to mop up.
+- **`updated_at` is the conflict token.** It is sent as `updatedAt` and the
+  server refuses to overwrite a stored skill that is newer, reporting those in
+  `skipped`. For this to work, `updateSkill` only touches `updated_at` on a real
+  content change — never on a metadata-only write such as linking the server id.
+- **A local delete is a tombstone, not a server delete.** One user removing a
+  skill from their machine must not destroy it for the whole tenant. The
+  soft-deleted row is kept, its id is dropped from the node assignment, and the
+  pull phase skips it. Hard-deleting the row instead makes the next pull
+  re-create the skill, silently undoing the delete.
+- **The org node assignment is a merge, never a replace.** `PUT /api/org-nodes/:id`
+  replaces `skillIds` wholesale, and this client only knows its own skills.
+  Sending just what it pushed would delete every skill an admin or another
+  member assigned to the shared node.
+- **A `[Workflo] `-prefixed skill is pushed back once it is linked**, so a local
+  edit to an enterprise skill reaches the server instead of diverging forever.
+  An unlinked prefixed skill is skipped — it has no identity and would duplicate.
+- **Skills under review are never overwritten.** The server skips any skill whose
+  status is not `active`, so a sync push cannot bypass the approval pipeline.
 
 ### Resource Naming
 
@@ -116,7 +152,8 @@ Enterprise-synced resources use the `wf_` prefix to avoid conflicts with user-cr
 ```typescript
 interface EnterpriseSyncResult {
   agents: { created: number; updated: number }
-  skills: { created: number; updated: number }
+  // `pushed` counts skills the server created or updated from this client.
+  skills: { created: number; updated: number; pushed: number }
   mcpServers: { created: number; updated: number }
   taskSources: { created: number; updated: number }
   errors: string[]
@@ -324,8 +361,9 @@ Unique index on `(source_id, external_id)` prevents duplicates.
 
 2. User clicks "Sync" (or auto-sync fires)
    ├─ EnterpriseSyncManager.syncAll()
-   │   ├─ GET /api/org-nodes → upsert agents, skills, MCP servers, task sources
-   │   └─ GET /api/skills → upsert skills
+   │   ├─ GET /api/org-nodes → upsert agents, MCP servers, task sources
+   │   └─ POST /api/skills/batch-sync → push local skills, pull tenant skills
+   │       (falls back to GET /api/skills when there is nothing to push)
    └─ SyncManager.importTasks(sourceId)
        └─ PeakfloPlugin.importTasksEnterprise()
            ├─ GET /api/tasks?myTasks=true (paginated)

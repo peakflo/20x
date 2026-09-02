@@ -124,12 +124,14 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       // Should use batchSyncSkills instead of createSkill/updateSkill
       expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(1)
       expect(mockApiClient.batchSyncSkills).toHaveBeenCalledWith([{
+        id: undefined,
         name: 'Test Skill',
         description: 'A test skill',
         content: '# Test',
         confidence: 0.8,
         uses: 5,
         lastUsed: '2026-03-10T00:00:00Z',
+        updatedAt: '2026-03-10T00:00:00Z',
         tags: ['test']
       }])
 
@@ -334,6 +336,85 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
   })
 
   // ── Pull server skills ────────────────────────────────────────────────
+
+  describe('local deletes', () => {
+    it('does not re-create a skill the user deleted locally', async () => {
+      // The skill is gone locally (soft-deleted) but the server still lists it.
+      mockDb.getSkills.mockReturnValue([])
+      mockDb.getDeletedEnterpriseSkills.mockReturnValue([
+        makeLocalSkill({ id: 'local-del', enterprise_skill_id: 'server-del' })
+      ])
+      mockApiClient.listSkills.mockResolvedValue([
+        makeServerSkill({ id: 'server-del', name: 'Deleted Skill' })
+      ])
+
+      const result = await syncManager.syncAll('user-1')
+
+      expect(mockDb.createSkill).not.toHaveBeenCalled()
+      expect(result.skills.created).toBe(0)
+    })
+
+    it('keeps the tombstone so the delete survives later syncs', async () => {
+      mockDb.getSkills.mockReturnValue([])
+      mockDb.getDeletedEnterpriseSkills.mockReturnValue([
+        makeLocalSkill({ id: 'local-del', enterprise_skill_id: 'server-del' })
+      ])
+      mockApiClient.listSkills.mockResolvedValue([
+        makeServerSkill({ id: 'server-del', name: 'Deleted Skill' })
+      ])
+
+      await syncManager.syncAll('user-1')
+
+      // Hard-deleting the tombstone is what previously let the skill come back.
+      expect(mockDb.hardDeleteSkill).not.toHaveBeenCalled()
+    })
+
+    it('never deletes the skill from the server on a local delete', async () => {
+      mockDb.getSkills.mockReturnValue([])
+      mockDb.getDeletedEnterpriseSkills.mockReturnValue([
+        makeLocalSkill({ id: 'local-del', enterprise_skill_id: 'server-del' })
+      ])
+      mockApiClient.listSkills.mockResolvedValue([])
+
+      await syncManager.syncAll('user-1')
+
+      expect(mockApiClient.deleteSkill).not.toHaveBeenCalled()
+    })
+
+    it('removes a locally-deleted skill from the node assignment', async () => {
+      mockDb.getSkills.mockReturnValue([])
+      mockDb.getDeletedEnterpriseSkills.mockReturnValue([
+        makeLocalSkill({ id: 'local-del', enterprise_skill_id: 'server-del' })
+      ])
+      mockApiClient.listOrgNodes.mockResolvedValue([
+        makeOrgNode({ skillIds: ['server-del', 'admin-skill-1'] })
+      ])
+      mockApiClient.listSkills.mockResolvedValue([])
+
+      await syncManager.syncAll('user-1')
+
+      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith('node-1', {
+        skillIds: ['admin-skill-1']
+      })
+    })
+  })
+
+  describe('cleanup-duplicates', () => {
+    it('is not called on a normal sync', async () => {
+      mockDb.getSkills.mockReturnValue([makeLocalSkill()])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 1,
+        skills: [makeServerSkill()]
+      })
+
+      await syncManager.syncAll('user-1')
+
+      // Destructive, admin-only, and no longer needed now that identity is
+      // resolved by id rather than by name.
+      expect(mockApiClient.cleanupDuplicateSkills).not.toHaveBeenCalled()
+    })
+  })
 
   describe('pullServerSkills', () => {
     it('creates new local skill from server skill not seen before', async () => {
@@ -550,29 +631,77 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
       // Batch sync should NOT be called (Mastermind filtered out, 0 skills to push)
       expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
-      // Should assign empty skillIds
-      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith(
-        'node-1',
-        { skillIds: [] }
-      )
+      // The node must be left alone. Writing `skillIds: []` here would delete
+      // every skill other members and admins assigned to the shared node.
+      expect(mockApiClient.updateOrgNode).not.toHaveBeenCalled()
     })
 
-    it('skips [Workflo]-prefixed skills from batch sync and node assignment', async () => {
+    it('never clears a node whose skills this client does not know about', async () => {
+      // Fresh install: the user has no pushable skills of their own, but the
+      // shared org node already holds skills assigned by an admin.
+      mockDb.getSkills.mockReturnValue([])
+      mockApiClient.listOrgNodes.mockResolvedValue([
+        makeOrgNode({ skillIds: ['admin-skill-1', 'admin-skill-2'] })
+      ])
+      mockApiClient.listSkills.mockResolvedValue([])
+
+      await syncManager.syncAll('user-1')
+
+      expect(mockApiClient.updateOrgNode).not.toHaveBeenCalled()
+    })
+
+    it('merges pushed skills into the node instead of replacing them', async () => {
+      const localSkill = makeLocalSkill({ enterprise_skill_id: null })
+      mockDb.getSkills.mockReturnValue([localSkill])
+      mockApiClient.listOrgNodes.mockResolvedValue([
+        makeOrgNode({ skillIds: ['admin-skill-1'] })
+      ])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 1,
+        updated: 0,
+        skills: [makeServerSkill({ id: 'server-new', name: 'Test Skill' })]
+      })
+
+      await syncManager.syncAll('user-1')
+
+      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith('node-1', {
+        skillIds: ['admin-skill-1', 'server-new']
+      })
+    })
+
+    it('pushes a linked [Workflo] skill so local edits reach the server', async () => {
+      const pulledSkill = makeLocalSkill({
+        name: '[Workflo] other-team-skill',
+        enterprise_skill_id: 'other-team-id'
+      })
+      mockDb.getSkills.mockReturnValue([pulledSkill])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 1,
+        skills: [makeServerSkill({ id: 'other-team-id', name: 'other-team-skill' })]
+      })
+
+      await syncManager.syncAll('user-1')
+
+      const payload = mockApiClient.batchSyncSkills.mock.calls[0][0]
+      expect(payload).toHaveLength(1)
+      // Pushed under its server id, with the display prefix stripped.
+      expect(payload[0].id).toBe('other-team-id')
+      expect(payload[0].name).toBe('other-team-skill')
+    })
+
+    it('skips an UNLINKED [Workflo] skill so it cannot become a duplicate', async () => {
       const pulledSkill = makeLocalSkill({
         name: '[Workflo] Other Team Skill',
-        enterprise_skill_id: 'other-team-id'
+        enterprise_skill_id: null
       })
       mockDb.getSkills.mockReturnValue([pulledSkill])
       mockApiClient.listSkills.mockResolvedValue([])
 
       await syncManager.syncAll('user-1')
 
-      // Batch sync should NOT be called (all skills filtered out)
       expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
-      expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith(
-        'node-1',
-        { skillIds: [] }
-      )
+      expect(mockApiClient.updateOrgNode).not.toHaveBeenCalled()
     })
 
     it('handles assign skills failure gracefully with domain in error', async () => {
@@ -693,23 +822,22 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
       const result = await syncManager.syncAll('user-1')
 
-      // Batch sync should only include non-skipped skills
+      // Batch sync includes the user's own skills plus the linked [Workflo]
+      // one (so its local edits propagate). Mastermind stays excluded.
       const batchPayload = mockApiClient.batchSyncSkills.mock.calls[0][0]
-      expect(batchPayload).toHaveLength(2) // New Skill + Existing Skill
-      expect(batchPayload.map((p: { name: string }) => p.name)).toEqual(['New Skill', 'Existing Skill'])
+      const pushedNames = batchPayload.map((p: { name: string }) => p.name)
+      expect(pushedNames).toEqual(['New Skill', 'Pulled Skill', 'Existing Skill'])
+      expect(pushedNames).not.toContain('Mastermind')
 
-      // Should NOT include [Workflo] or Mastermind
-      expect(batchPayload.map((p: { name: string }) => p.name)).not.toContain('[Workflo] Pulled Skill')
-      expect(batchPayload.map((p: { name: string }) => p.name)).not.toContain('Mastermind')
+      // The prefixed skill is pushed under its server id, not its display name.
+      const pulled = batchPayload.find((p: { name: string }) => p.name === 'Pulled Skill')
+      expect(pulled.id).toBe('server-pulled')
 
       expect(result.skills.pushed).toBe(2)
 
-      // Node should only have local skills, not pulled [Workflo] ones
       expect(mockApiClient.updateOrgNode).toHaveBeenCalledWith('node-1', {
         skillIds: expect.arrayContaining(['server-new', 'server-existing'])
       })
-      const assignedIds = mockApiClient.updateOrgNode.mock.calls[0][1].skillIds
-      expect(assignedIds).not.toContain('server-pulled')
     })
 
     it('makes only 1 API call for skills instead of N per-skill calls', async () => {
