@@ -570,6 +570,7 @@ export interface PluginAction {
   requiresInput?: boolean
   inputLabel?: string
   inputPlaceholder?: string
+  inputOptions?: ConfigFieldOption[]
 }
 
 export interface ActionResult {

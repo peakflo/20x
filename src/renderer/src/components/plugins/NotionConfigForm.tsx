@@ -42,6 +42,20 @@ interface NotionFilterRow {
   values: string[]
 }
 
+/**
+ * Finds the property the plugin treats as the task status: the first Status
+ * property, else a Select property named "status". Mirrors buildPropertyMap()
+ * in src/main/plugins/notion-plugin.ts.
+ */
+function findStatusProperty(
+  properties: NotionPropertyInfo[]
+): NotionPropertyInfo | undefined {
+  return (
+    properties.find((p) => p.type === 'status') ??
+    properties.find((p) => p.type === 'select' && p.name.toLowerCase() === 'status')
+  )
+}
+
 // ── Main Form ────────────────────────────────────────────────
 
 export function NotionConfigForm({ value, onChange, sourceId }: PluginFormProps) {
@@ -119,6 +133,20 @@ export function NotionConfigForm({ value, onChange, sourceId }: PluginFormProps)
   const hasToken = !!(value.api_token as string)
   const hasDataSource = !!(value.data_source_id as string)
 
+  const statusProperty = findStatusProperty(dbProperties)
+  const nextStatuses = (value.next_statuses as string[]) ?? []
+  const completionStatus = (value.completion_status as string) ?? ''
+
+  const updateNextStatuses = (statuses: string[]) => {
+    // Drop a completion status the user just removed from the list.
+    const keepCompletion = statuses.some((s) => s === completionStatus)
+    onChange({
+      ...value,
+      next_statuses: statuses,
+      completion_status: keepCompletion ? completionStatus : ''
+    })
+  }
+
   return (
     <div className="space-y-3">
       {/* Integration Token */}
@@ -166,7 +194,15 @@ export function NotionConfigForm({ value, onChange, sourceId }: PluginFormProps)
             <SearchableSelect
               options={dataSources}
               value={(value.data_source_id as string) ?? ''}
-              onChange={(v) => onChange({ ...value, data_source_id: v, filters: [] })}
+              onChange={(v) =>
+                onChange({
+                  ...value,
+                  data_source_id: v,
+                  filters: [],
+                  next_statuses: [],
+                  completion_status: ''
+                })
+              }
               placeholder="Select data source..."
             />
           )}
@@ -225,6 +261,49 @@ export function NotionConfigForm({ value, onChange, sourceId }: PluginFormProps)
         </div>
       )}
 
+      {/* Next statuses */}
+      {hasDataSource && !loadingProps && statusProperty && (
+        <div className="space-y-1.5" data-testid="notion-next-statuses">
+          <Label>Next statuses</Label>
+          <p className="text-xs text-muted-foreground">
+            Statuses a task can move to from 20x, from the "{statusProperty.name}"
+            property.
+          </p>
+          {statusProperty.options?.length ? (
+            <MultiSelectValues
+              options={statusProperty.options}
+              selected={nextStatuses}
+              onChange={updateNextStatuses}
+            />
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              This property has no status options.
+            </p>
+          )}
+
+          {nextStatuses.length > 0 && (
+            <div className="space-y-1.5 pt-1">
+              <Label>Status on completion</Label>
+              <p className="text-xs text-muted-foreground">
+                Written to Notion when a task is completed at source.
+              </p>
+              <select
+                value={completionStatus}
+                onChange={(e) => updateField('completion_status', e.target.value)}
+                className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm cursor-pointer"
+                data-testid="notion-completion-status"
+              >
+                <option value="">Detect automatically</option>
+                {nextStatuses.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
