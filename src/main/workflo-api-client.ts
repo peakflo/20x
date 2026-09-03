@@ -129,6 +129,26 @@ export interface WorkfloSkill {
   updatedAt: string
 }
 
+/**
+ * Response from POST /api/skills/batch-sync.
+ *
+ * `conflicts` reports per-item outcomes the counts cannot express — most
+ * importantly a rename the server refused, which is otherwise invisible
+ * because the item is still written, just under its old name.
+ */
+export interface BatchSyncSkillsResult {
+  created: number
+  updated: number
+  skipped?: number
+  conflicts?: Array<{
+    id?: string
+    name: string
+    reason: 'under_review' | 'stale' | 'duplicate_in_batch' | 'rename_refused'
+  }>
+  createdIds?: string[]
+  skills: WorkfloSkill[]
+}
+
 export interface WorkfloOrgNodeDetail {
   node: WorkfloOrgNode
   mcpServers: WorkfloMcpServer[]
@@ -339,15 +359,16 @@ export class WorkfloApiClient {
     content: string
     confidence?: number
     uses?: number
+    usesDelta?: number
     lastUsed?: string | null
     updatedAt?: string
     tags?: string[]
-  }>): Promise<{ created: number; updated: number; skipped?: number; skills: WorkfloSkill[] }> {
+  }>): Promise<BatchSyncSkillsResult> {
     const result = (await this.auth.apiRequest(
       'POST',
       '/api/skills/batch-sync',
       { skills }
-    )) as { created: number; updated: number; skipped?: number; skills: WorkfloSkill[] }
+    )) as BatchSyncSkillsResult
     return result
   }
 
