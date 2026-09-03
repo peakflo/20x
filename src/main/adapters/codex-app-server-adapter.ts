@@ -363,7 +363,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
   async createSession(config: SessionConfig): Promise<string> {
     const session = await this.startAppServerProcess(config, config.taskId)
-    this.sessions.set(config.taskId, session)
+    this.trackSession(config.taskId, session)
 
     // From here on the child exists. Every exit from this method that is not a
     // thread id must take it with it: `initialize` and `thread/start` each
@@ -397,6 +397,16 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const threadId = extractThreadId(result)
     if (!threadId) {
       throw new Error('Codex app-server did not return a thread id')
+    }
+
+    // Starting a thread takes two awaits, and a SECOND create for the same task
+    // can arrive across either of them and displace this one. The child is
+    // already stopped by then, so returning its thread id would hand
+    // agent-manager a session id backed by nothing — and adopting the thread
+    // key would evict the live child that replaced us. Fail instead, and let
+    // the caller's teardown run.
+    if (session.terminated) {
+      throw new Error('Codex app-server was stopped while its thread was starting')
     }
 
     session.threadId = threadId
@@ -1683,6 +1693,13 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
   private sendRpcRequest(session: AppServerSession, method: string, params?: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => {
+      // Writing to a stopped child's stdin is silent — the guard swallows the
+      // EPIPE — so the request would sit on its 30 s timeout instead of
+      // failing. Say so at once.
+      if (session.terminated) {
+        reject(new Error(`Codex app-server is stopped, cannot send ${method}`))
+        return
+      }
       const id = session.nextRequestId++
       session.pendingRequests.set(id, { resolve, reject })
       this.writeJson(session, { jsonrpc: '2.0', id, method, params })

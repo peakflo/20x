@@ -1413,6 +1413,75 @@ describe('CodexAppServerAdapter app-server lifecycle', () => {
     expect(adapter.liveSessions.size).toBe(0)
   })
 
+  /**
+   * Two `createSession` calls for one task, the first parked mid-startup.
+   *
+   * Not hypothetical: `agent-manager` starts a session on several triggers, and
+   * `thread/start` can sit for up to 30 s, which is a wide window for a second
+   * call to arrive on the same task key.
+   */
+  async function raceTwoCreates() {
+    const first = fakeSession('task-1', 4101)
+    const second = fakeSession('task-1', 4102)
+    const { adapterInstance, adapter } = harness([first, second])
+
+    let releaseFirst = (): void => undefined
+    const parked = new Promise<void>((resolve) => {
+      releaseFirst = () => resolve()
+    })
+    adapter.initializeAppServer = vi
+      .fn()
+      .mockImplementationOnce(() => parked)
+      .mockImplementation(() => Promise.resolve(undefined))
+
+    const firstCreate = adapterInstance.createSession(config as never)
+    // Let the first call spawn its child and claim the task key before the
+    // second arrives; that ordering is the whole point of the test.
+    await new Promise((done) => setTimeout(done, 0))
+    const secondThreadId = await adapterInstance.createSession(config as never)
+    releaseFirst()
+
+    return { first, second, adapter, firstCreate, secondThreadId }
+  }
+
+  it('stops the earlier child when two creates race on the same task key', async () => {
+    // `createSession` used to write the map directly, so the first child was
+    // orphaned exactly as it was on the resume path — same leak, other door.
+    const { first, second, adapter, firstCreate, secondThreadId } = await raceTwoCreates()
+    await firstCreate.catch(() => undefined)
+
+    expect(first.process.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(first.process.kill).toHaveBeenCalledTimes(1)
+    expect(second.process.kill).not.toHaveBeenCalled()
+    // The winner keeps the thread key, and nothing is left under the task key.
+    expect(secondThreadId).toBe('thread-1')
+    expect(adapter.sessions.get('thread-1')).toBe(second)
+    expect(adapter.sessions.size).toBe(1)
+  })
+
+  it('fails the displaced create rather than handing back a dead thread id', async () => {
+    // The loser must not report success: its child is already stopped, and
+    // adopting the thread key would evict the live child that replaced it.
+    const { firstCreate, second, adapter } = await raceTwoCreates()
+
+    await expect(firstCreate).rejects.toThrow('stopped while its thread was starting')
+    expect(adapter.sessions.get('thread-1')).toBe(second)
+  })
+
+  it('refuses to send an RPC on a stopped session', async () => {
+    // Without this the write is swallowed by the stdin guard and the caller
+    // waits the full 30 s for a reply that cannot come. The REAL
+    // `sendRpcRequest` runs here — the harness stubs it everywhere else.
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = fakeSession('task-1', 4103)
+    adapter.sessions.set('task-1', session)
+
+    await adapterInstance.destroySession('task-1', config as never)
+
+    await expect(adapter.sendRpcRequest(session, 'turn/start')).rejects.toThrow('Codex app-server is stopped')
+  })
+
   it('fails in-flight RPCs instead of leaving them on their 30 s timeout', async () => {
     const live = fakeSession('task-1', 4009)
     const { adapterInstance, adapter } = harness([live])
