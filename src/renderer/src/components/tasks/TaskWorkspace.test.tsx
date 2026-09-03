@@ -149,6 +149,7 @@ describe('TaskWorkspace keyboard actions', () => {
     act(() => dispatchTaskShortcut({ action: TaskShortcutAction.OPEN_DETAILS, taskId: 'task-1' }))
     expect(useArtifactStore.getState().getUI('task-1').activeTabId).toBe(PinnedArtifactTabId.DETAILS)
   })
+
 })
 
 describe('TaskWorkspace – artifacts/details sidebar default width', () => {

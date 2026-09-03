@@ -951,6 +951,7 @@ export function AgentTranscriptPanel({
     return registerComposer(composerKey, {
       getField: () => inputRef.current,
       submit: () => sendRef.current?.(),
+      sendMessage: (message) => onSend(message),
     })
   }, [composerKey, onSend])
 

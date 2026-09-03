@@ -33,7 +33,7 @@ export interface CommandPaletteActions {
   clearSelection: () => void
   focusSearch: () => void
   completeTask: () => void
-  whipTask: () => void
+  nudgeTask: () => void
   snoozeTask: () => void
   runTask: () => void
   deleteTask: () => void
@@ -97,7 +97,7 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
       { id: 'act-complete-task', group: 'Task actions', label: 'Complete selected task', icon: CircleCheck, shortcut: 'E', run: () => { actions.completeTask(); close() } },
       { id: 'act-snooze-task', group: 'Task actions', label: 'Snooze selected task', icon: Clock3, shortcut: 'H', run: () => { actions.snoozeTask(); close() } },
       { id: 'act-run-task', group: 'Task actions', label: 'Run or resume selected task', icon: Play, shortcut: 'R', run: () => { actions.runTask(); close() } },
-      { id: 'act-whip-task', group: 'Task actions', label: 'Whip agent to continue', icon: Zap, shortcut: 'W', run: () => { actions.whipTask(); close() } },
+      { id: 'act-nudge-task', group: 'Task actions', label: 'Nudge agent to continue', icon: Zap, shortcut: 'W', run: () => { actions.nudgeTask(); close() } },
       { id: 'act-delete-task', group: 'Task actions', label: 'Delete selected task', icon: Trash2, shortcut: '#', run: () => { actions.deleteTask(); close() } },
       { id: 'act-shortcuts', group: 'Actions', label: 'Keyboard shortcuts', icon: CircleHelp, shortcut: '?', run: () => { close(); actions.showShortcuts() } },
       { id: 'panel-details', group: 'Task panels', label: 'Open Details', icon: PanelRightOpen, shortcut: 'O D', run: () => { actions.openDetails(); close() } },

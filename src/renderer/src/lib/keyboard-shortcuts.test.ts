@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   dispatchTaskShortcut,
-  getNextWhipMessage,
+  getNextNudgeMessage,
   isKeyboardInput,
   onTaskShortcut,
   TaskShortcutAction
@@ -17,9 +17,9 @@ describe('keyboard shortcuts', () => {
     expect(isKeyboardInput(document.createElement('div'))).toBe(false)
   })
 
-  it('cycles through different Whip messages', () => {
-    const first = getNextWhipMessage()
-    const second = getNextWhipMessage()
+  it('cycles through different Nudge messages', () => {
+    const first = getNextNudgeMessage()
+    const second = getNextNudgeMessage()
     expect(first).not.toBe(second)
     expect(first.length).toBeGreaterThan(10)
     expect(second.length).toBeGreaterThan(10)

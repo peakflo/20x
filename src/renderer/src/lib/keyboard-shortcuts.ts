@@ -7,8 +7,7 @@ export enum TaskShortcutAction {
   OPEN_ARTIFACT = 'open_artifact',
   OPEN_PR = 'open_pr',
   COPY_PR_URL = 'copy_pr_url',
-  COPY_PR_BRANCH = 'copy_pr_branch',
-  WHIP = 'whip'
+  COPY_PR_BRANCH = 'copy_pr_branch'
 }
 
 const TASK_SHORTCUT_EVENT = '20x:task-shortcut'
@@ -43,7 +42,7 @@ export const KEYBOARD_SHORTCUT_GROUPS = [
       { keys: ['E'], label: 'Complete selected task' },
       { keys: ['H'], label: 'Snooze selected task' },
       { keys: ['R'], label: 'Run or resume selected task' },
-      { keys: ['W'], label: 'Whip agent to continue' },
+      { keys: ['W'], label: 'Nudge agent to continue' },
       { keys: ['#'], label: 'Delete selected task' },
       { keys: ['?'], label: 'Show keyboard shortcuts' }
     ]
@@ -69,17 +68,17 @@ export const KEYBOARD_SHORTCUT_GROUPS = [
   }
 ] as const
 
-const WHIP_MESSAGES = [
+const NUDGE_MESSAGES = [
   'Keep going and take the next useful step.',
   'Continue from where you stopped.',
   'Carry on until the task is ready.',
   'Please keep working toward completion.'
 ] as const
-let whipMessageIndex = 0
+let nudgeMessageIndex = 0
 
-export function getNextWhipMessage(): string {
-  const message = WHIP_MESSAGES[whipMessageIndex % WHIP_MESSAGES.length]
-  whipMessageIndex += 1
+export function getNextNudgeMessage(): string {
+  const message = NUDGE_MESSAGES[nudgeMessageIndex % NUDGE_MESSAGES.length]
+  nudgeMessageIndex += 1
   return message
 }
 
