@@ -36,7 +36,7 @@ import { ArtifactType } from '@shared/artifacts'
 import { ArtifactsPanel } from '@/components/artifacts/ArtifactsPanel'
 import { ArtifactRail } from '@/components/artifacts/ArtifactRail'
 import type { Artifact, ArtifactUIState } from '@shared/artifacts'
-import { dispatchShortcutFeedback, getNextWhipMessage, onTaskShortcut, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
+import { dispatchShortcutFeedback, onTaskShortcut, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 const DEFAULT_ARTIFACT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
@@ -928,16 +928,6 @@ Update existing skills that were helpful or create new ones for patterns worth r
       setShowSnooze(true)
       return
     }
-    if (action === TaskShortcutAction.WHIP) {
-      if (!task.agent_id) {
-        dispatchShortcutFeedback('Assign an agent before you use Whip', true)
-        return
-      }
-      void handleSend(getNextWhipMessage())
-        .then(() => dispatchShortcutFeedback('Whip sent'))
-        .catch(() => dispatchShortcutFeedback('Could not send Whip', true))
-      return
-    }
     if (action === TaskShortcutAction.OPEN_DETAILS) {
       selectArtifactTab(task.id, PinnedArtifactTabId.DETAILS, true)
       return
@@ -976,7 +966,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
         .then(() => dispatchShortcutFeedback('Pull-request branch copied'))
         .catch(() => dispatchShortcutFeedback('Could not copy the pull-request branch', true))
     }
-  }), [artifacts, handleRunShortcut, handleSend, newestPullRequest, selectArtifactTab, setRailExpanded, task])
+  }), [artifacts, handleRunShortcut, newestPullRequest, selectArtifactTab, setRailExpanded, task])
 
   if (!task) {
     return (

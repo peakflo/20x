@@ -63,6 +63,8 @@ export interface ComposerRegistration {
   getField: () => DictationTarget | null
   /** Sends the composer. Present only where a conversation can send. */
   submit?: () => void
+  /** Sends supplied text through the same live handler as the composer. */
+  sendMessage?: (message: string) => void
 }
 
 const composers = new Map<string, ComposerRegistration>()
@@ -94,6 +96,15 @@ export function registerComposer(key: string, registration: ComposerRegistration
  */
 export function composerCanSubmit(key: string): boolean {
   return Boolean(composers.get(key)?.submit)
+}
+
+/** Sends text through the live composer without changing its draft. */
+export function sendComposerMessage(key: string, message: string): boolean {
+  const sendMessage = composers.get(key)?.sendMessage
+  const text = message.trim()
+  if (!sendMessage || !text) return false
+  sendMessage(text)
+  return true
 }
 
 /**

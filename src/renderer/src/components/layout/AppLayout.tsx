@@ -39,9 +39,9 @@ import { CommandPalette } from './CommandPalette'
 import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
-import { dispatchTaskShortcut, isKeyboardInput, onShortcutFeedback, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
+import { dispatchTaskShortcut, getNextWhipMessage, isKeyboardInput, onShortcutFeedback, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
-import { composerCanSubmit, MASTERMIND_COMPOSER_KEY, setActiveComposer } from '@/lib/voice-dictation-target'
+import { composerCanSubmit, MASTERMIND_COMPOSER_KEY, sendComposerMessage, setActiveComposer } from '@/lib/voice-dictation-target'
 
 const isWindows = navigator.platform.toLowerCase().startsWith('win') || navigator.userAgent.includes('Windows')
 const isMac = navigator.platform.toLowerCase().includes('mac')
@@ -320,6 +320,18 @@ export function AppLayout() {
     void voice.toggleTurn(loop ? 'conversation' : 'dictation')
   }, [activeTaskId, showToast])
 
+  const whipActiveTask = useCallback(() => {
+    if (!activeTaskId) {
+      showToast('Select a task first', true)
+      return
+    }
+    if (!sendComposerMessage(activeTaskId, getNextWhipMessage())) {
+      showToast('Open the task message composer first', true)
+      return
+    }
+    showToast('Whip sent')
+  }, [activeTaskId, showToast])
+
   const toggleMastermindAudio = useCallback(() => {
     const voice = useVoiceStore.getState()
     if (!selectVoiceReady(voice)) {
@@ -347,7 +359,7 @@ export function AppLayout() {
     completeTask: completeActiveTask,
     snoozeTask: () => runTaskShortcut(TaskShortcutAction.SNOOZE),
     runTask: () => runTaskShortcut(TaskShortcutAction.RUN),
-    whipTask: () => runTaskShortcut(TaskShortcutAction.WHIP),
+    whipTask: whipActiveTask,
     deleteTask: deleteActiveTask,
     showShortcuts: () => setShortcutsOpen(true),
     openDetails: () => runTaskShortcut(TaskShortcutAction.OPEN_DETAILS),
@@ -359,7 +371,7 @@ export function AppLayout() {
     copyPullRequestBranch: () => runTaskShortcut(TaskShortcutAction.COPY_PR_BRANCH),
     toggleTaskAudio,
     toggleMastermindAudio
-  }), [clearTaskSelection, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, openSelectedTask, runTaskShortcut, toggleMastermindAudio, toggleTaskAudio])
+  }), [clearTaskSelection, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, openSelectedTask, runTaskShortcut, toggleMastermindAudio, toggleTaskAudio, whipActiveTask])
   const handleNavigateFromDashboardPreview = useCallback(
     (taskId: string) => {
       closeDashboardPreview()
@@ -504,7 +516,7 @@ export function AppLayout() {
       else if (key === 'e') { e.preventDefault(); completeActiveTask() }
       else if (key === 'h') { e.preventDefault(); runTaskShortcut(TaskShortcutAction.SNOOZE) }
       else if (key === 'r') { e.preventDefault(); runTaskShortcut(TaskShortcutAction.RUN) }
-      else if (key === 'w') { e.preventDefault(); runTaskShortcut(TaskShortcutAction.WHIP) }
+      else if (key === 'w') { e.preventDefault(); whipActiveTask() }
       else if (e.key === '#') { e.preventDefault(); deleteActiveTask() }
       else if (e.key === '?') { e.preventDefault(); setShortcutsOpen(true) }
       else if (e.key === '/') { e.preventDefault(); focusSearch() }
@@ -514,7 +526,7 @@ export function AppLayout() {
       window.removeEventListener('keydown', onKey)
       if (chordRef.current) window.clearTimeout(chordRef.current.timer)
     }
-  }, [activeModal, clearTaskSelection, closeModal, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, openCreateModal, openSelectedTask, runTaskShortcut, setShowOrchestrator, setSidebarView, showOrchestrator, sidebarView, toggleMastermindAudio, toggleTaskAudio])
+  }, [activeModal, clearTaskSelection, closeModal, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, openCreateModal, openSelectedTask, runTaskShortcut, setShowOrchestrator, setSidebarView, showOrchestrator, sidebarView, toggleMastermindAudio, toggleTaskAudio, whipActiveTask])
 
   return (
     <>

@@ -391,36 +391,6 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       throw new Error('No text content in message parts')
     }
 
-    const activeTurnId = session.activeTurnId
-
-    // A prompt sent while Codex is working must be added to the active turn.
-    // Starting a second turn here is rejected by app-server, which made the
-    // task-level Whip action appear to do nothing.
-    if (activeTurnId) {
-      const clientUserMessageId = `client-user-${Date.now()}-${Math.random().toString(36).slice(2)}`
-      this.addEvent(session, {
-        method: 'item/completed',
-        params: {
-          threadId: session.threadId,
-          turnId: activeTurnId,
-          item: {
-            id: clientUserMessageId,
-            type: 'user_message',
-            text: promptText
-          }
-        }
-      })
-      session.status = SessionStatusType.BUSY
-      session.lastError = null
-      await this.sendRpcRequest(session, 'turn/steer', {
-        threadId: session.threadId,
-        expectedTurnId: activeTurnId,
-        clientUserMessageId,
-        input: [{ type: 'text', text: promptText }]
-      })
-      return
-    }
-
     session.messageBuffer = []
 
     const userItem = {

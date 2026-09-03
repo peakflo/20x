@@ -6,6 +6,7 @@ import {
   insertAndSubmit,
   insertDictation,
   registerComposer,
+  sendComposerMessage,
   setActiveComposer,
   setDictationTarget,
 } from './voice-dictation-target'
@@ -213,5 +214,31 @@ describe('a conversation survives the panel being rebuilt', () => {
     const a = composer('a')
     a.root.setAttribute('data-voice-composer', 'task-9')
     expect(findComposerKey(a.button)).toBe('task-9')
+  })
+})
+
+describe('sendComposerMessage', () => {
+  it('uses the same live send handler as the named composer', () => {
+    const sendMessage = vi.fn()
+    registerComposer('task-1', {
+      getField: () => null,
+      sendMessage,
+    })
+
+    expect(sendComposerMessage('task-1', '  keep going  ')).toBe(true)
+    expect(sendMessage).toHaveBeenCalledWith('keep going')
+  })
+
+  it('does not change an existing draft', () => {
+    const a = composer('a')
+    a.field.value = 'my unfinished note'
+    registerComposer('task-1', {
+      getField: () => a.field,
+      sendMessage: vi.fn(),
+    })
+
+    sendComposerMessage('task-1', 'keep going')
+
+    expect(a.field.value).toBe('my unfinished note')
   })
 })

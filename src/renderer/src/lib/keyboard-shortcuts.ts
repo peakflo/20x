@@ -7,8 +7,7 @@ export enum TaskShortcutAction {
   OPEN_ARTIFACT = 'open_artifact',
   OPEN_PR = 'open_pr',
   COPY_PR_URL = 'copy_pr_url',
-  COPY_PR_BRANCH = 'copy_pr_branch',
-  WHIP = 'whip'
+  COPY_PR_BRANCH = 'copy_pr_branch'
 }
 
 const TASK_SHORTCUT_EVENT = '20x:task-shortcut'
