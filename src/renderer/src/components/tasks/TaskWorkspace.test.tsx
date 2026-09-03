@@ -6,7 +6,7 @@ import { useSettingsStore } from '@/stores/settings-store'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, Agent } from '@/types'
-import { dispatchTaskShortcut, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
+import { dispatchTaskShortcut, onShortcutFeedback, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 
 vi.mock('@/components/agents/AgentTranscriptPanel', () => ({
@@ -148,6 +148,27 @@ describe('TaskWorkspace keyboard actions', () => {
     renderWorkspace(makeRendererTask())
     act(() => dispatchTaskShortcut({ action: TaskShortcutAction.OPEN_DETAILS, taskId: 'task-1' }))
     expect(useArtifactStore.getState().getUI('task-1').activeTabId).toBe(PinnedArtifactTabId.DETAILS)
+  })
+
+  it('sends Whip to the active task session and confirms it', async () => {
+    useAgentStore.getState().initSession('task-1', 'session-1', 'agent-1')
+    const feedback = vi.fn()
+    const unsubscribe = onShortcutFeedback(feedback)
+    renderWorkspace(makeRendererTask({ status: TaskStatus.AgentWorking, session_id: 'session-1' }))
+
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.WHIP, taskId: 'task-1' }))
+
+    await waitFor(() => {
+      expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith(
+        'session-1',
+        expect.stringMatching(/continue|keep|carry/i),
+        'task-1',
+        'agent-1',
+        undefined
+      )
+      expect(feedback).toHaveBeenCalledWith({ message: 'Whip sent', isError: false })
+    })
+    unsubscribe()
   })
 })
 

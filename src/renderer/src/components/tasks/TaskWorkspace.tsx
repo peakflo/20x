@@ -929,7 +929,13 @@ Update existing skills that were helpful or create new ones for patterns worth r
       return
     }
     if (action === TaskShortcutAction.WHIP) {
+      if (!task.agent_id) {
+        dispatchShortcutFeedback('Assign an agent before you use Whip', true)
+        return
+      }
       void handleSend(getNextWhipMessage())
+        .then(() => dispatchShortcutFeedback('Whip sent'))
+        .catch(() => dispatchShortcutFeedback('Could not send Whip', true))
       return
     }
     if (action === TaskShortcutAction.OPEN_DETAILS) {
