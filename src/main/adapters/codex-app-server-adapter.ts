@@ -9,6 +9,8 @@
 import { spawn, type ChildProcess } from 'child_process'
 import { existsSync, mkdtempSync, readFileSync } from 'fs'
 import { guardChildStreams, writeToChildStdin } from '../child-stream-guards'
+import { parseProcessTable } from '../mcp-process-cleanup'
+import { selectUntrackedAppServerPids } from '../codex-app-server-sweep'
 import { homedir, tmpdir } from 'os'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { promisify } from 'util'
@@ -23,6 +25,28 @@ import type {
 import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
 
 const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-5.5'
+
+/**
+ * How long an app-server gets to honour SIGTERM before it is killed outright.
+ *
+ * SIGTERM is the signal that matters, and it is enough: measured on a live
+ * tree, terminating the node wrapper also removed the vendored `codex` binary
+ * beneath it AND the `npm exec @google-cloud/observability-mcp` grandchild with
+ * its own node child — four processes for one signal. The escalation exists for
+ * a wrapper that is wedged rather than merely busy.
+ */
+const APP_SERVER_KILL_GRACE_MS = 1000
+
+/**
+ * How often to look for app-server children that escaped their session.
+ *
+ * The adapter now stops its children on every path that can drop one, so this
+ * sweep is expected to find nothing. It runs anyway because the failure it
+ * covers is silent and expensive — each escaped app-server was observed holding
+ * 0.9-1.2 GB — and because a future path that forgets to tear down would
+ * otherwise go unnoticed until the machine ran out of memory again.
+ */
+const ORPHAN_SWEEP_INTERVAL_MS = 5 * 60_000
 const MAX_IPC_TOOL_INPUT_CHARS = 20_000
 const MAX_IPC_TOOL_OUTPUT_CHARS = 100_000
 const MIN_THREAD_LEVEL_ASSISTANT_DEDUPE_CHARS = 40
@@ -103,6 +127,16 @@ interface AppServerSession {
   }>
   codexUseApiKey: boolean
   codexAuthSummary: string
+  /**
+   * Set once the child has been signalled, so a session that is destroyed twice
+   * — a user stop racing the idle reaper, say — signals once and reports once.
+   */
+  terminated: boolean
+}
+
+/** The message of a thrown value, for a teardown log line. */
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -304,6 +338,18 @@ function decisionLabel(decision: string): string {
 
 export class CodexAppServerAdapter implements CodingAgentAdapter {
   private sessions = new Map<string, AppServerSession>()
+  /**
+   * Every app-server child that has been started and not yet stopped.
+   *
+   * Deliberately NOT derived from `sessions`. That map is keyed by session id
+   * and is re-keyed mid-flight (`thread/start` moves an entry from the task id
+   * to the thread id), so a child can be absent from it while very much alive —
+   * which is how the leak stayed invisible. This set is the spawn ledger: one
+   * entry per live process, added at spawn, removed at exit or teardown, and it
+   * is what tells the sweep which app-servers still have an owner.
+   */
+  private liveSessions = new Set<AppServerSession>()
+  private orphanSweepTimer: NodeJS.Timeout | null = null
   private codexExecutablePath: string | null = null
 
   onDataAvailable?: (sessionId: string) => void
@@ -319,6 +365,22 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const session = await this.startAppServerProcess(config, config.taskId)
     this.sessions.set(config.taskId, session)
 
+    // From here on the child exists. Every exit from this method that is not a
+    // thread id must take it with it: `initialize` and `thread/start` each
+    // reject on a 30 s timeout, and the caller (agent-manager) answers a failed
+    // start by STARTING ANOTHER SESSION. Without this the failed attempt's
+    // app-server — and the MCP servers it has already spawned — stay resident
+    // with nothing left to speak to them.
+    try {
+      return await this.startThread(session, config)
+    } catch (error) {
+      this.terminateSession(session, `create failed: ${errorText(error)}`)
+      if (this.sessions.get(config.taskId) === session) this.sessions.delete(config.taskId)
+      throw error
+    }
+  }
+
+  private async startThread(session: AppServerSession, config: SessionConfig): Promise<string> {
     await this.initializeAppServer(session)
 
     const result = await this.sendRpcRequest(session, 'thread/start', {
@@ -338,8 +400,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     }
 
     session.threadId = threadId
-    this.sessions.delete(config.taskId)
-    this.sessions.set(threadId, session)
+    if (this.sessions.get(config.taskId) === session) this.sessions.delete(config.taskId)
+    this.trackSession(threadId, session)
     void this.logMcpServerInventory(session, threadId, 'thread/start')
     return threadId
   }
@@ -347,8 +409,27 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   async resumeSession(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
     const session = await this.startAppServerProcess(config, sessionId)
     session.threadId = sessionId
-    this.sessions.set(sessionId, session)
+    // `trackSession`, not `sessions.set`. Resuming a thread that is already
+    // running spawns a SECOND app-server under the same key, and a plain `set`
+    // overwrote the only handle to the first one — which then ran on, with its
+    // MCP children, until the app quit. This was the larger half of the leak:
+    // one workspace with a single live session was measured holding three.
+    this.trackSession(sessionId, session)
 
+    try {
+      return await this.resumeThread(session, sessionId, config)
+    } catch (error) {
+      this.terminateSession(session, `resume failed: ${errorText(error)}`)
+      if (this.sessions.get(sessionId) === session) this.sessions.delete(sessionId)
+      throw error
+    }
+  }
+
+  private async resumeThread(
+    session: AppServerSession,
+    sessionId: string,
+    config: SessionConfig
+  ): Promise<SessionMessage[]> {
     await this.initializeAppServer(session)
 
     await this.sendRpcRequest(session, 'thread/resume', {
@@ -530,20 +611,113 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
     const session = this.sessions.get(sessionId)
+    this.sessions.delete(sessionId)
     if (!session) return
-    session.process.kill('SIGTERM')
-    setTimeout(() => {
-      if (!session.process.killed) {
-        session.process.kill('SIGKILL')
+    this.terminateSession(session, `session ${sessionId} destroyed`)
+  }
+
+  /**
+   * Puts `session` under `key`, stopping whatever child was there before.
+   *
+   * The map is the ONLY handle to an app-server child, so overwriting an entry
+   * leaks the process it pointed at. Every write goes through here so that
+   * cannot be forgotten again.
+   */
+  private trackSession(key: string, session: AppServerSession): void {
+    const displaced = this.sessions.get(key)
+    if (displaced && displaced !== session) {
+      this.terminateSession(displaced, `replaced by a new app-server for ${key}`)
+    }
+    this.sessions.set(key, session)
+  }
+
+  /**
+   * Stops one app-server child and releases everything it held.
+   *
+   * SIGTERM on the node wrapper is enough to take the whole tree: verified on a
+   * live process group that the vendored `codex` binary and the
+   * `npm exec @google-cloud/observability-mcp` grandchild beneath it both went
+   * with it. SIGKILL follows only if the wrapper is still there after the grace
+   * period — and it is scheduled against the child's own `exit`, not against
+   * `ChildProcess.killed`, which reports that a SIGNAL WAS SENT rather than
+   * that the process died and so was true immediately every time.
+   */
+  private terminateSession(session: AppServerSession, reason: string): void {
+    if (session.terminated) return
+    session.terminated = true
+    this.liveSessions.delete(session)
+
+    const child = session.process
+    console.log(`[CodexAppServerAdapter] Stopping app-server pid ${child.pid ?? '?'} — ${reason}`)
+    try {
+      child.kill('SIGTERM')
+    } catch {
+      // Already gone. Nothing left to stop.
+    }
+    const escalation = setTimeout(() => {
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        // Exited during the grace period, which is the outcome we wanted.
       }
-    }, 1000)
+    }, APP_SERVER_KILL_GRACE_MS)
+    escalation.unref()
+    child.once('exit', () => clearTimeout(escalation))
+
+    // An in-flight RPC would otherwise sit on its 30 s timeout against a pipe
+    // that is already closed, holding its caller open for no reason.
+    for (const pending of session.pendingRequests.values()) {
+      pending.reject(new Error(`Codex app-server stopped: ${reason}`))
+    }
+    session.pendingRequests.clear()
     session.messageBuffer.length = 0
     session.permanentMessages.length = 0
-    session.pendingRequests.clear()
     session.streamedTextByItemId.clear()
     session.assistantTextKeysByTurn.clear()
     session.runningTools.clear()
-    this.sessions.delete(sessionId)
+    session.bufferedThreadItemIds.clear()
+  }
+
+  /**
+   * Kills app-server children of this process that no session is holding.
+   *
+   * The backstop described in `codex-app-server-sweep.ts`. It reads the process
+   * table, so it runs on a timer rather than on every session change, and it is
+   * scoped to our own descendants — another 20x instance's app-servers are its
+   * own business.
+   */
+  private async sweepOrphanedAppServers(): Promise<void> {
+    if (process.platform === 'win32') return // No cheap ancestry query on Windows.
+    try {
+      const { stdout } = await this.execFileAsync('ps', ['-eo', 'pid=,ppid=,command='], {
+        timeout: 10_000,
+        maxBuffer: 16 * 1024 * 1024
+      })
+      const tracked = new Set<number>()
+      for (const session of this.liveSessions) {
+        if (typeof session.process.pid === 'number') tracked.add(session.process.pid)
+      }
+      const leaked = selectUntrackedAppServerPids(parseProcessTable(stdout), process.pid, tracked)
+      for (const pid of leaked) {
+        try {
+          process.kill(pid, 'SIGTERM')
+        } catch {
+          // Exited between the listing and the signal.
+        }
+      }
+      if (leaked.length > 0) {
+        console.warn(`[CodexAppServerAdapter] Swept ${leaked.length} orphaned app-server process(es): ${leaked.join(', ')}`)
+      }
+    } catch (error) {
+      console.warn('[CodexAppServerAdapter] Could not sweep orphaned app-servers:', error)
+    }
+  }
+
+  /** Starts the orphan sweep on the first spawn, so a Codex-free run has no timer. */
+  private startOrphanSweep(): void {
+    if (this.orphanSweepTimer) return
+    this.orphanSweepTimer = setInterval(() => void this.sweepOrphanedAppServers(), ORPHAN_SWEEP_INTERVAL_MS)
+    this.orphanSweepTimer.unref()
   }
 
   async registerMcpServer(
@@ -649,8 +823,15 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       assistantTextKeysByTurn: new Map(),
       runningTools: new Map(),
       codexUseApiKey: authEnv.usesApiKey,
-      codexAuthSummary: authEnv.summary
+      codexAuthSummary: authEnv.summary,
+      terminated: false
     }
+
+    // Recorded BEFORE anything can fail, and before the caller gets a chance to
+    // put it in `sessions`. A child that is spawned but not yet owned is exactly
+    // the state the leak lived in.
+    this.liveSessions.add(session)
+    this.startOrphanSweep()
 
     this.setupStdoutParser(child, session)
     child.stderr?.on('data', (chunk: Buffer) => {
@@ -658,6 +839,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     })
     child.on('exit', (code, signal) => {
       console.log(`[CodexAppServerAdapter] process exited: code=${code}, signal=${signal}`)
+      this.liveSessions.delete(session)
       if (code !== 0 && code !== null) {
         session.status = SessionStatusType.ERROR
         session.lastError = `Codex app-server exited with code ${code}`
@@ -695,7 +877,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   private async execFileAsync(
     command: string,
     args: string[],
-    options?: { timeout?: number }
+    options?: { timeout?: number; maxBuffer?: number }
   ): Promise<{ stdout: string }> {
     const { execFile } = await import('child_process')
     const execFileAsync = promisify(execFile)

@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
+import { EventEmitter } from 'events'
+import { spawn } from 'child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -12,6 +14,7 @@ vi.mock('child_process', () => ({
 
 interface AppServerAdapterPrivate {
   sessions: Map<string, AppServerSessionForTest>
+  liveSessions: Set<AppServerSessionForTest>
   handleRpcMessage(session: AppServerSessionForTest, message: unknown): void
   convertEventToMessageParts(
     event: unknown,
@@ -62,6 +65,9 @@ interface AppServerSessionForTest {
   threadId: string | null
   activeTurnId: string | null
   process: {
+    pid?: number
+    kill?: ReturnType<typeof vi.fn>
+    once?: ReturnType<typeof vi.fn>
     stdin: { write: ReturnType<typeof vi.fn> }
   }
   stdoutBuffer: string
@@ -92,6 +98,7 @@ interface AppServerSessionForTest {
   }>
   codexUseApiKey: boolean
   codexAuthSummary: string
+  terminated?: boolean
 }
 
 function adapterPrivate(adapter: CodexAppServerAdapter): AppServerAdapterPrivate {
@@ -1233,5 +1240,189 @@ describe('CodexAppServerAdapter', () => {
       if (originalCodex === undefined) delete process.env.CODEX_API_KEY
       else process.env.CODEX_API_KEY = originalCodex
     }
+  })
+})
+
+/**
+ * The two paths that dropped the only handle to a running `codex app-server`,
+ * measured on the owner's machine as 21 live app-servers under one 20x, each
+ * with its own duplicated `@google-cloud/observability-mcp` child, against a
+ * handful of real sessions.
+ */
+describe('CodexAppServerAdapter app-server lifecycle', () => {
+  /** A stand-in for one spawned app-server child, with its signals recorded. */
+  function fakeSession(sessionId: string, pid: number): AppServerSessionForTest & {
+    process: { pid: number; kill: ReturnType<typeof vi.fn>; once: ReturnType<typeof vi.fn>; stdin: { write: ReturnType<typeof vi.fn> } }
+  } {
+    const session = createSession() as AppServerSessionForTest & {
+      process: { pid: number; kill: ReturnType<typeof vi.fn>; once: ReturnType<typeof vi.fn>; stdin: { write: ReturnType<typeof vi.fn> } }
+    }
+    session.sessionId = sessionId
+    session.threadId = null
+    session.process = { pid, kill: vi.fn(), once: vi.fn(), stdin: { write: vi.fn() } }
+    return session
+  }
+
+  const config = { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }
+
+  /** An adapter whose process spawning and RPC are under the test's control. */
+  function harness(sessions: AppServerSessionForTest[]) {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    let next = 0
+    adapter.startAppServerProcess = vi.fn().mockImplementation(async () => sessions[next++])
+    adapter.initializeAppServer = vi.fn().mockResolvedValue(undefined)
+    adapter.sendRpcRequest = vi.fn().mockResolvedValue({ threadId: 'thread-1' })
+    adapter.logMcpServerInventory = vi.fn().mockResolvedValue(undefined)
+    adapter.bufferAllThreadItems = vi.fn().mockResolvedValue(undefined)
+    ;(adapterInstance as unknown as { getAllMessages: () => Promise<unknown[]> }).getAllMessages =
+      vi.fn().mockResolvedValue([])
+    return { adapterInstance, adapter }
+  }
+
+  it('stops the previous app-server when a session is resumed again', async () => {
+    // THE LARGER HALF OF THE LEAK. `resumeSession` spawned a new child and
+    // wrote it over the same map key. The first child kept running with nobody
+    // holding it — one workspace with a single session id was found with three.
+    const first = fakeSession('thread-1', 4001)
+    const second = fakeSession('thread-1', 4002)
+    const { adapterInstance, adapter } = harness([first, second])
+
+    await adapterInstance.resumeSession('thread-1', config as never)
+    await adapterInstance.resumeSession('thread-1', config as never)
+
+    expect(first.process.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(second.process.kill).not.toHaveBeenCalled()
+    expect(adapter.sessions.get('thread-1')).toBe(second)
+    expect(adapter.sessions.size).toBe(1)
+  })
+
+  it('stops the child when the startup RPC of a new session rejects', async () => {
+    // THE SECOND HALF. `initialize` and `thread/start` each reject on a 30 s
+    // timeout, and agent-manager answers a failed start by starting ANOTHER
+    // session — so every timeout used to add one resident app-server.
+    const orphan = fakeSession('task-1', 4003)
+    const { adapterInstance, adapter } = harness([orphan])
+    adapter.sendRpcRequest = vi.fn().mockRejectedValue(new Error('Codex app-server RPC timed out: thread/start'))
+
+    await expect(adapterInstance.createSession(config as never)).rejects.toThrow('RPC timed out')
+
+    expect(orphan.process.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(adapter.sessions.size).toBe(0)
+  })
+
+  it('stops the child when the app-server returns no thread id', async () => {
+    const orphan = fakeSession('task-1', 4004)
+    const { adapterInstance, adapter } = harness([orphan])
+    adapter.sendRpcRequest = vi.fn().mockResolvedValue({})
+
+    await expect(adapterInstance.createSession(config as never)).rejects.toThrow('did not return a thread id')
+
+    expect(orphan.process.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(adapter.sessions.size).toBe(0)
+  })
+
+  it('stops the child when a resume rejects', async () => {
+    const orphan = fakeSession('thread-1', 4005)
+    const { adapterInstance, adapter } = harness([orphan])
+    adapter.initializeAppServer = vi.fn().mockRejectedValue(new Error('Codex app-server RPC timed out: initialize'))
+
+    await expect(adapterInstance.resumeSession('thread-1', config as never)).rejects.toThrow('RPC timed out')
+
+    expect(orphan.process.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(adapter.sessions.size).toBe(0)
+  })
+
+  /**
+   * A spawned child, as `startAppServerProcess` needs to find it: every pipe an
+   * event emitter, because the adapter attaches error and data listeners to all
+   * three before the first write.
+   */
+  function fakeChild(pid: number) {
+    const child = new EventEmitter() as EventEmitter & {
+      pid: number
+      stdin: EventEmitter & { write: ReturnType<typeof vi.fn>; writable: boolean }
+      stdout: EventEmitter
+      stderr: EventEmitter
+      kill: ReturnType<typeof vi.fn>
+    }
+    child.pid = pid
+    child.stdin = Object.assign(new EventEmitter(), { write: vi.fn(), writable: true })
+    child.stdout = new EventEmitter()
+    child.stderr = new EventEmitter()
+    child.kill = vi.fn()
+    return child
+  }
+
+  /** An adapter that really spawns, against a child the test controls. */
+  function spawningHarness(child: ReturnType<typeof fakeChild>) {
+    vi.mocked(spawn).mockReturnValue(child as never)
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    // Short-circuits the `which codex` lookup; the executable is not the subject.
+    ;(adapterInstance as unknown as { codexExecutablePath: string }).codexExecutablePath = '/usr/local/bin/codex'
+    adapter.initializeAppServer = vi.fn().mockResolvedValue(undefined)
+    adapter.sendRpcRequest = vi.fn().mockResolvedValue({ threadId: 'thread-1' })
+    adapter.logMcpServerInventory = vi.fn().mockResolvedValue(undefined)
+    return { adapterInstance, adapter }
+  }
+
+  it('records every spawned child in the ledger and releases it on exit', async () => {
+    // The ledger is what the orphan sweep reads. A child missing from it while
+    // alive would be swept out from under a working session; a child left in it
+    // after exit would hide a real leak behind a stale pid.
+    const child = fakeChild(4007)
+    const { adapterInstance, adapter } = spawningHarness(child)
+
+    const threadId = await adapterInstance.createSession(config as never)
+
+    expect(threadId).toBe('thread-1')
+    // The map key moves from the task id to the thread id. The process does not.
+    expect(adapter.sessions.has('task-1')).toBe(false)
+    expect(adapter.sessions.get('thread-1')?.process).toBe(child)
+    expect(adapter.liveSessions.size).toBe(1)
+    expect(child.kill).not.toHaveBeenCalled()
+
+    child.emit('exit', 0, null)
+    expect(adapter.liveSessions.size).toBe(0)
+  })
+
+  it('drops a failed start from the ledger, having signalled its child', async () => {
+    const child = fakeChild(4006)
+    const { adapterInstance, adapter } = spawningHarness(child)
+    adapter.sendRpcRequest = vi.fn().mockRejectedValue(new Error('Codex app-server RPC timed out: thread/start'))
+
+    await expect(adapterInstance.createSession(config as never)).rejects.toThrow('RPC timed out')
+
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(adapter.liveSessions.size).toBe(0)
+    expect(adapter.sessions.size).toBe(0)
+  })
+
+  it('signals once when a session is destroyed twice', async () => {
+    // A user stop racing the idle reaper. Both call destroySession.
+    const live = fakeSession('task-1', 4008)
+    const { adapterInstance, adapter } = harness([live])
+    await adapterInstance.createSession(config as never)
+
+    await adapterInstance.destroySession('thread-1', config as never)
+    await adapterInstance.destroySession('thread-1', config as never)
+
+    expect(live.process.kill).toHaveBeenCalledTimes(1)
+    expect(adapter.sessions.size).toBe(0)
+    expect(adapter.liveSessions.size).toBe(0)
+  })
+
+  it('fails in-flight RPCs instead of leaving them on their 30 s timeout', async () => {
+    const live = fakeSession('task-1', 4009)
+    const { adapterInstance, adapter } = harness([live])
+    await adapterInstance.createSession(config as never)
+
+    const session = adapter.sessions.get('thread-1')!
+    const inFlight = new Promise((resolve, reject) => session.pendingRequests.set(7, { resolve, reject }))
+
+    await adapterInstance.destroySession('thread-1', config as never)
+
+    await expect(inFlight).rejects.toThrow('Codex app-server stopped')
   })
 })

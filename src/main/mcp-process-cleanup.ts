@@ -17,8 +17,20 @@
 /** One row of the process table. */
 export type ProcessRow = { pid: number; ppid: number; command: string }
 
-/** The stdio MCP servers 20x spawns. Matched as a substring of the command. */
-export const MCP_SCRIPT_MARKERS = ['task-management-mcp.js'] as const
+/**
+ * The stdio servers 20x spawns. Matched as a substring of the command.
+ *
+ * `codex app-server --stdio` is here for the boot pass. The Codex adapter stops
+ * its own children now, and sweeps the ones that escape while it is running,
+ * but neither survives a FORCE-QUIT: the app-servers are reparented to launchd,
+ * each holding around a gigabyte and a duplicated
+ * `@google-cloud/observability-mcp` child, and nothing collects them until the
+ * machine reboots. At boot this instance has no descendants yet, so only those
+ * parentless leftovers match; at shutdown it takes our own, after
+ * `stopAllSessions` has had its turn. The substring covers both halves of the
+ * pair — the node wrapper and the vendored binary run the same arguments.
+ */
+export const MCP_SCRIPT_MARKERS = ['task-management-mcp.js', 'codex app-server --stdio'] as const
 
 /**
  * Parses the output of `ps -eo pid=,ppid=,command=`.
