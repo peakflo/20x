@@ -110,12 +110,15 @@ describe('NotionPlugin', () => {
     expect(plugin.requiresMcpServer).toBe(false)
   })
 
-  it('returns config schema with api_token, data_source_id, and filters', () => {
+  it('returns config schema with token, data source, filters, and statuses', () => {
     const schema = plugin.getConfigSchema()
-    expect(schema).toHaveLength(3)
-    expect(schema[0].key).toBe('api_token')
-    expect(schema[1].key).toBe('data_source_id')
-    expect(schema[2].key).toBe('filters')
+    expect(schema.map((f) => f.key)).toEqual([
+      'api_token',
+      'data_source_id',
+      'filters',
+      'next_statuses',
+      'completion_status'
+    ])
   })
 
   it('returns field mapping', () => {
@@ -545,6 +548,159 @@ describe('NotionPlugin', () => {
       if (result.error) {
         expect(result.error).not.toMatch(/Unknown action/)
       }
+    })
+  })
+
+  // ── Next statuses ───────────────────────────────────────
+
+  describe('next statuses', () => {
+    const CUSTOM_SCHEMA = {
+      ...DB_SCHEMA,
+      properties: {
+        Name: { id: 'title', name: 'Name', type: 'title' },
+        Status: {
+          id: 'status',
+          name: 'Status',
+          type: 'status',
+          status: {
+            options: [
+              { id: 's1', name: 'Icebox', color: 'default' },
+              { id: 's2', name: 'Ready for QA', color: 'blue' },
+              { id: 's3', name: 'Shipped', color: 'green' }
+            ],
+            groups: []
+          }
+        }
+      }
+    }
+
+    const configuredConfig = {
+      ...defaultConfig,
+      next_statuses: ['Ready for QA', 'Shipped'],
+      completion_status: 'Shipped'
+    }
+
+    beforeEach(() => {
+      mockClientInstance.getDataSource.mockResolvedValue(CUSTOM_SCHEMA)
+    })
+
+    it('resolves the status options of the data source', async () => {
+      const options = await plugin.resolveOptions('status_options', defaultConfig, makeContext())
+      expect(options).toEqual([
+        { value: 'Icebox', label: 'Icebox' },
+        { value: 'Ready for QA', label: 'Ready for QA' },
+        { value: 'Shipped', label: 'Shipped' }
+      ])
+    })
+
+    it('offers the configured statuses as action input options', () => {
+      const [changeStatus] = plugin.getActions(configuredConfig)
+      expect(changeStatus.inputOptions).toEqual([
+        { value: 'Ready for QA', label: 'Ready for QA' },
+        { value: 'Shipped', label: 'Shipped' }
+      ])
+    })
+
+    it('leaves the action free-text when no status is configured', () => {
+      const [changeStatus] = plugin.getActions(defaultConfig)
+      expect(changeStatus.inputOptions).toBeUndefined()
+      expect(changeStatus.inputPlaceholder).toBe('e.g. Done, In Progress')
+    })
+
+    it('completes at source with the status the user selected', async () => {
+      const ctx = makeContext()
+      const task = { id: 'local-1', external_id: 'ext-1' } as TaskRecord
+
+      const result = await plugin.executeAction('complete', task, undefined, configuredConfig, ctx)
+
+      expect(result.success).toBe(true)
+      expect(mockClientInstance.updatePage).toHaveBeenCalledWith('ext-1', {
+        Status: { status: { name: 'Shipped' } }
+      })
+      expect(result.taskUpdate).toEqual({ status: TaskStatus.Completed })
+    })
+
+    it('writes a selected status that the name heuristics do not know', async () => {
+      const ctx = makeContext()
+      const task = { id: 'local-1', external_id: 'ext-1' } as TaskRecord
+
+      const result = await plugin.executeAction(
+        'change_status',
+        task,
+        'ready for qa',
+        configuredConfig,
+        ctx
+      )
+
+      expect(result.success).toBe(true)
+      // The spelling from the config is used, not the spelling the user typed.
+      expect(mockClientInstance.updatePage).toHaveBeenCalledWith('ext-1', {
+        Status: { status: { name: 'Ready for QA' } }
+      })
+    })
+
+    it('ignores a completion status that is no longer in the list', async () => {
+      const ctx = makeContext()
+      const task = { id: 'local-1', external_id: 'ext-1' } as TaskRecord
+      const staleConfig = {
+        ...defaultConfig,
+        next_statuses: ['Ready for QA'],
+        completion_status: 'Shipped'
+      }
+
+      await plugin.executeAction('complete', task, undefined, staleConfig, ctx)
+
+      // Falls back to the heuristics, which find no Done option in this schema.
+      expect(mockClientInstance.updatePage).toHaveBeenCalledWith('ext-1', {
+        Status: { status: { name: 'completed' } }
+      })
+    })
+
+    it('exports a completed task to the selected status', async () => {
+      const ctx = makeContext()
+      const task = { id: 'local-1', external_id: 'ext-1' } as TaskRecord
+
+      await plugin.exportUpdate(task, { status: TaskStatus.Completed }, configuredConfig, ctx)
+
+      expect(mockClientInstance.updatePage).toHaveBeenCalledWith('ext-1', {
+        Status: { status: { name: 'Shipped' } }
+      })
+    })
+
+    it('imports the completion status as a completed task', async () => {
+      const ctx = makeContext()
+      mockClientInstance.queryAllPages.mockResolvedValue([
+        makePage({
+          properties: {
+            Name: { id: 'title', type: 'title', title: [{ plain_text: 'Shipped Task' }] },
+            Status: { id: 'status', type: 'status', status: { id: 's3', name: 'Shipped' } }
+          }
+        })
+      ])
+
+      await plugin.importTasks('source-1', configuredConfig, ctx)
+
+      expect(ctx.db.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({ status: TaskStatus.Completed })
+      )
+    })
+
+    it('imports an unconfigured custom status as not started', async () => {
+      const ctx = makeContext()
+      mockClientInstance.queryAllPages.mockResolvedValue([
+        makePage({
+          properties: {
+            Name: { id: 'title', type: 'title', title: [{ plain_text: 'Iced Task' }] },
+            Status: { id: 'status', type: 'status', status: { id: 's1', name: 'Icebox' } }
+          }
+        })
+      ])
+
+      await plugin.importTasks('source-1', configuredConfig, ctx)
+
+      expect(ctx.db.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({ status: TaskStatus.NotStarted })
+      )
     })
   })
 })

@@ -126,6 +126,54 @@ function buildPropertyFilter(
   }
 }
 
+// ── Next statuses (stored in source config) ──────────────────
+
+/**
+ * The statuses a user can move a task to from 20x. The user selects these in
+ * the source form from the real options of the Notion status property, because
+ * the name heuristics below only know the default Notion board names.
+ */
+export function readNextStatuses(config: Record<string, unknown>): string[] {
+  const raw = config.next_statuses
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of raw) {
+    if (typeof value !== 'string') continue
+    const name = value.trim()
+    if (!name || seen.has(name.toLowerCase())) continue
+    seen.add(name.toLowerCase())
+    result.push(name)
+  }
+  return result
+}
+
+/**
+ * The status a completed task moves to. Returns null when the user selected
+ * none, or when the selection is stale — the status list can change in Notion
+ * after the source was configured.
+ */
+export function readCompletionStatus(config: Record<string, unknown>): string | null {
+  const raw = config.completion_status
+  if (typeof raw !== 'string') return null
+  const name = raw.trim()
+  if (!name) return null
+  const nextStatuses = readNextStatuses(config)
+  if (nextStatuses.length === 0) return name
+  const match = nextStatuses.find((s) => s.toLowerCase() === name.toLowerCase())
+  return match ?? null
+}
+
+/** All status names the user configured, in the spelling Notion expects. */
+function configuredStatuses(config: Record<string, unknown>): string[] {
+  const nextStatuses = readNextStatuses(config)
+  const completion = readCompletionStatus(config)
+  if (completion && !nextStatuses.some((s) => s.toLowerCase() === completion.toLowerCase())) {
+    return [...nextStatuses, completion]
+  }
+  return nextStatuses
+}
+
 // ── Status mapping ───────────────────────────────────────────
 
 const STATUS_TO_LOCAL: Record<string, TaskStatus> = {
@@ -219,6 +267,23 @@ export class NotionPlugin implements TaskSourcePlugin {
         dependsOn: { field: 'data_source_id', value: '__any__' },
         description: 'Structured filter configuration (managed by custom form)'
       },
+      {
+        key: 'next_statuses',
+        label: 'Next statuses',
+        type: 'dynamic-select',
+        optionsResolver: 'status_options',
+        multiSelect: true,
+        dependsOn: { field: 'data_source_id', value: '__any__' },
+        description: 'Statuses a task can be moved to from 20x'
+      },
+      {
+        key: 'completion_status',
+        label: 'Status on completion',
+        type: 'dynamic-select',
+        optionsResolver: 'status_options',
+        dependsOn: { field: 'data_source_id', value: '__any__' },
+        description: 'Status written to Notion when a task is completed at source'
+      }
     ]
   }
 
@@ -242,6 +307,24 @@ export class NotionPlugin implements TaskSourcePlugin {
       } catch (err) {
         console.error('[notion] Failed to fetch data sources:', err)
         throw err
+      }
+    }
+
+    if (resolverKey === 'status_options') {
+      const dataSourceId = config.data_source_id as string
+      if (!dataSourceId) return []
+
+      try {
+        const db = await client.getDataSource(dataSourceId)
+        const propMap = this.buildPropertyMap(db)
+        if (!propMap.status) return []
+        return this.statusOptionNames(db.properties[propMap.status.name]).map((name) => ({
+          value: name,
+          label: name
+        }))
+      } catch (err) {
+        console.error('[notion] Failed to fetch status options:', err)
+        return []
       }
     }
 
@@ -326,16 +409,25 @@ export class NotionPlugin implements TaskSourcePlugin {
     }
   }
 
-  getActions(_config: Record<string, unknown>): PluginAction[] {
+  getActions(config: Record<string, unknown>): PluginAction[] {
+    const nextStatuses = readNextStatuses(config)
+    const changeStatus: PluginAction = {
+      id: PluginActionId.ChangeStatus,
+      label: 'Change Status',
+      icon: 'ArrowRightCircle',
+      requiresInput: true,
+      inputLabel: 'New Status',
+      inputPlaceholder:
+        nextStatuses.length > 0 ? `e.g. ${nextStatuses[0]}` : 'e.g. Done, In Progress'
+    }
+    // With next statuses configured the user picks one instead of typing a
+    // name that Notion may not have.
+    if (nextStatuses.length > 0) {
+      changeStatus.inputOptions = nextStatuses.map((name) => ({ value: name, label: name }))
+    }
+
     return [
-      {
-        id: PluginActionId.ChangeStatus,
-        label: 'Change Status',
-        icon: 'ArrowRightCircle',
-        requiresInput: true,
-        inputLabel: 'New Status',
-        inputPlaceholder: 'e.g. Done, In Progress'
-      },
+      changeStatus,
       {
         id: PluginActionId.UpdatePriority,
         label: 'Update Priority',
@@ -380,7 +472,7 @@ export class NotionPlugin implements TaskSourcePlugin {
         if (page.archived) continue
 
         try {
-          const mapped = this.mapPage(page, propMap)
+          const mapped = this.mapPage(page, propMap, config)
           if (!mapped.title) continue
 
           // Fetch page blocks for both content rendering and file extraction
@@ -505,10 +597,10 @@ export class NotionPlugin implements TaskSourcePlugin {
       }
 
       if (changedFields.status && propMap.status) {
-        const notionStatus = this.localStatusToNotion(
-          changedFields.status as string,
-          db.properties[propMap.status.name]
-        )
+        const localStatus = changedFields.status as string
+        const notionStatus =
+          (localStatus === TaskStatus.Completed ? readCompletionStatus(config) : null) ??
+          this.localStatusToNotion(localStatus, db.properties[propMap.status.name])
         if (notionStatus) {
           if (propMap.status.type === NotionPropertyType.Status) {
             properties[propMap.status.name] = { status: { name: notionStatus } }
@@ -554,10 +646,11 @@ export class NotionPlugin implements TaskSourcePlugin {
     }
 
     // "complete" is a generic completion action — treat it as a status change
-    // to "completed" so Notion moves the page to its Done/Complete status.
+    // so Notion moves the page on. The status the user selected wins; without
+    // one, fall back to the Done/Complete name heuristics.
     if (actionId === PluginActionId.Complete) {
       actionId = PluginActionId.ChangeStatus
-      input = 'completed'
+      input = readCompletionStatus(config) ?? 'completed'
     }
 
     if (!input) {
@@ -574,8 +667,12 @@ export class NotionPlugin implements TaskSourcePlugin {
       const properties: Record<string, unknown> = {}
 
       if (actionId === PluginActionId.ChangeStatus && propMap.status) {
-        // Try to find a matching status in the DB schema, or use input as-is
-        const notionStatus = this.localStatusToNotion(input, db.properties[propMap.status.name]) || input
+        // Prefer a status the user selected, then the name heuristics against
+        // the DB schema, and finally the input as typed.
+        const notionStatus =
+          this.matchConfiguredStatus(input, config) ??
+          this.localStatusToNotion(input, db.properties[propMap.status.name]) ??
+          input
         if (propMap.status.type === NotionPropertyType.Status) {
           properties[propMap.status.name] = { status: { name: notionStatus } }
         } else {
@@ -592,7 +689,11 @@ export class NotionPlugin implements TaskSourcePlugin {
 
       const taskUpdate: Record<string, unknown> = {}
       if (actionId === PluginActionId.ChangeStatus) {
-        const localStatus = STATUS_TO_LOCAL[input.toLowerCase()]
+        const completionStatus = readCompletionStatus(config)
+        const localStatus =
+          completionStatus && completionStatus.toLowerCase() === input.toLowerCase()
+            ? TaskStatus.Completed
+            : STATUS_TO_LOCAL[input.toLowerCase()]
         if (localStatus) taskUpdate.status = localStatus
       } else if (actionId === PluginActionId.UpdatePriority) {
         const localPriority = PRIORITY_TO_LOCAL[input.toLowerCase()]
@@ -708,7 +809,8 @@ Alternatively, open the database in Notion → click **...** → **Connections**
 1. Paste your **Integration Token**
 2. Select the **Database** from the dropdown
 3. Optionally select **Filters** to only import specific items (e.g. Status = In Progress)
-4. Click **Save** and **Sync**
+4. Optionally select the **Next statuses** a task can move to from 20x
+5. Click **Save** and **Sync**
 
 ## Features
 
@@ -716,6 +818,12 @@ Alternatively, open the database in Notion → click **...** → **Connections**
 Select property values to filter by. Values from the same property are combined with OR; different properties with AND.
 
 Example: Status = "In Progress" OR "To Do" AND Priority = "High"
+
+### Next Statuses
+Select the statuses of your data source that a task can move to from 20x, and
+which one a completed task moves to. Use this when your board has custom status
+names such as "Ready for QA" or "Shipped" — without it, 20x can only recognise
+the default Notion names (To Do, In progress, In review, Done).
 
 ### Incremental Sync
 After the first full sync, subsequent syncs only fetch pages modified since the last sync.
@@ -821,7 +929,8 @@ The integration automatically maps Notion properties to task fields:
    */
   private mapPage(
     page: NotionPage,
-    propMap: PropertyMap
+    propMap: PropertyMap,
+    config: Record<string, unknown> = {}
   ): {
     title: string
     status?: string
@@ -845,7 +954,14 @@ The integration automatically maps Notion properties to task fields:
           ? statusProp.status?.name
           : statusProp.select?.name
         if (rawStatus) {
-          status = STATUS_TO_LOCAL[rawStatus.toLowerCase()] || TaskStatus.NotStarted
+          // A configured completion status wins over the name heuristics, so a
+          // custom name such as "Shipped" does not import back as not started
+          // and re-open a task 20x just completed.
+          const completionStatus = readCompletionStatus(config)
+          status =
+            completionStatus && completionStatus.toLowerCase() === rawStatus.toLowerCase()
+              ? TaskStatus.Completed
+              : STATUS_TO_LOCAL[rawStatus.toLowerCase()] || TaskStatus.NotStarted
         }
       }
     }
@@ -1090,6 +1206,31 @@ The integration automatically maps Notion properties to task fields:
   }
 
   /**
+   * Option names of a Notion status or select property, in board order.
+   */
+  private statusOptionNames(propSchema: NotionPropertySchema | undefined): string[] {
+    if (!propSchema) return []
+    const options =
+      propSchema.type === NotionPropertyType.Status
+        ? propSchema.status?.options
+        : propSchema.select?.options
+    return options?.map((o) => o.name) ?? []
+  }
+
+  /**
+   * Match user input against the statuses the user configured, so the value
+   * written to Notion always uses the spelling Notion knows.
+   */
+  private matchConfiguredStatus(
+    input: string,
+    config: Record<string, unknown>
+  ): string | null {
+    const wanted = input.trim().toLowerCase()
+    if (!wanted) return null
+    return configuredStatuses(config).find((s) => s.toLowerCase() === wanted) ?? null
+  }
+
+  /**
    * Map local status to a Notion status option name
    */
   private localStatusToNotion(
@@ -1101,13 +1242,8 @@ The integration automatically maps Notion properties to task fields:
     const candidates = LOCAL_TO_NOTION_STATUS[localStatus]
     if (!candidates) return null
 
-    // Get available options from schema
-    const options = propSchema.type === NotionPropertyType.Status
-      ? propSchema.status?.options
-      : propSchema.select?.options
-    if (!options) return null
-
-    const optionNames = options.map((o) => o.name)
+    const optionNames = this.statusOptionNames(propSchema)
+    if (optionNames.length === 0) return null
 
     // Find first matching candidate
     for (const candidate of candidates) {

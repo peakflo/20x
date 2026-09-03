@@ -67,6 +67,11 @@ export interface PluginAction {
   requiresInput?: boolean
   inputLabel?: string
   inputPlaceholder?: string
+  /**
+   * For 'requiresInput' actions: the values the user can choose from. When the
+   * plugin supplies these, the UI shows a picker instead of a free-text box.
+   */
+  inputOptions?: ConfigFieldOption[]
 }
 
 export interface ActionResult {
