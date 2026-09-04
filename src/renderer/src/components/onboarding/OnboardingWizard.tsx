@@ -62,6 +62,7 @@ const STORAGE_KEYS = {
 } as const
 
 const DEFAULT_AGENT_NAME = 'Robo'
+const PEAKFLO_DEFAULT_HARNESS = CodingAgentType.PI
 
 /* ─── Force-onboarding flag ─── */
 
@@ -461,9 +462,10 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
       const status = await window.electronAPI.agentInstaller.detect()
       setToolStatus(status)
 
-      // Phase 2: Install OpenCode if needed
-      if (!status.opencode?.installed) {
-        toasts.update(TOAST_ID, { message: 'Installing OpenCode...', percent: 10 })
+      // Phase 2: Install or update the managed Peakflo harness if needed
+      const piStatus = status.pi as ToolStatus | undefined
+      if (!piStatus?.installed || piStatus.supported === false) {
+        toasts.update(TOAST_ID, { message: 'Installing Pi...', percent: 10 })
 
         // Subscribe to install progress events for real-time updates
         const cleanup = window.electronAPI.agentInstaller.onProgress(
@@ -471,28 +473,28 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
             if (data.stage === 'complete' || data.stage === 'error') return
             // Map install percent (0-100) to our range (10-50)
             const mapped = 10 + Math.round((data.percent || 0) * 0.4)
-            const message = data.percent > 60 ? 'Almost there...' : 'Downloading & installing OpenCode...'
+            const message = data.percent > 60 ? 'Almost there...' : 'Downloading & installing Pi...'
             toasts.update(TOAST_ID, { percent: mapped, message })
           }
         )
 
         try {
-          await window.electronAPI.agentInstaller.install(DetectKey.OPENCODE)
+          await window.electronAPI.agentInstaller.install(DetectKey.PI)
         } finally {
           cleanup()
         }
       } else {
-        toasts.update(TOAST_ID, { percent: 50, message: 'OpenCode already installed' })
+        toasts.update(TOAST_ID, { percent: 50, message: 'Pi already installed' })
       }
 
-      // Phase 3: Start OpenCode server & configure agent + model
-      toasts.update(TOAST_ID, { message: 'Starting OpenCode server...', percent: 55 })
+      // Phase 3: Configure the Pi agent and its Peakflo gateway model
+      toasts.update(TOAST_ID, { message: 'Preparing Pi...', percent: 55 })
 
       // createDefaultAgent calls getDefaultModel which calls getProviders,
-      // which triggers ensureServerRunning() — this starts the server.
-      // It also skips creation if a complete default agent already exists.
+      // which loads the available Peakflo gateway models. It also skips
+      // creation if a complete default agent already exists.
       toasts.update(TOAST_ID, { message: 'Configuring agent & model...', percent: 70 })
-      await createDefaultAgent(CodingAgentType.OPENCODE)
+      await createDefaultAgent(PEAKFLO_DEFAULT_HARNESS)
       await useAgentStore.getState().fetchAgents()
 
       // Done!
