@@ -444,6 +444,11 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         }
       }
 
+      if (params.title !== undefined) {
+        const title = typeof params.title === 'string' ? params.title.trim() : ''
+        if (!title) return { error: 'Title cannot be empty' }
+        updates.push('title = ?'); qParams.push(title)
+      }
       if (params.description !== undefined) { updates.push('description = ?'); qParams.push(params.description) }
       if (params.resolution !== undefined) { updates.push('resolution = ?'); qParams.push(params.resolution) }
       if (params.attachments !== undefined) { updates.push('attachments = ?'); qParams.push(JSON.stringify(params.attachments)) }
