@@ -1090,6 +1090,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
         <TaskHeaderBar
           task={task}
           agent={assignedAgent}
+          agents={agents}
+          onAssignAgent={handleAssignAgent}
           action={primaryAction}
           onAction={handlePrimaryAction}
           onComplete={() => void handleCompleteTask()}

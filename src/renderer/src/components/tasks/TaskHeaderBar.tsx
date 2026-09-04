@@ -25,6 +25,8 @@ const ACTION_META = {
 interface TaskHeaderBarProps {
   task: WorkfloTask
   agent?: Agent | null
+  agents?: Agent[]
+  onAssignAgent?: (agentId: string | null) => void | Promise<void>
   action?: TaskPrimaryAction | null
   onAction?: () => void
   onComplete?: () => void
@@ -45,6 +47,8 @@ interface TaskHeaderBarProps {
 export function TaskHeaderBar({
   task,
   agent,
+  agents,
+  onAssignAgent,
   action,
   onAction,
   onComplete,
@@ -65,8 +69,10 @@ export function TaskHeaderBar({
   const [title, setTitle] = useState(task.title)
   const [menuOpen, setMenuOpen] = useState(false)
   const [statusMenuOpen, setStatusMenuOpen] = useState(false)
+  const [agentMenuOpen, setAgentMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const statusMenuRef = useRef<HTMLDivElement>(null)
+  const agentMenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => setTitle(task.title), [task.title])
   useEffect(() => {
@@ -85,6 +91,14 @@ export function TaskHeaderBar({
     window.addEventListener('pointerdown', close)
     return () => window.removeEventListener('pointerdown', close)
   }, [statusMenuOpen])
+  useEffect(() => {
+    if (!agentMenuOpen) return
+    const close = (event: PointerEvent) => {
+      if (!agentMenuRef.current?.contains(event.target as Node)) setAgentMenuOpen(false)
+    }
+    window.addEventListener('pointerdown', close)
+    return () => window.removeEventListener('pointerdown', close)
+  }, [agentMenuOpen])
 
   const commitTitle = async () => {
     const next = title.trim()
@@ -163,12 +177,65 @@ export function TaskHeaderBar({
           </div>
         )}
       </div>
-      <div className="hidden items-center gap-1.5 lg:flex">
+      <div className="flex items-center gap-1.5">
         <TaskPriorityBadge priority={task.priority} />
-        <span className="inline-flex max-w-36 items-center gap-1.5 rounded-full border border-border/50 bg-card px-2 py-1 text-[11px] text-muted-foreground">
-          <Bot className="h-3 w-3" />
-          <span className="truncate">{agent?.name || 'Unassigned'}</span>
-        </span>
+        {onAssignAgent && agents ? (
+          <div ref={agentMenuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setAgentMenuOpen((open) => !open)}
+              className="group inline-flex max-w-36 items-center gap-1.5 rounded-full border border-border/50 bg-card px-2 py-1 text-[11px] text-muted-foreground outline-none hover:border-border hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
+              aria-label="Change agent"
+              aria-haspopup="menu"
+              aria-expanded={agentMenuOpen}
+              data-testid="header-agent-trigger"
+            >
+              <Bot className="h-3 w-3 shrink-0" />
+              <span className="truncate">{agent?.name || 'Unassigned'}</span>
+              <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+            </button>
+            {agentMenuOpen && (
+              <div role="menu" aria-label="Agent" className="absolute right-0 top-7 z-50 w-48 overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={!task.agent_id}
+                  onClick={() => {
+                    setAgentMenuOpen(false)
+                    if (task.agent_id) void onAssignAgent(null)
+                  }}
+                  className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground hover:bg-accent"
+                  data-testid="header-agent-option-unassigned"
+                >
+                  <span>Unassigned</span>
+                  {!task.agent_id && <Check className="h-3.5 w-3.5 text-primary" />}
+                </button>
+                {agents.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={task.agent_id === a.id}
+                    onClick={() => {
+                      setAgentMenuOpen(false)
+                      if (task.agent_id !== a.id) void onAssignAgent(a.id)
+                    }}
+                    className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground hover:bg-accent"
+                    data-testid={`header-agent-option-${a.id}`}
+                  >
+                    <span className="truncate">{a.name}</span>
+                    {task.agent_id === a.id && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <span className="hidden items-center gap-1.5 rounded-full border border-border/50 bg-card px-2 py-1 text-[11px] text-muted-foreground lg:inline-flex">
+            <Bot className="h-3 w-3" />
+            <span className="truncate">{agent?.name || 'Unassigned'}</span>
+          </span>
+        )}
       </div>
       {actionMeta && onAction && (
         <Button size="sm" onClick={onAction} className="h-8 gap-1.5 px-3" data-testid={`header-cta-${action}`}>
