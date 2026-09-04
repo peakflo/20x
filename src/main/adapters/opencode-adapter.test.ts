@@ -2,7 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { OpencodeAdapter } from './opencode-adapter'
 import { SessionStatusType } from './coding-agent-adapter'
 import { ENTERPRISE_AI_GATEWAY_PROVIDER_ID } from '../enterprise-ai-gateway'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -34,6 +34,8 @@ describe('OpencodeAdapter', () => {
         expect(pluginPaths).toHaveLength(2)
         expect(pluginPaths.some(path => path.endsWith('20x-tilldone.js'))).toBe(true)
         expect(pluginPaths.some(path => path.endsWith('20x-secret-injector.js'))).toBe(true)
+        expect(pluginPaths.every(path => path.includes(`${join('.opencode', '.20x-plugins')}`))).toBe(true)
+        expect(pluginPaths.every(path => !path.includes(`${join('.opencode', 'plugins')}`))).toBe(true)
         expect(supportPaths.some(path => path.endsWith('.20x-secrets'))).toBe(true)
         expect(supportPaths.some(path => path.endsWith('.20x-tilldone-state.json'))).toBe(true)
         expect(supportPaths.some(path => path.endsWith('.20x-tilldone-config.json'))).toBe(true)
@@ -82,7 +84,7 @@ describe('OpencodeAdapter', () => {
       }
     })
 
-    it('passes disabled tilldone config through to the generated extension', () => {
+    it('does not generate a local tilldone plugin when tilldone is disabled', () => {
       const adapter = new OpencodeAdapter()
       const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
 
@@ -96,10 +98,42 @@ describe('OpencodeAdapter', () => {
 
         const pluginPaths = (adapter as any).pluginFilePaths as string[]
         const supportPaths = (adapter as any).runtimeSupportFilePaths as string[]
-        const tillDoneConfigPath = supportPaths.find(path => path.endsWith('.20x-tilldone-config.json'))!
 
-        expect(pluginPaths.some(path => path.endsWith('20x-tilldone.js'))).toBe(true)
-        expect(JSON.parse(readFileSync(tillDoneConfigPath, 'utf-8'))).toEqual({ defaultEnabled: false, sessions: {} })
+        expect(pluginPaths).toEqual([])
+        expect(supportPaths).toEqual([])
+        expect(existsSync(join(workspaceDir, '.opencode', 'plugins', '20x-tilldone.js'))).toBe(false)
+        expect(existsSync(join(workspaceDir, '.opencode', '.20x-plugins', '20x-tilldone.js'))).toBe(false)
+      } finally {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      }
+    })
+
+    it('removes a stale local tilldone plugin when tilldone is disabled', () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
+
+      try {
+        ;(adapter as any).writeRuntimePluginFiles({
+          agentId: 'agent-1',
+          taskId: 'task-1',
+          workspaceDir,
+          tillDone: true
+        })
+        const stalePluginPath = join(workspaceDir, '.opencode', 'plugins', '20x-tilldone.js')
+        mkdirSync(join(workspaceDir, '.opencode', 'plugins'), { recursive: true })
+        writeFileSync(stalePluginPath, 'legacy plugin', 'utf-8')
+        expect(existsSync(stalePluginPath)).toBe(true)
+
+        ;(adapter as any).writeRuntimePluginFiles({
+          agentId: 'agent-1',
+          taskId: 'triage-task',
+          workspaceDir,
+          tillDone: false
+        })
+
+        expect(existsSync(stalePluginPath)).toBe(false)
+        expect(existsSync(join(workspaceDir, '.opencode', '.20x-plugins', '20x-tilldone.js'))).toBe(false)
+        expect((adapter as any).pluginFilePaths).toEqual([])
       } finally {
         rmSync(workspaceDir, { recursive: true, force: true })
       }
@@ -135,7 +169,7 @@ describe('OpencodeAdapter', () => {
       }
     })
 
-    it('preserves per-session tilldone config when another session starts in the same workspace', () => {
+    it('creates fresh tilldone config when an enabled session follows a disabled session', () => {
       const adapter = new OpencodeAdapter()
       const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
 
@@ -146,8 +180,6 @@ describe('OpencodeAdapter', () => {
           workspaceDir,
           tillDone: false
         })
-        ;(adapter as any).writeTillDoneSessionConfig('triage-session', false)
-
         ;(adapter as any).writeRuntimePluginFiles({
           agentId: 'agent-1',
           taskId: 'regular-task',
@@ -162,7 +194,6 @@ describe('OpencodeAdapter', () => {
         expect(JSON.parse(readFileSync(tillDoneConfigPath, 'utf-8'))).toEqual({
           defaultEnabled: true,
           sessions: {
-            'triage-session': false,
             'regular-session': true
           }
         })
