@@ -185,6 +185,26 @@ describe('OnboardingWizard', () => {
     })
   })
 
+  it('uses Pi as the default harness after Peakflo authentication', async () => {
+    mockEnterprise.getSession.mockResolvedValue({
+      isAuthenticated: true,
+      userEmail: 'user@peakflo.co',
+      userId: 'user-1',
+      currentTenant: { id: 'tenant-1', name: 'Peakflo' }
+    })
+
+    render(<OnboardingWizard open={true} onOpenChange={vi.fn()} />)
+
+    await waitFor(() => {
+      expect(mockAgentInstaller.install).toHaveBeenCalledWith('pi')
+      expect(mockAgents.create).toHaveBeenCalledWith(expect.objectContaining({
+        is_default: true,
+        config: expect.objectContaining({ coding_agent: CodingAgentType.PI })
+      }))
+    })
+    expect(mockAgentInstaller.install).not.toHaveBeenCalledWith('opencode')
+  })
+
   it('should call onOpenChange(false) when Skip is clicked', () => {
     const onOpenChange = vi.fn()
     render(<OnboardingWizard open={true} onOpenChange={onOpenChange} />)
