@@ -138,6 +138,19 @@ describe('clampTranscriptWidth', () => {
 })
 
 describe('TaskWorkspace keyboard actions', () => {
+  it('opens session feedback instead of completing immediately', () => {
+    const task = makeRendererTask({
+      status: TaskStatus.ReadyForReview,
+      session_id: 'persisted-session-1'
+    })
+
+    renderWorkspace(task)
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.COMPLETE, taskId: task.id }))
+
+    expect(screen.getByText('Session Feedback')).toBeInTheDocument()
+    expect(noopFn).not.toHaveBeenCalled()
+  })
+
   it('opens the snooze dialog for the selected task', () => {
     renderWorkspace(makeRendererTask())
     act(() => dispatchTaskShortcut({ action: TaskShortcutAction.SNOOZE, taskId: 'task-1' }))

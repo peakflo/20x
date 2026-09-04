@@ -3,14 +3,14 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { SubtaskPickerDialog } from './SubtaskPickerDialog'
 import { TaskStatus, type WorkfloTask } from '@/types'
 
-function makeTask(id: string, title: string): WorkfloTask {
+function makeTask(id: string, title: string, status = TaskStatus.NotStarted): WorkfloTask {
   return {
     id,
     title,
     description: '',
     type: 'general',
     priority: 'medium',
-    status: TaskStatus.NotStarted,
+    status,
     assignee: '',
     due_date: null,
     labels: [],
@@ -45,6 +45,23 @@ function makeTask(id: string, title: string): WorkfloTask {
 afterEach(cleanup)
 
 describe('SubtaskPickerDialog', () => {
+  it('shows each subtask status', () => {
+    render(
+      <SubtaskPickerDialog
+        open
+        onOpenChange={vi.fn()}
+        subtasks={[
+          makeTask('sub-1', 'First subtask', TaskStatus.AgentWorking),
+          makeTask('sub-2', 'Second subtask', TaskStatus.ReadyForReview)
+        ]}
+        onSelect={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText('Agent Working')).toBeInTheDocument()
+    expect(screen.getByText('Ready for Review')).toBeInTheDocument()
+  })
+
   it('opens the highlighted subtask with arrow keys and Enter', () => {
     const onSelect = vi.fn()
     const onOpenChange = vi.fn()
@@ -82,5 +99,32 @@ describe('SubtaskPickerDialog', () => {
     fireEvent.keyDown(dialog, { key: 'Enter' })
 
     expect(onSelect).toHaveBeenCalledWith('sub-1')
+  })
+
+  it('closes only the popup when Escape is pressed', () => {
+    const onOpenChange = vi.fn()
+    let parentClosed = false
+    const closeParentUnlessHandled = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented) parentClosed = true
+    }
+    window.addEventListener('keydown', closeParentUnlessHandled)
+
+    try {
+      render(
+        <SubtaskPickerDialog
+          open
+          onOpenChange={onOpenChange}
+          subtasks={[makeTask('sub-1', 'First subtask')]}
+          onSelect={vi.fn()}
+        />
+      )
+
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+
+      expect(onOpenChange).toHaveBeenCalledWith(false)
+      expect(parentClosed).toBe(false)
+    } finally {
+      window.removeEventListener('keydown', closeParentUnlessHandled)
+    }
   })
 })

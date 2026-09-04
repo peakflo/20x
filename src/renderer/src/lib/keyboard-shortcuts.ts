@@ -1,4 +1,5 @@
 export enum TaskShortcutAction {
+  COMPLETE = 'complete',
   RUN = 'run',
   SNOOZE = 'snooze',
   OPEN_DETAILS = 'open_details',
@@ -90,6 +91,15 @@ export function isKeyboardInput(target: EventTarget | null): boolean {
   return target.isContentEditable
     || ['INPUT', 'TEXTAREA', 'SELECT', 'WEBVIEW'].includes(target.tagName)
     || !!target.closest('[contenteditable="true"], .xterm')
+}
+
+export function isGlobalShortcutBlocked(event: KeyboardEvent): boolean {
+  return event.defaultPrevented
+    || event.metaKey
+    || event.ctrlKey
+    || event.altKey
+    || isKeyboardInput(event.target)
+    || !!document.querySelector('[role="dialog"], [role="alertdialog"]')
 }
 
 export function dispatchTaskShortcut(detail: TaskShortcutDetail): void {

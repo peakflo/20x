@@ -40,7 +40,7 @@ import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog'
 import { SubtaskPickerDialog } from '@/components/tasks/SubtaskPickerDialog'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
-import { dispatchTaskShortcut, getNextNudgeMessage, isKeyboardInput, onShortcutFeedback, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
+import { dispatchTaskShortcut, getNextNudgeMessage, isGlobalShortcutBlocked, onShortcutFeedback, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import { composerCanSubmit, MASTERMIND_COMPOSER_KEY, sendComposerMessage, setActiveComposer } from '@/lib/voice-dictation-target'
 
@@ -369,10 +369,9 @@ export function AppLayout() {
   }, [sidebarCollapsed, sidebarView])
 
   const completeActiveTask = useCallback(() => {
-    if (dashboardPreviewTaskId) void handleCompleteDashboardPreviewTask()
-    else if (selectedTaskId) void handleCompleteSelectedTask()
+    if (activeTaskId) dispatchTaskShortcut({ action: TaskShortcutAction.COMPLETE, taskId: activeTaskId })
     else showToast('Select a task first', true)
-  }, [dashboardPreviewTaskId, handleCompleteDashboardPreviewTask, handleCompleteSelectedTask, selectedTaskId, showToast])
+  }, [activeTaskId, showToast])
 
   const deleteActiveTask = useCallback(() => {
     if (dashboardPreviewTaskId) handleDeleteDashboardPreviewTask()
@@ -538,8 +537,9 @@ export function AppLayout() {
         }
         return
       }
-      if (e.metaKey || e.ctrlKey || e.altKey || isKeyboardInput(e.target)) return
-      if (document.querySelector('[role="dialog"]')) return
+      // Radix dialogs prevent the Escape event after they close. Respect that
+      // marker so this listener does not also close the task behind the popup.
+      if (isGlobalShortcutBlocked(e)) return
 
       const pending = chordRef.current
       if (pending) {
