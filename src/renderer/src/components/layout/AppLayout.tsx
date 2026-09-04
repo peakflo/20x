@@ -369,10 +369,9 @@ export function AppLayout() {
   }, [sidebarCollapsed, sidebarView])
 
   const completeActiveTask = useCallback(() => {
-    if (dashboardPreviewTaskId) void handleCompleteDashboardPreviewTask()
-    else if (selectedTaskId) void handleCompleteSelectedTask()
+    if (activeTaskId) dispatchTaskShortcut({ action: TaskShortcutAction.COMPLETE, taskId: activeTaskId })
     else showToast('Select a task first', true)
-  }, [dashboardPreviewTaskId, handleCompleteDashboardPreviewTask, handleCompleteSelectedTask, selectedTaskId, showToast])
+  }, [activeTaskId, showToast])
 
   const deleteActiveTask = useCallback(() => {
     if (dashboardPreviewTaskId) handleDeleteDashboardPreviewTask()

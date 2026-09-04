@@ -938,6 +938,10 @@ Update existing skills that were helpful or create new ones for patterns worth r
     if (!task || task.id !== taskId) return
     const workspace = workspaceBodyRef.current
     if (workspace && window.getComputedStyle(workspace).visibility === 'hidden') return
+    if (action === TaskShortcutAction.COMPLETE) {
+      void handleCompleteTask()
+      return
+    }
     if (action === TaskShortcutAction.RUN) {
       handleRunShortcut()
       return
@@ -984,7 +988,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
         .then(() => dispatchShortcutFeedback('Pull-request branch copied'))
         .catch(() => dispatchShortcutFeedback('Could not copy the pull-request branch', true))
     }
-  }), [artifacts, handleRunShortcut, newestPullRequest, selectArtifactTab, setRailExpanded, task])
+  }), [artifacts, handleCompleteTask, handleRunShortcut, newestPullRequest, selectArtifactTab, setRailExpanded, task])
 
   if (!task) {
     return (

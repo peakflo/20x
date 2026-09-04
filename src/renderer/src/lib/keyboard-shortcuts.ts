@@ -1,4 +1,5 @@
 export enum TaskShortcutAction {
+  COMPLETE = 'complete',
   RUN = 'run',
   SNOOZE = 'snooze',
   OPEN_DETAILS = 'open_details',
