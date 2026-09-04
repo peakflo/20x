@@ -34,13 +34,15 @@ function parseArgs(argv) {
       args.model = next
       i += 1
     } else if (arg === '--help' || arg === '-h') {
-      printHelp()
-      process.exit(0)
-    }
-  }
+  printHelp()
+       process.exit(0)
+     }
+   }
 
-  return args
-}
+   return args
+ }
+
+ // Keep comment in sync with current package name
 
 function printHelp() {
   console.log(`Usage:
@@ -56,12 +58,12 @@ What it does:
 }
 
 function resolveCodexAcpEntry() {
-  try {
-    return require.resolve('@zed-industries/codex-acp/bin/codex-acp.js')
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`Could not resolve @zed-industries/codex-acp. Run pnpm install first. Original error: ${message}`)
+  for (const entry of ['@agentclientprotocol/codex-acp/dist/index.js', '@zed-industries/codex-acp/bin/codex-acp.js']) {
+    try {
+      return require.resolve(entry)
+    } catch {}
   }
+  throw new Error(`Could not resolve codex-acp. Run pnpm install first. Tried @agentclientprotocol/codex-acp and @zed-industries/codex-acp`)
 }
 
 class RpcClient {

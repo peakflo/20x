@@ -2418,17 +2418,15 @@ describe('AcpAdapter process spawning for packaged Electron apps', () => {
     })
   })
 
-  it('codex should spawn the native binary directly, not via the JS wrapper', () => {
+  it('codex should spawn via node with the JS entrypoint (new package)', () => {
     const adapter = new AcpAdapter('codex')
     const config = (adapter as any).agentConfig
 
-    // Command should be the resolved native binary path, NOT 'node'
-    expect(config.command).not.toBe('node')
-    expect(config.command).toContain('codex-acp')
-    // Should not need ELECTRON_RUN_AS_NODE since it's a native binary
+    // New @agentclientprotocol/codex-acp is a Node script, spawned via process.execPath
+    expect(config.command).toBe(process.execPath)
+    expect(config.args[0]).toContain('codex-acp')
+    expect(config.args[0]).toContain('dist/index.js')
     expect(config.env).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
-    // No args — the binary is run directly
-    expect(config.args).toEqual([])
   })
 
   it('codex should replace app.asar with app.asar.unpacked in the binary path', async () => {

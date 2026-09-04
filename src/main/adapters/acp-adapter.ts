@@ -178,25 +178,31 @@ export class AcpAdapter implements CodingAgentAdapter {
   }
 
   /**
-   * Resolve the path to the codex-acp native binary for the current platform.
+   * Resolve the codex-acp entrypoint.
    *
-   * codex-acp ships as a native binary per platform (e.g. codex-acp-darwin-arm64).
-   * The JS wrapper (codex-acp.js) uses import.meta.resolve() which returns an ASAR
-   * path — but the OS can't execute a native binary from inside an ASAR archive.
-   * We bypass the wrapper and resolve the native binary directly, replacing the
-   * ASAR path with the unpacked path (electron-builder auto-unpacks native binaries).
+   * New package (@agentclientprotocol/codex-acp >=1.x) ships as a Node.js
+   * entrypoint (dist/index.js) that internally spawns the bundled @openai/codex.
+   * It is NOT a native binary, so we spawn it via `node <entry>`.
    *
-   * pnpm note: the platform-specific package (e.g. codex-acp-darwin-arm64) is an
-   * optionalDependency of codex-acp, so under pnpm it is NOT hoisted to the root
-   * node_modules. We must resolve it from codex-acp's own directory using the
-   * `{ paths }` option of require.resolve. In a packaged app (ASAR), electron-builder
-   * flattens the structure so a plain require.resolve would also work.
+   * Old package (@zed-industries/codex-acp 0.16.0) shipped as native binaries
+   * per platform (codex-acp-darwin-arm64 etc). That package is deprecated and
+   * has been removed from dependencies; we keep a fallback resolver for users
+   * who still have it on disk or in an unpacked ASAR.
    */
   private resolveCodexBinary(): string {
+    // Prefer new package
+    try {
+      const entry = require.resolve('@agentclientprotocol/codex-acp/dist/index.js')
+      console.log(`[AcpAdapter/codex] Resolved new codex-acp entry: ${entry}`)
+      return entry
+    } catch {
+      // Fallback to deprecated native binary
+    }
+
     const platformMap: Record<string, Record<string, string>> = {
       darwin: { arm64: 'codex-acp-darwin-arm64', x64: 'codex-acp-darwin-x64' },
-      linux:  { arm64: 'codex-acp-linux-arm64',  x64: 'codex-acp-linux-x64' },
-      win32:  { arm64: 'codex-acp-win32-arm64',  x64: 'codex-acp-win32-x64' },
+      linux: { arm64: 'codex-acp-linux-arm64', x64: 'codex-acp-linux-x64' },
+      win32: { arm64: 'codex-acp-win32-arm64', x64: 'codex-acp-win32-x64' },
     }
 
     const packages = platformMap[process.platform]
@@ -206,7 +212,7 @@ export class AcpAdapter implements CodingAgentAdapter {
 
     const binaryName = process.platform === 'win32' ? 'codex-acp.exe' : 'codex-acp'
 
-    // Resolve from codex-acp's own directory so pnpm's nested optional deps are found.
+    // Resolve from deprecated package's own directory so pnpm's nested optional deps are found.
     const codexAcpDir = dirname(require.resolve('@zed-industries/codex-acp/package.json'))
     let binaryPath = require.resolve(
       `@zed-industries/${packageName}/bin/${binaryName}`,
@@ -220,24 +226,33 @@ export class AcpAdapter implements CodingAgentAdapter {
       binaryPath = binaryPath.replace('app.asar', 'app.asar.unpacked')
     }
 
-    console.log(`[AcpAdapter/codex] Resolved native binary: ${binaryPath}`)
+    console.log(`[AcpAdapter/codex] Resolved native binary (deprecated package): ${binaryPath}`)
     return binaryPath
+  }
+
+  private isNewCodexPackage(entryPath: string): boolean {
+    return entryPath.includes('@agentclientprotocol') || entryPath.endsWith('dist/index.js')
   }
 
   private getAgentConfig(agentType: AcpAgentType): AcpAgentConfig {
     switch (agentType) {
-      case 'codex':
-        // Codex ships as a native binary — spawn it directly, bypassing the JS wrapper
-        // which fails inside ASAR (see resolveCodexBinary docs for details).
+      case 'codex': {
+        const resolved = this.resolveCodexBinary()
+        if (this.isNewCodexPackage(resolved)) {
+          // New package is a Node script — spawn via node/electron's Node
+          return {
+            command: process.execPath,
+            args: [resolved],
+            env: {}
+          }
+        }
+        // Legacy native binary
         return {
-          command: this.resolveCodexBinary(),
+          command: resolved,
           args: [],
-          // Auth env is decided per-session by configureCodexAuthEnv(), which
-          // gives the user's Codex CLI login (ChatGPT subscription) priority over
-          // any ambient OPENAI_API_KEY/CODEX_API_KEY. Do NOT inject ambient keys
-          // here — that previously hijacked subscription users into API-key auth.
           env: {}
         }
+      }
       case 'cursor':
         return {
           command: 'cursor-agent',
@@ -1016,17 +1031,23 @@ export class AcpAdapter implements CodingAgentAdapter {
         return { available: true }
       }
 
-      // Verify the ACP agent package is installed
-      const packageName = '@zed-industries/codex-acp'
-
-      try {
-        // Different packages have different entry points
-        const entryPoint = `${packageName}/bin/codex-acp.js`
-        require.resolve(entryPoint)
-      } catch {
+      // Verify the ACP agent package is installed (new or legacy)
+      const candidates = [
+        '@agentclientprotocol/codex-acp/dist/index.js',
+        '@zed-industries/codex-acp/bin/codex-acp.js',
+      ]
+      let found = false
+      for (const entry of candidates) {
+        try {
+          require.resolve(entry)
+          found = true
+          break
+        } catch {}
+      }
+      if (!found) {
         return {
           available: false,
-          reason: `${packageName} not found. Install with: pnpm add ${packageName}`
+          reason: `@agentclientprotocol/codex-acp not found. Install with: pnpm add @agentclientprotocol/codex-acp`
         }
       }
 
