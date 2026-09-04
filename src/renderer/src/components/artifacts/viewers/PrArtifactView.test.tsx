@@ -79,6 +79,14 @@ describe('PrArtifactView', () => {
     expect(screen.getByText('1 pending')).toBeInTheDocument()
   })
 
+  it('wraps header actions before they squeeze the pull request title', async () => {
+    render(<PrArtifactView artifact={artifact} />)
+
+    const title = await screen.findByRole('heading', { name: 'Task artifacts' })
+    expect(title.parentElement).toHaveClass('basis-64', 'flex-1', 'min-w-0')
+    expect(title.parentElement?.parentElement).toHaveClass('flex-wrap')
+  })
+
   it('keeps the current PR visible during a background refresh', async () => {
     const fetchDetails = window.electronAPI.github.fetchPullRequestDetails as ReturnType<typeof vi.fn>
     const { rerender } = render(<PrArtifactView artifact={artifact} refreshTrigger={0} />)
