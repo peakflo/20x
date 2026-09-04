@@ -536,14 +536,47 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       return skill
     }
 
+    case '/create_skill': {
+      const name = typeof params.name === 'string' ? params.name.trim() : ''
+      const description = typeof params.description === 'string' ? params.description.trim() : ''
+      const content = typeof params.content === 'string' ? params.content : ''
+      if (!name) return { error: 'Skill name is required' }
+      if (!description) return { error: 'Skill description is required' }
+      if (!content) return { error: 'Skill content is required' }
+      if (params.confidence !== undefined) {
+        const c = Number(params.confidence)
+        if (!Number.isFinite(c) || c < 0 || c > 1) return { error: 'confidence must be a number between 0.0 and 1.0' }
+      }
+      if (params.tags !== undefined && !Array.isArray(params.tags)) return { error: 'tags must be an array of strings' }
+      // Prevent duplicate names — an update should be used instead
+      const existingByName = rawDb.prepare('SELECT id FROM skills WHERE name = ? AND is_deleted = 0').get(name) as { id: string } | undefined
+      if (existingByName) return { error: `Skill with name "${name}" already exists (id: ${existingByName.id}). Use update_skill to modify it.` }
+
+      const skill = db.createSkill({
+        name,
+        description,
+        content,
+        confidence: params.confidence !== undefined ? Number(params.confidence) : undefined,
+        tags: Array.isArray(params.tags) ? (params.tags as string[]) : undefined
+      })
+      if (!skill) return { error: 'Failed to create skill' }
+      return { success: true, skill }
+    }
+
     case '/update_skill': {
+      if (params.confidence !== undefined) {
+        const c = Number(params.confidence)
+        if (!Number.isFinite(c) || c < 0 || c > 1) return { error: 'confidence must be a number between 0.0 and 1.0' }
+      }
+      if (params.tags !== undefined && !Array.isArray(params.tags)) return { error: 'tags must be an array of strings' }
+
       const skillUpdates: string[] = []
       const skillParams: unknown[] = []
 
       if (params.name !== undefined) { skillUpdates.push('name = ?'); skillParams.push(params.name) }
       if (params.description !== undefined) { skillUpdates.push('description = ?'); skillParams.push(params.description) }
       if (params.content !== undefined) { skillUpdates.push('content = ?'); skillParams.push(params.content) }
-      if (params.confidence !== undefined) { skillUpdates.push('confidence = ?'); skillParams.push(params.confidence) }
+      if (params.confidence !== undefined) { skillUpdates.push('confidence = ?'); skillParams.push(Number(params.confidence)) }
       if (params.tags !== undefined) { skillUpdates.push('tags = ?'); skillParams.push(JSON.stringify(params.tags)) }
 
       if (skillUpdates.length === 0) return { error: 'No updates provided' }

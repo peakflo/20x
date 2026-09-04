@@ -136,6 +136,21 @@ const sharedTools: Tool[] = [
     }
   },
   {
+    name: 'create_skill',
+    description: 'Create a new skill with name, description, and content (markdown body). Returns the created skill with its ID.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Skill name (lowercase hyphenated, 1-64 chars, e.g. "my-skill")' },
+        description: { type: 'string', description: 'Skill description (1-1024 chars)' },
+        content: { type: 'string', description: 'Skill content (the full skill file body, markdown)' },
+        confidence: { type: 'number', description: 'Confidence score (0.0 to 1.0, defaults to 0.5)' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Tags for categorization' }
+      },
+      required: ['name', 'description', 'content']
+    }
+  },
+  {
     name: 'update_skill',
     description: 'Update an existing skill. Only provided fields will be updated.',
     inputSchema: {
