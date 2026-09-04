@@ -117,20 +117,25 @@ describe('MCP Auth Proxy', () => {
     expect(port1).toBe(port2)
   })
 
-  it('registers a target and returns a proxy URL', async () => {
+  // The link id is an UNGUESSABLE 32-hex string, not a monotonic counter.
+  // Each agent/session gets its own link to the one proxy; a guessable /1, /2
+  // would let one session reach another's target (and its credential).
+  const idOf = (proxyUrl: string): string => new URL(proxyUrl).pathname.split('/')[1]
+
+  it('registers a target and returns a proxy URL with an unguessable id', async () => {
     const port = await startMcpAuthProxy(mockAuth as never)
     const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`)
-    expect(proxyUrl).toBe(`http://127.0.0.1:${port}/1`)
+    expect(proxyUrl).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${port}/[0-9a-f]{32}$`))
   })
 
   it('registers a target with a label', async () => {
     const port = await startMcpAuthProxy(mockAuth as never)
     const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'My Integration')
-    expect(proxyUrl).toBe(`http://127.0.0.1:${port}/1`)
+    expect(proxyUrl).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${port}/[0-9a-f]{32}$`))
   })
 
   it('deduplicates repeated registrations for the same target URL', async () => {
-    const port = await startMcpAuthProxy(mockAuth as never)
+    await startMcpAuthProxy(mockAuth as never)
     const targetUrl = `http://127.0.0.1:${upstream.port}`
 
     const url1 = registerMcpProxyTarget(targetUrl)
@@ -138,13 +143,13 @@ describe('MCP Auth Proxy', () => {
     const url3 = registerMcpProxyTarget(targetUrl)
 
     // All calls should return the same proxy URL (same ID)
-    expect(url1).toBe(`http://127.0.0.1:${port}/1`)
     expect(url2).toBe(url1)
     expect(url3).toBe(url1)
 
-    // A different target URL should get a new ID
+    // A different target URL gets a DIFFERENT, independent id.
     const url4 = registerMcpProxyTarget('http://example.com:9999')
-    expect(url4).toBe(`http://127.0.0.1:${port}/2`)
+    expect(idOf(url4!)).not.toBe(idOf(url1!))
+    expect(idOf(url4!)).toMatch(/^[0-9a-f]{32}$/)
   })
 
   it('returns null from registerMcpProxyTarget when proxy is not running', () => {
@@ -201,12 +206,20 @@ describe('MCP Auth Proxy', () => {
     expect(upstream.lastMethod()).toBe('GET')
   })
 
-  it('returns 404 for unknown target IDs', async () => {
+  it('returns a TERMINAL, VALID-JSON 404 for unknown target IDs (never the bare text that broke OAuth parsing)', async () => {
     await startMcpAuthProxy(mockAuth as never)
 
     const port = getMcpAuthProxyPort()!
-    const response = await fetch(`http://127.0.0.1:${port}/999`, { method: 'POST', body: '{}' })
+    const response = await fetch(`http://127.0.0.1:${port}/deadbeef`, { method: 'POST', body: '{}' })
+    const raw = await response.text()
+
     expect(response.status).toBe(404)
+    expect(response.headers.get('content-type')).toContain('application/json')
+    expect(raw).not.toBe('Unknown proxy target')
+    const parsed = JSON.parse(raw) as { reason?: string; terminal?: boolean; retryable?: boolean }
+    expect(parsed.reason).toBe('unknown_proxy_target')
+    expect(parsed.terminal).toBe(true)
+    expect(parsed.retryable).toBe(false)
   })
 
   it('returns 502 when auth fails and includes integration name in error', async () => {
@@ -231,7 +244,9 @@ describe('MCP Auth Proxy', () => {
     const response = await fetch(proxyUrl, { method: 'POST', body: '{}' })
     expect(response.status).toBe(502)
     const data = await response.json()
-    expect(data.error).toContain('target 1')
+    // The fallback label is `target <id>`, and the id is the unguessable
+    // hex from the link itself — not a monotonic counter.
+    expect(data.error).toContain(`target ${idOf(proxyUrl)}`)
   })
 
   it('shows a notification on first JWT failure per integration', async () => {

@@ -22,6 +22,7 @@
 
 import { createServer, request as httpRequest, type Server as HttpServer, type IncomingMessage, type ServerResponse } from 'http'
 import { request as httpsRequest } from 'https'
+import { randomBytes } from 'crypto'
 import { Notification } from 'electron'
 import type { EnterpriseAuth } from './enterprise-auth'
 
@@ -41,9 +42,6 @@ const targetsByUrl = new Map<string, string>()
 // Track integrations that have already shown a JWT-failure notification this app run.
 // Prevents spamming the user with repeated notifications for the same integration.
 const notifiedJwtFailures = new Set<string>()
-
-// Monotonic counter for short, collision-free IDs
-let nextId = 1
 
 export function getMcpAuthProxyPort(): number | null {
   return port
@@ -70,7 +68,12 @@ export function registerMcpProxyTarget(targetUrl: string, label?: string): strin
     return `http://127.0.0.1:${port}/${existingId}`
   }
 
-  const id = String(nextId++)
+  // UNGUESSABLE, not a monotonic counter. Each agent/session gets its OWN link
+  // to this one proxy, and that link is how the proxy tells sessions apart and
+  // attaches the right credential. `String(nextId++)` made the link guessable —
+  // one agent could reach another session's target (and its token) by requesting
+  // /1, /2, /3. 16 random bytes makes a link a genuine per-session capability.
+  const id = randomBytes(16).toString('hex')
   targets.set(id, targetUrl)
   targetsByUrl.set(targetUrl, id)
   if (label) targetLabels.set(id, label)
@@ -132,7 +135,6 @@ export function stopMcpAuthProxy(): void {
   targetLabels.clear()
   notifiedJwtFailures.clear()
   authRef = null
-  nextId = 1
 }
 
 // ── Request handler ───────────────────────────────────────────────
@@ -147,8 +149,26 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     if (!id || !targets.has(id)) {
       console.warn(`[McpAuthProxy] 404 — unknown target ID "${id}"`)
 
-      res.writeHead(404, { 'Content-Type': 'text/plain' })
-      res.end('Unknown proxy target')
+      // A TERMINAL routing failure, as VALID JSON. The bare text `Unknown proxy
+      // target` made the MCP client (which treats a non-2xx during connect as a
+      // possible OAuth challenge and JSON.parses the body) throw
+      // `SyntaxError: Unexpected identifier "Unknown"`, reported as an
+      // "Invalid OAuth error response". Valid JSON removes that misdirection and
+      // marks the failure non-retryable — this link is not registered with this
+      // proxy, which no amount of retrying resolves.
+      res.writeHead(404, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+      res.end(
+        JSON.stringify({
+          error: 'unknown_proxy_target',
+          reason: 'unknown_proxy_target',
+          terminal: true,
+          retryable: false,
+          message:
+            'MCP loopback proxy: no target is registered for this id, so this ' +
+            'server is not routable for this session. Terminal routing failure ' +
+            '(not authentication) — do not retry.'
+        })
+      )
       return
     }
 
