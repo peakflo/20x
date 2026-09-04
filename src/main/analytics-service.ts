@@ -93,6 +93,15 @@ export class AnalyticsService {
   private readonly buffer: BufferedAnalyticsEvent[] = []
   private flushTimer: ReturnType<typeof setInterval> | null = null
   private isFlushing = false
+  private enterpriseEmail: string | null = null
+
+  setEnterpriseEmail(email: string | null): void {
+    this.enterpriseEmail = email && email.trim() ? email.trim() : null
+  }
+
+  getEnterpriseEmail(): string | null {
+    return this.enterpriseEmail
+  }
 
   constructor(options: AnalyticsServiceOptions = {}) {
     this.posthogKey = options.posthogKey ?? nonEmpty(process.env['POSTHOG_KEY']) ?? nonEmpty(buildPosthogKey()) ?? ''
@@ -153,6 +162,7 @@ export class AnalyticsService {
             timestamp: item.capturedAt,
             properties: {
               ...item.properties,
+              ...(this.enterpriseEmail ? { email: this.enterpriseEmail, enterprise_email: this.enterpriseEmail } : {}),
               $process_person_profile: false,
               platform: process.platform,
               arch: process.arch,

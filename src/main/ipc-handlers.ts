@@ -1095,6 +1095,9 @@ export function registerIpcHandlers(
 
       // Use the received tokens to log in
       const result = await enterpriseAuth.loginWithTokens(tokens.access_token, tokens.refresh_token)
+      if (result?.email) {
+        analytics()?.setEnterpriseEmail(result.email)
+      }
 
       return result
     } catch (err) {
@@ -1105,7 +1108,11 @@ export function registerIpcHandlers(
 
   ipcMain.handle('enterprise:login', async (_, email: string, password: string) => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
-    return await enterpriseAuth.login(email, password)
+    const result = await enterpriseAuth.login(email, password)
+    if (result?.email) {
+      analytics()?.setEnterpriseEmail(result.email)
+    }
+    return result
   })
 
   ipcMain.handle('enterprise:listCompanies', async () => {
@@ -1116,6 +1123,12 @@ export function registerIpcHandlers(
   ipcMain.handle('enterprise:selectTenant', async (event, tenantId: string) => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     const result = await enterpriseAuth.selectTenant(tenantId)
+    try {
+      const session = await enterpriseAuth.getSession()
+      if (session.userEmail) analytics()?.setEnterpriseEmail(session.userEmail)
+    } catch {
+      // non-fatal
+    }
 
     // Return auth result immediately — run post-connect setup (sync, MCP, etc.) in background
     // so the UI shows "Connected" right away with a "Syncing..." indicator.
@@ -1321,6 +1334,7 @@ export function registerIpcHandlers(
     agentManager.setEnterpriseStateSync(null)
 
     await enterpriseAuth.logout()
+    analytics()?.setEnterpriseEmail(null)
 
     try {
       new Notification({
@@ -1337,6 +1351,11 @@ export function registerIpcHandlers(
       return { isAuthenticated: false, userEmail: null, userId: null, currentTenant: null }
     }
     const session = await enterpriseAuth.getSession()
+    if (session.userEmail) {
+      analytics()?.setEnterpriseEmail(session.userEmail)
+    } else if (!session.isAuthenticated) {
+      analytics()?.setEnterpriseEmail(null)
+    }
 
     // Restore enterprise connection if authenticated but sync manager not wired
     if (session.isAuthenticated && session.currentTenant && session.userId) {

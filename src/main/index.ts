@@ -947,6 +947,17 @@ app.whenReady().then(async () => {
   db = new DatabaseManager()
   db.initialize()
 
+  // Sync enterprise email into PostHog payloads before any analytics event
+  try {
+    const storedEmail = db.getSetting('enterprise_user_email')
+    if (storedEmail) {
+      const { analytics: getAnalytics } = await import('./analytics-service')
+      getAnalytics()?.setEnterpriseEmail(storedEmail)
+    }
+  } catch {
+    // ignore
+  }
+
   // The BOOT sweep for workspace processes. It runs here rather than beside the
   // MCP sweep above because it needs the task table to tell a leaked workspace
   // from one an agent is working in. This is the call that catches a machine
@@ -1024,6 +1035,17 @@ app.whenReady().then(async () => {
   void voiceSessionManager.initialize()
   watchAgentAnswersForSpeech(agentManager, db)
 
+  // Sync enterprise email into PostHog payloads if user is logged in
+  try {
+    const storedEmail = db.getSetting('enterprise_user_email')
+    if (storedEmail) {
+      const { analytics: getAnalytics } = await import('./analytics-service')
+      getAnalytics()?.setEnterpriseEmail(storedEmail)
+    }
+  } catch {
+    // ignore
+  }
+
   // Eagerly restore enterprise connection on startup so sync works immediately
   if (enterpriseAuth) {
     try {
@@ -1034,6 +1056,10 @@ app.whenReady().then(async () => {
         userId: session.userId,
         hasTenant: !!session.currentTenant
       })
+      if (session.userEmail) {
+        const { analytics: getAnalytics } = await import('./analytics-service')
+        getAnalytics()?.setEnterpriseEmail(session.userEmail)
+      }
       if (session.isAuthenticated && session.currentTenant && session.userId) {
         const { WorkfloApiClient } = await import('./workflo-api-client')
         const { EnterpriseSyncManager } = await import('./enterprise-sync')
