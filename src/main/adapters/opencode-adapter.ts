@@ -1737,10 +1737,35 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
 
     const openCodeDir = join(config.workspaceDir, '.opencode')
-    const pluginsDir = join(openCodeDir, 'plugins')
-    mkdirSync(pluginsDir, { recursive: true })
+    // Do not put generated plugins in `.opencode/plugins`. OpenCode 1.16+
+    // can hang while it auto-discovers project-local plugins (upstream issue
+    // #30904), and it can install another copy of plugin dependencies in each
+    // workspace. We register these files explicitly through config.update().
+    const pluginsDir = join(openCodeDir, '.20x-plugins')
+    mkdirSync(openCodeDir, { recursive: true })
 
-    this.writeTillDonePlugin(openCodeDir, pluginsDir, config.tillDone !== false)
+    // Remove files created by older 20x versions so a retry can recover an
+    // already-stuck workspace. Leave user-owned plugins in the directory.
+    const legacyPluginsDir = join(openCodeDir, 'plugins')
+    for (const fileName of ['20x-tilldone.js', '20x-secret-injector.js']) {
+      const legacyPluginPath = join(legacyPluginsDir, fileName)
+      if (existsSync(legacyPluginPath)) {
+        unlinkSync(legacyPluginPath)
+      }
+      const generatedPluginPath = join(pluginsDir, fileName)
+      if (existsSync(generatedPluginPath)) {
+        unlinkSync(generatedPluginPath)
+      }
+    }
+
+    if (config.tillDone !== false) {
+      mkdirSync(pluginsDir, { recursive: true })
+      this.writeTillDonePlugin(openCodeDir, pluginsDir, true)
+    }
+
+    if (config.secretEnvVars && Object.keys(config.secretEnvVars).length > 0) {
+      mkdirSync(pluginsDir, { recursive: true })
+    }
     this.writeSecretPlugin(config, openCodeDir, pluginsDir)
   }
 
