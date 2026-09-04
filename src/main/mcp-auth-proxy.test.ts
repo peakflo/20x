@@ -244,7 +244,9 @@ describe('MCP Auth Proxy', () => {
     const response = await fetch(proxyUrl, { method: 'POST', body: '{}' })
     expect(response.status).toBe(502)
     const data = await response.json()
-    expect(data.error).toContain('target 1')
+    // The fallback label is `target <id>`, and the id is the unguessable
+    // hex from the link itself — not a monotonic counter.
+    expect(data.error).toContain(`target ${idOf(proxyUrl)}`)
   })
 
   it('shows a notification on first JWT failure per integration', async () => {
