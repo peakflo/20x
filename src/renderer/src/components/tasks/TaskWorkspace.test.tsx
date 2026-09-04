@@ -283,6 +283,45 @@ describe('TaskWorkspace – artifacts/details sidebar default width', () => {
   })
 })
 
+describe('TaskWorkspace – messaging a task whose session has ended', () => {
+  const sessionApi = () => window.electronAPI.agentSession as unknown as Record<string, ReturnType<typeof vi.fn>>
+
+  const renderCompletedTask = () =>
+    renderWorkspace(
+      makeRendererTask({ status: TaskStatus.Completed, session_id: 'persisted-session-1' })
+    )
+
+  it('starts a fresh session and delivers the message when the persisted session has ended', async () => {
+    // What the main process reports for a completed task whose adapter session
+    // is gone: it clears session_id and answers "ended" instead of a session.
+    sessionApi().resume.mockResolvedValue({ sessionId: '', ended: true })
+    sessionApi().start.mockResolvedValue({ sessionId: 'fresh-session-1' })
+
+    renderCompletedTask()
+    fireEvent.click(screen.getByTestId('mock-send'))
+
+    await waitFor(() => expect(sessionApi().start).toHaveBeenCalled())
+    // The task description must not be replayed — the typed message is the
+    // instruction, so the initial prompt is skipped.
+    expect(sessionApi().start).toHaveBeenCalledWith('agent-1', 'task-1', undefined, true)
+    await waitFor(() =>
+      expect(sessionApi().send).toHaveBeenCalledWith('fresh-session-1', 'approved', 'task-1', 'agent-1', undefined)
+    )
+  })
+
+  it('resumes without starting a second session when the persisted session is still alive', async () => {
+    sessionApi().resume.mockResolvedValue({ sessionId: 'persisted-session-1' })
+
+    renderCompletedTask()
+    fireEvent.click(screen.getByTestId('mock-send'))
+
+    await waitFor(() =>
+      expect(sessionApi().send).toHaveBeenCalledWith('persisted-session-1', 'approved', 'task-1', 'agent-1', undefined)
+    )
+    expect(sessionApi().start).not.toHaveBeenCalled()
+  })
+})
+
 describe('TaskWorkspace – stale triage session cleanup', () => {
   it('sets up worktrees when adding repos to a task with only a persisted session_id', async () => {
     ;(window.electronAPI.github.checkCli as ReturnType<typeof vi.fn>).mockResolvedValue({ installed: true, authenticated: true })

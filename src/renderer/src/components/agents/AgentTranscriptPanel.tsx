@@ -13,6 +13,7 @@ import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifa
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
 import { SpeakMessageButton } from '@/components/voice/SpeakMessageButton'
 import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
+import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -247,7 +248,8 @@ interface AgentTranscriptPanelProps {
   status: SessionStatus
   onStop: () => void
   onRestart?: () => void
-  onSend?: (message: string, options?: { attachments?: ComposerAttachment[] }) => void
+  /** May be async: a rejected send is reported to the user instead of vanishing. */
+  onSend?: (message: string, options?: { attachments?: ComposerAttachment[] }) => void | Promise<void>
   onPickAttachments?: () => Promise<ComposerAttachment[]>
   onAddAttachmentPaths?: (filePaths: string[]) => Promise<ComposerAttachment[]>
   className?: string
@@ -1134,11 +1136,21 @@ export function AgentTranscriptPanel({
       // sentence goes through here too and arms a fresh expectation of its own
       // straight afterwards, so the conversation loop is unaffected.
       void voiceApi.answerNotExpected(taskId)
-      onSend(value, pendingAttachments.length > 0 ? { attachments: pendingAttachments } : undefined)
+      const attachmentsAtSend = pendingAttachments
+      const sent = onSend(value, attachmentsAtSend.length > 0 ? { attachments: attachmentsAtSend } : undefined)
       inputRef.current!.value = ''
       // Reset textarea height back to single row
       inputRef.current!.style.height = 'auto'
       setPendingAttachments([])
+      // The composer clears the text before the send resolves, so a rejected
+      // send used to leave no trace at all — no message, no session, no error.
+      // The text goes back into the box and the failure is announced.
+      void Promise.resolve(sent).catch((error: unknown) => {
+        console.error('[AgentTranscriptPanel] Message send failed:', error)
+        if (inputRef.current && !inputRef.current.value) inputRef.current.value = value
+        setPendingAttachments(attachmentsAtSend)
+        dispatchShortcutFeedback('Could not send the message — the agent session did not start', true)
+      })
     }
   }
   // The registration calls through this ref, so a conversation always uses the
