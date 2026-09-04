@@ -537,7 +537,18 @@ function TaskWorkspaceComponent({
     [approve]
   )
 
-  const ensureChatSession = useCallback(async (): Promise<string | null> => {
+  /**
+   * Gives the composer a session to talk to, starting or resuming one if the
+   * task has none live.
+   *
+   * `allowFreshStart` covers the case where the persisted `session_id` can no
+   * longer be resumed. The main process reports that as "ended" — it does so
+   * for every completed or reviewed task whose adapter session is gone, and
+   * for a session left behind by a previously assigned agent. Answering a
+   * question in a dead session is meaningless, so that caller keeps the old
+   * behaviour, but a plain message must still wake the agent.
+   */
+  const ensureChatSession = useCallback(async (allowFreshStart = false): Promise<string | null> => {
     if (!task?.agent_id) return null
 
     const latestSession = useAgentStore.getState().sessions.get(task.id)
@@ -546,8 +557,12 @@ function TaskWorkspaceComponent({
     if (task.session_id) {
       const resumedSessionId = await resume(task.agent_id, task.id, task.session_id)
       if (!resumedSessionId) {
+        // `resume` has already cleared the dead `session_id` in the database.
         fetchTasks()
-        return null
+        if (!allowFreshStart) return null
+        // The initial prompt is skipped: the transcript already carries the
+        // task, and the message the user just typed is the new instruction.
+        return start(task.agent_id, task.id, undefined, true)
       }
       return resumedSessionId
     }
@@ -592,8 +607,11 @@ function TaskWorkspaceComponent({
         return
       }
 
-      const readySessionId = await ensureChatSession()
-      if (!readySessionId) return
+      const readySessionId = await ensureChatSession(true)
+      // Thrown, not swallowed: the composer has already cleared the text, so a
+      // silent return leaves the user staring at an idle transcript with no
+      // idea that the message went nowhere.
+      if (!readySessionId) throw new Error('Could not start an agent session for this task')
       await sendMessage(message, options)
     },
     [approve, ensureChatSession, sendMessage, task?.id]
