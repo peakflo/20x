@@ -235,6 +235,7 @@ const mastermindTools: Tool[] = [
       type: 'object',
       properties: {
         task_id: { type: 'string' },
+        title: { type: 'string', description: 'Update task title' },
         description: { type: 'string', description: 'Update task description' },
         resolution: { type: 'string', description: 'Set task resolution/output summary' },
         attachments: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, path: { type: 'string' }, type: { type: 'string' } } }, description: 'Set task attachments (e.g. files, screenshots). Each item needs name and path.' },
@@ -713,6 +714,7 @@ const subtaskTools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        title: { type: 'string', description: 'Update title' },
         description: { type: 'string', description: 'Update description' },
         resolution: { type: 'string', description: 'Set resolution/output summary (read by sibling subtasks for coordination)' },
         attachments: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, path: { type: 'string' }, type: { type: 'string' } } }, description: 'Set attachments (e.g. files, screenshots)' },
