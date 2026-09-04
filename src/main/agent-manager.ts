@@ -166,6 +166,10 @@ interface PollingEntry {
   createdAt: number  // Timestamp to enforce grace period before IDLE transition
   hasSeenWork?: boolean  // True once we've seen at least one non-IDLE status
   lastPartReceivedAt?: number  // Timestamp of last received data — used for secondary grace period
+  /** True when the adapter buffered new data after this cycle's pollMessages()
+   *  call. The data is still behind the adapter's cursor, so the session must
+   *  NOT be unregistered yet: the next cycle has to drain it first. */
+  dataArrivedSincePoll?: boolean
   /** How many times the tillDone nudge has been sent for this polling cycle.
    *  Capped at MAX_TILLDONE_NUDGES to prevent infinite nudge loops. */
   tillDoneNudgeCount?: number
@@ -303,6 +307,10 @@ export class AgentManager extends EventEmitter {
   // the data to the UI within ~50ms instead of waiting up to 2 seconds.
   private nudgeTimer: ReturnType<typeof setTimeout> | null = null
   private static readonly NUDGE_DELAY_MS = 50
+  /** Set when a nudge arrives while a cycle is already running. The cycle may
+   *  have polled that session already, so the signal cannot simply be dropped;
+   *  tick() re-raises it once the cycle ends. */
+  private nudgeRequestedDuringTick = false
   private transcriptChangedTimer: ReturnType<typeof setTimeout> | null = null
   private pendingTranscriptChanged = new Map<string, { sinceRev: number; maxRev: number }>()
   private static readonly TRANSCRIPT_CHANGED_FLUSH_MS = 125
@@ -1941,6 +1949,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         // ends first and the children report back afterwards. Re-register it,
         // otherwise nudgePollingCoordinator() is a no-op and the work is lost.
         this.wakeSessionOnAdapterData(dataSessionId)
+        // Remember that data landed. If it landed after this cycle already
+        // polled the session, the cycle must not unregister it — see the
+        // IDLE branch of pollSingleSession().
+        const dataEntry = this.pollingEntries.get(dataSessionId)
+        if (dataEntry) dataEntry.dataArrivedSincePoll = true
         this.nudgePollingCoordinator()
       }
     }
@@ -2110,6 +2123,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       if (this.pollingEntries.size > 0) {
         this.pollingTimer = setTimeout(tick, AgentManager.POLL_INTERVAL_MS)
       }
+
+      // Re-raise any nudge that arrived while this cycle was running, so data
+      // buffered mid-cycle is delivered in ~50ms rather than at the next
+      // heartbeat — or, for a session polled before the data landed, at all.
+      if (this.nudgeRequestedDuringTick) {
+        this.nudgeRequestedDuringTick = false
+        this.nudgePollingCoordinator()
+      }
     }
 
     // Store reference so nudgePollingCoordinator can invoke it
@@ -2132,8 +2153,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     // Already have a nudge scheduled, no need to double-schedule
     if (this.nudgeTimer) return
 
-    // If a tick is already running, it will pick up the new data — no nudge needed
-    if (this.pollingInProgress) return
+    // A running tick only picks the data up if it has not polled this session
+    // yet. Once it has, dropping the signal here leaves the data buffered with
+    // nothing scheduled to collect it, so the request is re-raised instead.
+    if (this.pollingInProgress) {
+      this.nudgeRequestedDuringTick = true
+      return
+    }
 
     // No active sessions → nothing to nudge
     if (this.pollingEntries.size === 0) return
@@ -2192,6 +2218,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         this.stopAdapterPolling(entry.sessionId)
         return
       }
+
+      // Cleared immediately before the poll, so anything the adapter buffers
+      // from here on is known to be undelivered even if this poll returns it
+      // (at worst that costs one extra cycle; it can never lose a message).
+      entry.dataArrivedSincePoll = false
 
       // Poll for new messages
       const newParts = await adapter.pollMessages(
@@ -2742,6 +2773,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
           } else if (incomplete.length > 0) {
             console.log(`[AgentManager] TillDone nudge limit (${AgentManager.MAX_TILLDONE_NUDGES}) reached for ${sessionId}, transitioning to idle`)
           }
+        }
+
+        // The adapter buffered data after this cycle polled it, and the turn's
+        // `result` came with that data — which is why the status now reads
+        // IDLE. Unregistering here strands the buffered part: the nudge that
+        // announced it was swallowed because a cycle was already running, and
+        // stopAdapterPolling() cancels both the nudge and the heartbeat. The
+        // part then sits in the adapter until the NEXT prompt polls it out,
+        // which is how an agent's closing message ended up below the user's
+        // following message. Give the next cycle a chance to drain it.
+        if (pollingEntry?.dataArrivedSincePoll) {
+          console.log(`[AgentManager] IDLE for ${sessionId} deferred: adapter buffered data after this poll`)
+          return
         }
 
         console.log(`[AgentManager] Detected IDLE status for ${sessionId}, calling transitionToIdle`)
