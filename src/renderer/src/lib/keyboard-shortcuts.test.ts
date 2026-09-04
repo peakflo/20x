@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   dispatchTaskShortcut,
   getNextNudgeMessage,
+  isGlobalShortcutBlocked,
   isKeyboardInput,
   KEYBOARD_SHORTCUT_GROUPS,
   onTaskShortcut,
@@ -16,6 +17,13 @@ describe('keyboard shortcuts', () => {
     editable.contentEditable = 'true'
     expect(isKeyboardInput(editable)).toBe(true)
     expect(isKeyboardInput(document.createElement('div'))).toBe(false)
+  })
+
+  it('blocks a key event that a popup already handled', () => {
+    const event = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    event.preventDefault()
+
+    expect(isGlobalShortcutBlocked(event)).toBe(true)
   })
 
   it('cycles through different Nudge messages', () => {

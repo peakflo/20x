@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { CheckSquare, CornerDownLeft } from 'lucide-react'
 import type { WorkfloTask } from '@/types'
+import { TaskStatusBadge } from './TaskStatusBadge'
 
 interface SubtaskPickerDialogProps {
   open: boolean
@@ -70,6 +71,7 @@ export function SubtaskPickerDialog({ open, onOpenChange, subtasks, onSelect }: 
               >
                 <CheckSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1 truncate">{subtask.title}</span>
+                <TaskStatusBadge status={subtask.status} />
                 {index === activeIndex && <CornerDownLeft className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
               </button>
             ))}

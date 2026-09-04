@@ -93,6 +93,15 @@ export function isKeyboardInput(target: EventTarget | null): boolean {
     || !!target.closest('[contenteditable="true"], .xterm')
 }
 
+export function isGlobalShortcutBlocked(event: KeyboardEvent): boolean {
+  return event.defaultPrevented
+    || event.metaKey
+    || event.ctrlKey
+    || event.altKey
+    || isKeyboardInput(event.target)
+    || !!document.querySelector('[role="dialog"], [role="alertdialog"]')
+}
+
 export function dispatchTaskShortcut(detail: TaskShortcutDetail): void {
   window.dispatchEvent(new CustomEvent<TaskShortcutDetail>(TASK_SHORTCUT_EVENT, { detail }))
 }
