@@ -4,7 +4,7 @@ import {
   Search, LayoutDashboard, Layers, CheckSquare, Zap, Settings, MessageSquare,
   Plus, Sun, Moon, CornerDownLeft, LayoutGrid, ArrowDown, ArrowUp, ExternalLink,
   PanelRightOpen, FileDiff, PackageOpen, Copy, GitBranch, Mic, CircleHelp,
-  CircleCheck, Clock3, Play, Trash2, LogOut, type LucideIcon
+  CircleCheck, Clock3, Play, Trash2, LogOut, ListTree, CornerUpLeft, type LucideIcon
 } from 'lucide-react'
 import { useUIStore } from '@/stores/ui-store'
 import { useThemeStore } from '@/stores/theme-store'
@@ -43,6 +43,10 @@ export interface CommandPaletteActions {
   openOutput: () => void
   openArtifact: () => void
   openPullRequest: () => void
+  openSubtasks: () => void
+  openParentTask: () => void
+  openTaskOnCanvas: () => void
+  runHeartbeat: () => void
   copyPullRequestUrl: () => void
   copyPullRequestBranch: () => void
   toggleTaskAudio: () => void
@@ -85,7 +89,7 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
     const goto = (view: 'dashboard' | 'canvas' | 'tasks' | 'skills') => () => { closeModal(); setSidebarView(view); close() }
     const base: CommandItem[] = [
       { id: 'nav-dashboard', group: 'Navigation', label: 'Go to Dashboard', icon: LayoutDashboard, keywords: 'home overview', shortcut: `G D · ${mod}1`, run: goto('dashboard') },
-      { id: 'nav-canvas', group: 'Navigation', label: 'Go to Canvas', icon: Layers, keywords: 'board panels', shortcut: `G C · ${mod}2`, run: goto('canvas') },
+      { id: 'nav-canvas', group: 'Navigation', label: 'Go to Canvas', icon: Layers, keywords: 'board panels', shortcut: `${mod}2`, run: goto('canvas') },
       { id: 'nav-tasks', group: 'Navigation', label: 'Go to Tasks', icon: CheckSquare, keywords: 'todo list', shortcut: `G T · ${mod}3`, run: goto('tasks') },
       { id: 'nav-skills', group: 'Navigation', label: 'Go to Skills', icon: Zap, keywords: 'abilities', shortcut: `G S · ${mod}4`, run: goto('skills') },
       { id: 'nav-next-task', group: 'Navigation', label: 'Next visible task', icon: ArrowDown, shortcut: 'J', run: () => { actions.nextTask(); close() } },
@@ -105,6 +109,10 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
       { id: 'panel-output', group: 'Task panels', label: 'Open Output', icon: PackageOpen, shortcut: 'O O', run: () => { actions.openOutput(); close() } },
       { id: 'panel-artifact', group: 'Task panels', label: 'Open newest artifact', icon: LayoutGrid, shortcut: 'O A', run: () => { actions.openArtifact(); close() } },
       { id: 'panel-pr', group: 'Task panels', label: 'Open newest pull request', icon: ExternalLink, shortcut: 'O P', run: () => { actions.openPullRequest(); close() } },
+      { id: 'nav-subtasks', group: 'Task navigation', label: 'Choose a subtask to open', icon: ListTree, shortcut: 'O S', run: () => { actions.openSubtasks(); close() } },
+      { id: 'nav-parent-task', group: 'Task navigation', label: 'Go to parent task', icon: CornerUpLeft, shortcut: 'G P', run: () => { actions.openParentTask(); close() } },
+      { id: 'nav-task-canvas', group: 'Task navigation', label: 'Open task on Canvas', icon: Layers, shortcut: 'G C', run: () => { actions.openTaskOnCanvas(); close() } },
+      { id: 'act-run-heartbeat', group: 'Task actions', label: 'Run heartbeat now', icon: Zap, shortcut: 'Shift H', run: () => { actions.runHeartbeat(); close() } },
       { id: 'copy-pr-url', group: 'Pull request', label: 'Copy pull-request URL', icon: Copy, shortcut: 'Y P', run: () => { actions.copyPullRequestUrl(); close() } },
       { id: 'copy-pr-branch', group: 'Pull request', label: 'Copy pull-request branch', icon: GitBranch, shortcut: 'Y B', run: () => { actions.copyPullRequestBranch(); close() } },
       { id: 'audio-task', group: 'Audio', label: 'Toggle task audio', icon: Mic, shortcut: 'V T', run: () => { actions.toggleTaskAudio(); close() } },

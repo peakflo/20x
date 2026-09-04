@@ -37,6 +37,7 @@ import { ThemeToggle } from './ThemeToggle'
 import { StatusBar } from './StatusBar'
 import { CommandPalette } from './CommandPalette'
 import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog'
+import { SubtaskPickerDialog } from '@/components/tasks/SubtaskPickerDialog'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
 import { dispatchTaskShortcut, getNextNudgeMessage, isKeyboardInput, onShortcutFeedback, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
@@ -84,10 +85,12 @@ export function AppLayout() {
   const clearCreateTaskPrefill = useUIStore((s) => s.clearCreateTaskPrefill)
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed)
   const toggleSidebarCollapsed = useUIStore((s) => s.toggleSidebarCollapsed)
+  const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
 
   // ── Command palette ──
   const [cmdOpen, setCmdOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [subtaskPickerOpen, setSubtaskPickerOpen] = useState(false)
   const chordRef = useRef<{ key: 'g' | 'o' | 'y' | 'v'; timer: number } | null>(null)
 
   // ── Update indicator state ──
@@ -242,12 +245,88 @@ export function AppLayout() {
   }, [completeTask, dashboardPreviewTaskId])
 
   const activeTaskId = dashboardPreviewTaskId || selectedTaskId || null
+  const handleNavigateFromDashboardPreview = useCallback(
+    (taskId: string) => {
+      closeDashboardPreview()
+      handleGoToFullView(taskId)
+    },
+    [closeDashboardPreview, handleGoToFullView]
+  )
+  const activeTask = useMemo(
+    () => activeTaskId ? allTasks.find((task) => task.id === activeTaskId) : undefined,
+    [activeTaskId, allTasks]
+  )
+  const activeSubtasks = useMemo(
+    () => activeTask
+      ? allTasks
+          .filter((task) => task.parent_task_id === activeTask.id)
+          .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.created_at.localeCompare(b.created_at))
+      : [],
+    [activeTask, allTasks]
+  )
   const runTaskShortcut = useCallback((action: TaskShortcutAction) => {
     if (!activeTaskId) {
       showToast('Select a task first', true)
       return
     }
     dispatchTaskShortcut({ action, taskId: activeTaskId })
+  }, [activeTaskId, showToast])
+
+  const openSubtasks = useCallback(() => {
+    if (!activeTask) {
+      showToast('Select a task first', true)
+    } else if (activeSubtasks.length === 0) {
+      showToast('This task has no subtasks', true)
+    } else {
+      setSubtaskPickerOpen(true)
+    }
+  }, [activeSubtasks.length, activeTask, showToast])
+
+  const openParentTask = useCallback(() => {
+    if (!activeTask) {
+      showToast('Select a task first', true)
+      return
+    }
+    if (!activeTask.parent_task_id) {
+      showToast('This task has no parent', true)
+      return
+    }
+    if (dashboardPreviewTaskId) handleNavigateFromDashboardPreview(activeTask.parent_task_id)
+    else selectTask(activeTask.parent_task_id)
+  }, [activeTask, dashboardPreviewTaskId, handleNavigateFromDashboardPreview, selectTask, showToast])
+
+  const openActiveTaskOnCanvas = useCallback(() => {
+    if (!activeTaskId) {
+      setSidebarView('canvas')
+      return
+    }
+    openTaskOnCanvas(activeTaskId)
+  }, [activeTaskId, openTaskOnCanvas, setSidebarView])
+
+  const selectSubtask = useCallback((taskId: string) => {
+    if (dashboardPreviewTaskId) handleNavigateFromDashboardPreview(taskId)
+    else selectTask(taskId)
+  }, [dashboardPreviewTaskId, handleNavigateFromDashboardPreview, selectTask])
+
+  const runActiveHeartbeat = useCallback(async () => {
+    if (!activeTaskId) {
+      showToast('Select a task first', true)
+      return
+    }
+    try {
+      const result = await window.electronAPI.heartbeat.runNow(activeTaskId)
+      const feedback = {
+        sent: ['Heartbeat check started', false],
+        no_file: ['This task has no heartbeat.md file', true],
+        no_agent: ['This task has no heartbeat agent', true],
+        in_progress: ['A heartbeat check is already running', true],
+        error: ['Could not run the heartbeat check', true]
+      } as const
+      const [message, isError] = feedback[result]
+      showToast(message, isError)
+    } catch {
+      showToast('Could not run the heartbeat check', true)
+    }
   }, [activeTaskId, showToast])
 
   const navigateVisibleTask = useCallback((direction: 1 | -1) => {
@@ -367,18 +446,15 @@ export function AppLayout() {
     openOutput: () => runTaskShortcut(TaskShortcutAction.OPEN_OUTPUT),
     openArtifact: () => runTaskShortcut(TaskShortcutAction.OPEN_ARTIFACT),
     openPullRequest: () => runTaskShortcut(TaskShortcutAction.OPEN_PR),
+    openSubtasks,
+    openParentTask,
+    openTaskOnCanvas: openActiveTaskOnCanvas,
+    runHeartbeat: () => { void runActiveHeartbeat() },
     copyPullRequestUrl: () => runTaskShortcut(TaskShortcutAction.COPY_PR_URL),
     copyPullRequestBranch: () => runTaskShortcut(TaskShortcutAction.COPY_PR_BRANCH),
     toggleTaskAudio,
     toggleMastermindAudio
-  }), [clearTaskSelection, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, nudgeActiveTask, openSelectedTask, runTaskShortcut, toggleMastermindAudio, toggleTaskAudio])
-  const handleNavigateFromDashboardPreview = useCallback(
-    (taskId: string) => {
-      closeDashboardPreview()
-      handleGoToFullView(taskId)
-    },
-    [closeDashboardPreview, handleGoToFullView]
-  )
+  }), [clearTaskSelection, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, nudgeActiveTask, openActiveTaskOnCanvas, openParentTask, openSelectedTask, openSubtasks, runActiveHeartbeat, runTaskShortcut, toggleMastermindAudio, toggleTaskAudio])
 
   const overdueCount = useMemo(
     () => tasks.filter(
@@ -470,7 +546,7 @@ export function AppLayout() {
         window.clearTimeout(pending.timer)
         chordRef.current = null
         const chord = `${pending.key}${key}`
-        const views: Record<string, SidebarView> = { gd: 'dashboard', gc: 'canvas', gt: 'tasks', gs: 'skills' }
+        const views: Record<string, SidebarView> = { gd: 'dashboard', gt: 'tasks', gs: 'skills' }
         const taskActions: Record<string, TaskShortcutAction> = {
           od: TaskShortcutAction.OPEN_DETAILS,
           oc: TaskShortcutAction.OPEN_CHANGES,
@@ -487,6 +563,16 @@ export function AppLayout() {
         } else if (taskActions[chord]) {
           e.preventDefault()
           runTaskShortcut(taskActions[chord])
+        } else if (chord === 'gc') {
+          e.preventDefault()
+          if (activeTaskId) openActiveTaskOnCanvas()
+          else setSidebarView('canvas')
+        } else if (chord === 'gp') {
+          e.preventDefault()
+          openParentTask()
+        } else if (chord === 'os') {
+          e.preventDefault()
+          openSubtasks()
         } else if (chord === 'vt') {
           e.preventDefault()
           toggleTaskAudio()
@@ -514,6 +600,7 @@ export function AppLayout() {
       else if (e.key === 'Escape') { e.preventDefault(); if (showOrchestrator) setShowOrchestrator(false); else clearTaskSelection() }
       else if (key === 'c') { e.preventDefault(); openCreateModal() }
       else if (key === 'e') { e.preventDefault(); completeActiveTask() }
+      else if (key === 'h' && e.shiftKey) { e.preventDefault(); void runActiveHeartbeat() }
       else if (key === 'h') { e.preventDefault(); runTaskShortcut(TaskShortcutAction.SNOOZE) }
       else if (key === 'r') { e.preventDefault(); runTaskShortcut(TaskShortcutAction.RUN) }
       else if (key === 'w') { e.preventDefault(); nudgeActiveTask() }
@@ -526,7 +613,7 @@ export function AppLayout() {
       window.removeEventListener('keydown', onKey)
       if (chordRef.current) window.clearTimeout(chordRef.current.timer)
     }
-  }, [activeModal, clearTaskSelection, closeModal, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, nudgeActiveTask, openCreateModal, openSelectedTask, runTaskShortcut, setShowOrchestrator, setSidebarView, showOrchestrator, sidebarView, toggleMastermindAudio, toggleTaskAudio])
+  }, [activeModal, activeTaskId, clearTaskSelection, closeModal, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, nudgeActiveTask, openActiveTaskOnCanvas, openCreateModal, openParentTask, openSelectedTask, openSubtasks, runActiveHeartbeat, runTaskShortcut, setShowOrchestrator, setSidebarView, showOrchestrator, sidebarView, toggleMastermindAudio, toggleTaskAudio])
 
   return (
     <>
@@ -882,6 +969,12 @@ export function AppLayout() {
 
       {/* Command palette (⌘K / Ctrl+K) */}
       <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} actions={commandActions} />
+      <SubtaskPickerDialog
+        open={subtaskPickerOpen}
+        onOpenChange={setSubtaskPickerOpen}
+        subtasks={activeSubtasks}
+        onSelect={selectSubtask}
+      />
       <KeyboardShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
 
       {/* Background progress toasts (setup, task progress, etc.) */}

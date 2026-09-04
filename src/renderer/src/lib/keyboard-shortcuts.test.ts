@@ -3,6 +3,7 @@ import {
   dispatchTaskShortcut,
   getNextNudgeMessage,
   isKeyboardInput,
+  KEYBOARD_SHORTCUT_GROUPS,
   onTaskShortcut,
   TaskShortcutAction
 } from './keyboard-shortcuts'
@@ -31,5 +32,18 @@ describe('keyboard shortcuts', () => {
     dispatchTaskShortcut({ action: TaskShortcutAction.OPEN_DETAILS, taskId: 'task-1' })
     unsubscribe()
     expect(received).toEqual({ action: TaskShortcutAction.OPEN_DETAILS, taskId: 'task-1' })
+  })
+
+  it('lists the task navigation and heartbeat shortcuts', () => {
+    const shortcuts = KEYBOARD_SHORTCUT_GROUPS.reduce<Array<{ keys: readonly string[]; label: string }>>(
+      (all, group) => [...all, ...group.shortcuts],
+      []
+    )
+    expect(shortcuts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ keys: ['O', 'S'], label: 'Choose a subtask to open' }),
+      expect.objectContaining({ keys: ['G', 'P'], label: 'Go to parent task' }),
+      expect.objectContaining({ keys: ['G', 'C'], label: 'Open selected task on Canvas or go to Canvas' }),
+      expect.objectContaining({ keys: ['Shift', 'H'], label: 'Run heartbeat now' })
+    ]))
   })
 })

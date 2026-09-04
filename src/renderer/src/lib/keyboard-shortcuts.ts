@@ -27,7 +27,8 @@ export const KEYBOARD_SHORTCUT_GROUPS = [
       { keys: ['Enter'], label: 'Open selected task' },
       { keys: ['Esc'], label: 'Close or clear selection' },
       { keys: ['G', 'D'], label: 'Go to Dashboard' },
-      { keys: ['G', 'C'], label: 'Go to Canvas' },
+      { keys: ['G', 'C'], label: 'Open selected task on Canvas or go to Canvas' },
+      { keys: ['G', 'P'], label: 'Go to parent task' },
       { keys: ['G', 'T'], label: 'Go to Tasks' },
       { keys: ['G', 'S'], label: 'Go to Skills' },
       { keys: ['/'], label: 'Focus search' },
@@ -43,6 +44,7 @@ export const KEYBOARD_SHORTCUT_GROUPS = [
       { keys: ['H'], label: 'Snooze selected task' },
       { keys: ['R'], label: 'Run or resume selected task' },
       { keys: ['W'], label: 'Nudge agent to continue' },
+      { keys: ['Shift', 'H'], label: 'Run heartbeat now' },
       { keys: ['#'], label: 'Delete selected task' },
       { keys: ['?'], label: 'Show keyboard shortcuts' }
     ]
@@ -55,6 +57,7 @@ export const KEYBOARD_SHORTCUT_GROUPS = [
       { keys: ['O', 'O'], label: 'Open Output' },
       { keys: ['O', 'A'], label: 'Open newest artifact' },
       { keys: ['O', 'P'], label: 'Open newest pull request' },
+      { keys: ['O', 'S'], label: 'Choose a subtask to open' },
       { keys: ['Y', 'P'], label: 'Copy pull-request URL' },
       { keys: ['Y', 'B'], label: 'Copy pull-request branch' }
     ]
