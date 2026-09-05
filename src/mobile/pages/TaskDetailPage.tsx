@@ -170,100 +170,31 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     if (session?.sessionId) _stopSession(session.sessionId)
   }, [session?.sessionId, _stopSession])
 
-  // Display name of the source this task came from, when it has one. Shown in
-  // the completion choice, mirroring the desktop dialog.
-  const completeSourceName = useMemo(() => {
-    if (!task?.source_id) return undefined
-    return task.source || 'the task source'
-  }, [task?.source_id, task?.source])
-
-  // Completes a task the way the desktop does: a source-backed task honours
-  // the recorded answer — closing the ticket at the source when the user chose
-  // to, local-only otherwise. Tasks without a source just mark Completed.
-  const completeTaskNow = useCallback(
-    async (t: Task, completeAtSource: boolean) => {
-      if (t.source_id) {
-        await api.tasks.complete(t.id, completeAtSource)
-      } else {
-        await updateTask(t.id, { status: TaskStatus.Completed })
-      }
-    },
-    [updateTask]
-  )
+  const completeTaskNow = useCallback(async (t: Task) => {
+    try {
+      await api.tasks.complete(t.id)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Workflo has not confirmed completion.')
+    }
+  }, [])
 
   const handleCompleteTask = useCallback(async () => {
     if (!task) return
-    // Always show feedback when an agent is assigned (there may be a session to learn from)
-    if (task.agent_id) {
-      setCompleteModal({ withFeedback: true })
-    } else if (task.source_id && task.complete_at_source == null) {
-      // A source-backed task with no recorded answer asks which to use — reuse
-      // the same modal, without the rating/comment section.
-      setCompleteModal({ withFeedback: false })
-    } else {
-      await completeTaskNow(task, task.complete_at_source !== false)
-    }
+    if (task.agent_id) setCompleteModal({ withFeedback: true })
+    else await completeTaskNow(task)
   }, [task, completeTaskNow])
 
-  const handleCompleteAtSource = useCallback(async () => {
+  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
     if (!task) return
     setCompleteModal(null)
-    await completeTaskNow(task, true)
-  }, [task, completeTaskNow])
+    await updateTask(task.id, { feedback_rating: rating, feedback_comment: comment || null })
+    await completeTaskNow(task)
+  }, [task, updateTask, completeTaskNow])
 
-  const handleCompleteManually = useCallback(async () => {
+  const handleFeedbackSkip = useCallback(async () => {
     if (!task) return
     setCompleteModal(null)
-    await completeTaskNow(task, false)
-  }, [task, completeTaskNow])
-
-  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string, completeAtSource: boolean) => {
-    if (!task || !task.agent_id) return
-    setCompleteModal(null)
-
-    // 1. Set task to AgentLearning status with feedback (matches desktop flow).
-    //    complete_at_source records the answer for the backend completion, which
-    //    honours it when the learning session finishes.
-    await updateTask(task.id, {
-      status: TaskStatus.AgentLearning,
-      feedback_rating: rating,
-      feedback_comment: comment || null,
-      ...(task.source_id ? { complete_at_source: completeAtSource } : {})
-    })
-
-    // 2. Build the same feedback prompt as desktop
-    const commentPart = comment ? ` Comment: "${comment}".` : ''
-    const today = new Date().toISOString().split('T')[0]
-    const prompt = `User rated this session ${rating}/5.${commentPart}\n\nReview the session and update skills in .agents/skills/:\n\n**For skills you used:**\nUpdate the YAML frontmatter:\n- confidence: ${rating >= 4 ? '+0.05 (was helpful)' : rating <= 2 ? '-0.10 (was wrong/outdated)' : 'no change'}\n- uses: increment by 1\n- lastUsed: ${today}\n- tags: add relevant keywords if missing\n\n**If you discovered a new reusable pattern:**\nCreate a new skill file.\n\nUpdate existing skills that were helpful or create new ones for patterns worth reusing.`
-
-    // 3. Resume the session (or start fresh if none) and send feedback prompt
-    try {
-      let activeSessionId = session?.sessionId
-      if (!activeSessionId && task.session_id) {
-        // Resume existing session from task record
-        const { sessionId } = await api.sessions.resume(task.session_id, task.agent_id, task.id)
-        activeSessionId = sessionId
-        initSession(task.id, sessionId, task.agent_id)
-      }
-      if (activeSessionId) {
-        await api.sessions.send(activeSessionId, prompt, task.id, task.agent_id)
-        // Backend agent-manager will sync skills and auto-transition to Completed
-        // when the session becomes idle (via transitionToIdle AgentLearning check)
-      } else {
-        // No session at all — just complete, honouring the source choice
-        await completeTaskNow(task, completeAtSource)
-      }
-    } catch (e) {
-      console.error('Failed to send feedback to agent:', e)
-      // Fallback: complete the task even if learning session fails
-      await completeTaskNow(task, completeAtSource)
-    }
-  }, [task, session, updateTask, initSession, completeTaskNow])
-
-  const handleFeedbackSkip = useCallback(async (completeAtSource: boolean) => {
-    if (!task) return
-    setCompleteModal(null)
-    await completeTaskNow(task, completeAtSource)
+    await completeTaskNow(task)
   }, [task, completeTaskNow])
 
   // Skills available for this agent — must be before conditional return (Rules of Hooks)
@@ -883,13 +814,9 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         completion choice — one modal, no separate dialog. */}
       {completeModal && (
         <FeedbackModal
-          withFeedback={completeModal.withFeedback}
-          sourceName={completeSourceName}
           onSubmit={handleFeedbackSubmit}
           onSkip={handleFeedbackSkip}
           onCancel={() => setCompleteModal(null)}
-          onCompleteAtSource={handleCompleteAtSource}
-          onCompleteManually={handleCompleteManually}
         />
       )}
     </div>
@@ -1012,190 +939,29 @@ function SubtasksSection({ subtasks, onNavigateToTask, onReorderSubtasks }: { su
   )
 }
 
-function FeedbackModal({
-  withFeedback,
-  sourceName,
-  onSubmit,
-  onSkip,
-  onCancel,
-  onCompleteAtSource,
-  onCompleteManually
-}: {
-  /** True for an agent completion (shows 5-star rating + comment). False for a plain source completion. */
-  withFeedback: boolean
-  sourceName?: string | null
-  onSubmit: (rating: number, comment: string, completeAtSource: boolean) => void
-  onSkip: (completeAtSource: boolean) => void
+function FeedbackModal({ onSubmit, onSkip, onCancel }: {
+  onSubmit: (rating: number, comment: string) => void
+  onSkip: () => void
   onCancel: () => void
-  onCompleteAtSource: () => void
-  onCompleteManually: () => void
 }) {
   const [rating, setRating] = useState(0)
   const [comment, setComment] = useState('')
-  // Defaults to closing the task at the source, which is what 20x did before
-  // the choice existed (matches desktop).
-  const [completeAtSource, setCompleteAtSource] = useState(true)
-
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
-      {/* Backdrop */}
-      <div className="fixed inset-0 bg-black/60" onClick={onCancel} />
-
-      {/* Modal */}
-      <div className="relative z-50 w-full max-w-md mx-4 mb-4 bg-card border border-border rounded-xl shadow-xl animate-in slide-in-from-bottom-4 duration-200">
-        <div className="px-5 pt-5 pb-2">
-          {withFeedback ? (
-            <>
-              <h2 className="text-base font-semibold text-foreground">Session Feedback</h2>
-              <p className="text-xs text-muted-foreground mt-1">Rate this session to help the agent improve</p>
-            </>
-          ) : (
-            <>
-              <h2 className="text-base font-semibold text-foreground">
-                {sourceName ? `Complete in ${sourceName}?` : 'Complete this task?'}
-              </h2>
-              <p className="text-xs text-muted-foreground mt-1">
-                {sourceName
-                  ? `20x can close it there for you, or you can mark it complete here only and update ${sourceName} yourself.`
-                  : 'Choose how this task completes.'}
-              </p>
-            </>
-          )}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div role="dialog" aria-label="Session feedback" className="mx-4 w-full max-w-md rounded-xl border bg-card p-5 space-y-4">
+        <h2>Session feedback</h2>
+        <p className="text-sm text-muted-foreground">Workflo confirms task completion.</p>
+        <div className="flex gap-2">
+          {[1, 2, 3, 4, 5].map(value => <button key={value} aria-label={`Rate ${value}`} aria-pressed={rating === value} onClick={() => setRating(value)}>{value}</button>)}
         </div>
-
-        {/* Star rating + comment — only for a feedback completion */}
-        {withFeedback && (
-          <>
-            <div className="flex gap-2 justify-center py-4">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <button
-                  key={star}
-                  type="button"
-                  onClick={() => setRating(star)}
-                  className="p-1 active:scale-110 transition-transform"
-                >
-                  <svg
-                    className={`h-8 w-8 transition-colors ${
-                      star <= rating
-                        ? 'fill-amber-400 text-amber-400'
-                        : 'text-muted-foreground/30 fill-none'
-                    }`}
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                  </svg>
-                </button>
-              ))}
-            </div>
-            <div className="px-5">
-              <textarea
-                placeholder="Optional feedback..."
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                rows={3}
-                className="w-full bg-transparent border border-input rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 resize-none"
-              />
-            </div>
-          </>
-        )}
-
-        {/* Source completion choice (mirrors desktop FeedbackDialog). Shown only
-        alongside the rating form — a plain completion uses the action buttons
-        below. */}
-        {withFeedback && sourceName && (
-          <div className="mx-5 rounded-lg border border-border/50 p-3 space-y-2">
-            <span className="block text-xs font-medium text-foreground">
-              This task came from {sourceName}
-            </span>
-            <div className="flex gap-2">
-              <ChoiceButton
-                selected={completeAtSource}
-                onClick={() => setCompleteAtSource(true)}
-                label={`Close it in ${sourceName}`}
-              />
-              <ChoiceButton
-                selected={!completeAtSource}
-                onClick={() => setCompleteAtSource(false)}
-                label="I'll do it manually"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Actions */}
-        <div className="flex gap-2 justify-end px-5 py-4">
-          {withFeedback ? (
-            <>
-              <button
-                onClick={() => onSkip(completeAtSource)}
-                className="h-9 px-4 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors"
-              >
-                Skip
-              </button>
-              <button
-                onClick={() => { if (rating > 0) onSubmit(rating, comment, completeAtSource) }}
-                disabled={rating === 0}
-                className="h-9 px-4 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                Submit Feedback
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={onCancel}
-                className="h-9 px-4 text-sm text-muted-foreground hover:text-foreground rounded-md transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={onCompleteManually}
-                className="h-9 px-4 text-sm font-medium border border-border text-foreground rounded-md hover:bg-accent/60 transition-colors"
-              >
-                I'll do it manually
-              </button>
-              <button
-                onClick={onCompleteAtSource}
-                className="h-9 px-4 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
-              >
-                Complete at source
-              </button>
-            </>
-          )}
+        <textarea aria-label="Feedback" placeholder="Optional feedback..." value={comment} onChange={event => setComment(event.target.value)} />
+        <div className="flex gap-3">
+          <button onClick={onCancel}>Cancel</button>
+          <button onClick={onSkip}>Skip</button>
+          <button disabled={!rating} onClick={() => onSubmit(rating, comment)}>Submit Feedback</button>
         </div>
       </div>
     </div>
-  )
-}
-
-function ChoiceButton({
-  selected,
-  onClick,
-  label
-}: {
-  selected: boolean
-  onClick: () => void
-  label: string
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      onClick={onClick}
-      className={cn(
-        'flex-1 rounded-md border px-2.5 py-1.5 text-[11px] transition-colors',
-        selected
-          ? 'border-ring bg-accent/60 text-foreground'
-          : 'border-border/50 text-muted-foreground active:bg-accent/30'
-      )}
-    >
-      {label}
-    </button>
   )
 }
 

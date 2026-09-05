@@ -1,3 +1,4 @@
+import { isWorkfloLinkedTask } from './workflo-task-sync'
 import type { DatabaseManager, TaskRecord } from './database'
 import type { AgentManager } from './agent-manager'
 import { TaskStatus } from '../shared/constants'
@@ -182,7 +183,7 @@ export class TaskAutomationScheduler {
     return candidateIds
       .filter((id) => (this.failedStarts.get(id) ?? 0) < this.MAX_START_ATTEMPTS)
       .map((id) => this.dbManager.getTask(id))
-      .filter((task): task is TaskRecord => !!task)
+      .filter((task): task is TaskRecord => !!task && !isWorkfloLinkedTask(this.dbManager, task))
   }
 
   private hasSubtasks(taskId: string): boolean {
@@ -253,6 +254,8 @@ export class TaskAutomationScheduler {
     console.log(`[TaskAutomation] Found ${candidates.length} task(s) to auto-complete`)
 
     for (const row of candidates) {
+      const task = this.dbManager.getTask(row.id)
+      if (task && isWorkfloLinkedTask(this.dbManager, task)) continue
       if (this.inFlight.has(row.id)) continue
       if (this.agentManager.hasActiveSessionForTask(row.id)) {
         console.log(`[TaskAutomation] Skipping auto-complete of ${row.id} — agent session still active`)

@@ -341,36 +341,13 @@ describe('TaskDetailPage', () => {
     unmount()
   })
 
-  it('asks a source-backed task which completion to use instead of completing directly', () => {
-    const task = makeTask({ source_id: 'src-1', source: 'Notion' })
-    useTaskStore.setState({ tasks: [task], isLoading: false })
-
-    const { getByTestId, getByText, queryByTestId } = render(
-      <TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />
-    )
-
-    // The completion choice must be shown, not a direct completion
-    fireEvent.click(getByTestId('main-cta-complete'))
-    expect(getByText('Complete in Notion?')).toBeTruthy()
-
-    // Cancel leaves the task open
-    fireEvent.click(getByText('Cancel'))
-    expect(queryByTestId('main-cta-complete')).toBeTruthy()
-  })
-
-  it('completes a source-backed task locally via /complete when the user picks manual', () => {
+  it.each([null, 'src-1'])('requests server completion for source %s without a local choice', (sourceId) => {
     completeMock.mockClear()
-    const task = makeTask({ source_id: 'src-1', source: 'Notion' })
+    const task = makeTask({ source_id: sourceId, complete_at_source: false })
     useTaskStore.setState({ tasks: [task], isLoading: false })
-
-    const { getByTestId, getByText } = render(
-      <TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />
-    )
-
+    const { getByTestId, queryByText } = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
     fireEvent.click(getByTestId('main-cta-complete'))
-    // "I'll do it manually" routes to the source-honouring completion endpoint
-    // with completeAtSource=false, so the ticket is not closed at the source.
-    fireEvent.click(getByText("I'll do it manually"))
-    expect(completeMock).toHaveBeenCalledWith('task-1', false)
+    expect(completeMock).toHaveBeenCalledWith('task-1')
+    expect(queryByText("I'll do it manually")).toBeNull()
   })
 })

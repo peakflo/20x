@@ -1,3 +1,4 @@
+import { serverTaskSnapshot } from './workflo-task-sync'
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
 import { join } from 'path'
@@ -6,7 +7,7 @@ import { mkdir, writeFile } from 'fs/promises'
 import { Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
-import { TaskStatus, SessionStatus, PluginActionId } from '../shared/constants'
+import { TaskStatus, SessionStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
@@ -246,7 +247,6 @@ export class AgentManager extends EventEmitter {
   private enterpriseAuth: import('./enterprise-auth').EnterpriseAuth | null = null
   private externalListeners: Array<(channel: string, data: unknown) => void> = []
   private enterpriseStateSync: import('./enterprise-state-sync').EnterpriseStateSync | null = null
-  private syncManager: import('./sync-manager').SyncManager | null = null
 
   // ── Centralized Polling Coordinator ──
   // Instead of N independent setTimeout loops (one per session),
@@ -560,7 +560,7 @@ export class AgentManager extends EventEmitter {
    * Called after both AgentManager and SyncManager are created.
    */
   setSyncManager(syncManager: import('./sync-manager').SyncManager): void {
-    this.syncManager = syncManager
+    void syncManager
   }
 
   setMainWindow(window: BrowserWindow): void {
@@ -3042,6 +3042,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Uses promptAsync to send the initial prompt without blocking.
    */
   async startSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<string> {
+    if (this.db.getSetting(`workflo-upload:${taskId}`)) throw new Error('Wait for the Workflo task upload to finish.')
+    const serverTask = serverTaskSnapshot(this.db, taskId)
+    if (serverTask) {
+      throw new Error('Task help runs in Workflo. Open its server session.')
+    }
     const agent = this.db.getAgent(agentId)
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`)
@@ -3727,14 +3732,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    *
    * Returns false when the task was left for review instead.
    */
-  private async completeTaskAfterAgent(
-    session: AgentSession,
-    sessionId: string,
-    task: TaskRecord
-  ): Promise<boolean> {
-    void sessionId
-    return this.completeTaskWithoutReview(session.taskId, task)
-  }
 
   /**
    * Completes a task that must not wait for a human review, telling the source
@@ -3753,91 +3750,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const task = knownTask ?? this.db.getTask(taskId)
     if (!task) return false
 
-    const yieldEventLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
-
-    // A coordinator is not finished while its children are still to run.
-    //
-    // An agent that creates subtasks and then stops leaves them in
-    // not_started. Completing the parent there would mark the whole recurring
-    // occurrence done while none of the actual work had run. Park it in review
-    // instead; the parent is woken again by notifyParentOfSubtaskCompletion
-    // once every child reaches a terminal state, and completes then.
-    const pendingSubtasks = this.db.getSubtasks(taskId).filter(
-      (subtask) =>
-        subtask.status !== TaskStatus.Completed && subtask.status !== TaskStatus.ReadyForReview
-    )
-    if (pendingSubtasks.length > 0) {
-      console.log(
-        `[AgentManager] Task ${taskId} completes without review, but ${pendingSubtasks.length} ` +
-        `subtask(s) have not finished — leaving it for review`
-      )
-      if (task.status !== TaskStatus.ReadyForReview) {
-        this.db.updateTask(taskId, { status: TaskStatus.ReadyForReview })
-        await yieldEventLoop()
-        this.sendToRenderer('task:updated', {
-          taskId,
-          updates: { status: TaskStatus.ReadyForReview }
-        })
-      }
-      return false
-    }
-
-    /**
-     * The user answers this in the feedback dialog before the learning session
-     * starts, and the answer is stored on the task. `false` means the user
-     * closes the task in the source system themselves, so 20x must not do it.
-     * `null` means nobody was asked — an unattended run (auto-complete without
-     * review, a scheduled run, an MCP caller) — which keeps pushing, as before.
-     */
-    const pushToSource = task.complete_at_source !== false
-
-    if (task.source_id && this.syncManager && pushToSource) {
-      const actionField = task.output_fields?.find((f: OutputFieldRecord) => f.id === 'action')
-      const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
-      console.log(`[AgentManager] Enterprise task — calling executeAction("${actionValue}") for source ${task.source_id}`)
-      let failure: string | null = null
-      try {
-        const result = await this.syncManager.executeAction(actionValue, task, undefined, task.source_id)
-        if (!result.success) failure = result.error ?? 'unknown error'
-      } catch (err) {
-        failure = err instanceof Error ? err.message : String(err)
-      }
-      if (failure) {
-        console.error(`[AgentManager] executeAction failed, leaving task for review:`, failure)
-        this.db.updateTask(taskId, { status: TaskStatus.ReadyForReview })
-        await yieldEventLoop()
-        this.sendToRenderer('task:updated', {
-          taskId,
-          updates: { status: TaskStatus.ReadyForReview }
-        })
-        // Without this the task silently returns to review and the user is
-        // never told that the source system refused the completion.
-        this.sendToRenderer('task:source-action-failed', {
-          taskId,
-          taskTitle: task.title,
-          error: failure
-        })
-        return false
-      }
-      await yieldEventLoop()
-    } else if (task.source_id && !pushToSource) {
-      console.log(`[AgentManager] Task ${taskId} completes locally — the user updates the source`)
-    }
-
-    this.db.updateTask(taskId, { status: TaskStatus.Completed })
-    await yieldEventLoop()
-    this.sendToRenderer('task:updated', {
-      taskId,
-      updates: { status: TaskStatus.Completed }
-    })
-
-    // A subtask that finishes must still wake its parent.
-    if (task.parent_task_id) {
-      this.notifyParentOfSubtaskCompletion(task.parent_task_id, taskId).catch((err) => {
-        console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${taskId} completed:`, err)
-      })
-    }
-    return true
+    // Desktop sessions have no server session credential. Never use the
+    // signed-in user's token to complete an agent action.
+    return false
   }
 
   private async transitionToIdle(sessionId: string, session: AgentSession): Promise<void> {
@@ -3942,7 +3857,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
       await yieldEventLoop()
 
-      await this.completeTaskAfterAgent(session, sessionId, task)
+      if (this.db.getTask(session.taskId)?.status !== TaskStatus.Completed) this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
       this.sendToRenderer('agent:status', {
         sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
       })
@@ -3970,30 +3885,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       return
     }
 
-    /**
-     * A task told to finish without review finishes here, in main.
-     *
-     * This used to be done by the renderer, watching for ready_for_review — so
-     * a task could only self-resolve while a window happened to be open. An
-     * agent driving 20x through MCP, or a scheduled run on a machine with the
-     * window closed, would leave the task sitting in review for ever.
-     */
-    if (task.auto_complete_without_review) {
-      console.log(`[AgentManager] Task ${session.taskId} completes without review`)
-      const completed = await this.completeTaskAfterAgent(session, sessionId, task)
-      if (completed) {
-        this.autoEnableHeartbeat(session.taskId)
-        this.sendToRenderer('agent:status', {
-          sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
-        })
-        return
-      }
-      // Completion was refused upstream; it is already back in review.
-      this.sendToRenderer('agent:status', {
-        sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
-      })
-      return
-    }
+    // Desktop agent work is help. Only the server can accept completion.
 
     // Update task status to ready_for_review (only if task exists)
     if (task) {

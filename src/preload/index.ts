@@ -256,6 +256,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('taskSource:update', id, data),
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('taskSource:delete', id),
     sync: (sourceId: string): Promise<unknown> => ipcRenderer.invoke('taskSource:sync', sourceId),
+    upload: (taskId: string, autonomous?: boolean): Promise<{ queued: boolean }> => ipcRenderer.invoke('taskSource:upload', taskId, autonomous),
     exportUpdate: (taskId: string, fields: Record<string, unknown>): Promise<void> =>
       ipcRenderer.invoke('taskSource:exportUpdate', taskId, fields),
     getUsers: (sourceId: string): Promise<unknown[]> =>

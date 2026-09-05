@@ -1,3 +1,5 @@
+const TASK_WRITE_HEADERS = { 'x-task-contract-version': '2', 'x-task-actor': 'human' }
+
 /**
  * WorkfloApiClient — Phase 2.1
  *
@@ -22,6 +24,16 @@ export interface WorkfloTask {
   title: string
   description: string | null
   status: string
+  deletedAt?: string | null
+  version?: number
+  agentId?: string | null
+  skillIds?: string[]
+  cron?: string | null
+  timezone?: string
+  isRecurring?: boolean
+  recurrenceParentId?: string | null
+  executionMode?: 'human' | 'autonomous'
+  autoCompleteWithoutReview?: boolean
   communicationChannel: string
   dueDate: string | null
   priority: string | null
@@ -121,6 +133,7 @@ export interface WorkfloSkill {
   description: string
   content: string
   confidence?: number
+  deletedAt?: string | null
   version?: number
   uses?: number
   lastUsed?: string | null
@@ -196,8 +209,19 @@ export class WorkfloApiClient {
   /**
    * Get a single task by ID
    */
+  async listTaskCache(cursor?: string): Promise<{tasks: WorkfloTask[]; nextCursor: string | null}> {
+    return await this.auth.apiRequest('GET', `/api/tasks/cache${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`) as {tasks:WorkfloTask[];nextCursor:string|null}
+  }
+
   async getTask(taskId: string): Promise<WorkfloTask> {
     const result = (await this.auth.apiRequest('GET', `/api/tasks/${taskId}`)) as { task: WorkfloTask }
+    return result.task
+  }
+
+
+
+  async createTask(data: { clientRequestId: string; title: string; description: string; agentId?: string; skillIds?: string[]; assignees?: Array<{ assigneeType: string; assigneeValue: string }>; cron?: string; timezone?: string; autoCompleteWithoutReview?: boolean }): Promise<WorkfloTask> {
+    const result = await this.auth.apiRequest('POST', '/api/tasks', data, TASK_WRITE_HEADERS) as { task: WorkfloTask }
     return result.task
   }
 
@@ -207,6 +231,9 @@ export class WorkfloApiClient {
   async updateTask(
     taskId: string,
     data: {
+      expectedVersion?: number
+      agentId?: string | null
+      skillIds?: string[]
       title?: string
       description?: string | null
       priority?: string | null
@@ -215,7 +242,7 @@ export class WorkfloApiClient {
       assignees?: Array<{ assigneeType: string; assigneeValue: string }>
     }
   ): Promise<void> {
-    await this.auth.apiRequest('PATCH', `/api/tasks/${taskId}`, data)
+    await this.auth.apiRequest('PATCH', `/api/tasks/${taskId}`, data, TASK_WRITE_HEADERS)
   }
 
   /**
@@ -223,11 +250,13 @@ export class WorkfloApiClient {
    */
   async executeAction(
     taskId: string,
-    outputs: Record<string, unknown>
+    outputs: Record<string, unknown>,
+    expectedVersion?: number
   ): Promise<void> {
+    const version = expectedVersion ?? (await this.getTask(taskId)).version
     await this.auth.apiRequest('POST', `/api/tasks/${taskId}/action`, {
-      outputs
-    })
+      outputs, expectedVersion: version
+    }, TASK_WRITE_HEADERS)
   }
 
   // ── Org Nodes ─────────────────────────────────────────────────────────
