@@ -3788,10 +3788,45 @@ describe('AgentManager background subagent protection', () => {
 })
 
 describe('Workflo task execution owner', () => {
+  it('starts and resumes local help for a human-owned server task without claiming task status', async () => {
+    const db = createMockDb()
+    vi.mocked(db.getSetting).mockImplementation(key => key === 'workflo-task:task-1' ? JSON.stringify({ executionMode: 'human', status: 'not_started' }) : undefined)
+    vi.mocked(db.getAgent).mockReturnValue({ id: 'agent-1', config: {} } as any)
+    const manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue({})
+    const start = vi.spyOn(manager as any, 'startAdapterSession').mockResolvedValue('help-session')
+    const resume = vi.spyOn(manager as any, 'resumeAdapterSession').mockResolvedValue('help-session')
+    await expect(manager.startSession('agent-1', 'task-1', '/tmp/help')).resolves.toBe('help-session')
+    await expect(manager.resumeSession('agent-1', 'task-1', 'help-session')).resolves.toBe('help-session')
+    expect(start).toHaveBeenCalledTimes(1)
+    expect(resume).toHaveBeenCalledTimes(1)
+    ;(manager as any).updateTaskFromLocalAgent('task-1', { status: TaskStatus.AgentWorking, session_id: 'help-session' })
+    ;(manager as any).updateTaskFromLocalAgent('task-1', { status: TaskStatus.ReadyForReview })
+    expect(db.updateTask).toHaveBeenCalledExactlyOnceWith('task-1', { session_id: 'help-session' })
+  })
+
+  it('does not publish local helper status as canonical task status', () => {
+    const db = createMockDb()
+    vi.mocked(db.getSetting).mockImplementation(key => key === 'workflo-task:task-1' ? JSON.stringify({ executionMode: 'human' }) : undefined)
+    const manager = new AgentManager(db)
+    const send = vi.fn()
+    ;(manager as any).mainWindow = { isDestroyed: () => false, webContents: { send } }
+    ;(manager as any).sendToRenderer('task:updated', { taskId: 'task-1', updates: { status: TaskStatus.AgentWorking } })
+    expect(send).not.toHaveBeenCalled()
+    ;(manager as any).sendToRenderer('task:updated', { taskId: 'task-1', updates: { status: TaskStatus.ReadyForReview, session_id: 'help-session' } })
+    expect(send).toHaveBeenCalledExactlyOnceWith('task:updated', { taskId: 'task-1', updates: { session_id: 'help-session' } })
+  })
+
+  it('refuses resuming local help after assignment changes to an agent', async () => {
+    const db = createMockDb()
+    vi.mocked(db.getSetting).mockImplementation(key => key === 'workflo-task:task-1' ? JSON.stringify({ executionMode: 'autonomous' }) : undefined)
+    await expect(new AgentManager(db).resumeSession('agent-1', 'task-1', 'help-session')).rejects.toThrow('Agent-assigned tasks')
+  })
+
   it('refuses a desktop session for autonomous server work', async () => {
     const db = createMockDb()
     vi.mocked(db.getSetting).mockImplementation(key => key === 'workflo-task:task-1' ? JSON.stringify({ executionMode: 'autonomous' }) : undefined)
-    await expect(new AgentManager(db).startSession('agent-1', 'task-1', '/tmp/workflo-guard')).rejects.toThrow('Task help runs in Workflo')
+    await expect(new AgentManager(db).startSession('agent-1', 'task-1', '/tmp/workflo-guard')).rejects.toThrow('Agent-assigned tasks run through Workflo')
   })
 
   it('refuses a desktop session while task upload is pending', async () => {
