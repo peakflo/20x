@@ -22,7 +22,7 @@ import type {
 } from './coding-agent-adapter'
 import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
 
-const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-5.5'
+const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-6-astra'
 const MAX_IPC_TOOL_INPUT_CHARS = 20_000
 const MAX_IPC_TOOL_OUTPUT_CHARS = 100_000
 const MIN_THREAD_LEVEL_ASSISTANT_DEDUPE_CHARS = 40

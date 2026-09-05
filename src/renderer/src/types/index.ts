@@ -87,6 +87,7 @@ export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
 ]
 
 export enum CodexModel {
+  GPT_6_ASTRA = 'gpt-6-astra',
   GPT_5_6_SOL = 'gpt-5.6-sol',
   GPT_5_6_TERRA = 'gpt-5.6-terra',
   GPT_5_6_LUNA = 'gpt-5.6-luna',
@@ -97,7 +98,8 @@ export enum CodexModel {
 }
 
 export const CODEX_MODELS: { id: CodexModel; name: string }[] = [
-  { id: CodexModel.GPT_5_6_SOL, name: 'GPT-5.6 Sol (Recommended)' },
+  { id: CodexModel.GPT_6_ASTRA, name: 'GPT-6 Astra (Recommended)' },
+  { id: CodexModel.GPT_5_6_SOL, name: 'GPT-5.6 Sol' },
   { id: CodexModel.GPT_5_6_TERRA, name: 'GPT-5.6 Terra' },
   { id: CodexModel.GPT_5_6_LUNA, name: 'GPT-5.6 Luna' },
   { id: CodexModel.GPT_5_5, name: 'GPT-5.5' },
