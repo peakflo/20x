@@ -53,9 +53,9 @@ const WORKFLO_MCP_DEV_PATH = '/api/mcp/dev/mcp'
  * present for Codex, Claude Code, OpenCode, Pi, and ACP sessions even when the
  * server's cached tool list is empty.
  */
-const WORKFLO_WORKSPACE_DISCOVERY_GUIDANCE = `### Workflo workspace discovery
+const WORKFLO_WORKSPACE_DISCOVERY_GUIDANCE = `### Organisation Workspace discovery
 
-The Workflo MCP Dev Server is the source of truth for this tenant's live data. When a request can depend on the tenant's workflows, connected apps, tables, reports, or Business Context, do a short read-only discovery pass before you plan or answer. Do not wait for the user to name a tool.
+The Organisation Workspace is the source of truth for this tenant's live data. When a request can depend on the tenant's workflows, connected apps, tables, reports, or Business Context, do a short read-only discovery pass before you plan or answer. Do not wait for the user to name a tool.
 
 Use the discovery tools that this session exposes:
 

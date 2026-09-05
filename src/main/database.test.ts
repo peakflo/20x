@@ -252,7 +252,7 @@ describe('MCP Server CRUD', () => {
 
   it("persists `source: 'enterprise'` when set explicitly (used by EnterpriseSyncManager)", () => {
     const server = db.createMcpServer({
-      name: '[Workflo] MCP Dev Server',
+      name: '[Workflo] Organisation Workspace',
       type: 'remote',
       url: 'https://api.peakflo.ai/api/mcp/dev/mcp',
       source: 'enterprise'

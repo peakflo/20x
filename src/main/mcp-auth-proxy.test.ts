@@ -224,7 +224,7 @@ describe('MCP Auth Proxy', () => {
 
   it('returns 502 when auth fails and includes integration name in error', async () => {
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, '[Workflo] MCP Dev Server')!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, '[Workflo] Organisation Workspace')!
 
     mockAuth.setFail(true)
 
@@ -232,7 +232,7 @@ describe('MCP Auth Proxy', () => {
     expect(response.status).toBe(502)
     const data = await response.json()
     expect(data.error).toContain('Failed to obtain auth token')
-    expect(data.error).toContain('[Workflo] MCP Dev Server')
+    expect(data.error).toContain('[Workflo] Organisation Workspace')
   })
 
   it('returns 502 with fallback label when no label was set', async () => {

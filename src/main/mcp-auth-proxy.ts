@@ -33,7 +33,7 @@ let authRef: EnterpriseAuth | null = null
 // Registration ID → target URL
 const targets = new Map<string, string>()
 
-// Registration ID → human-readable integration label (e.g. "[Workflo] MCP Dev Server")
+// Registration ID → human-readable integration label (e.g. "[Workflo] Organisation Workspace")
 const targetLabels = new Map<string, string>()
 
 // Reverse lookup: target URL → ID (deduplicates repeated registrations)
