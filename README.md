@@ -54,7 +54,7 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 ### 🤖 Multi-Agent Support
 - **Claude Code** — Anthropic's official agent SDK (Claude Sonnet 4.6)
 - **OpenCode** — Open-source coding agent
-- **Codex** — OpenAI's agent framework (GPT-5.6 Sol)
+- **Codex** — OpenAI's agent framework (GPT-6 Astra)
 - **Pi** — Open-source coding agent with Peakflo AI Gateway models
 - **Live transcripts** — Watch agents think and work in real time with message counts
 - **Human-in-the-loop** — Approve risky actions before execution
@@ -268,7 +268,7 @@ We welcome contributions! Here's how:
 - ✅ Skills 2-way sync with Workflo
 - ✅ Heartbeat monitoring with CI failure detection
 - ✅ Presetup wizard and dashboard templates
-- ✅ Claude Sonnet 4.6 and GPT-5.6 model family support
+- ✅ Claude Sonnet 4.6 and GPT-6 Astra model family support
 - ✅ Multi-agent support (OpenCode, Claude Code, Codex, Pi)
 - ✅ Skills system with auto-learning
 - ✅ Recurring tasks
