@@ -32,6 +32,7 @@ export interface CommandPaletteActions {
   openTask: () => void
   clearSelection: () => void
   focusSearch: () => void
+  focusComposer: () => void
   completeTask: () => void
   nudgeTask: () => void
   snoozeTask: () => void
@@ -97,6 +98,8 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
       { id: 'nav-open-task', group: 'Navigation', label: 'Open selected task', icon: ExternalLink, shortcut: 'Enter', run: () => { actions.openTask(); close() } },
       { id: 'nav-clear-task', group: 'Navigation', label: 'Clear task selection', icon: LogOut, shortcut: 'Esc', run: () => { actions.clearSelection(); close() } },
       { id: 'nav-focus-search', group: 'Navigation', label: 'Focus search', icon: Search, shortcut: '/', run: () => { close(); window.setTimeout(actions.focusSearch, 0) } },
+      { id: 'nav-focus-composer', group: 'Navigation', label: 'Focus message composer', icon: Search, shortcut: 'I', run: () => { close(); window.setTimeout(actions.focusComposer, 0) } },
+      { id: 'nav-type-composer', group: 'Navigation', label: 'Just start typing to focus composer', icon: Search, run: () => { close(); window.setTimeout(actions.focusComposer, 0) } },
       { id: 'act-new-task', group: 'Task actions', label: 'New Task', icon: Plus, keywords: 'create add', shortcut: 'C', run: () => { openCreateModal(); close() } },
       { id: 'act-complete-task', group: 'Task actions', label: 'Complete selected task', icon: CircleCheck, shortcut: 'E', run: () => { actions.completeTask(); close() } },
       { id: 'act-snooze-task', group: 'Task actions', label: 'Snooze selected task', icon: Clock3, shortcut: 'H', run: () => { actions.snoozeTask(); close() } },
