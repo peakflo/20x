@@ -120,6 +120,27 @@ describe('AgentTranscriptPanel message layout', () => {
     vi.clearAllMocks()
   })
 
+  it('always renders transcript content as markdown without a raw content control', () => {
+    render(
+      <AgentTranscriptPanel
+        messages={[
+          {
+            id: 'agent-markdown',
+            role: 'assistant',
+            content: '**Rendered markdown**',
+            timestamp: new Date(),
+            partType: 'text'
+          }
+        ]}
+        status={SessionStatus.IDLE}
+        onStop={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('Rendered markdown').tagName).toBe('STRONG')
+    expect(screen.queryByTitle('Show raw content')).toBeNull()
+  })
+
   it('renders agent text full width without card bubble chrome while keeping user bubbles', () => {
     render(
       <AgentTranscriptPanel
