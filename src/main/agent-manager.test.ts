@@ -591,6 +591,8 @@ describe('AgentManager skill file paths', () => {
       for (const md of [agentsMd, claudeMd]) {
         expect(md).toContain('Organisation Workspace discovery')
         expect(md).toContain('do a short read-only discovery pass')
+        expect(md).toContain('Permissions, toolset settings, and connected services can hide')
+        expect(md).toContain('not evidence that the data does not exist')
         expect(md).toContain('`integrations_list`')
         expect(md).toContain('`workflow_list`')
         expect(md).toContain('`report_schema`')

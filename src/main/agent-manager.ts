@@ -57,15 +57,15 @@ const WORKFLO_WORKSPACE_DISCOVERY_GUIDANCE = `### Organisation Workspace discove
 
 The Organisation Workspace is the source of truth for this tenant's live data. When a request can depend on the tenant's workflows, connected apps, tables, reports, or Business Context, do a short read-only discovery pass before you plan or answer. Do not wait for the user to name a tool.
 
-Use the discovery tools that this session exposes:
+First inspect the tools that this session exposes. Permissions, toolset settings, and connected services can hide a category or an individual tool. The names below are possible routes, not a guaranteed tool list. Use a route only when its tools are available:
 
-- Workflows: \`workflow_list\`, then \`workflow_get\` when one is relevant.
-- Connected apps: \`integrations_list\`, then \`integration_mcp_tools_list\` before \`integration_mcp_tool_call\`.
-- Tables: \`table_list\`, then \`table_schema\` and \`table_query\` or \`table_sql\`.
-- Reports and analytics: \`report_schema\`, then \`report_schema_detail\` and \`report_query\`.
-- Business Context: \`datastore_list\` and \`datastore_query\`, or \`datastore_discover\` and \`datastore_get_document\` for provisioned reference documents.
+- Workflows, when available: \`workflow_list\`, then \`workflow_get\` when one is relevant.
+- Connected apps, when available: \`integrations_list\`, then \`integration_mcp_tools_list\` before a permitted \`integration_mcp_tool_call\`.
+- Tables, when available: \`table_list\`, then \`table_schema\` and \`table_query\` or \`table_sql\`.
+- Reports and analytics, when available: \`report_schema\`, then \`report_schema_detail\` and \`report_query\`.
+- Business Context, when available: \`datastore_list\` and \`datastore_query\`, or \`datastore_discover\` and \`datastore_get_document\` for provisioned reference documents.
 
-These first calls inspect available data. Use execute or write tools only when the task requires a change. Treat an empty discovery result as useful evidence and report it clearly.
+These first calls inspect available data. Use execute or write tools only when the task requires a change. Treat an empty successful result as useful evidence. A missing tool or a permission error is not evidence that the data does not exist. Report the access limit clearly.
 
 `
 
