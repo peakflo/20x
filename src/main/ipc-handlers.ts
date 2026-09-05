@@ -1204,21 +1204,35 @@ export function registerIpcHandlers(
         // workflows-as-tools, integrations, datastores, and data tables).
         // Uses the enterprise JWT for authentication — no separate API key needed.
         try {
-          const mcpDevServerName = '[Workflo] MCP Dev Server'
+          const mcpDevServerName = '[Workflo] Organisation Workspace'
+          const legacyMcpDevServerName = '[Workflo] MCP Dev Server'
           const apiUrl = enterpriseAuth!.getApiUrl()
           const mcpDevUrl = `${apiUrl}/api/mcp/dev/mcp`
 
           const localServers = db.getMcpServers()
-          const existingMcpDev = localServers.find((s) => s.name === mcpDevServerName)
+          const existingMcpDev =
+            localServers.find((s) => s.name === mcpDevServerName) ??
+            localServers.find(
+              (s) =>
+                s.name === legacyMcpDevServerName &&
+                s.source === 'enterprise'
+            )
 
           if (existingMcpDev) {
             // Update URL and ensure source is 'enterprise' (may be missing on
             // servers created before this fix). Also handles env changes
             // (e.g. local → stage → prod).
-            const needsUpdate = existingMcpDev.url !== mcpDevUrl || existingMcpDev.source !== 'enterprise'
+            const needsUpdate =
+              existingMcpDev.name !== mcpDevServerName ||
+              existingMcpDev.url !== mcpDevUrl ||
+              existingMcpDev.source !== 'enterprise'
             if (needsUpdate) {
-              db.updateMcpServer(existingMcpDev.id, { url: mcpDevUrl, source: 'enterprise' })
-              console.log('[enterprise] Updated MCP Dev Server URL:', mcpDevUrl)
+              db.updateMcpServer(existingMcpDev.id, {
+                name: mcpDevServerName,
+                url: mcpDevUrl,
+                source: 'enterprise'
+              })
+              console.log('[enterprise] Updated Organisation Workspace:', mcpDevUrl)
             }
           } else {
             db.createMcpServer({
@@ -1231,7 +1245,7 @@ export function registerIpcHandlers(
               // layer (via EnterpriseAuth.getJwt()), not stored statically here.
               // The MCP client retrieves a fresh JWT before each connection.
             })
-            console.log('[enterprise] Registered MCP Dev Server:', mcpDevUrl)
+            console.log('[enterprise] Registered Organisation Workspace:', mcpDevUrl)
           }
         } catch (mcpErr) {
           console.warn('[enterprise] Failed to register MCP Dev Server (non-fatal):', mcpErr)

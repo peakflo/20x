@@ -47,6 +47,28 @@ For every standalone user-facing deliverable, first call \`create_artifact\` on 
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
 const WORKFLO_MCP_DEV_PATH = '/api/mcp/dev/mcp'
 
+/**
+ * Agent backends do not all pass the MCP `initialize.instructions` field to
+ * the model. Put the same discovery rule in the workspace context so it is
+ * present for Codex, Claude Code, OpenCode, Pi, and ACP sessions even when the
+ * server's cached tool list is empty.
+ */
+const WORKFLO_WORKSPACE_DISCOVERY_GUIDANCE = `### Organisation Workspace discovery
+
+The Organisation Workspace is the source of truth for this tenant's live data. When a request can depend on the tenant's workflows, connected apps, tables, reports, or Business Context, do a short read-only discovery pass before you plan or answer. Do not wait for the user to name a tool.
+
+First inspect the tools that this session exposes. Permissions, toolset settings, and connected services can hide a category or an individual tool. The names below are possible routes, not a guaranteed tool list. Use a route only when its tools are available:
+
+- Workflows, when available: \`workflow_list\`, then \`workflow_get\` when one is relevant.
+- Connected apps, when available: \`integrations_list\`, then \`integration_mcp_tools_list\` before a permitted \`integration_mcp_tool_call\`.
+- Tables, when available: \`table_list\`, then \`table_schema\` and \`table_query\` or \`table_sql\`.
+- Reports and analytics, when available: \`report_schema\`, then \`report_schema_detail\` and \`report_query\`.
+- Business Context, when available: \`datastore_list\` and \`datastore_query\`, or \`datastore_discover\` and \`datastore_get_document\` for provisioned reference documents.
+
+These first calls inspect available data. Use execute or write tools only when the task requires a change. Treat an empty successful result as useful evidence. A missing tool or a permission error is not evidence that the data does not exist. Report the access limit clearly.
+
+`
+
 interface TodoItem {
   content: string
   status: string
@@ -199,6 +221,14 @@ interface DocumentedMcpServer {
   server: McpServerRecord
   enabledTools?: string[]
   injected?: McpServerConfig
+}
+
+function hasWorkfloMcpDevServer(entries: DocumentedMcpServer[]): boolean {
+  return entries.some(({ server, injected }) => {
+    if (isWorkfloMcpDevServerUrl(server.url ?? undefined)) return true
+    if (injected?.type !== 'http' && injected?.type !== 'sse') return false
+    return isWorkfloMcpDevServerUrl(injected.url)
+  })
 }
 
 export class AgentManager extends EventEmitter {
@@ -1280,6 +1310,10 @@ export class AgentManager extends EventEmitter {
         md += `## Available MCP Servers & Tools\n\n`
         md += `This session has access to the following Model Context Protocol (MCP) servers and their tools:\n\n`
 
+        if (hasWorkfloMcpDevServer(documentedServers)) {
+          md += WORKFLO_WORKSPACE_DISCOVERY_GUIDANCE
+        }
+
         for (const entry of documentedServers) {
           const { server: mcpServer, enabledTools } = entry
           const transport = AgentManager.describeMcpTransport(entry)
@@ -1396,6 +1430,10 @@ export class AgentManager extends EventEmitter {
       if (documentedServers.length > 0) {
         md += `## MCP Tools Available\n\n`
         md += `You have access to the following tools through Model Context Protocol (MCP) servers:\n\n`
+
+        if (hasWorkfloMcpDevServer(documentedServers)) {
+          md += WORKFLO_WORKSPACE_DISCOVERY_GUIDANCE
+        }
 
         for (const { server: mcpServer, enabledTools } of documentedServers) {
           if (mcpServer.tools && mcpServer.tools.length > 0) {

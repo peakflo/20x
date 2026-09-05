@@ -566,6 +566,48 @@ describe('AgentManager skill file paths', () => {
       expect(md).toContain('task-management (1 tools)')
       expect(md).not.toContain('configured-server')
     })
+
+    it('adds Workflo discovery guidance even when the cached tool list is empty', () => {
+      const workflo = {
+        id: 'srv-workflo',
+        name: '[Workflo] Organisation Workspace',
+        type: 'remote',
+        url: 'https://api.peakflo.ai/api/mcp/dev/mcp',
+        headers: {},
+        tools: [],
+        source: 'enterprise'
+      }
+      const mockDb = createMockDb({ mcp_servers: ['srv-workflo'] }) as any
+      mockDb.getMcpServer = vi.fn(() => workflo)
+      mockDb.getMcpServers = vi.fn(() => [workflo])
+      manager = new AgentManager(mockDb)
+      const injected = {
+        '[Workflo] Organisation Workspace': { type: 'http', url: 'http://127.0.0.1:5555/proxy-id' }
+      }
+
+      const agentsMd: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', injected)
+      const claudeMd: string = (manager as any).generateClaudeMd([], [], '/tmp/ws', 'agent-1', injected)
+
+      for (const md of [agentsMd, claudeMd]) {
+        expect(md).toContain('Organisation Workspace discovery')
+        expect(md).toContain('do a short read-only discovery pass')
+        expect(md).toContain('Permissions, toolset settings, and connected services can hide')
+        expect(md).toContain('not evidence that the data does not exist')
+        expect(md).toContain('`integrations_list`')
+        expect(md).toContain('`workflow_list`')
+        expect(md).toContain('`report_schema`')
+      }
+    })
+
+    it('does not add Workflo discovery guidance for unrelated MCP servers', () => {
+      manager = new AgentManager(makeMcpDb())
+
+      const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', {
+        'configured-server': { type: 'stdio', command: '/bin/configured', args: ['a.js'] }
+      })
+
+      expect(md).not.toContain('Organisation Workspace discovery')
+    })
   })
 
   describe('getMemoryFileName', () => {
@@ -1125,7 +1167,7 @@ describe('AgentManager MCP server routing', () => {
       })),
       getMcpServer: vi.fn(() => ({
         id: 'workflo-stage-server',
-        name: '[Workflo] MCP Dev Server',
+        name: '[Workflo] Organisation Workspace',
         type: 'remote',
         url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
         headers: {},
@@ -1142,7 +1184,7 @@ describe('AgentManager MCP server routing', () => {
 
     const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
 
-    expect(mcpServers['[Workflo] MCP Dev Server']).toMatchObject({
+    expect(mcpServers['[Workflo] Organisation Workspace']).toMatchObject({
       type: 'http',
       url: 'https://api.peakflo.ai/api/mcp/dev/mcp',
       headers: { Authorization: 'Bearer fresh-prod-jwt' },
@@ -1165,7 +1207,7 @@ describe('AgentManager MCP server routing', () => {
       })),
       getMcpServer: vi.fn(() => ({
         id: 'tan-insurance-workflo',
-        name: '[Workflo] MCP Dev Server',  // user copied the canonical name
+        name: '[Workflo] Organisation Workspace',  // user copied the canonical name
         type: 'remote',
         url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',  // and the canonical URL
         headers: {},
@@ -1182,13 +1224,13 @@ describe('AgentManager MCP server routing', () => {
 
     const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
 
-    expect(mcpServers['[Workflo] MCP Dev Server']).toMatchObject({
+    expect(mcpServers['[Workflo] Organisation Workspace']).toMatchObject({
       type: 'http',
       // URL is NOT rewritten — user pointed at stage, request goes to stage
       url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
     })
     // No Authorization injected — user didn't set one and the proxy is not invoked
-    expect(mcpServers['[Workflo] MCP Dev Server'].headers).not.toHaveProperty('Authorization')
+    expect(mcpServers['[Workflo] Organisation Workspace'].headers).not.toHaveProperty('Authorization')
   })
 
   it('respects a user-supplied Authorization header even when an enterprise-sourced row carries one (defence-in-depth)', async () => {
