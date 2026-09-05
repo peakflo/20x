@@ -182,6 +182,59 @@ function extractText(value: unknown): string {
   return ''
 }
 
+const DEFAULT_APP_SERVER_ERROR = 'Codex app-server error'
+
+/**
+ * Codex `codexErrorInfo` is either a plain enum string (`serverOverloaded`,
+ * `usageLimitExceeded`, ...) or a single-key object such as
+ * `{ responseStreamDisconnected: { httpStatusCode: 502 } }`.
+ */
+function describeCodexErrorInfo(info: unknown): string | null {
+  if (typeof info === 'string') return info || null
+  if (!isObject(info)) return null
+  const [kind] = Object.keys(info)
+  if (!kind) return null
+  const detail = isObject(info[kind]) ? info[kind] : {}
+  const httpStatus = typeof detail.httpStatusCode === 'number' ? ` HTTP ${detail.httpStatusCode}` : ''
+  return `${kind}${httpStatus}`
+}
+
+interface AppServerErrorSummary {
+  /** Human-readable message, suffixed with the Codex error code when known. */
+  message: string
+  code: string | null
+  /** Codex retries the request itself; the turn is still alive. */
+  willRetry: boolean
+}
+
+/**
+ * Codex app-server `error` notifications carry `{ error: { message,
+ * codexErrorInfo, additionalDetails }, willRetry, threadId, turnId }` and a
+ * failed `turn/completed` carries `turn.error` with the same `TurnError` shape.
+ * `extractText` does not descend into `error`, which is why every provider
+ * failure used to surface as the bare "Codex app-server error".
+ */
+function summarizeAppServerError(params: Record<string, unknown>): AppServerErrorSummary {
+  const error = isObject(params.error) ? params.error : null
+  const code = describeCodexErrorInfo(error?.codexErrorInfo ?? error?.codex_error_info)
+  const message = (error ? asString(error.message) : undefined) || extractText(params) || DEFAULT_APP_SERVER_ERROR
+  const details = error ? asString(error.additionalDetails) : undefined
+  const lines = [message.trim()]
+  if (details && details.trim() && !message.includes(details.trim())) lines.push(details.trim())
+  const text = lines.join('\n')
+  return {
+    message: code ? `${text} (${code})` : text,
+    code,
+    willRetry: params.willRetry === true || params.will_retry === true
+  }
+}
+
+function extractFailedTurnError(params: Record<string, unknown>): AppServerErrorSummary | null {
+  const turn = isObject(params.turn) ? params.turn : null
+  if (!turn || asString(turn.status) !== 'failed' || !isObject(turn.error)) return null
+  return summarizeAppServerError({ error: turn.error })
+}
+
 function extractRole(item: Record<string, unknown>): string {
   return (asString(item.role) || asString(item.author) || asString(item.sender) || '').toLowerCase()
 }
@@ -926,6 +979,14 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
     if (notification.method === 'turn/completed') {
       session.activeTurnId = null
+      // A failed turn reports `turn.status === 'failed'` with a `TurnError`.
+      // Codex normally sends a non-retryable `error` notification first, but
+      // this is the authoritative signal that the turn is over.
+      const failure = extractFailedTurnError(params)
+      if (failure) {
+        session.status = SessionStatusType.ERROR
+        session.lastError = failure.message
+      }
       if (session.threadId) {
         session.pendingCompletionRefreshes += 1
         void this.reconcileCompletedTurn(session)
@@ -951,8 +1012,17 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     }
 
     if (notification.method === 'error') {
-      session.status = SessionStatusType.ERROR
-      session.lastError = extractText(params) || 'Codex app-server error'
+      const failure = summarizeAppServerError(params)
+      if (failure.willRetry) {
+        // Recoverable (stream disconnect, transient 5xx, ...): Codex retries
+        // the request itself and the turn keeps running. Flipping the session
+        // to ERROR here made AgentManager stop polling and abandon a turn that
+        // usually went on to complete.
+        console.warn(`[CodexAppServerAdapter] Codex is retrying after a recoverable error: ${failure.message}`)
+      } else {
+        session.status = SessionStatusType.ERROR
+        session.lastError = failure.message
+      }
     }
 
     if (notification.method === 'serverRequest/resolved') {
@@ -1287,11 +1357,40 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     }
 
     if (method === 'error') {
-      const partId = `error-${Date.now()}`
+      const failure = summarizeAppServerError(params)
+      const turnId = asString(params.turnId) || asString(params.turn_id) || `${Date.now()}`
+      if (failure.willRetry) {
+        return [{
+          id: `retry-${turnId}-${Date.now()}`,
+          type: MessagePartType.RETRY,
+          text: `Codex is retrying after a recoverable error: ${failure.message}`,
+          role: MessageRole.ASSISTANT
+        }]
+      }
+      // One fatal error per turn: the failed `turn/completed` that follows
+      // carries the same TurnError and must not print a second copy.
+      const partId = `error-${turnId}`
+      if (seenPartIds.has(partId)) return []
+      seenPartIds.add(partId)
       return [{
         id: partId,
         type: MessagePartType.ERROR,
-        text: extractText(params) || 'Codex app-server error',
+        text: failure.message,
+        role: MessageRole.ASSISTANT
+      }]
+    }
+
+    if (method === 'turn/completed') {
+      const failure = extractFailedTurnError(params)
+      if (!failure) return []
+      const turn = isObject(params.turn) ? params.turn : {}
+      const partId = `error-${asString(turn.id) || Date.now()}`
+      if (seenPartIds.has(partId)) return []
+      seenPartIds.add(partId)
+      return [{
+        id: partId,
+        type: MessagePartType.ERROR,
+        text: failure.message,
         role: MessageRole.ASSISTANT
       }]
     }

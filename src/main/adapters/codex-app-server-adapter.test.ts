@@ -1235,3 +1235,170 @@ describe('CodexAppServerAdapter', () => {
     }
   })
 })
+
+describe('CodexAppServerAdapter app-server error notifications', () => {
+  const capacityError = {
+    message: 'Selected model is at capacity. Please try a different model.',
+    codexErrorInfo: 'serverOverloaded'
+  }
+
+  it('surfaces the TurnError message and code instead of the generic label', () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    session.status = SessionStatusType.BUSY
+    session.activeTurnId = 'turn-1'
+    adapter.sessions.set('thread-1', session)
+
+    const notification = {
+      jsonrpc: '2.0',
+      method: 'error',
+      params: { threadId: 'thread-1', turnId: 'turn-1', willRetry: false, error: capacityError }
+    }
+    adapter.handleRpcMessage(session, notification)
+
+    expect(session.status).toBe(SessionStatusType.ERROR)
+    expect(session.lastError).toBe(
+      'Selected model is at capacity. Please try a different model. (serverOverloaded)'
+    )
+
+    const seenPartIds = new Set<string>()
+    const parts = adapter.convertEventToMessageParts(notification, new Set(), seenPartIds, new Map(), session)
+    expect(parts).toEqual([
+      expect.objectContaining({
+        id: 'error-turn-1',
+        type: MessagePartType.ERROR,
+        text: 'Selected model is at capacity. Please try a different model. (serverOverloaded)'
+      })
+    ])
+
+    // The failed turn/completed that follows carries the same TurnError and
+    // must not print a second copy.
+    const completed = {
+      jsonrpc: '2.0',
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: { id: 'turn-1', status: 'failed', items: [], error: capacityError }
+      }
+    }
+    expect(adapter.convertEventToMessageParts(completed, new Set(), seenPartIds, new Map(), session)).toEqual([])
+  })
+
+  it('describes object-shaped codexErrorInfo with its HTTP status', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+
+    const parts = adapter.convertEventToMessageParts({
+      method: 'error',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-2',
+        willRetry: false,
+        error: {
+          message: 'stream disconnected before completion',
+          additionalDetails: 'upstream closed the connection',
+          codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 502 } }
+        }
+      }
+    }, new Set(), new Set(), new Map(), session)
+
+    expect(parts).toHaveLength(1)
+    expect(parts[0].text).toBe(
+      'stream disconnected before completion\nupstream closed the connection (responseStreamDisconnected HTTP 502)'
+    )
+  })
+
+  it('keeps the session busy and emits a retry part for recoverable errors', () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    session.status = SessionStatusType.BUSY
+    session.activeTurnId = 'turn-1'
+    adapter.sessions.set('thread-1', session)
+
+    const notification = {
+      jsonrpc: '2.0',
+      method: 'error',
+      params: {
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        willRetry: true,
+        error: {
+          message: 'stream disconnected before completion',
+          codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } }
+        }
+      }
+    }
+    adapter.handleRpcMessage(session, notification)
+
+    expect(session.status).toBe(SessionStatusType.BUSY)
+    expect(session.lastError).toBeNull()
+
+    const parts = adapter.convertEventToMessageParts(notification, new Set(), new Set(), new Map(), session)
+    expect(parts).toEqual([
+      expect.objectContaining({
+        type: MessagePartType.RETRY,
+        text: 'Codex is retrying after a recoverable error: stream disconnected before completion (responseStreamDisconnected)'
+      })
+    ])
+
+    // The turn is still alive: a later idle settles normally.
+    adapter.handleRpcMessage(session, {
+      jsonrpc: '2.0',
+      method: 'thread/status/changed',
+      params: { threadId: 'thread-1', status: { type: 'idle' } }
+    })
+    expect(session.status).toBe(SessionStatusType.IDLE)
+  })
+
+  it('marks the session failed from a failed turn/completed without an error notification', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    session.status = SessionStatusType.BUSY
+    session.activeTurnId = 'turn-3'
+    adapter.sessions.set('thread-1', session)
+
+    const completed = {
+      jsonrpc: '2.0',
+      method: 'turn/completed',
+      params: {
+        threadId: 'thread-1',
+        turn: { id: 'turn-3', status: 'failed', items: [], error: capacityError }
+      }
+    }
+    adapter.handleRpcMessage(session, completed)
+
+    const pending = Array.from(session.pendingRequests.values())[0]
+    pending.resolve({ data: [] })
+    await flushPromises()
+
+    expect(session.status).toBe(SessionStatusType.ERROR)
+    expect(session.lastError).toBe(
+      'Selected model is at capacity. Please try a different model. (serverOverloaded)'
+    )
+    expect(adapter.convertEventToMessageParts(completed, new Set(), new Set(), new Map(), session)).toEqual([
+      expect.objectContaining({ id: 'error-turn-3', type: MessagePartType.ERROR })
+    ])
+  })
+
+  it('does not treat a completed or interrupted turn as a failure', () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    session.status = SessionStatusType.BUSY
+    adapter.sessions.set('thread-1', session)
+
+    for (const status of ['completed', 'interrupted']) {
+      const completed = {
+        jsonrpc: '2.0',
+        method: 'turn/completed',
+        params: { threadId: 'thread-1', turn: { id: `turn-${status}`, status, items: [] } }
+      }
+      adapter.handleRpcMessage(session, completed)
+      expect(session.lastError).toBeNull()
+      expect(adapter.convertEventToMessageParts(completed, new Set(), new Set(), new Map(), session)).toEqual([])
+    }
+  })
+})
