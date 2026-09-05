@@ -1,3 +1,4 @@
+import { serverTaskSnapshot } from './workflo-task-sync'
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
 import { join } from 'path'
@@ -6,7 +7,7 @@ import { mkdir, writeFile } from 'fs/promises'
 import { Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { DatabaseManager, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
-import { TaskStatus, SessionStatus, PluginActionId } from '../shared/constants'
+import { TaskStatus, SessionStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
@@ -250,7 +251,6 @@ export class AgentManager extends EventEmitter {
   private enterpriseAuth: import('./enterprise-auth').EnterpriseAuth | null = null
   private externalListeners: Array<(channel: string, data: unknown) => void> = []
   private enterpriseStateSync: import('./enterprise-state-sync').EnterpriseStateSync | null = null
-  private syncManager: import('./sync-manager').SyncManager | null = null
 
   // ── Centralized Polling Coordinator ──
   // Instead of N independent setTimeout loops (one per session),
@@ -568,7 +568,7 @@ export class AgentManager extends EventEmitter {
    * Called after both AgentManager and SyncManager are created.
    */
   setSyncManager(syncManager: import('./sync-manager').SyncManager): void {
-    this.syncManager = syncManager
+    void syncManager
   }
 
   setMainWindow(window: BrowserWindow): void {
@@ -1568,6 +1568,7 @@ export class AgentManager extends EventEmitter {
     workspaceDir?: string,
     skipInitialPrompt?: boolean
   ): Promise<string> {
+    this.assertLocalHelpAllowed(taskId)
     // Helper: yield event loop between bursts of synchronous DB / FS calls
     // so the renderer can process IPC and paint frames during session setup.
     const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
@@ -1717,12 +1718,12 @@ export class AgentManager extends EventEmitter {
     })
 
     // Store session ID in database
-    this.db.updateTask(taskId, { session_id: adapterSessionId })
+    this.updateTaskFromLocalAgent(taskId, { session_id: adapterSessionId })
     console.log(`[SessionTracker] CREATED session=${adapterSessionId} task=${taskId} agent=${agentId} reason=new_session`)
 
     // Update task status (preserve Triaging status for triage sessions)
     if (!isTriageSession) {
-      this.db.updateTask(taskId, { status: TaskStatus.AgentWorking })
+      this.updateTaskFromLocalAgent(taskId, { status: TaskStatus.AgentWorking })
 
       // Notify renderer about task status change
       this.sendToRenderer('task:updated', {
@@ -2058,7 +2059,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         // put it back to working so the UI reflects the still-running children.
         const task = this.db.getTask(session!.taskId)
         if (task && task.status === TaskStatus.ReadyForReview) {
-          this.db.updateTask(session!.taskId, { status: TaskStatus.AgentWorking })
+          this.updateTaskFromLocalAgent(session!.taskId, { status: TaskStatus.AgentWorking })
           this.sendToRenderer('task:updated', {
             taskId: session!.taskId,
             updates: { status: TaskStatus.AgentWorking }
@@ -2281,7 +2282,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         console.log(`[SessionTracker] REKEYED old=${sessionId} new=${realSessionId} task=${config.taskId} reason=adapter_provided_real_id`)
 
         // Update database with real session ID
-        this.db.updateTask(config.taskId, { session_id: realSessionId })
+        this.updateTaskFromLocalAgent(config.taskId, { session_id: realSessionId })
 
         // Re-key the sessions map
         const session = this.sessions.get(sessionId)
@@ -2484,7 +2485,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       if (status.type === SessionStatusType.ERROR) {
         if (status.message?.includes('INCOMPATIBLE_SESSION_ID')) {
           console.warn('[AgentManager] Incompatible session detected during polling:', sessionId)
-          this.db.updateTask(config.taskId, { session_id: null })
+          this.updateTaskFromLocalAgent(config.taskId, { session_id: null })
           this.sendToRenderer('agent:incompatible-session', {
             taskId: config.taskId,
             agentId: config.agentId,
@@ -2862,6 +2863,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     taskId: string,
     adapterSessionId: string
   ): Promise<string> {
+    this.assertLocalHelpAllowed(taskId)
     // Helper: yield event loop between bursts of sync DB/FS calls
     const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
 
@@ -2970,7 +2972,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         const currentTask = this.db.getTask(taskId)
         if (currentTask && (currentTask.status === TaskStatus.ReadyForReview || currentTask.status === TaskStatus.Completed)) {
           console.log(`[AgentManager] Session ended normally for ${currentTask.status} task ${taskId} — clearing session_id`)
-          this.db.updateTask(taskId, { session_id: null })
+          this.updateTaskFromLocalAgent(taskId, { session_id: null })
           this.sendToRenderer('task:updated', { taskId, updates: { session_id: null } })
           // Return a sentinel value instead of throwing, so the IPC handler doesn't
           // log a noisy error. The public resumeSession() method returns empty string
@@ -2979,7 +2981,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
 
         // Clear the old session_id in the database
-        this.db.updateTask(taskId, { session_id: null })
+        this.updateTaskFromLocalAgent(taskId, { session_id: null })
 
         // Determine user-friendly error message
         let userMessage = 'Session not found. Would you like to start a new session?'
@@ -3062,7 +3064,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     // (e.g. an event-driven wake-up after the runtime was released) leaves the
     // renderer bound to a stale session id and the wake turn's output renders
     // late or not at all.
-    this.db.updateTask(taskId, { session_id: adapterSessionId })
+    this.updateTaskFromLocalAgent(taskId, { session_id: adapterSessionId })
     this.sendToRenderer('task:updated', { taskId, updates: { session_id: adapterSessionId } })
 
     // Notify renderer — session is resumed but idle (no work in progress)
@@ -3085,7 +3087,26 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Creates an OpenCode session and returns the sessionId immediately.
    * Uses promptAsync to send the initial prompt without blocking.
    */
+  private assertLocalHelpAllowed(taskId: string): void {
+    if (this.db.getSetting(`workflo-upload:${taskId}`)) throw new Error('Wait for the Workflo task upload to finish.')
+    const task = serverTaskSnapshot(this.db, taskId)
+    if (!task) return
+    if (task.executionMode !== 'human') throw new Error('Agent-assigned tasks run through Workflo, not a local help session.')
+    if (task.isRecurring || ['completed', 'cancelled', 'expired'].includes(task.status)) {
+      throw new Error('This Workflo task cannot start a help session.')
+    }
+  }
+
+  /** Local help can save its session and results, but cannot set canonical status. */
+  private updateTaskFromLocalAgent(taskId: string, updates: Parameters<DatabaseManager['updateTask']>[1]): TaskRecord | undefined {
+    const fields = { ...updates }
+    if (serverTaskSnapshot(this.db, taskId)) delete fields.status
+    if (Object.keys(fields).length === 0) return this.db.getTask(taskId)
+    return this.db.updateTask(taskId, fields)
+  }
+
   async startSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<string> {
+    this.assertLocalHelpAllowed(taskId)
     const agent = this.db.getAgent(agentId)
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`)
@@ -3109,6 +3130,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     startedTaskId?: string
     agentId?: string
   }> {
+    this.assertLocalHelpAllowed(taskId)
     const task = this.db.getTask(taskId)
     if (!task) {
       throw new Error(`Task not found: ${taskId}`)
@@ -3167,7 +3189,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         return { action: 'no_action', startedTaskId: taskId }
       }
 
-      this.db.updateTask(taskId, { status: TaskStatus.Triaging })
+      this.updateTaskFromLocalAgent(taskId, { status: TaskStatus.Triaging })
       this.sendToRenderer('task:updated', {
         taskId,
         updates: { status: TaskStatus.Triaging }
@@ -3617,6 +3639,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Replays all messages to the renderer and resumes polling.
    */
   async resumeSession(agentId: string, taskId: string, sessionId: string): Promise<string> {
+    this.assertLocalHelpAllowed(taskId)
     console.log('[AgentManager] resumeSession called:', { agentId, taskId, sessionId })
     const agent = this.db.getAgent(agentId)
     if (!agent) {
@@ -3760,128 +3783,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
   }
 
-  /**
-   * Marks a task complete once its agent is done, telling the source system
-   * first when there is one.
-   *
-   * Two callers need exactly this: a learning session finishing, and a task
-   * flagged to complete without review. An enterprise task that cannot be
-   * closed upstream falls back to ready_for_review, so it is never marked done
-   * locally while the system of record still shows it open.
-   *
-   * Returns false when the task was left for review instead.
-   */
-  private async completeTaskAfterAgent(
-    session: AgentSession,
-    sessionId: string,
-    task: TaskRecord
-  ): Promise<boolean> {
-    void sessionId
-    return this.completeTaskWithoutReview(session.taskId, task)
-  }
-
-  /**
-   * Completes a task that must not wait for a human review, telling the source
-   * system first when there is one.
-   *
-   * This is deliberately session-independent: a task can reach this point
-   * without a live agent session — a coordinator marked its parent
-   * ready_for_review, an MCP client set the status, or the periodic
-   * reconciliation sweep found a task that was left in review while its
-   * auto_complete_without_review flag was set. Every one of those routes must
-   * honour the flag, not just the one that runs inside transitionToIdle.
-   *
-   * Returns false when the task was left for review instead.
-   */
+  /** Local agents help a human owner; only that human can accept completion. */
   async completeTaskWithoutReview(taskId: string, knownTask?: TaskRecord): Promise<boolean> {
     const task = knownTask ?? this.db.getTask(taskId)
     if (!task) return false
 
-    const yieldEventLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
-
-    // A coordinator is not finished while its children are still to run.
-    //
-    // An agent that creates subtasks and then stops leaves them in
-    // not_started. Completing the parent there would mark the whole recurring
-    // occurrence done while none of the actual work had run. Park it in review
-    // instead; the parent is woken again by notifyParentOfSubtaskCompletion
-    // once every child reaches a terminal state, and completes then.
-    const pendingSubtasks = this.db.getSubtasks(taskId).filter(
-      (subtask) =>
-        subtask.status !== TaskStatus.Completed && subtask.status !== TaskStatus.ReadyForReview
-    )
-    if (pendingSubtasks.length > 0) {
-      console.log(
-        `[AgentManager] Task ${taskId} completes without review, but ${pendingSubtasks.length} ` +
-        `subtask(s) have not finished — leaving it for review`
-      )
-      if (task.status !== TaskStatus.ReadyForReview) {
-        this.db.updateTask(taskId, { status: TaskStatus.ReadyForReview })
-        await yieldEventLoop()
-        this.sendToRenderer('task:updated', {
-          taskId,
-          updates: { status: TaskStatus.ReadyForReview }
-        })
-      }
-      return false
-    }
-
-    /**
-     * The user answers this in the feedback dialog before the learning session
-     * starts, and the answer is stored on the task. `false` means the user
-     * closes the task in the source system themselves, so 20x must not do it.
-     * `null` means nobody was asked — an unattended run (auto-complete without
-     * review, a scheduled run, an MCP caller) — which keeps pushing, as before.
-     */
-    const pushToSource = task.complete_at_source !== false
-
-    if (task.source_id && this.syncManager && pushToSource) {
-      const actionField = task.output_fields?.find((f: OutputFieldRecord) => f.id === 'action')
-      const actionValue = actionField?.value ? String(actionField.value) : PluginActionId.Complete
-      console.log(`[AgentManager] Enterprise task — calling executeAction("${actionValue}") for source ${task.source_id}`)
-      let failure: string | null = null
-      try {
-        const result = await this.syncManager.executeAction(actionValue, task, undefined, task.source_id)
-        if (!result.success) failure = result.error ?? 'unknown error'
-      } catch (err) {
-        failure = err instanceof Error ? err.message : String(err)
-      }
-      if (failure) {
-        console.error(`[AgentManager] executeAction failed, leaving task for review:`, failure)
-        this.db.updateTask(taskId, { status: TaskStatus.ReadyForReview })
-        await yieldEventLoop()
-        this.sendToRenderer('task:updated', {
-          taskId,
-          updates: { status: TaskStatus.ReadyForReview }
-        })
-        // Without this the task silently returns to review and the user is
-        // never told that the source system refused the completion.
-        this.sendToRenderer('task:source-action-failed', {
-          taskId,
-          taskTitle: task.title,
-          error: failure
-        })
-        return false
-      }
-      await yieldEventLoop()
-    } else if (task.source_id && !pushToSource) {
-      console.log(`[AgentManager] Task ${taskId} completes locally — the user updates the source`)
-    }
-
-    this.db.updateTask(taskId, { status: TaskStatus.Completed })
-    await yieldEventLoop()
-    this.sendToRenderer('task:updated', {
-      taskId,
-      updates: { status: TaskStatus.Completed }
-    })
-
-    // A subtask that finishes must still wake its parent.
-    if (task.parent_task_id) {
-      this.notifyParentOfSubtaskCompletion(task.parent_task_id, taskId).catch((err) => {
-        console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${taskId} completed:`, err)
-      })
-    }
-    return true
+    // Agent-owned work completes through agent-harness. Local help must not
+    // use the human owner's token to accept its own result.
+    return false
   }
 
   private async transitionToIdle(sessionId: string, session: AgentSession): Promise<void> {
@@ -3907,7 +3816,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (session.isTriageSession) {
       session.status = 'idle'
       console.log(`[AgentManager] Triage session completed for task ${session.taskId}, reverting to NotStarted`)
-      this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted, session_id: null })
+      this.updateTaskFromLocalAgent(session.taskId, { status: TaskStatus.NotStarted, session_id: null })
       await yieldEventLoop()
 
       this.sendToRenderer('task:updated', {
@@ -3986,7 +3895,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
       await yieldEventLoop()
 
-      await this.completeTaskAfterAgent(session, sessionId, task)
+      if (this.db.getTask(session.taskId)?.status !== TaskStatus.Completed) this.updateTaskFromLocalAgent(session.taskId, { status: TaskStatus.ReadyForReview })
       this.sendToRenderer('agent:status', {
         sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
       })
@@ -4014,35 +3923,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       return
     }
 
-    /**
-     * A task told to finish without review finishes here, in main.
-     *
-     * This used to be done by the renderer, watching for ready_for_review — so
-     * a task could only self-resolve while a window happened to be open. An
-     * agent driving 20x through MCP, or a scheduled run on a machine with the
-     * window closed, would leave the task sitting in review for ever.
-     */
-    if (task.auto_complete_without_review) {
-      console.log(`[AgentManager] Task ${session.taskId} completes without review`)
-      const completed = await this.completeTaskAfterAgent(session, sessionId, task)
-      if (completed) {
-        this.autoEnableHeartbeat(session.taskId)
-        this.sendToRenderer('agent:status', {
-          sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
-        })
-        return
-      }
-      // Completion was refused upstream; it is already back in review.
-      this.sendToRenderer('agent:status', {
-        sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
-      })
-      return
-    }
+    // Desktop agent work is help. Only the server can accept completion.
 
     // Update task status to ready_for_review (only if task exists)
     if (task) {
       console.log(`[AgentManager] Updating task ${session.taskId} status to ReadyForReview`)
-      this.db.updateTask(session.taskId, { status: TaskStatus.ReadyForReview })
+      this.updateTaskFromLocalAgent(session.taskId, { status: TaskStatus.ReadyForReview })
       await yieldEventLoop()
 
       // Auto-enable heartbeat if agent wrote a heartbeat.md file
@@ -4220,7 +4106,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (resetTaskStatus) {
       const task = this.db.getTask(session.taskId)
       if (task?.status !== TaskStatus.Completed) {
-        this.db.updateTask(session.taskId, { status: TaskStatus.NotStarted })
+        this.updateTaskFromLocalAgent(session.taskId, { status: TaskStatus.NotStarted })
       }
     }
 
@@ -4400,7 +4286,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     session.lastActivityAt = Date.now()
     const currentTask = this.db.getTask(session.taskId)
     if (currentTask?.status !== TaskStatus.AgentLearning) {
-      this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
+      this.updateTaskFromLocalAgent(session.taskId, { status: TaskStatus.AgentWorking })
     }
     this.sendToRenderer('agent:status', {
       sessionId,
@@ -4554,7 +4440,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       session.status = 'working'
       const currentTask = this.db.getTask(session.taskId)
       if (currentTask?.status !== TaskStatus.AgentLearning) {
-        this.db.updateTask(session.taskId, { status: TaskStatus.AgentWorking })
+        this.updateTaskFromLocalAgent(session.taskId, { status: TaskStatus.AgentWorking })
       }
       this.sendToRenderer('agent:status', {
         sessionId, agentId: session.agentId, taskId: session.taskId, status: 'working'
@@ -5195,7 +5081,7 @@ Important:
       })
 
       // Save updated output fields
-      this.db.updateTask(session.taskId, { output_fields: updatedFields })
+      this.updateTaskFromLocalAgent(session.taskId, { output_fields: updatedFields })
       console.log(`[AgentManager] Extracted output values for task ${session.taskId}`)
     } catch (error) {
       console.error(`[AgentManager] Error extracting output values:`, error)
@@ -5446,7 +5332,7 @@ Important:
           const now = new Date()
           const nextCheck = new Date(now.getTime() + defaultInterval * 60_000)
 
-          this.db.updateTask(taskId, {
+          this.updateTaskFromLocalAgent(taskId, {
             heartbeat_enabled: true,
             heartbeat_interval_minutes: defaultInterval,
             heartbeat_next_check_at: nextCheck.toISOString()
@@ -5650,6 +5536,15 @@ Important:
   }
 
   private sendToRenderer(channel: string, data: unknown): void {
+    if (channel === 'task:updated' && data && typeof data === 'object') {
+      const event = data as { taskId?: string; updates?: Record<string, unknown> }
+      if (event.taskId && event.updates && serverTaskSnapshot(this.db, event.taskId)) {
+        const updates = { ...event.updates }
+        delete updates.status
+        if (Object.keys(updates).length === 0) return
+        data = { ...event, updates }
+      }
+    }
     // Durable transcript projection: persist every transcript part BEFORE any
     // client sees it. The main process owns the source of truth; renderer and
     // mobile hydrate from snapshots (transcript:get) instead of depending on

@@ -171,7 +171,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
       return allTasks
         .filter((task) => {
           // Skip recurring parent template tasks — they are templates, not actionable tasks
-          if (isRecurringTemplate(task)) return false
+          if (task.server_managed || isRecurringTemplate(task)) return false
 
           // Skip subtasks — they are managed by sequential subtask orchestration
           if (task.parent_task_id) return false
@@ -244,7 +244,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
 
       allTasks.forEach((task) => {
         // Skip recurring parent template tasks — they are templates, not actionable tasks
-        if (isRecurringTemplate(task)) return
+        if (task.server_managed || isRecurringTemplate(task)) return
 
         // Skip parent tasks that have subtasks — subtasks will run sequentially instead
         const hasChildren = allTasks.some((t) => t.parent_task_id === task.id)
@@ -392,7 +392,7 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
 
       // Verify task is still eligible
       if (
-        isRecurringTemplate(task) ||
+        task.server_managed || isRecurringTemplate(task) ||
         task.status !== TaskStatus.NotStarted ||
         task.agent_id !== agentId ||
         isSnoozed(task.snoozed_until) ||

@@ -1,3 +1,5 @@
+import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { useTaskStore } from '@/stores/task-store'
 import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, Bot, Check, ChevronDown, ExternalLink, FolderOpen, Layers, Menu, MoreHorizontal, Pencil, Play, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -68,6 +70,18 @@ export function TaskHeaderBar({
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(task.title)
   const [menuOpen, setMenuOpen] = useState(false)
+  const enterpriseConnected = useEnterpriseStore(s => s.isAuthenticated)
+  const [uploadMessage, setUploadMessage] = useState<string | null>(null)
+  const uploadToWorkflo = async (autonomous = false) => {
+    try {
+      const result = await window.electronAPI.taskSources.upload(task.id, autonomous)
+      setUploadMessage(result.queued ? 'Waiting for Workflo. Retry is saved.' : 'Task sent to Workflo.')
+      await useTaskStore.getState().fetchTasks()
+    } catch (error) {
+      setUploadMessage(error instanceof Error ? error.message : String(error))
+    }
+  }
+
   const [statusMenuOpen, setStatusMenuOpen] = useState(false)
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -237,7 +251,7 @@ export function TaskHeaderBar({
           </span>
         )}
       </div>
-      {actionMeta && onAction && (
+      {actionMeta && onAction && task.server_execution_mode !== 'autonomous' && (
         <Button size="sm" onClick={onAction} className="h-8 gap-1.5 px-3" data-testid={`header-cta-${action}`}>
           {ActionIcon && <ActionIcon className="h-3.5 w-3.5" />}
           {actionMeta.label}
@@ -268,6 +282,8 @@ export function TaskHeaderBar({
         {menuOpen && (
           <div className="absolute right-0 top-9 z-50 w-44 overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
             {[
+              { label: 'Send to Workflo', icon: ExternalLink, action: enterpriseConnected && !task.source_id ? () => uploadToWorkflo(false) : undefined },
+              { label: 'Run agent in Workflo', icon: Bot, action: enterpriseConnected && !task.source_id && task.agent_id ? () => uploadToWorkflo(true) : undefined },
               { label: 'Edit task', icon: Pencil, action: onEdit },
               { label: 'Snooze', icon: ChevronDown, action: onSnooze },
               { label: 'Open in canvas', icon: Layers, action: onOpenCanvas },
@@ -285,6 +301,11 @@ export function TaskHeaderBar({
           </div>
         )}
       </div>
+      {task.server_execution_mode === 'autonomous' && <span className="text-xs">Agent runs in Workflo</span>}
+      {task.server_cron && <span className="text-xs">Workflo schedule: {task.server_cron}</span>}
+      {task.server_pending_edits && <details className="text-xs"><summary>Unsaved edits</summary><pre className="whitespace-pre-wrap">{JSON.stringify(task.server_pending_edits, null, 2)}</pre></details>}
+      {task.server_sync_pending && <span role="status" className="text-xs">{task.server_sync_error ? `Edits not saved in Workflo: ${task.server_sync_error}` : 'Waiting to sync with Workflo'}</span>}
+      {uploadMessage && <span role="status" className="text-xs">{uploadMessage}</span>}
     </header>
   )
 }

@@ -330,6 +330,7 @@ interface ElectronAPI {
     update: (id: string, data: UpdateTaskSourceDTO) => Promise<TaskSource | undefined>
     delete: (id: string) => Promise<boolean>
     sync: (sourceId: string) => Promise<SyncResult>
+    upload: (taskId: string, autonomous?: boolean) => Promise<{ queued: boolean }>
     exportUpdate: (taskId: string, fields: Record<string, unknown>) => Promise<void>
     getUsers: (sourceId: string) => Promise<SourceUser[]>
     reassign: (taskId: string, userIds: string[], assigneeDisplay: string) => Promise<ReassignResult>

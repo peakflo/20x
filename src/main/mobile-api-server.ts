@@ -716,30 +716,34 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
 
   // POST /api/tasks — create task (must be checked before the :id update route)
   if (pathname === '/api/tasks') {
+    if (params.status === TaskStatus.Completed) throw Object.assign(new Error('Workflo must confirm completion.'), { status: 409 })
     const { title } = params as { title?: string }
     if (!title) throw Object.assign(new Error('title is required'), { status: 400 })
-    const task = db.createTask(params as unknown as Parameters<DatabaseManager['createTask']>[0])
+    let task = db.createTask(params as unknown as Parameters<DatabaseManager['createTask']>[0])
     if (!task) throw Object.assign(new Error('Failed to create task'), { status: 500 })
+    if (!task.source_id && syncManagerRef?.canUploadTasks()) {
+      try { await syncManagerRef.uploadTask(task.id) }
+      catch (error) { db.setSetting(`workflo-upload:${task.id}:error`, error instanceof Error ? error.message : String(error)) }
+      task = db.getTask(task.id)!
+    }
     broadcastToMobileClients('task:created', { task })
     if (notifyDesktop) notifyDesktop('task:created', { task })
     if (task.auto_start_agent) triggerTaskAutomation()
     return task
   }
 
-  // POST /api/tasks/:id/complete — complete a task, closing it at its source
-  // when the user chooses to (matches the desktop completion flow). Reuses
-  // completeTaskWithoutReview, which honours the recorded complete_at_source
-  // answer and leaves a task the source refuses in review.
+  // Human mobile completion uses the same durable server command as desktop.
   const taskCompleteMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/)
   if (taskCompleteMatch) {
     const taskId = taskCompleteMatch[1]
     const task = db.getTask(taskId)
     if (!task) throw Object.assign(new Error('Task not found'), { status: 404 })
-    const { completeAtSource } = params as { completeAtSource?: boolean }
-    if (task.source_id && completeAtSource !== undefined) {
-      db.updateTask(taskId, { complete_at_source: completeAtSource })
+    if (!syncManagerRef || !task.source_id || db.getTaskSource(task.source_id)?.plugin_id !== 'peakflo') {
+      throw Object.assign(new Error('Sync this task with Workflo before completing it.'), { status: 409 })
     }
-    const completed = await agent.completeTaskWithoutReview(taskId)
+    const result = await syncManagerRef.executeAction('complete', task, undefined, task.source_id)
+    if (!result.success) throw Object.assign(new Error(result.error || 'Completion is pending.'), { status: 409 })
+    const completed = true
     const fresh = db.getTask(taskId)
     if (fresh) {
       broadcastToMobileClients('task:updated', { taskId, updates: fresh })

@@ -288,7 +288,7 @@ describe('TaskAutomationScheduler — parents and subtasks', () => {
         sort_order: index,
         agent_id: child.agent_id === undefined ? agentId : child.agent_id,
         ...(child.status ? { status: child.status } : {})
-      })
+      }, 'workflo-server')
       return created.id
     })
     return { parentId: parent.id, childIds }
@@ -317,7 +317,9 @@ describe('TaskAutomationScheduler — parents and subtasks', () => {
 
     await new TaskAutomationScheduler(db, agentManager).runNow()
 
+    expect(agentManager.completeTaskWithoutReview).toHaveBeenCalledTimes(1)
     expect(agentManager.completeTaskWithoutReview).toHaveBeenCalledWith(parentId)
+    expect(db.getTask(parentId)?.status).toBe(TaskStatus.ReadyForReview)
   })
 
   it('waiting for a child does not burn a completion attempt', async () => {
@@ -333,10 +335,12 @@ describe('TaskAutomationScheduler — parents and subtasks', () => {
     for (let i = 0; i < 5; i++) await scheduler.runNow()
     expect(agentManager.completeTaskWithoutReview).not.toHaveBeenCalled()
 
-    db.updateTask(childIds[0], { status: TaskStatus.Completed })
+    db.updateTask(childIds[0], { status: TaskStatus.Completed }, 'workflo-server')
     await scheduler.runNow()
 
+    expect(agentManager.completeTaskWithoutReview).toHaveBeenCalledTimes(1)
     expect(agentManager.completeTaskWithoutReview).toHaveBeenCalledWith(parentId)
+    expect(db.getTask(parentId)?.status).toBe(TaskStatus.ReadyForReview)
   })
 
   it('starts the first child of a parent that created children and stopped', async () => {
@@ -368,7 +372,7 @@ describe('TaskAutomationScheduler — parents and subtasks', () => {
     await scheduler.runNow()
     expect(agentManager.startTask).not.toHaveBeenCalled()
 
-    db.updateTask(childIds[0], { status: TaskStatus.Completed })
+    db.updateTask(childIds[0], { status: TaskStatus.Completed }, 'workflo-server')
     await scheduler.runNow()
     expect(agentManager.startTask).toHaveBeenCalledWith(childIds[1])
   })

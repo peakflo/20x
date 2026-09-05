@@ -1,3 +1,4 @@
+import { isWorkfloLinkedTask } from './workflo-task-sync'
 import { BrowserWindow } from 'electron'
 import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager, RecurrencePatternRecord, RecurrencePatternObject, TaskRecord } from './database'
@@ -215,6 +216,7 @@ export class RecurrenceScheduler {
    * then fast-forward next_occurrence_at to the next future time.
    */
   private async catchUpMissedOccurrences(template: TaskRecord): Promise<void> {
+    if (isWorkfloLinkedTask(this.dbManager, template)) return
     if (!template.recurrence_pattern || !template.next_occurrence_at) {
       return
     }
