@@ -1,7 +1,7 @@
 import { Agent as UndiciAgent } from 'undici'
 import { mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync, readFileSync } from 'fs'
 import { join, delimiter } from 'path'
-import { homedir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { execSync } from 'child_process'
 import { buildMergedOpencodeConfig } from '../utils/opencode-config'
 import { ENTERPRISE_AI_GATEWAY_PROVIDER_ID, readEnterpriseAiGatewayConfig } from '../enterprise-ai-gateway'
@@ -628,6 +628,21 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         this.filterStaleProviderModels(data.providers)
       }
 
+      // If we fell back to homedir (no explicit directory) and the opencode Zen
+      // provider is missing a model that a fresh probe directory sees, the homedir
+      // shard is stale (e.g. muse-spark-1.3 released 2026-09-02 vs 1.2 on 2026-08-05).
+      // `opencode models --refresh` alone does NOT fix this – the per-directory
+      // in-memory cache remains stale until the server restarts. Detect and
+      // restart once to pull latest models (user asked: "ask server to pull latest").
+      if (!directory && allowRecovery && data?.providers) {
+        const isStale = await this.isHomedirZenCacheStale(data.providers, client, safeDirectory)
+        if (isStale) {
+          console.warn('[OpencodeAdapter] Homedir Zen cache stale (fresh probe has newer models), restarting opencode server to pull latest')
+          await this.recoverFromBrokenServer()
+          return this.getProvidersInner(serverUrl, directory, false)
+        }
+      }
+
       return data ? { providers: data.providers || [], default: data.default || {} } : null
     } catch (error: unknown) {
       console.log('[OpencodeAdapter] Could not get providers:', error instanceof Error ? error.message : error)
@@ -664,6 +679,46 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     if (removed > 0) {
       provider.models = filtered
       console.log(`[OpencodeAdapter] Filtered out ${removed} stale model(s) from ${ENTERPRISE_AI_GATEWAY_PROVIDER_ID} provider`)
+    }
+  }
+
+  /**
+   * Check if the homedir Zen cache is stale by comparing the homedir
+   * provider list with a fresh probe directory (tmp). If the fresh probe
+   * sees strictly more opencode Zen models (e.g. muse-spark-1.3), homedir is stale.
+   * Returns true if restart is needed. Never throws – returns false on any error.
+   */
+  private async isHomedirZenCacheStale(
+    homedirProviders: { id: string; name: string; models: unknown; [key: string]: unknown }[],
+    client: Awaited<ReturnType<OpencodeAdapter['getClient']>>,
+    safeDirectory: string
+  ): Promise<boolean> {
+    // Only check the fallback case – workspace-dir queries are caller-scoped
+    if (safeDirectory !== homedir()) return false
+    try {
+      const homedirOpencode = homedirProviders.find(p => p.id === 'opencode')
+      if (!homedirOpencode?.models || typeof homedirOpencode.models !== 'object') return false
+      const homedirIds = new Set(Object.keys(homedirOpencode.models as Record<string, unknown>))
+
+      // Probe a fresh directory that has never been used – its shard will be built
+      // from the current ~/.cache/opencode/models.json (which already has 1.3)
+      const probeDir = join(tmpdir(), `20x-zen-probe-${Date.now()}`)
+      try { mkdirSync(probeDir, { recursive: true }) } catch {}
+      const probeResult = await client.config.providers({ directory: probeDir })
+      try { rmSync(probeDir, { recursive: true, force: true }) } catch {}
+      if (probeResult.error || !probeResult.data) return false
+      const probeData = probeResult.data as { providers?: { id: string; models: unknown }[] }
+      const probeOpencode = probeData.providers?.find(p => p.id === 'opencode')
+      if (!probeOpencode?.models || typeof probeOpencode.models !== 'object') return false
+      const probeIds = new Set(Object.keys(probeOpencode.models as Record<string, unknown>))
+
+      // If probe has a superset (e.g. homedir has 1.2 only, probe has 1.2+1.3), stale
+      if (probeIds.size > homedirIds.size) {
+        for (const id of probeIds) if (!homedirIds.has(id)) return true
+      }
+      return false
+    } catch {
+      return false
     }
   }
 
