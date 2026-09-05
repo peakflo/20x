@@ -1,4 +1,4 @@
-const TASK_WRITE_HEADERS = { 'x-task-contract-version': '2', 'x-task-actor': 'human' }
+import { TASK_WRITE_HEADERS, taskCompletionCommand } from '../shared/task-write-contract'
 
 /**
  * WorkfloApiClient — Phase 2.1
@@ -254,9 +254,9 @@ export class WorkfloApiClient {
     expectedVersion?: number
   ): Promise<void> {
     const version = expectedVersion ?? (await this.getTask(taskId)).version
-    await this.auth.apiRequest('POST', `/api/tasks/${taskId}/action`, {
-      outputs, expectedVersion: version
-    }, TASK_WRITE_HEADERS)
+    if (version === undefined) throw new Error('Sync this task with Workflo contract v2 before completing it.')
+    const command = taskCompletionCommand(taskId, outputs, version)
+    await this.auth.apiRequest(command.method, command.path, command.body, command.headers)
   }
 
   // ── Org Nodes ─────────────────────────────────────────────────────────

@@ -15,10 +15,16 @@ export interface CompleteTaskRequestOptions {
 export function useTaskCompletion({ onToast }: UseTaskCompletionOptions = {}) {
   const executeAction = useTaskSourceStore(s => s.executeAction)
   const requestComplete = useCallback(async (taskId: string, options?: CompleteTaskRequestOptions) => {
-    const task = useTaskStore.getState().tasks.find(t => t.id === taskId)
+    let task = useTaskStore.getState().tasks.find(t => t.id === taskId)
     if (!task) return
     try {
-      if (!task.source_id) throw new Error('Send this task to Workflo before completing it.')
+      if (!task.source_id) {
+        const upload = await window.electronAPI.taskSources.upload(task.id)
+        if (upload.queued) throw new Error('Task creation is pending in Workflo. Completion has not been accepted.')
+        await useTaskStore.getState().fetchTasks()
+        task = useTaskStore.getState().tasks.find(t => t.id === taskId)
+        if (!task?.source_id) throw new Error('Send this task to Workflo before completing it.')
+      }
       const action = task.output_fields.find(f => f.id === 'action')?.value
       const result = await executeAction(action ? String(action) : PluginActionId.Complete, task.id, task.source_id)
       if (!result.success) throw new Error(result.error || 'The server did not confirm completion.')

@@ -1,3 +1,4 @@
+import { taskCompletionCommand } from '../../../../shared/task-write-contract'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { TaskPanelContent } from './TaskPanelContent'
@@ -101,6 +102,7 @@ vi.mock('@/stores/task-store', () => {
   useTaskStore.getState = () => ({
     tasks: taskList,
     selectTask: selectTaskMock,
+    fetchTasks: async () => undefined,
   })
 
   return { useTaskStore }
@@ -183,25 +185,26 @@ describe('TaskPanelContent', () => {
     expect(addEdgeMock).not.toHaveBeenCalled()
   })
 
-  it('completes a task with no source directly from the canvas panel', async () => {
+  it.each([null, 'src-1'])('issues server completion for source %s without writing local completion', async (sourceId) => {
+    taskList[0].source_id = sourceId
+    const apiRequest = vi.fn()
+    const upload = vi.fn(async () => { taskList[0].source_id = 'src-1'; return { queued: false } })
+    window.electronAPI.taskSources.upload = upload
+    // Bridge the renderer command to the real API encoder. Credentials stay in main.
+    executeActionMock.mockImplementation(async () => {
+      const command = taskCompletionCommand('remote-1', { action: 'complete' }, 7)
+      apiRequest(command.method, command.path, command.body, command.headers)
+      return { success: true }
+    })
     render(<TaskPanelContent panelId="panel-1" taskId="task-1" panelLayout="both" />)
-
     fireEvent.click(screen.getByText('Complete task'))
-
-    await waitFor(() =>
-      expect(updateTaskMock).toHaveBeenCalledWith('task-1', { status: 'completed' })
-    )
-    expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
-  })
-
-  it('asks how to complete a source-backed task from the canvas panel', async () => {
-    taskList[0].source_id = 'src-1'
-    render(<TaskPanelContent panelId="panel-1" taskId="task-1" panelLayout="both" />)
-
-    fireEvent.click(screen.getByText('Complete task'))
-
-    expect(await screen.findByTestId('complete-at-source-dialog')).toBeTruthy()
+    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith('POST', '/api/tasks/remote-1/action',
+      { outputs: { action: 'complete' }, expectedVersion: 7 },
+      { 'x-task-contract-version': '2', 'x-task-actor': 'human' }))
+    expect(executeActionMock).toHaveBeenCalledExactlyOnceWith('complete', 'task-1', 'src-1')
     expect(updateTaskMock).not.toHaveBeenCalled()
-    expect(executeActionMock).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
+    if (sourceId === null) expect(upload).toHaveBeenCalledExactlyOnceWith('task-1')
+    else expect(upload).not.toHaveBeenCalled()
   })
 })

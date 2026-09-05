@@ -97,8 +97,9 @@ describe('server completion', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
   it('requires a server task before completion',async()=>{
+    window.electronAPI.taskSources.upload = vi.fn().mockResolvedValue({queued:true})
     storeState.tasks=[makeTask()];render(<Harness />);fireEvent.click(screen.getByText('Complete'))
-    await waitFor(()=>expect(onToast).toHaveBeenCalledWith(expect.stringContaining('Send this task'),true))
+    await waitFor(()=>expect(onToast).toHaveBeenCalledWith(expect.stringContaining('Task creation is pending'),true))
     expect(updateTaskMock).not.toHaveBeenCalled();expect(executeActionMock).not.toHaveBeenCalled();expect(onCompleted).not.toHaveBeenCalled()
   })
   it('keeps a refused completion open',async()=>{
