@@ -40,7 +40,7 @@ import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog'
 import { SubtaskPickerDialog } from '@/components/tasks/SubtaskPickerDialog'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
-import { dispatchTaskShortcut, getNextNudgeMessage, isGlobalShortcutBlocked, onShortcutFeedback, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
+import { dispatchTaskShortcut, findComposerElement, focusComposerInput, getNextNudgeMessage, insertIntoComposer, isGlobalShortcutBlocked, onShortcutFeedback, shouldAutoFocusComposer, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import { composerCanSubmit, MASTERMIND_COMPOSER_KEY, sendComposerMessage, setActiveComposer } from '@/lib/voice-dictation-target'
 
@@ -368,6 +368,16 @@ export function AppLayout() {
     }, 0)
   }, [sidebarCollapsed, sidebarView])
 
+  const focusComposer = useCallback(() => {
+    // Try to focus the composer for the active task; falls back to any visible composer
+    if (focusComposerInput()) {
+      captureAnalyticsEvent('composer_focused', { source: 'keyboard', trigger: 'shortcut' })
+      return true
+    }
+    showToast('No message composer is available', true)
+    return false
+  }, [showToast])
+
   const completeActiveTask = useCallback(() => {
     if (activeTaskId) dispatchTaskShortcut({ action: TaskShortcutAction.COMPLETE, taskId: activeTaskId })
     else showToast('Select a task first', true)
@@ -434,6 +444,7 @@ export function AppLayout() {
     openTask: openSelectedTask,
     clearSelection: clearTaskSelection,
     focusSearch,
+    focusComposer,
     completeTask: completeActiveTask,
     snoozeTask: () => runTaskShortcut(TaskShortcutAction.SNOOZE),
     runTask: () => runTaskShortcut(TaskShortcutAction.RUN),
@@ -453,7 +464,7 @@ export function AppLayout() {
     copyPullRequestBranch: () => runTaskShortcut(TaskShortcutAction.COPY_PR_BRANCH),
     toggleTaskAudio,
     toggleMastermindAudio
-  }), [clearTaskSelection, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, nudgeActiveTask, openActiveTaskOnCanvas, openParentTask, openSelectedTask, openSubtasks, runActiveHeartbeat, runTaskShortcut, toggleMastermindAudio, toggleTaskAudio])
+  }), [clearTaskSelection, completeActiveTask, deleteActiveTask, focusComposer, focusSearch, navigateVisibleTask, nudgeActiveTask, openActiveTaskOnCanvas, openParentTask, openSelectedTask, openSubtasks, runActiveHeartbeat, runTaskShortcut, toggleMastermindAudio, toggleTaskAudio])
 
   const overdueCount = useMemo(
     () => tasks.filter(
@@ -594,6 +605,22 @@ export function AppLayout() {
       if (sidebarView === 'canvas') return
       if (e.repeat && key !== 'j' && key !== 'k') return
 
+      // Explicit composer focus (I) — before single-letter task shortcuts
+      if (key === 'i' && !e.shiftKey) { e.preventDefault(); focusComposer(); return }
+
+      // Just start typing: any printable key that is not a defined shortcut focuses the
+      // composer and inserts the character, so the first keystroke is not lost.
+      if (shouldAutoFocusComposer(e)) {
+        const composer = findComposerElement()
+        if (composer) {
+          e.preventDefault()
+          composer.focus()
+          insertIntoComposer(composer, e.key)
+          captureAnalyticsEvent('composer_focused', { source: 'keyboard', trigger: 'auto_type' })
+          return
+        }
+      }
+
       if (key === 'j') { e.preventDefault(); navigateVisibleTask(1) }
       else if (key === 'k') { e.preventDefault(); navigateVisibleTask(-1) }
       else if (e.key === 'Enter' && !(e.target as HTMLElement | null)?.closest('button, a')) { e.preventDefault(); openSelectedTask() }
@@ -613,7 +640,7 @@ export function AppLayout() {
       window.removeEventListener('keydown', onKey)
       if (chordRef.current) window.clearTimeout(chordRef.current.timer)
     }
-  }, [activeModal, activeTaskId, clearTaskSelection, closeModal, completeActiveTask, deleteActiveTask, focusSearch, navigateVisibleTask, nudgeActiveTask, openActiveTaskOnCanvas, openCreateModal, openParentTask, openSelectedTask, openSubtasks, runActiveHeartbeat, runTaskShortcut, setShowOrchestrator, setSidebarView, showOrchestrator, sidebarView, toggleMastermindAudio, toggleTaskAudio])
+  }, [activeModal, activeTaskId, clearTaskSelection, closeModal, completeActiveTask, deleteActiveTask, focusComposer, focusSearch, navigateVisibleTask, nudgeActiveTask, openActiveTaskOnCanvas, openCreateModal, openParentTask, openSelectedTask, openSubtasks, runActiveHeartbeat, runTaskShortcut, setShowOrchestrator, setSidebarView, showOrchestrator, sidebarView, toggleMastermindAudio, toggleTaskAudio])
 
   return (
     <>

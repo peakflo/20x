@@ -33,6 +33,8 @@ export const KEYBOARD_SHORTCUT_GROUPS = [
       { keys: ['G', 'T'], label: 'Go to Tasks' },
       { keys: ['G', 'S'], label: 'Go to Skills' },
       { keys: ['/'], label: 'Focus search' },
+      { keys: ['I'], label: 'Focus message composer' },
+      { keys: ['Type'], label: 'Just start typing to focus composer' },
       { keys: ['Cmd/Ctrl', 'K'], label: 'Open command palette' },
       { keys: ['Cmd/Ctrl', '1–4'], label: 'Switch main view' }
     ]
@@ -100,6 +102,63 @@ export function isGlobalShortcutBlocked(event: KeyboardEvent): boolean {
     || event.altKey
     || isKeyboardInput(event.target)
     || !!document.querySelector('[role="dialog"], [role="alertdialog"]')
+}
+
+export function findComposerElement(): HTMLTextAreaElement | null {
+  const candidates = [
+    '[data-testid="transcript-composer"] textarea',
+    'textarea[aria-label="Kickoff instructions"]',
+    'textarea[placeholder="Write a message..."]',
+    'textarea[placeholder="Add kickoff instructions…"]'
+  ]
+  for (const selector of candidates) {
+    const el = document.querySelector<HTMLTextAreaElement>(selector)
+    if (el && !el.disabled && el.offsetParent !== null) return el
+  }
+  // Fallback: any visible composer textarea inside the task workspace
+  const fallback = document.querySelector<HTMLTextAreaElement>('[data-voice-composer] textarea')
+  if (fallback && !fallback.disabled && fallback.offsetParent !== null) return fallback
+  return null
+}
+
+export function focusComposerInput(): boolean {
+  const el = findComposerElement()
+  if (!el) return false
+  el.focus()
+  return document.activeElement === el
+}
+
+export function isPrintableKey(event: KeyboardEvent): boolean {
+  return event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey
+}
+
+const SINGLE_KEY_SHORTCUTS = new Set(['j', 'k', 'c', 'e', 'h', 'r', 'w', '#', '?', '/', 'i'])
+const CHORD_STARTERS = new Set(['g', 'o', 'y', 'v'])
+
+export function shouldAutoFocusComposer(event: KeyboardEvent): boolean {
+  if (isGlobalShortcutBlocked(event)) return false
+  if (!isPrintableKey(event)) return false
+  const lower = event.key.toLowerCase()
+  if (SINGLE_KEY_SHORTCUTS.has(lower) || CHORD_STARTERS.has(lower)) return false
+  const composer = findComposerElement()
+  return !!composer
+}
+
+export function insertIntoComposer(composer: HTMLTextAreaElement, text: string): void {
+  const start = composer.selectionStart ?? composer.value.length
+  const end = composer.selectionEnd ?? composer.value.length
+  const before = composer.value.slice(0, start)
+  const after = composer.value.slice(end)
+  const next = before + text + after
+  const proto = HTMLTextAreaElement.prototype
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set
+  if (setter) setter.call(composer, next)
+  else composer.value = next
+  const cursor = start + text.length
+  composer.setSelectionRange(cursor, cursor)
+  composer.dispatchEvent(new Event('input', { bubbles: true }))
+  // Ensure auto-resize handlers run
+  composer.dispatchEvent(new Event('change', { bubbles: true }))
 }
 
 export function dispatchTaskShortcut(detail: TaskShortcutDetail): void {
