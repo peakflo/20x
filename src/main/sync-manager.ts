@@ -119,8 +119,9 @@ export class SyncManager {
     // Merge legacy columns into config for backward compat
     const config = this.getConfig(source)
 
-    // Phase 2.4: re-sync agents/skills/MCP servers before each task import
-    if (this.enterpriseSyncManager && this.enterpriseUserId) {
+    // Canonical task snapshots are self-contained. Resource uploads must not
+    // block task commands/imports when an unrelated skill sync is slow or fails.
+    if (source.plugin_id !== 'peakflo' && this.enterpriseSyncManager && this.enterpriseUserId) {
       try {
         console.log('[sync] Running enterprise resource sync before task import...')
         await this.enterpriseSyncManager.syncAll(this.enterpriseUserId)
