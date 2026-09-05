@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, Code2, Eye, ListTodo, FileText, ArrowDown, ArrowUp, Paperclip, Search, X, Image as ImageIcon, GitPullRequest, MonitorPlay } from 'lucide-react'
+import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, ListTodo, FileText, ArrowDown, ArrowUp, Paperclip, Search, X, Image as ImageIcon, GitPullRequest, MonitorPlay } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
@@ -16,11 +16,6 @@ import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation
 import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
-
-enum ViewMode {
-  MARKDOWN = 'markdown',
-  RAW = 'raw'
-}
 
 function formatStepMeta(meta: NonNullable<AgentMessage['stepMeta']>): string {
   const parts: string[] = []
@@ -558,7 +553,7 @@ function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; sear
   )
 }
 
-function ReasoningMessage({ message, viewMode, searchQuery }: { message: AgentMessage; viewMode?: ViewMode; searchQuery?: string }) {
+function ReasoningMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const summary = message.content.split('\n').map((line) => line.trim()).find(Boolean) || 'Thinking'
 
@@ -577,11 +572,7 @@ function ReasoningMessage({ message, viewMode, searchQuery }: { message: AgentMe
       </button>
       {expanded && (
         <div className="ml-5 border-l border-teal-500/30 pl-3 py-1.5 text-foreground/75">
-          {viewMode === ViewMode.MARKDOWN ? (
-            <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
-          ) : (
-            <pre className="whitespace-pre-wrap break-words font-mono text-xs"><HighlightedText text={message.content} query={searchQuery} /></pre>
-          )}
+          <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
         </div>
       )}
     </div>
@@ -632,12 +623,12 @@ function ArtifactTranscriptCard({ artifact, onOpen }: { artifact: Artifact; onOp
   )
 }
 
-function ActivityMessageGroup({ messages, viewMode, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { messages: AgentMessage[]; viewMode?: ViewMode; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
+function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
   return (
     <div className="w-full border-l border-border/30 pl-2 py-0.5">
       {messages.map((message) => {
         if (message.partType === 'reasoning') {
-          return <ReasoningMessage key={message.id} message={message} viewMode={viewMode} searchQuery={searchQuery} />
+          return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
         }
         const artifact = findMessageArtifact(message, artifacts)
         return (
@@ -651,7 +642,7 @@ function ActivityMessageGroup({ messages, viewMode, searchQuery, artifacts = EMP
   )
 }
 
-function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false, searchQuery }: { message: AgentMessage; onAnswer?: (answer: string) => void; viewMode?: ViewMode; canAnswerQuestion?: boolean; searchQuery?: string }) {
+function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswerQuestion?: boolean; searchQuery?: string }) {
   if (message.partType === 'question' && message.tool?.questions) {
     return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} searchQuery={searchQuery} />
   }
@@ -665,7 +656,7 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false,
   }
 
   if (isCompactActivityMessage(message)) {
-    return <ActivityMessageGroup messages={[message]} viewMode={viewMode} searchQuery={searchQuery} />
+    return <ActivityMessageGroup messages={[message]} searchQuery={searchQuery} />
   }
 
   if (message.partType === 'task_progress' && message.taskProgress) {
@@ -700,13 +691,7 @@ function MessageBubble({ message, onAnswer, viewMode, canAnswerQuestion = false,
             <AlertTriangle className="h-3 w-3" /> Error
           </span>
         )}
-        {viewMode === ViewMode.MARKDOWN ? (
-          <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
-        ) : (
-          <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-            <HighlightedText text={message.content} query={searchQuery} />
-          </pre>
-        )}
+        <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
         <div className={`flex items-center gap-2 mt-1 ${!isUser ? 'opacity-70' : ''}`}>
           <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
           {message.stepMeta && (
@@ -731,7 +716,6 @@ const MemoizedMessageBubble = React.memo(MessageBubble)
 const MemoizedActivityGroup = React.memo(
   ActivityMessageGroup,
   (prev, next) =>
-    prev.viewMode === next.viewMode &&
     prev.searchQuery === next.searchQuery &&
     prev.artifacts === next.artifacts &&
     prev.onOpenArtifact === next.onOpenArtifact &&
@@ -833,7 +817,6 @@ export function AgentTranscriptPanel({
   const panelRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
-  const [viewMode, setViewMode] = useState<ViewMode>(ViewMode.MARKDOWN)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeSearchResult, setActiveSearchResult] = useState(0)
@@ -1248,15 +1231,6 @@ export function AgentTranscriptPanel({
             >
               <Search className="h-3.5 w-3.5" />
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setViewMode(viewMode === ViewMode.MARKDOWN ? ViewMode.RAW : ViewMode.MARKDOWN)}
-              className="h-7 px-2"
-              title={viewMode === ViewMode.MARKDOWN ? 'Show raw content' : 'Show markdown'}
-            >
-              {viewMode === ViewMode.MARKDOWN ? <Code2 className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-            </Button>
             {onRestart && messages.length > 0 && (
               <Button
                 variant="ghost"
@@ -1388,12 +1362,11 @@ export function AgentTranscriptPanel({
                   >
                     <div className="pb-2">
                       {item.type === 'activity' ? (
-                        <MemoizedActivityGroup messages={item.messages} viewMode={viewMode} searchQuery={normalizedSearchQuery} artifacts={taskArtifacts} onOpenArtifact={handleOpenArtifact} />
+                        <MemoizedActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} artifacts={taskArtifacts} onOpenArtifact={handleOpenArtifact} />
                       ) : (
                         <MemoizedMessageBubble
                           message={item.message}
                           onAnswer={onSend}
-                          viewMode={viewMode}
                           canAnswerQuestion={item.message.id === activeQuestionId}
                           searchQuery={normalizedSearchQuery}
                         />
