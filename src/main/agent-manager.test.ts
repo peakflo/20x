@@ -2538,6 +2538,88 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
     expect((mgr as any).pollingEntries.has('session-1')).toBe(true)
   })
 
+  it('pollSingleSession keeps polling when the adapter buffers data after the poll (regression: last message stranded)', async () => {
+    const mgr = buildManager()
+    const adapter = buildAdapter() as any
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' },
+      undefined,
+      session
+    )
+
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    // Past both idle grace windows, so only the new guard can hold IDLE off.
+    entry.createdAt = Date.now() - 60_000
+    entry.hasSeenWork = true
+    entry.lastPartReceivedAt = Date.now() - 60_000
+
+    // The real race: the agent's closing message and its `result` land in the
+    // adapter buffer AFTER pollMessages() ran and BEFORE getStatus() is asked.
+    // `result` is what makes the adapter report IDLE.
+    adapter.getStatus = vi.fn(async () => {
+      adapter.onDataAvailable('session-1')
+      return { type: SessionStatusType.IDLE }
+    })
+
+    const transitionSpy = vi.spyOn(mgr as any, 'transitionToIdle').mockResolvedValue(undefined)
+
+    await (mgr as any).pollSingleSession(entry)
+
+    // Unregistering here would strand the buffered message until the next prompt.
+    expect(transitionSpy).not.toHaveBeenCalled()
+    expect((mgr as any).pollingEntries.has('session-1')).toBe(true)
+  })
+
+  it('pollSingleSession still transitions to idle when nothing was buffered after the poll', async () => {
+    const mgr = buildManager()
+    const adapter = buildAdapter() as any
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' },
+      undefined,
+      session
+    )
+
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    entry.createdAt = Date.now() - 60_000
+    entry.hasSeenWork = true
+    entry.lastPartReceivedAt = Date.now() - 60_000
+
+    const transitionSpy = vi.spyOn(mgr as any, 'transitionToIdle').mockResolvedValue(undefined)
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(transitionSpy).toHaveBeenCalledOnce()
+    expect((mgr as any).pollingEntries.has('session-1')).toBe(false)
+  })
+
   it('pollSingleSession does NOT set hasSeenWork from message content — only from BUSY status (root cause: stale parts)', async () => {
     // ROOT CAUSE regression test: pollMessages can return stale assistant tool
     // parts (fingerprint updates from the previous turn) or user echoes.  The
