@@ -26,6 +26,8 @@ export enum MessagePartType {
   QUESTION = 'question',
   IMAGE = 'image',
   ERROR = 'error',
+  /** Recoverable provider error: the backend is retrying the request itself. */
+  RETRY = 'retry',
   TASK_PROGRESS = 'task_progress'
 }
 
