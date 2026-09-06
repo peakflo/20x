@@ -950,7 +950,6 @@ function FeedbackModal({ onSubmit, onSkip, onCancel }: {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div role="dialog" aria-label="Session feedback" className="mx-4 w-full max-w-md rounded-xl border bg-card p-5 space-y-4">
         <h2>Session feedback</h2>
-        <p className="text-sm text-muted-foreground">Workflo confirms task completion.</p>
         <div className="flex gap-2">
           {[1, 2, 3, 4, 5].map(value => <button key={value} aria-label={`Rate ${value}`} aria-pressed={rating === value} onClick={() => setRating(value)}>{value}</button>)}
         </div>
