@@ -100,12 +100,18 @@ describe('PiAdapter', () => {
     })
 
     expect(id).toBe('/sessions/native-session.jsonl')
+    expect(spawnMock.mock.calls[0][0]).toBe(process.execPath)
     const args = spawnMock.mock.calls[0][1] as string[]
+    expect(args[0]).toBe('/usr/local/bin/pi')
     expect(args).toContain('--mode')
     expect(args).toContain('--extension')
     expect(args).not.toContain('--session-dir')
     expect(args).not.toContain('--provider')
     expect(args).not.toContain('--model')
+    expect(spawnMock.mock.calls[0][2]).toMatchObject({
+      env: expect.objectContaining({ ELECTRON_RUN_AS_NODE: '1' }),
+      shell: false,
+    })
     expect(command).toHaveBeenLastCalledWith(
       expect.anything(),
       { type: 'set_model', provider: 'peakflo', modelId: 'model-one' },
@@ -146,7 +152,18 @@ describe('PiAdapter', () => {
       ],
       default: { peakflo: 'model-one' },
     })
-    expect(spawnMock.mock.calls[0][1]).toEqual(['--mode', 'rpc', '--no-session', '--approve'])
+    expect(spawnMock.mock.calls[0][0]).toBe(process.execPath)
+    expect(spawnMock.mock.calls[0][1]).toEqual([
+      '/usr/local/bin/pi',
+      '--mode',
+      'rpc',
+      '--no-session',
+      '--approve',
+    ])
+    expect(spawnMock.mock.calls[0][2]).toMatchObject({
+      env: expect.objectContaining({ ELECTRON_RUN_AS_NODE: '1' }),
+      shell: false,
+    })
   })
 
   it('waits for agent_settled instead of agent_end', () => {

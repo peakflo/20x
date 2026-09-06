@@ -268,6 +268,32 @@ export class PiAdapter implements CodingAgentAdapter {
     return env
   }
 
+  /**
+   * Pi's npm launcher uses `#!/usr/bin/env node`. Launching it directly would
+   * therefore make Pi depend on whichever Node happens to be first on the
+   * desktop app's PATH. Recent Pi releases require Node >=22.19 and use zstd
+   * APIs that are absent from older runtimes. On macOS/Linux, run the launcher
+   * with Electron's bundled Node so Pi uses the same known runtime as 20x.
+   *
+   * Windows npm launchers are .cmd files, so they must continue to run through
+   * the shell.
+   */
+  private piInvocation(
+    executable: string,
+    args: string[],
+    env: NodeJS.ProcessEnv,
+  ): { command: string; args: string[]; env: NodeJS.ProcessEnv; shell: boolean } {
+    if (process.platform === 'win32') {
+      return { command: executable, args, env, shell: true }
+    }
+    return {
+      command: process.execPath,
+      args: [executable, ...args],
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+      shell: false,
+    }
+  }
+
   private createSessionState(
     id: string,
     child: ChildProcessWithoutNullStreams,
@@ -333,12 +359,13 @@ export class PiAdapter implements CodingAgentAdapter {
     if (resumeId) args.push('--session', resumeId)
     if (mcpConfigPath) args.push('--mcp-config', mcpConfigPath)
 
-    const child = spawn(executable, args, {
+    const invocation = this.piInvocation(executable, args, this.processEnv(config, gateway))
+    const child = spawn(invocation.command, invocation.args, {
       cwd: config.workspaceDir,
-      env: this.processEnv(config, gateway),
+      env: invocation.env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
-      shell: process.platform === 'win32',
+      shell: invocation.shell,
       detached: process.platform !== 'win32',
     })
 
@@ -1027,8 +1054,11 @@ export class PiAdapter implements CodingAgentAdapter {
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
       const executable = await this.findPiExecutable()
-      const { stdout, stderr } = await execFileAsync(executable, ['--version'], {
+      const invocation = this.piInvocation(executable, ['--version'], { ...process.env })
+      const { stdout, stderr } = await execFileAsync(invocation.command, invocation.args, {
+        env: invocation.env,
         timeout: 10_000,
+        shell: invocation.shell,
         windowsHide: true,
       })
       const match = `${stdout}\n${stderr}`.match(/(\d+)\.(\d+)\.(\d+)/)
@@ -1061,12 +1091,17 @@ export class PiAdapter implements CodingAgentAdapter {
       workspaceDir: directory || process.cwd(),
       permissionMode: 'allow',
     }
-    const child = spawn(executable, ['--mode', 'rpc', '--no-session', '--approve'], {
+    const invocation = this.piInvocation(
+      executable,
+      ['--mode', 'rpc', '--no-session', '--approve'],
+      this.processEnv(config, gateway),
+    )
+    const child = spawn(invocation.command, invocation.args, {
       cwd: config.workspaceDir,
-      env: this.processEnv(config, gateway),
+      env: invocation.env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
-      shell: process.platform === 'win32',
+      shell: invocation.shell,
       detached: process.platform !== 'win32',
     })
     const session = this.createSessionState(`pi-discovery-${randomUUID()}`, child, config)
