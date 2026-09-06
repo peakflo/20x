@@ -1,3 +1,4 @@
+import { recordResponsibilityHumanInput } from './responsibility-ipc'
 import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
 import * as childProcess from 'child_process'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
@@ -468,6 +469,7 @@ export function registerIpcHandlers(
   ipcMain.handle(
     'agentSession:sendByTaskId',
     async (_, taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
+      recordResponsibilityHumanInput(taskId, message, _)
       const result = await agentManager.sendByTaskId(taskId, message, attachments)
       return { success: true, ...result }
     }
@@ -476,6 +478,8 @@ export function registerIpcHandlers(
   ipcMain.handle(
     'agentSession:send',
     async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
+      const recipientTaskId = taskId ?? agentManager.getSessionStatus(sessionId)?.taskId
+      if (recipientTaskId) recordResponsibilityHumanInput(recipientTaskId, message, _)
       const result = await agentManager.sendMessage(sessionId, message, taskId, agentId, attachments)
       return { success: true, ...result }
     }

@@ -893,6 +893,11 @@ describe('ClaudeCodeAdapter loadSessionHistory stable IDs (regression)', () => {
 })
 
 describe('ClaudeCodeAdapter persistent session input', () => {
+  it('rejects legacy transcript answers for a responsibility SDK callback', async () => {
+    const { adapter } = createAdapterWithSession('s1', [])
+    await expect(adapter.respondToQuestion('s1', { answer: 'Yes' }, { authorizeTool: async () => true } as any)).rejects.toThrow('Mastermind → Decisions')
+  })
+
   it('queues a follow-up on the live query instead of closing the session', async () => {
     const { adapter, session } = createAdapterWithSession('s1', [])
     await adapter.initialize()

@@ -1,3 +1,5 @@
+import { ResponsibilitiesPanel } from './ResponsibilitiesPanel'
+import { projectConversationId, type ProjectRecord } from '@shared/responsibilities'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -17,10 +19,19 @@ interface OrchestratorPanelProps {
 }
 
 export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
+  const [project, setProject] = useState<ProjectRecord | null>(null)
+  return <div className="flex h-full min-h-0 flex-col gap-2">
+    <ResponsibilitiesPanel onProjectChange={setProject} />
+    <MastermindConversation key={project?.id ?? 'all'} project={project} onClose={onClose} />
+  </div>
+}
+
+function MastermindConversation({ onClose, project }: OrchestratorPanelProps & { project: ProjectRecord | null }) {
+  const conversationId = project ? projectConversationId(project.id) : MASTERMIND_SESSION_ID
   const [agents, setAgents] = useState<Agent[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
-  const { start, stop, sendMessage, approve } = useAgentSession(MASTERMIND_SESSION_ID)
-  const currentSession = useAgentStore((state) => state.sessions.get(MASTERMIND_SESSION_ID))
+  const { start, stop, sendMessage, approve } = useAgentSession(conversationId)
+  const currentSession = useAgentStore((state) => state.sessions.get(conversationId))
   const removeSession = useAgentStore((state) => state.removeSession)
   /** The start in flight, shared so a message can wait for it instead of racing. */
   const startingRef = useRef<Promise<void> | null>(null)
@@ -45,12 +56,20 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     }
   }, [])
 
+  // Project switches release disposable reasoning; the persisted transcript restores context.
+  useEffect(() => {
+    if (!project) return
+    return () => {
+      void (startingRef.current ?? Promise.resolve()).then(() => stop()).catch(error => console.error('Could not release project conversation', error))
+    }
+  }, [conversationId, stop])
+
   // Load agents on mount
   useEffect(() => {
     agentApi.getAll().then((allAgents) => {
       setAgents(allAgents)
       // Select default agent or first available
-      const defaultAgent = allAgents.find((a) => a.is_default) || allAgents[0]
+      const defaultAgent = allAgents.find((a) => a.id === project?.agentId) || allAgents.find((a) => a.is_default) || allAgents[0]
       if (defaultAgent) {
         setSelectedAgentId(defaultAgent.id)
       }
@@ -64,7 +83,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     setSelectedAgentId(newAgentId)
     if (currentSession?.sessionId) {
       await stop()
-      removeSession(MASTERMIND_SESSION_ID)
+      removeSession(conversationId)
     }
   }
 
@@ -77,7 +96,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
    * dropped, because there is no session yet and one is already being made.
    */
   const ensureSession = useCallback(async (): Promise<boolean> => {
-    const live = useAgentStore.getState().sessions.get(MASTERMIND_SESSION_ID)
+    const live = useAgentStore.getState().sessions.get(conversationId)
     if (live?.sessionId) return true
 
     const agentId = selectedAgentIdRef.current
@@ -86,9 +105,9 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     if (!startingRef.current) {
       startingRef.current = (async () => {
         // Clean up any old session data first
-        removeSession(MASTERMIND_SESSION_ID)
+        removeSession(conversationId)
         // skipInitialPrompt keeps the agent quiet until the user speaks.
-        await start(agentId, MASTERMIND_SESSION_ID, undefined, true)
+        await start(agentId, conversationId, undefined, true)
         // Small delay to ensure session is fully initialized
         await new Promise((resolve) => setTimeout(resolve, 100))
       })().finally(() => {
@@ -98,12 +117,12 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
 
     try {
       await startingRef.current
-      return Boolean(useAgentStore.getState().sessions.get(MASTERMIND_SESSION_ID)?.sessionId)
+      return Boolean(useAgentStore.getState().sessions.get(conversationId)?.sessionId)
     } catch (err) {
       console.error('Failed to start mastermind session:', err)
       return false
     }
-  }, [start, removeSession])
+  }, [start, removeSession, conversationId])
 
   // Send message - the session is usually warm already, so this just sends.
   const handleSendMessage = useCallback(
@@ -111,7 +130,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       if (!(await ensureSession())) return
 
       // Question answers should use approve() instead of sendMessage()
-      const live = useAgentStore.getState().sessions.get(MASTERMIND_SESSION_ID)
+      const live = useAgentStore.getState().sessions.get(conversationId)
       const messages = live?.messages || []
       const lastMessage = messages[messages.length - 1]
       if (lastMessage?.partType === 'question' && lastMessage?.tool?.questions) {
@@ -158,7 +177,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     // Floats as a card, like the workspace and the sidebar: same radius,
     // hairline, fill and shadow. It was the one panel still sitting flush and
     // square against the work.
-    <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-card">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-card">
       {/* Header with agent selector */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         {/* A warm session is not a conversation: the choice stays open until
@@ -167,7 +186,8 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
           value={selectedAgentId || ''}
           onChange={(e) => handleAgentChange(e.target.value)}
           className="text-xs bg-background border border-border rounded px-2 py-1 cursor-pointer hover:border-primary/50 transition-colors"
-          disabled={(currentSession?.messages?.length ?? 0) > 0}
+          aria-label="Mastermind agent"
+          disabled={!!project || (currentSession?.messages?.length ?? 0) > 0}
         >
           {agents.map((agent) => (
             <option key={agent.id} value={agent.id}>
@@ -184,7 +204,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       {/* Chat interface */}
       {selectedAgentId && (
         <AgentTranscriptPanel
-          title="Mastermind den"
+          title={project ? project.name : "Mastermind den"}
           messages={currentSession?.messages || []}
           status={currentSession?.status || SessionStatus.IDLE}
           systemStatus={currentSession?.systemStatus}

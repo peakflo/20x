@@ -214,6 +214,7 @@ export interface GlabCliStatus {
 }
 
 interface ElectronAPI {
+  responsibilities: import('@shared/responsibilities').ResponsibilitiesApi
   db: {
     getTasks: () => Promise<WorkfloTask[]>
     getTask: (id: string) => Promise<WorkfloTask | undefined>

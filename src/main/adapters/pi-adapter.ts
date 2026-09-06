@@ -51,6 +51,9 @@ function inputSummary(input: unknown): string {
 
 export default function permissions(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
+    if (process.env.TWENTYX_RESPONSIBILITY_ROLE === "root" && ["read", "grep", "find", "ls", "bash", "edit", "write"].includes(event.toolName)) {
+      return { block: true, reason: "Mastermind delegates project work through responsibility tools." };
+    }
     if (process.env.${PI_PERMISSION_MODE_ENV} === "allow" || READ_ONLY_TOOLS.has(event.toolName)) return;
     const approved = await ctx.ui.confirm(
       \`Allow \${event.toolName}?\`,
@@ -262,6 +265,7 @@ export class PiAdapter implements CodingAgentAdapter {
       ...(config.secretEnvVars ?? {}),
       ...(gateway ? { PEAKFLO_AI_GATEWAY_API_KEY: gateway.apiKey } : {}),
       [PI_PERMISSION_MODE_ENV]: config.permissionMode ?? 'ask',
+      TWENTYX_RESPONSIBILITY_ROLE: config.responsibilityRole ?? '',
     } as NodeJS.ProcessEnv
     delete env.AI_AGENT
     delete env.PI_CODING_AGENT

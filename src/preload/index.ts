@@ -1,8 +1,23 @@
+import type { ResponsibilitiesApi } from '../shared/responsibilities'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
 
+const responsibilities: ResponsibilitiesApi = {
+  snapshot: projectId => ipcRenderer.invoke('responsibilities:snapshot', projectId),
+  createProject: (name, root, agentId) => ipcRenderer.invoke('responsibilities:createProject', name, root, agentId),
+  act: (id, revision, action) => ipcRenderer.invoke('responsibilities:act', id, revision, action),
+  answer: (id, answer, approved) => ipcRenderer.invoke('responsibilities:answer', id, answer, approved),
+  remember: (projectId, kind, text, id) => ipcRenderer.invoke('responsibilities:remember', projectId, kind, text, id),
+  forget: id => ipcRenderer.invoke('responsibilities:forget', id),
+  onChanged: callback => {
+    const handler = (): void => callback()
+    ipcRenderer.on('responsibilities:changed', handler)
+    return () => { ipcRenderer.removeListener('responsibilities:changed', handler) }
+  }
+}
 contextBridge.exposeInMainWorld('electronAPI', {
+  responsibilities,
   db: {
     getTasks: (): Promise<unknown[]> => ipcRenderer.invoke('db:getTasks'),
     getTask: (id: string): Promise<unknown> => ipcRenderer.invoke('db:getTask', id),

@@ -322,10 +322,10 @@ function isSubpath(parent: string, child: string): boolean {
 }
 
 function summarizeApproval(params: Record<string, unknown>, fallback: string): string {
-  const command = asString(params.command)
+  const command = asString(params.command) || asString(params.message) || (isObject(params.request) ? asString(params.request.message) : '')
   const reason = asString(params.reason)
   const itemId = asString(params.itemId) || asString(params.callId)
-  return [command || fallback, reason, itemId ? `id: ${itemId}` : ''].filter(Boolean).join('\n')
+  return [command || `${fallback}\n${JSON.stringify(params, null, 2).slice(0, 12000)}`, reason, itemId ? `id: ${itemId}` : ''].filter(Boolean).join('\n')
 }
 
 function normalizeDecisionName(decision: unknown): string {
@@ -372,29 +372,35 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const session = await this.startAppServerProcess(config, config.taskId)
     this.sessions.set(config.taskId, session)
 
-    await this.initializeAppServer(session)
+    try {
+      await this.initializeAppServer(session)
 
-    const result = await this.sendRpcRequest(session, 'thread/start', {
-      cwd: config.workspaceDir,
-      model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
-      approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
-      approvalsReviewer: 'user',
-      sandbox: this.resolveSandboxMode(config),
-      developerInstructions: config.systemPrompt || null,
-      runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
-      config: this.buildConfigOverrides(config)
-    })
+      const result = await this.sendRpcRequest(session, 'thread/start', {
+        cwd: config.workspaceDir,
+        model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
+        approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
+        approvalsReviewer: 'user',
+        sandbox: this.resolveSandboxMode(config),
+        developerInstructions: config.systemPrompt || null,
+        runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
+        config: config.responsibilityRole ? await this.sessionConfigOverrides(session, config) : this.buildConfigOverrides(config)
+      })
 
-    const threadId = extractThreadId(result)
-    if (!threadId) {
-      throw new Error('Codex app-server did not return a thread id')
+      const threadId = extractThreadId(result)
+      if (!threadId) {
+        throw new Error('Codex app-server did not return a thread id')
+      }
+
+      session.threadId = threadId
+      this.sessions.delete(config.taskId)
+      this.sessions.set(threadId, session)
+      void this.logMcpServerInventory(session, threadId, 'thread/start')
+      return threadId
+    } catch (error) {
+      // A failed initialization must not leave an untracked provider process.
+      await this.destroySession(config.taskId, config)
+      throw error
     }
-
-    session.threadId = threadId
-    this.sessions.delete(config.taskId)
-    this.sessions.set(threadId, session)
-    void this.logMcpServerInventory(session, threadId, 'thread/start')
-    return threadId
   }
 
   async resumeSession(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
@@ -413,7 +419,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       sandbox: this.resolveSandboxMode(config),
       runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
       initialTurnsPage: { limit: 50 },
-      config: this.buildConfigOverrides(config)
+      config: config.responsibilityRole ? await this.sessionConfigOverrides(session, config) : this.buildConfigOverrides(config)
     })
 
     void this.logMcpServerInventory(session, sessionId, 'thread/resume')
@@ -474,7 +480,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       sandbox: this.resolveSandboxMode(config),
       sandboxPolicy: this.buildSandboxPolicy(config),
       runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
-      config: this.buildConfigOverrides(config)
+      config: config.responsibilityRole ? await this.sessionConfigOverrides(session, config) : this.buildConfigOverrides(config)
     })
 
     if (isObject(result)) {
@@ -584,14 +590,24 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) return
-    session.process.kill('SIGTERM')
-    setTimeout(() => {
-      if (!session.process.killed) {
-        session.process.kill('SIGKILL')
-      }
-    }, 1000)
+    const child = session.process
+    if (child.exitCode === null && child.signalCode === null) {
+      await new Promise<void>((resolveExit, rejectExit) => {
+        const escalate = setTimeout(() => child.kill('SIGKILL'), 1000)
+        const timeout = setTimeout(() => finish(new Error('Codex process did not confirm exit.')), 3000)
+        const exited = (): void => finish()
+        const finish = (error?: Error): void => {
+          clearTimeout(escalate); clearTimeout(timeout); child.removeListener('exit', exited)
+          if (error) rejectExit(error); else resolveExit()
+        }
+        child.once('exit', exited)
+        // `killed` only means a signal was sent. Wait for actual process exit.
+        child.kill('SIGTERM')
+      })
+    }
     session.messageBuffer.length = 0
     session.permanentMessages.length = 0
+    for (const request of session.pendingRequests.values()) request.reject(new Error('Codex session closed.'))
     session.pendingRequests.clear()
     session.streamedTextByItemId.clear()
     session.assistantTextKeysByTurn.clear()
@@ -633,10 +649,10 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     return this.sessions.get(sessionId)?.pendingApproval || null
   }
 
-  async respondToApproval(sessionId: string, approved: boolean, optionId?: string): Promise<void> {
+  async respondToApproval(sessionId: string, approved: boolean, optionId?: string, requestId?: string): Promise<boolean> {
     const session = this.requireSession(sessionId)
     const approval = session.pendingApproval
-    if (!approval) return
+    if (!approval || (requestId !== undefined && String(approval.requestId) !== requestId)) return false
 
     const selected = optionId || approval.options.find((option) =>
       approved
@@ -650,6 +666,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (!approved) {
       session.status = SessionStatusType.IDLE
     }
+    return true
   }
 
   async getRunningTools(sessionId: string, _config: SessionConfig): Promise<Array<{
@@ -802,14 +819,33 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     }
   }
 
+  private async sessionConfigOverrides(session: AppServerSession, requested: SessionConfig): Promise<Record<string, unknown>> {
+    const overrides = this.buildConfigOverrides(requested)
+    if (session.config.responsibilityRole) {
+      const result = await this.sendRpcRequest(session, 'config/read', { includeLayers: false })
+      const config = isObject(result) && isObject(result.config) ? result.config : {}
+      const inherited = isObject(config.mcp_servers) ? Object.keys(config.mcp_servers) : []
+      overrides.mcp_servers = { ...Object.fromEntries(inherited.map(name => [name, { enabled: false }])), ...Object.fromEntries(Object.entries(this.convertMcpServers(requested.mcpServers ?? {})).map(([name, server]) => [name, { ...(server as Record<string, unknown>), enabled: true, default_tools_approval_mode: 'approve' }])) }
+    }
+    return overrides
+  }
+
   private buildConfigOverrides(config: SessionConfig): Record<string, unknown> {
     const overrides: Record<string, unknown> = {}
+    if (config.responsibilityRole === 'root') {
+      // Official config reference: features.shell_tool disables root command execution.
+      overrides.features = { shell_tool: false }
+      overrides.web_search = 'disabled'
+    }
+    if (config.responsibilityRole) {
+      overrides.features = { ...(overrides.features as Record<string, boolean> ?? {}), multi_agent: false, apps: false, plugins: false }
+    }
     if (config.reasoningEffort && config.reasoningEffort !== 'max') {
       overrides.model_reasoning_effort = config.reasoningEffort
     }
     if (this.resolveSandboxMode(config) === 'workspace-write') {
       overrides.sandbox_workspace_write = {
-        network_access: true,
+        network_access: !config.responsibilityRole,
         writable_roots: this.buildRuntimeWorkspaceRoots(config.workspaceDir)
       }
     }
@@ -1129,14 +1165,14 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   private buildSandboxPolicy(config: SessionConfig): CodexSandboxPolicy {
     switch (this.resolveSandboxMode(config)) {
       case 'read-only':
-        return { type: 'readOnly', networkAccess: true }
+        return { type: 'readOnly', networkAccess: !config.responsibilityRole }
       case 'danger-full-access':
         return { type: 'dangerFullAccess' }
       case 'workspace-write':
       default:
         return {
           type: 'workspaceWrite',
-          networkAccess: true,
+          networkAccess: !config.responsibilityRole,
           writableRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir)
         }
     }

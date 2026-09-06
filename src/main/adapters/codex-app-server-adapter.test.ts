@@ -1,9 +1,10 @@
+import { EventEmitter } from 'events'
 import { describe, it, expect, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { CodexAppServerAdapter } from './codex-app-server-adapter'
-import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
+import { MessagePartType, MessageRole, SessionStatusType, type SessionConfig } from './coding-agent-adapter'
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
@@ -49,6 +50,7 @@ interface AppServerAdapterPrivate {
       headers?: Record<string, string>
     }>
   }): Record<string, unknown>
+  sessionConfigOverrides(session: AppServerSessionForTest, config: SessionConfig): Promise<Record<string, unknown>>
   buildRuntimeWorkspaceRoots(workspaceDir: string): string[]
   bufferAllThreadItems(session: AppServerSessionForTest, threadId: string): Promise<void>
   sendRpcRequest(session: AppServerSessionForTest, method: string, params?: unknown): Promise<unknown>
@@ -79,7 +81,7 @@ interface AppServerSessionForTest {
   pendingApproval: unknown | null
   nextRequestId: number
   lastError: string | null
-  config: { permissionMode?: 'ask' | 'allow'; sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access' }
+  config: Partial<SessionConfig>
   streamedTextByItemId: Map<string, string>
   assistantTextKeysByTurn: Map<string, Set<string>>
   runningTools: Map<string, {
@@ -130,6 +132,43 @@ function flushPromises(): Promise<void> {
 }
 
 describe('CodexAppServerAdapter', () => {
+  it('waits for exit and escalates even when SIGTERM set the killed flag', async () => {
+    vi.useFakeTimers()
+    try {
+      const instance = new CodexAppServerAdapter(); const adapter = adapterPrivate(instance); const session = createSession()
+      const child = Object.assign(new EventEmitter(), { stdin: session.process.stdin, exitCode: null, signalCode: null, killed: false, kill: vi.fn((_signal: string) => { child.killed = true; return true }) })
+      session.process = child; adapter.sessions.set('thread-1', session)
+      const stopping = instance.destroySession('thread-1', {} as SessionConfig)
+      expect(adapter.sessions.has('thread-1')).toBe(true)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']])
+      expect(adapter.sessions.has('thread-1')).toBe(true)
+      child.emit('exit', null, 'SIGKILL'); await stopping
+      expect(adapter.sessions.has('thread-1')).toBe(false)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('isolates responsibility tools from inherited MCP servers and plugins', async () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const config: SessionConfig = { taskId: 'root', agentId: 'agent', workspaceDir: '/tmp', responsibilityRole: 'root', sandboxMode: 'read-only', mcpServers: { responsibilities: { type: 'http', url: 'http://localhost:1234/mcp?responsibility=owned' } } }
+    session.config = config
+    vi.spyOn(adapter, 'sendRpcRequest').mockResolvedValue({ config: { mcp_servers: { external: { url: 'https://external.example/mcp' } } } })
+    const overrides = await adapter.sessionConfigOverrides(session, config)
+    expect(overrides.features).toMatchObject({ shell_tool: false, multi_agent: false, apps: false, plugins: false })
+    expect(overrides.mcp_servers).toEqual({ external: { enabled: false }, responsibilities: { url: 'http://localhost:1234/mcp?responsibility=owned', enabled: true, default_tools_approval_mode: 'approve' } })
+  })
+
+  it('rejects a stale approval id while another request in the same session is pending', async () => {
+    const instance = new CodexAppServerAdapter(); const adapter = adapterPrivate(instance); const session = createSession()
+    adapter.sessions.set('thread-1', session)
+    adapter.handleRpcMessage(session, { jsonrpc: '2.0', id: 22, method: 'item/commandExecution/requestApproval', params: { command: 'current operation' } })
+    expect(await instance.respondToApproval('thread-1', true, undefined, '21')).toBe(false)
+    expect(session.process.stdin.write).not.toHaveBeenCalled()
+    expect(await instance.respondToApproval('thread-1', true, undefined, '22')).toBe(true)
+    expect(session.process.stdin.write).toHaveBeenCalledTimes(1)
+  })
+
   it('accumulates agent message deltas into an updating text part', () => {
     const adapter = adapterPrivate(new CodexAppServerAdapter())
     const session = createSession()

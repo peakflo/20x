@@ -1,3 +1,6 @@
+import { ResponsibilityManager } from './responsibility-manager'
+import { registerResponsibilityIpc } from './responsibility-ipc'
+import { setResponsibilityManager } from './task-api-server'
 import { execFile, execSync } from 'child_process'
 import { readdirSync } from 'fs'
 import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage } from 'electron'
@@ -72,6 +75,7 @@ let syncManager: SyncManager | null = null
 let pluginRegistry: PluginRegistry | null = null
 let oauthManager: OAuthManager | null = null
 let enterpriseAuth: EnterpriseAuth | null = null
+let responsibilityManager: ResponsibilityManager | null = null
 let recurrenceScheduler: RecurrenceScheduler | null = null
 let heartbeatScheduler: HeartbeatScheduler | null = null
 let taskAutomationScheduler: TaskAutomationScheduler | null = null
@@ -271,6 +275,8 @@ async function sweepLeakedWorkspaces(graceMs?: number, orphansIgnoreTaskState = 
 }
 
 async function shutdownAppServices(): Promise<void> {
+  await responsibilityManager?.stop()
+  recurrenceScheduler?.stop()
   voiceSessionManager?.shutdown()
   enterpriseHeartbeatInstance?.stop()
   heartbeatScheduler?.stop()
@@ -1005,6 +1011,17 @@ app.whenReady().then(async () => {
 
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
   agentManager.setSyncManager(syncManager)
+
+  responsibilityManager = new ResponsibilityManager(db, agentManager, taskId => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('responsibilities:changed')
+      if (taskId) mainWindow.webContents.send('tasks:refresh')
+    }
+  })
+  agentManager.setResponsibilityManager(responsibilityManager)
+  setResponsibilityManager(responsibilityManager)
+  registerResponsibilityIpc(responsibilityManager, () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : undefined)
+  responsibilityManager.start()
 
   recurrenceScheduler = new RecurrenceScheduler(db)
   heartbeatScheduler = new HeartbeatScheduler(db, agentManager)
