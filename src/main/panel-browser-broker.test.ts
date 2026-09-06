@@ -14,16 +14,23 @@ import {
   buildClickScript,
   buildGetScript,
   buildPressScript,
+  buildResourceTimingScript,
   buildScrollScript,
   buildSnapshotScript,
   buildTypeScript,
   buildWaitScript,
+  consoleLevelName,
+  filterConsoleEntries,
   normalizeRef,
   panelBrowserBroker,
+  parseResourceTimingResult,
   parseSnapshotResult,
+  pushConsoleEntry,
   resolveKeyName,
   resolvePanelForTask,
   unwrapEval,
+  CONSOLE_BUFFER_CAP,
+  type ConsoleEntry,
   type PanelRegistry
 } from './panel-browser-broker'
 
@@ -209,6 +216,156 @@ describe('reload hard flag', () => {
       expect(result).toEqual({ ok: true, url: 'https://x.io/after-soft' })
     } finally {
       panelBrowserBroker.unregisterPanel('p-soft')
+    }
+  })
+})
+
+describe('console helpers', () => {
+  it('maps Electron console-message levels to names', () => {
+    expect(consoleLevelName(0)).toBe('debug')
+    expect(consoleLevelName(1)).toBe('info')
+    expect(consoleLevelName(2)).toBe('warning')
+    expect(consoleLevelName(3)).toBe('error')
+    expect(consoleLevelName(99)).toBe('error')
+  })
+
+  it('caps the per-panel buffer at CONSOLE_BUFFER_CAP', () => {
+    const buffer: ConsoleEntry[] = []
+    for (let i = 0; i < CONSOLE_BUFFER_CAP + 10; i++) {
+      pushConsoleEntry(buffer, { level: 'info', message: `m${i}`, source: '', line: 0, at: i })
+    }
+    expect(buffer).toHaveLength(CONSOLE_BUFFER_CAP)
+    expect(buffer[0].message).toBe('m10')
+    expect(buffer[buffer.length - 1].message).toBe(`m${CONSOLE_BUFFER_CAP + 9}`)
+  })
+
+  it('filters by level and honors the limit (newest last)', () => {
+    const entries: ConsoleEntry[] = [
+      { level: 'info', message: 'a', source: '', line: 0, at: 1 },
+      { level: 'error', message: 'b', source: '', line: 0, at: 2 },
+      { level: 'error', message: 'c', source: '', line: 0, at: 3 }
+    ]
+    expect(filterConsoleEntries(entries, { level: 'error' }).map((e) => e.message)).toEqual(['b', 'c'])
+    expect(filterConsoleEntries(entries, { limit: 2 }).map((e) => e.message)).toEqual(['b', 'c'])
+    expect(filterConsoleEntries(entries, {})).toHaveLength(3)
+  })
+})
+
+describe('resource timing script', () => {
+  it('reads the performance timeline and caps rows', () => {
+    const script = buildResourceTimingScript('api', 25)
+    expect(script).toContain("getEntriesByType('navigation')")
+    expect(script).toContain("getEntriesByType('resource')")
+    expect(script).toContain('slice(-25)')
+    expect(script).toContain('"api"')
+  })
+
+  it('clamps the limit to the result cap', () => {
+    expect(buildResourceTimingScript(undefined, 999999)).toContain('slice(-200)')
+  })
+
+  it('parses a well-formed payload and rejects malformed ones', () => {
+    const payload = JSON.stringify({
+      navigation: [{ url: 'https://x.io/', initiator: 'navigation', durationMs: 1, transferSize: 2, decodedSize: 3, status: 200 }],
+      resources: []
+    })
+    expect(parseResourceTimingResult(payload)).toMatchObject({ resources: [] })
+    expect(parseResourceTimingResult({ navigation: [], resources: [] })).toMatchObject({ navigation: [] })
+    expect(parseResourceTimingResult(null)).toHaveProperty('error')
+    expect(parseResourceTimingResult('not json')).toHaveProperty('error')
+    expect(parseResourceTimingResult('{"navigation":[]}')).toHaveProperty('error')
+  })
+})
+
+describe('broker console buffering', () => {
+  type ConsoleListener = (event: unknown, level: number, message: string, line: number, sourceId: string) => void
+
+  function fakeConsoleWebContents() {
+    let consoleListener: ConsoleListener | null = null
+    return {
+      listener: () => consoleListener,
+      isDestroyed: vi.fn(() => false),
+      getURL: vi.fn(() => 'https://x.io/'),
+      on: vi.fn((event: string, cb: ConsoleListener) => {
+        if (event === 'console-message') consoleListener = cb
+      }),
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      executeJavaScript: vi.fn(async () => '{}')
+    }
+  }
+
+  it('buffers console-message events per panel with level/line/source', async () => {
+    const wc = fakeConsoleWebContents()
+    electronMocks.fromId.mockReturnValue(wc)
+    panelBrowserBroker.registerPanel('p-console', 44, ['task-console'])
+    try {
+      expect(wc.on).toHaveBeenCalledWith('console-message', expect.any(Function))
+      wc.listener()?.({}, 3, 'boom', 42, 'https://x.io/app.js')
+      wc.listener()?.({}, 1, 'hello', 7, 'https://x.io/app.js')
+      const all = (await panelBrowserBroker.console('task-console', {}, 'p-console')) as unknown as {
+        entries: ConsoleEntry[]
+        count: number
+      }
+      expect(all.count).toBe(2)
+      expect(all.entries[0]).toMatchObject({ level: 'error', message: 'boom', line: 42 })
+      const errors = (await panelBrowserBroker.console('task-console', { level: 'error' }, 'p-console')) as unknown as {
+        entries: ConsoleEntry[]
+      }
+      expect(errors.entries.map((e) => e.message)).toEqual(['boom'])
+    } finally {
+      panelBrowserBroker.unregisterPanel('p-console')
+    }
+  })
+
+  it('drains the buffer when clear is set and isolates panels', async () => {
+    const wc = fakeConsoleWebContents()
+    electronMocks.fromId.mockReturnValue(wc)
+    panelBrowserBroker.registerPanel('p-console-a', 45, ['task-console-a'])
+    panelBrowserBroker.registerPanel('p-console-b', 46, ['task-console-b'])
+    try {
+      const drained = (await panelBrowserBroker.console('task-console-a', { clear: true }, 'p-console-a')) as unknown as {
+        entries: ConsoleEntry[]
+      }
+      expect(Array.isArray(drained.entries)).toBe(true)
+      // Other panels are untouched by the drain.
+      const other = (await panelBrowserBroker.console('task-console-b', {}, 'p-console-b')) as unknown as {
+        entries: ConsoleEntry[]
+      }
+      expect(Array.isArray(other.entries)).toBe(true)
+    } finally {
+      panelBrowserBroker.unregisterPanel('p-console-a')
+      panelBrowserBroker.unregisterPanel('p-console-b')
+    }
+  })
+})
+
+describe('broker network', () => {
+  it('returns parsed navigation + resource entries', async () => {
+    const payload = JSON.stringify({
+      navigation: [{ url: 'https://x.io/', initiator: 'navigation', durationMs: 10, transferSize: 5, decodedSize: 6, status: 200 }],
+      resources: [{ url: 'https://x.io/api', initiator: 'fetch', durationMs: 3, transferSize: 1, decodedSize: 2, status: 200 }]
+    })
+    const wc = {
+      isDestroyed: vi.fn(() => false),
+      getURL: vi.fn(() => 'https://x.io/'),
+      on: vi.fn(),
+      once: vi.fn(),
+      removeListener: vi.fn(),
+      executeJavaScript: vi.fn(async () => payload)
+    }
+    electronMocks.fromId.mockReturnValue(wc)
+    panelBrowserBroker.registerPanel('p-network', 47, ['task-network'])
+    try {
+      const result = (await panelBrowserBroker.network('task-network', 'api', 50, 'p-network')) as unknown as {
+        navigation: unknown[]
+        resources: Array<{ url: string }>
+      }
+      expect(result.navigation).toHaveLength(1)
+      expect(result.resources.map((r) => r.url)).toEqual(['https://x.io/api'])
+      expect(wc.executeJavaScript).toHaveBeenCalledTimes(1)
+    } finally {
+      panelBrowserBroker.unregisterPanel('p-network')
     }
   })
 })

@@ -1254,6 +1254,35 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       return panelBrowserBroker.reload(taskId, panelId, params.hard === true)
     }
 
+    case '/browser_console': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      const level = typeof params.level === 'string' ? params.level : undefined
+      if (level && !['debug', 'info', 'warning', 'error'].includes(level.toLowerCase())) {
+        return { error: 'level must be debug | info | warning | error' }
+      }
+      return panelBrowserBroker.console(
+        taskId,
+        {
+          level,
+          limit: typeof params.limit === 'number' ? params.limit : undefined,
+          clear: params.clear === true
+        },
+        str(params.panel_id)
+      )
+    }
+
+    case '/browser_network': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      return panelBrowserBroker.network(
+        taskId,
+        typeof params.filter === 'string' ? params.filter : undefined,
+        typeof params.limit === 'number' ? params.limit : undefined,
+        str(params.panel_id)
+      )
+    }
+
     default:
       return { error: 'Unknown route' }
   }

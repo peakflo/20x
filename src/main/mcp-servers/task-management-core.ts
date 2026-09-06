@@ -668,6 +668,35 @@ const browserTools: Tool[] = [
       },
       required: ['task_id']
     }
+  },
+  {
+    name: 'browser_console',
+    description: 'Read buffered browser console messages (log/warn/error + page errors) for a panel. Capture starts with the first command against the panel; pass clear=true to drain the buffer after reading.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: taskParam,
+        level: { type: 'string', enum: ['debug', 'info', 'warning', 'error'], description: 'Only return messages at this level' },
+        limit: { type: 'number', description: 'Max entries to return, newest last (default 100, max 200)' },
+        clear: { type: 'boolean', description: 'Drain the buffer after reading (default false)' },
+        panel_id: panelIdParam
+      },
+      required: ['task_id']
+    }
+  },
+  {
+    name: 'browser_network',
+    description: 'List recent network activity for a panel (document navigations + resource/fetch/XHR rows with URL, initiator, timing and sizes) from the page performance timeline.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: taskParam,
+        filter: { type: 'string', description: 'Only return entries whose URL contains this substring' },
+        limit: { type: 'number', description: 'Max resource rows to return, most recent last (default 50, max 200)' },
+        panel_id: panelIdParam
+      },
+      required: ['task_id']
+    }
   }
 ]
 
