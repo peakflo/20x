@@ -294,6 +294,113 @@ export function buildWaitScript(mode: 'selector' | 'text' | 'url', value: string
 })()`
 }
 
+/** A single captured browser console message for one panel. */
+export interface ConsoleEntry {
+  level: 'debug' | 'info' | 'warning' | 'error'
+  message: string
+  source: string
+  line: number
+  /** Epoch millis when the main process observed the message. */
+  at: number
+}
+
+/** Ring-buffer cap per panel — bounds memory when pages log in loops. */
+export const CONSOLE_BUFFER_CAP = 200
+
+const CONSOLE_LEVELS = ['debug', 'info', 'warning', 'error'] as const
+
+/** Maps Electron's console-message numeric level to a stable name. */
+export function consoleLevelName(level: number): ConsoleEntry['level'] {
+  return CONSOLE_LEVELS[level] ?? (level >= 3 ? 'error' : 'debug')
+}
+
+/** Pushes an entry, evicting the oldest when the buffer is full. */
+export function pushConsoleEntry(buffer: ConsoleEntry[], entry: ConsoleEntry, cap = CONSOLE_BUFFER_CAP): ConsoleEntry[] {
+  buffer.push(entry)
+  while (buffer.length > cap) buffer.shift()
+  return buffer
+}
+
+export interface ConsoleFilter {
+  level?: string
+  /** Max entries to return (newest last). Defaults to 100, clamped to the buffer cap. */
+  limit?: number
+}
+
+/** Applies level filter + limit; returns entries oldest-first. */
+export function filterConsoleEntries(entries: ConsoleEntry[], filter: ConsoleFilter = {}): ConsoleEntry[] {
+  const level = (filter.level || '').toLowerCase()
+  const scoped = level ? entries.filter((e) => e.level === level) : entries.slice()
+  const limit = Math.max(1, Math.min(filter.limit ?? 100, CONSOLE_BUFFER_CAP))
+  return scoped.slice(-limit)
+}
+
+/** A single performance-timeline entry behind browser_network. */
+export interface NetworkEntry {
+  url: string
+  initiator: string
+  durationMs: number
+  transferSize: number
+  decodedSize: number
+  /** HTTP status when Chromium exposes it (0 when unknown / failed). */
+  status: number
+}
+
+export interface ResourceTimingResult {
+  navigation: NetworkEntry[]
+  resources: NetworkEntry[]
+}
+
+/** Max resource rows a single browser_network call returns. */
+export const NETWORK_RESULT_CAP = 200
+
+/**
+ * Builds the injected script behind browser_network: reads the page's
+ * performance timeline (navigation + resource entries) — the same data
+ * agent-browser surfaces via `network requests`, but panel-scoped through
+ * executeJavaScript so no debugger attachment or CDP socket is needed.
+ */
+export function buildResourceTimingScript(filter?: string, limit?: number): string {
+  const lim = Math.max(1, Math.min(limit ?? 50, NETWORK_RESULT_CAP))
+  return `(() => {
+  const pick = (e) => ({
+    url: String(e.name || '').slice(0, 500),
+    initiator: String(e.initiatorType || e.entryType || ''),
+    durationMs: Math.round(e.duration || 0),
+    transferSize: e.transferSize || 0,
+    decodedSize: e.decodedBodySize || 0,
+    status: e.responseStatus || 0
+  });
+  const match = (u) => !${JSON.stringify(filter || '')} || u.includes(${JSON.stringify(filter || '')});
+  let nav = [];
+  let res = [];
+  try {
+    nav = performance.getEntriesByType('navigation').map(pick).filter((e) => match(e.url));
+    res = performance.getEntriesByType('resource').map(pick).filter((e) => match(e.url)).slice(-${lim});
+  } catch (err) {
+    return JSON.stringify({ error: 'Resource timing unavailable: ' + (err && err.message ? err.message : String(err)) });
+  }
+  return JSON.stringify({ navigation: nav, resources: res });
+})()`
+}
+
+/** Parses the payload returned by buildResourceTimingScript(). */
+export function parseResourceTimingResult(raw: unknown): ResourceTimingResult | { error: string } {
+  let parsed: unknown = raw
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      return { error: 'Malformed network payload' }
+    }
+  }
+  const result = parsed as ResourceTimingResult | null
+  if (!result || typeof result !== 'object' || !Array.isArray(result.resources) || !Array.isArray(result.navigation)) {
+    return { error: 'Malformed network payload' }
+  }
+  return result
+}
+
 /** Parses whatever executeJavaScript resolved into a plain object. */
 export function unwrapEval(raw: unknown): Record<string, unknown> {
   if (typeof raw === 'string') {
@@ -329,9 +436,21 @@ export function withTimeout<T>(
 
 export class PanelBrowserBroker {
   private registry: PanelRegistry = new Map()
+  /**
+   * Per-panel console ring buffers. Filled from the main-process
+   * `console-message` event — page JS history cannot be re-read after the
+   * fact, so buffering at observe time is the only way to expose past logs
+   * without a debugger attachment.
+   */
+  private consoleBuffers: Map<string, ConsoleEntry[]> = new Map()
+  /** webContentsIds already carrying a console-message listener. */
+  private consoleHooked: Set<number> = new Set()
 
   registerPanel(panelId: string, webContentsId: number, taskIds: string[]): void {
     this.registry.set(panelId, { webContentsId, taskIds: new Set(taskIds) })
+    if (!this.consoleBuffers.has(panelId)) this.consoleBuffers.set(panelId, [])
+    const wc = this.getLiveWebContents(webContentsId)
+    if (wc) this.ensureConsoleHook(webContentsId, wc)
   }
 
   /** Replaces just the task linkage (edges changed), keeping the webContentsId. */
@@ -343,6 +462,7 @@ export class PanelBrowserBroker {
   }
 
   unregisterPanel(panelId: string): boolean {
+    this.consoleBuffers.delete(panelId)
     return this.registry.delete(panelId)
   }
 
@@ -362,6 +482,8 @@ export class PanelBrowserBroker {
 
   stopAll(): void {
     this.registry.clear()
+    this.consoleBuffers.clear()
+    this.consoleHooked.clear()
   }
 
   private getLiveWebContents(webContentsId: number): Electron.WebContents | null {
@@ -386,7 +508,41 @@ export class PanelBrowserBroker {
       this.registry.delete(resolved.panelId)
       return { ok: false, error: 'That browser panel was closed. Use browser_list_panels.' }
     }
+    // Late-attach: the panel may have registered before its webContents
+    // existed (first dom-ready had not fired yet).
+    this.ensureConsoleHook(entry.webContentsId, wc)
     return { ok: true, wc }
+  }
+
+  /**
+   * Attaches a single `console-message` listener per live webContents. The
+   * fan-out is by webContentsId so one listener serves every panel sharing
+   * it, and the main app window is never hooked (it never appears here —
+   * only explicitly registered panels do).
+   */
+  private ensureConsoleHook(webContentsId: number, wc: Electron.WebContents): void {
+    if (this.consoleHooked.has(webContentsId)) return
+    if (typeof (wc as { on?: unknown }).on !== 'function') return
+    try {
+      wc.on('console-message', (_event, level, message, line, sourceId) => {
+        const entry: ConsoleEntry = {
+          level: consoleLevelName(typeof level === 'number' ? level : 0),
+          message: String(message ?? '').slice(0, 2000),
+          source: String(sourceId ?? '').slice(0, 300),
+          line: typeof line === 'number' ? line : 0,
+          at: Date.now()
+        }
+        for (const [id, panel] of this.registry) {
+          if (panel.webContentsId !== webContentsId) continue
+          const buffer = this.consoleBuffers.get(id) ?? []
+          pushConsoleEntry(buffer, entry)
+          this.consoleBuffers.set(id, buffer)
+        }
+      })
+      this.consoleHooked.add(webContentsId)
+    } catch {
+      // Listener attachment is best-effort (e.g. torn-down contents).
+    }
   }
 
   private async eval(wc: Electron.WebContents, script: string): Promise<Record<string, unknown>> {
@@ -477,6 +633,45 @@ export class PanelBrowserBroker {
 
   get(taskId: string, what: string, panelId?: string | null): Promise<Record<string, unknown>> {
     return this.evalOnResolved(taskId, panelId, buildGetScript(what))
+  }
+
+  /**
+   * Returns buffered console messages for a panel (agent-browser parity for
+   * `console` / `errors`). Capture starts with the first command against the
+   * panel; messages before that are not available. Pass clear=true to drain
+   * the buffer after reading (e.g. polling for new errors in a loop).
+   */
+  async console(
+    taskId: string,
+    filter: ConsoleFilter & { clear?: boolean } = {},
+    panelId?: string | null
+  ): Promise<Record<string, unknown>> {
+    const resolved = this.resolve(taskId, panelId)
+    if (!resolved.ok) return resolved
+    const resolvedPanel = resolvePanelForTask(this.registry, taskId, panelId)
+    if (!resolvedPanel.ok) return { error: resolvedPanel.error }
+    const buffer = this.consoleBuffers.get(resolvedPanel.panelId) ?? []
+    const entries = filterConsoleEntries(buffer, filter)
+    if (filter.clear) this.consoleBuffers.set(resolvedPanel.panelId, [])
+    return { entries, count: entries.length, buffered: buffer.length } as unknown as Record<string, unknown>
+  }
+
+  /**
+   * Returns recent network activity for a panel from the page performance
+   * timeline (agent-browser parity for `network requests`): document
+   * navigations plus subresource / fetch / XHR rows with URL, initiator,
+   * timing and sizes. No request/response headers or bodies — those need a
+   * session webRequest tap (documented follow-up), deliberately out of scope
+   * here to avoid touching the shared-session handlers.
+   */
+  async network(taskId: string, filter?: string, limit?: number, panelId?: string | null): Promise<Record<string, unknown>> {
+    const resolved = this.resolve(taskId, panelId)
+    if (!resolved.ok) return resolved
+    const evalResult = await this.evalOnResolved(taskId, panelId, buildResourceTimingScript(filter, limit))
+    if (evalResult.error) return evalResult
+    const result = parseResourceTimingResult(evalResult)
+    if ('error' in result) return result
+    return result as unknown as Record<string, unknown>
   }
 
   async wait(taskId: string, mode: 'selector' | 'text' | 'url', value: string, timeoutMs?: number, panelId?: string | null): Promise<Record<string, unknown>> {

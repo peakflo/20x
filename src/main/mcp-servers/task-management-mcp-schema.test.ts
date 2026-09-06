@@ -126,6 +126,37 @@ describe('browser_reload schema', () => {
   })
 })
 
+describe('browser console + network schemas', () => {
+  it('exposes browser_console with level/limit/clear for both scopes', () => {
+    for (const scope of [FULL_ACCESS_SCOPE, SCOPED]) {
+      const props = propertiesOf(scope, 'browser_console')
+      expect(Object.keys(props)).toEqual(expect.arrayContaining(['task_id', 'level', 'limit', 'clear', 'panel_id']))
+      const tool = toolByName(scope, 'browser_console')
+      expect(tool!.inputSchema.required).toEqual(['task_id'])
+    }
+  })
+
+  it('exposes browser_network with filter/limit for both scopes', () => {
+    for (const scope of [FULL_ACCESS_SCOPE, SCOPED]) {
+      const props = propertiesOf(scope, 'browser_network')
+      expect(Object.keys(props)).toEqual(expect.arrayContaining(['task_id', 'filter', 'limit', 'panel_id']))
+      const tool = toolByName(scope, 'browser_network')
+      expect(tool!.inputSchema.required).toEqual(['task_id'])
+    }
+  })
+
+  it('dispatches both tools through the shared pass-through route', async () => {
+    const calls: Array<{ route: string; params: Record<string, unknown> }> = []
+    const invoke = async (route: string, params: Record<string, unknown>): Promise<unknown> => {
+      calls.push({ route, params })
+      return { ok: true }
+    }
+    await callToolForScope('browser_console', { task_id: 't1', level: 'error' }, FULL_ACCESS_SCOPE, invoke)
+    await callToolForScope('browser_network', { task_id: 't1', filter: 'api' }, FULL_ACCESS_SCOPE, invoke)
+    expect(calls.map((c) => c.route)).toEqual(['/browser_console', '/browser_network'])
+  })
+})
+
 describe('subtask status ceiling', () => {
   it('refuses a self-completion and points at ready_for_review', async () => {
     const invoke = async (): Promise<unknown> => ({ ok: true })
