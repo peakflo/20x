@@ -74,8 +74,6 @@ export function FeedbackDialog({ open, onSubmit, onSkip, onCancel }: FeedbackDia
             rows={3}
           />
 
-          <p>Workflo confirms task completion.</p>
-
           <div className="flex gap-2 justify-end">
             <Button variant="ghost" size="sm" onClick={() => onSkip()}>
               Skip
