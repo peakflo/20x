@@ -660,13 +660,17 @@ function TaskWorkspaceComponent({
     }
   }, [session.sessionId, session.messages.length, task?.session_id, onCompleteTask])
 
-  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string, completeAtSource: boolean) => {
+  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
     if (!task?.agent_id || !task?.id) return
     setShowFeedback(false)
 
+    if (task.server_managed) {
+      await taskApi.update(task.id, {feedback_rating:rating,feedback_comment:comment || null})
+      await onCompleteTask()
+      return
+    }
+
     // Persist feedback + set task to Learning status - prevents auto-stop useEffect.
-    // `complete_at_source` records the user's answer here, because the learning
-    // session finishes in the main process, where no dialog can be shown.
     console.log('[TaskWorkspace] Setting task status to AgentLearning:', task.id)
     let updatedTask: WorkfloTask | null | undefined
     try {
@@ -674,7 +678,6 @@ function TaskWorkspaceComponent({
         status: TaskStatus.AgentLearning,
         feedback_rating: rating,
         feedback_comment: comment || null,
-        ...(task.source_id ? { complete_at_source: completeAtSource } : {})
       })
     } catch (error) {
       // The dialog is already closed at this point, so a rejected write left the
@@ -757,7 +760,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
     }
   }, [ensureChatSession, sendMessage, session.sessionId, task?.id])
 
-  const handleFeedbackSkip = useCallback(async (completeAtSource: boolean) => {
+  const handleFeedbackSkip = useCallback(async () => {
     if (!task?.id) return
     setShowFeedback(false)
     // Record the answer first so the completion path does not ask a second
@@ -765,7 +768,6 @@ Update existing skills that were helpful or create new ones for patterns worth r
     // source-backed tasks before setting the local status to Completed.
     // updateTaskInStore persists through the API and syncs the store, so the
     // completion path below reads the answer back.
-    if (task.source_id) await updateTaskInStore(task.id, { complete_at_source: completeAtSource })
     await onCompleteTask()
   }, [task?.id, task?.source_id, onCompleteTask, updateTaskInStore])
 
@@ -1246,6 +1248,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
       <FeedbackDialog
         open={showFeedback}
         sourceName={feedbackSourceName}
+        serverManaged={task.server_managed || taskSources.find(s => s.id === task.source_id)?.plugin_id === 'peakflo'}
         onSubmit={handleFeedbackSubmit}
         onSkip={handleFeedbackSkip}
         onCancel={() => setShowFeedback(false)}

@@ -104,15 +104,21 @@ export function registerIpcHandlers(
     return db.getTask(id)
   })
 
-  ipcMain.handle('db:createTask', (event, data: CreateTaskData) => {
-    const task = db.createTask(data)
+  ipcMain.handle('db:createTask', async (event, data: CreateTaskData) => {
+    if (data.status === TaskStatus.Completed) throw new Error('Workflo must confirm completion.')
+    let task = db.createTask(data)
+    if (task && !task.source_id && syncManager.canUploadTasks()) {
+      try { await syncManager.uploadTask(task.id) }
+      catch (error) { db.setSetting(`workflo-upload:${task.id}:error`, error instanceof Error ? error.message : String(error)) }
+      task = db.getTask(task.id)
+    }
     // Initialize recurring task if it has a recurrence pattern
-    if (task && task.is_recurring && recurrenceScheduler) {
+    if (task && !task.server_managed && task.is_recurring && recurrenceScheduler) {
       recurrenceScheduler.initializeRecurringTask(task.id)
     }
     // Hand a self-starting task straight to the main-process automation loop
     // instead of relying on a renderer listener seeing this one event.
-    if (task?.auto_start_agent) {
+    if (task?.auto_start_agent && !task.server_managed) {
       void taskAutomationScheduler?.runNow()
     }
     // Notify renderer so auto-start hook can trigger triage for UI-created tasks
@@ -687,8 +693,12 @@ export function registerIpcHandlers(
     return result
   })
 
-  ipcMain.handle('taskSource:exportUpdate', async (_, taskId: string, fields: Record<string, unknown>) => {
+  ipcMain.handle('taskSource:upload', async (_, taskId: string, autonomous?: boolean) => syncManager.uploadTask(taskId, autonomous === true))
+
+  ipcMain.handle('taskSource:exportUpdate', async (event, taskId: string, fields: Record<string, unknown>) => {
     await syncManager.exportTaskUpdate(taskId, fields)
+    const updated = db.getTask(taskId)
+    if (updated) event.sender.send('task:updated', { taskId, updates: updated })
   })
 
   ipcMain.handle('taskSource:getUsers', (_, sourceId: string) => {

@@ -1,3 +1,4 @@
+import { isWorkfloLinkedTask } from './workflo-task-sync'
 import Database from 'better-sqlite3'
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
@@ -330,6 +331,12 @@ export interface TranscriptPartRecord {
 }
 
 export interface TaskRecord {
+  server_pending_edits?: Record<string, unknown>
+  server_managed?: boolean
+  server_execution_mode?: 'human' | 'autonomous'
+  server_cron?: string | null
+  server_sync_pending?: boolean
+  server_sync_error?: string
   id: string
   title: string
   description: string
@@ -415,6 +422,9 @@ export interface CreateTaskData {
 }
 
 export interface UpdateTaskData {
+  external_id?: string | null
+  source_id?: string | null
+  source?: string
   title?: string
   description?: string
   type?: string
@@ -450,6 +460,7 @@ export interface UpdateTaskData {
 
 /** Columns that can be dynamically updated via updateTask. */
 const UPDATABLE_COLUMNS = new Set([
+  'external_id', 'source_id', 'source',
   'title',
   'description',
   'type',
@@ -2089,7 +2100,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       'SELECT * FROM tasks ORDER BY created_at DESC'
     ).all() as TaskRow[]
 
-    return rows.map(deserializeTask)
+    return rows.map(row => this.withServerOwnership(deserializeTask(row)))
+  }
+
+  private withServerOwnership(task: TaskRecord): TaskRecord {
+    if (this.getSetting(`workflo-upload:${task.id}`)) return { ...task, server_pending_edits: JSON.parse(this.getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_sync_pending: true, server_sync_error: this.getSetting(`workflo-upload:${task.id}:error`) }
+    if (!isWorkfloLinkedTask(this, task)) return task
+    const snapshot = this.getSetting(`workflo-task:${task.id}`)
+    return { ...task, server_pending_edits: JSON.parse(this.getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_cron: snapshot ? JSON.parse(snapshot).cron : null, server_execution_mode: snapshot ? JSON.parse(snapshot).executionMode : 'human', server_sync_pending: !!this.getSetting(`workflo-update:${task.id}`) || !!this.getSetting(`workflo-completion:${task.id}`), server_sync_error: this.getSetting(`workflo-update:${task.id}:error`) ?? this.getSetting(`workflo-completion:${task.id}:error`) }
   }
 
   getTask(id: string): TaskRecord | undefined {
@@ -2099,7 +2117,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       'SELECT * FROM tasks WHERE id = ?'
     ).get(id) as TaskRow | undefined
 
-    return row ? deserializeTask(row) : undefined
+    return row ? this.withServerOwnership(deserializeTask(row)) : undefined
   }
 
   getSubtasks(parentId: string): TaskRecord[] {
@@ -2344,7 +2362,27 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return this.getTask(id)
   }
 
-  updateTask(id: string, data: UpdateTaskData): TaskRecord | undefined {
+  updateTask(id: string, data: UpdateTaskData, origin?: 'workflo-server'): TaskRecord | undefined {
+    if (origin !== 'workflo-server' && ('external_id' in data || 'source_id' in data || 'source' in data)) {
+      throw new Error('Only the sync service can change a task source link.')
+    }
+    if (data.status && origin !== 'workflo-server') {
+      const task = this.getTask(id)
+      const snapshot = this.getSetting(`workflo-task:${id}`)
+      const remote = snapshot ? JSON.parse(snapshot) : undefined
+      if (task && data.status !== task.status && isWorkfloLinkedTask(this, task)) {
+        throw new Error('Workflo controls task status. Use a server task action.')
+      }
+      if (task && data.status !== task.status && remote?.status === 'completed') {
+        throw new Error('This task is completed in Workflo.')
+      }
+    }
+    if (data.status === TaskStatus.Completed && origin !== 'workflo-server') {
+      const task = this.getTask(id)
+      if (task && task.status !== TaskStatus.Completed) {
+        throw new Error('Workflo must confirm completion before this task can close in 20x.')
+      }
+    }
     const setClauses: string[] = []
     const values: (string | number | null)[] = []
 

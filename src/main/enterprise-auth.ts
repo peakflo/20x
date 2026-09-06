@@ -588,13 +588,14 @@ export class EnterpriseAuth {
 
   // ── API Request Proxy ────────────────────────────────────────────
 
-  async apiRequest(method: string, path: string, body?: unknown): Promise<unknown> {
+  async apiRequest(method: string, path: string, body?: unknown, requestHeaders?: Record<string, string>): Promise<unknown> {
     const jwt = await this.getValidJwt()
 
     const url = `${this.apiUrl}${path.startsWith('/') ? path : `/${path}`}`
     const normalizedMethod = method.toUpperCase()
 
     const headers: Record<string, string> = {
+      ...requestHeaders,
       'Authorization': `Bearer ${jwt}`
     }
 

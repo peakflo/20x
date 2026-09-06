@@ -292,6 +292,12 @@ export interface RecurrencePatternObject {
 export type RecurrencePattern = RecurrencePatternObject | string
 
 export interface WorkfloTask {
+  server_pending_edits?: Record<string, unknown>
+  server_managed?: boolean
+  server_execution_mode?: 'human' | 'autonomous'
+  server_cron?: string | null
+  server_sync_pending?: boolean
+  server_sync_error?: string
   id: string
   title: string
   description: string

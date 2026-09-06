@@ -52,6 +52,23 @@ describe('SyncManager', () => {
   })
 
   describe('importTasks', () => {
+    it('imports canonical tasks without waiting for unrelated resource uploads', async () => {
+      const plugin = makeMockPlugin({ id: 'peakflo' })
+      const resourceSync = vi.fn().mockRejectedValue(new Error('Duplicate skill ids'))
+      Object.assign(syncManager, {
+        enterpriseSyncManager: { syncAll: resourceSync },
+        enterpriseUserId: 'human-1'
+      })
+      vi.mocked(db.getTaskSource).mockReturnValue({
+        id: 'src-1', plugin_id: 'peakflo', config: {}
+      } as ReturnType<DatabaseManager['getTaskSource']>)
+      vi.mocked(registry.get).mockReturnValue(plugin)
+      const result = await syncManager.importTasks('src-1')
+      expect(plugin.importTasks).toHaveBeenCalledOnce()
+      expect(result.imported).toBe(5)
+      expect(resourceSync).not.toHaveBeenCalled()
+    })
+
     it('returns error when source not found', async () => {
       ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue(undefined)
       const result = await syncManager.importTasks('src-1')
@@ -144,7 +161,7 @@ describe('SyncManager', () => {
       ;(db.getMcpServer as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'srv-1' })
 
       await syncManager.exportTaskUpdate('t1', { status: 'completed', complete_at_source: false })
-      expect(plugin.exportUpdate).not.toHaveBeenCalled()
+      expect(plugin.exportUpdate).toHaveBeenCalledWith(expect.anything(), {status:'completed'}, {}, expect.anything())
     })
 
     it('still syncs non-status edits when the user chose "I\'ll do it manually"', async () => {
@@ -161,7 +178,7 @@ describe('SyncManager', () => {
       await syncManager.exportTaskUpdate('t1', { title: 'New', status: 'in_progress' })
       expect(plugin.exportUpdate).toHaveBeenCalledWith(
         expect.objectContaining({ id: 't1' }),
-        { title: 'New' },
+        { title: 'New', status: 'in_progress' },
         {},
         expect.anything()
       )

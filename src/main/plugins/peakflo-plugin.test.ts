@@ -7,6 +7,8 @@ import type { DatabaseManager, McpServerRecord, TaskRecord } from '../database'
 function makeContext(overrides: Partial<PluginContext> = {}): PluginContext {
   return {
     db: {
+      setSetting: vi.fn(),
+      getSetting: vi.fn(),
       getTaskSource: vi.fn().mockReturnValue({ name: 'Peakflo' }),
       getTaskByExternalId: vi.fn().mockReturnValue(undefined),
       createTask: vi.fn(),
@@ -147,34 +149,14 @@ describe('PeakfloPlugin', () => {
   })
 
   describe('executeAction', () => {
-    it('calls task_complete for approve', async () => {
+    it.each(['approve', 'reject'])('refuses legacy MCP %s writes', async (action) => {
       const ctx = makeContext()
-      ;(ctx.toolCaller.callTool as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
-
       const task = { id: 'local-1', external_id: 'ext-1', output_fields: [] } as unknown as TaskRecord
-      const result = await plugin.executeAction('approve', task, undefined, {}, ctx)
-
-      expect(result.success).toBe(true)
-      expect(result.taskUpdate).toEqual({ status: TaskStatus.Completed })
-      expect(ctx.toolCaller.callTool).toHaveBeenCalledWith(
-        ctx.mcpServer,
-        'task_complete',
-        expect.objectContaining({
-          taskId: 'ext-1',
-          outputs: expect.objectContaining({ action: 'approve' })
-        })
-      )
-    })
-
-    it('calls task_complete for reject with reason', async () => {
-      const ctx = makeContext()
-      ;(ctx.toolCaller.callTool as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ success: true })
-
-      const task = { id: 'local-1', external_id: 'ext-1', output_fields: [] } as unknown as TaskRecord
-      const result = await plugin.executeAction('reject', task, 'Bad quality', {}, ctx)
-
-      expect(result.success).toBe(true)
-      expect(result.taskUpdate).toEqual({ status: TaskStatus.Completed })
+      const result = await plugin.executeAction(action, task, undefined, {}, ctx)
+      expect(result.success).toBe(false)
+      expect(result.error).toContain('0.0.146')
+      expect(ctx.toolCaller.callTool).not.toHaveBeenCalled()
+      expect(ctx.db.updateTask).not.toHaveBeenCalled()
     })
 
     it('returns error when no external_id', async () => {
@@ -188,6 +170,7 @@ describe('PeakfloPlugin', () => {
       const mockExecuteAction = vi.fn().mockResolvedValue(undefined)
       const ctx = makeContext({
         workfloApiClient: {
+          getTask: vi.fn().mockResolvedValue({ status: 'completed' }),
           executeAction: mockExecuteAction
         } as unknown as PluginContext['workfloApiClient']
       })
@@ -208,13 +191,14 @@ describe('PeakfloPlugin', () => {
       expect(mockExecuteAction).toHaveBeenCalledWith('wf-task-123', {
         action: 'approve',
         reason: 'Looks good'
-      })
+      }, undefined)
     })
 
     it('enterprise mode: sends default "complete" action for tasks without action field', async () => {
       const mockExecuteAction = vi.fn().mockResolvedValue(undefined)
       const ctx = makeContext({
         workfloApiClient: {
+          getTask: vi.fn().mockResolvedValue({ status: 'completed' }),
           executeAction: mockExecuteAction
         } as unknown as PluginContext['workfloApiClient']
       })
@@ -231,7 +215,7 @@ describe('PeakfloPlugin', () => {
       expect(result.taskUpdate).toEqual({ status: TaskStatus.Completed })
       expect(mockExecuteAction).toHaveBeenCalledWith('wf-task-456', {
         action: 'complete'
-      })
+      }, undefined)
     })
 
     it('enterprise mode: returns error when workfloApiClient is missing', async () => {
@@ -267,7 +251,9 @@ describe('PeakfloPlugin', () => {
       })
 
       const db = {
-        getTaskSource: vi.fn().mockReturnValue({ name: 'Workflo Test' }),
+        setSetting: vi.fn(),
+      getSetting: vi.fn(),
+      getTaskSource: vi.fn().mockReturnValue({ name: 'Workflo Test' }),
         getTaskByExternalId: vi.fn().mockReturnValue(existingTask || undefined),
         createTask: vi.fn(),
         updateTask: vi.fn(),
@@ -277,7 +263,7 @@ describe('PeakfloPlugin', () => {
       const ctx = makeContext({
         db,
         workfloApiClient: {
-          listTasks: mockListTasks,
+          listTaskCache: mockListTasks,
           downloadFile: vi.fn()
         } as unknown as PluginContext['workfloApiClient']
       })
@@ -285,7 +271,7 @@ describe('PeakfloPlugin', () => {
       return { ctx, db }
     }
 
-    it('preserves local Completed status within the 2-minute race window', async () => {
+    it('uses server status even when local completion is recent', async () => {
       // Task was completed very recently (30 seconds ago)
       const recentUpdate = new Date(Date.now() - 30_000).toISOString()
       const { ctx, db } = makeEnterpriseCtx({
@@ -299,7 +285,8 @@ describe('PeakfloPlugin', () => {
       // Should keep Completed (within race window)
       expect(db.updateTask).toHaveBeenCalledWith(
         'local-1',
-        expect.objectContaining({ status: TaskStatus.Completed })
+        expect.objectContaining({ status: TaskStatus.NotStarted }),
+        'workflo-server'
       )
     })
 
@@ -317,7 +304,8 @@ describe('PeakfloPlugin', () => {
       // Should update to server status (NotStarted, mapped from "pending")
       expect(db.updateTask).toHaveBeenCalledWith(
         'local-1',
-        expect.objectContaining({ status: TaskStatus.NotStarted })
+        expect.objectContaining({ status: TaskStatus.NotStarted }),
+        'workflo-server'
       )
     })
   })

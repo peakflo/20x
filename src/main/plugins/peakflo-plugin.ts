@@ -1,3 +1,4 @@
+import { saveServerTaskSnapshot, serverTaskFields, serverTaskSnapshot, serverTaskStatus } from '../workflo-task-sync'
 import {
   PluginActionId,
   type TaskSourcePlugin,
@@ -369,7 +370,7 @@ export class PeakfloPlugin implements TaskSourcePlugin {
 
   private async importTasksEnterprise(
     sourceId: string,
-    config: Record<string, unknown>,
+    _config: Record<string, unknown>,
     ctx: PluginContext,
     result: PluginSyncResult
   ): Promise<PluginSyncResult> {
@@ -381,37 +382,28 @@ export class PeakfloPlugin implements TaskSourcePlugin {
 
     const source = ctx.db.getTaskSource(sourceId)
     const sourceName = source?.name ?? 'Peakflo'
-    const statusFilter = (config.status_filter as string) || 'all'
+    // Read every status, including completed tasks, so a cache cannot stay open.
 
     // Collect file download jobs to run after the sync loop
     const fileDownloadJobs: Array<{ taskId: string; fields: PeakfloField[] }> = []
 
     try {
-      // Paginated fetch from Workflo API
-      let page = 1
-      const pageSize = 100
+      let cursor: string | undefined
       let hasMore = true
-
       while (hasMore) {
-        const response = await apiClient.listTasks({
-          status: statusFilter !== 'all' ? statusFilter : undefined,
-          page,
-          pageSize,
-          myTasks: true
-        })
-
-        console.log(
-          `[peakflo] Enterprise sync page ${page}: ${response.tasks.length} tasks, ` +
-          `total=${response.pagination.total}, totalPages=${response.pagination.totalPages}`
-        )
-
+        const response = await apiClient.listTaskCache(cursor)
         for (const task of response.tasks) {
           try {
             const externalId = task.id // Workflo task ID is the external ID
-            const existing = ctx.db.getTaskByExternalId(sourceId, externalId)
+            const existing = ctx.db.getTaskByExternalId(sourceId, externalId) ??
+              ctx.db.getTasks().find(local => local.external_id === externalId &&
+                serverTaskSnapshot(ctx.db, local.id)?.tenantId === task.tenantId)
 
+            if (task.deletedAt) {
+              if (existing) ctx.db.deleteTask(existing.id)
+              continue
+            }
             // Map Workflo task status to local status
-            const status = this.mapWorkfloStatus(task.status)
             const priority = task.priority || 'medium'
             const assignee = task.assignees?.[0]?.assigneeValue
 
@@ -438,32 +430,16 @@ export class PeakfloPlugin implements TaskSourcePlugin {
             })
 
             if (existing) {
-              // Guard against a narrow race condition: the user completes a task
-              // in 20x (executeAction succeeds on the server) but the next sync
-              // fetch returns stale data before the server has processed it.
-              //
-              // We only preserve the local Completed status for a brief window
-              // (2 minutes).  After that we trust the server — if the action was
-              // processed, the server will already report "completed".  If it
-              // didn't, we should let the server status flow through so the user
-              // can see the task is still open and retry.
-              const RACE_WINDOW_MS = 2 * 60 * 1000
-              const completedRecently =
-                existing.status === TaskStatus.Completed &&
-                status !== TaskStatus.Completed &&
-                (Date.now() - new Date(existing.updated_at).getTime()) < RACE_WINDOW_MS
-
-              const effectiveStatus = completedRecently ? TaskStatus.Completed : status
-
+              saveServerTaskSnapshot(ctx.db, existing.id, task)
               ctx.db.updateTask(existing.id, {
                 title: task.title,
                 description,
-                status: effectiveStatus,
+                ...serverTaskFields(ctx.db, task),
                 priority,
                 assignee,
                 due_date: task.dueDate,
-                output_fields: outputFields.length > 0 ? outputFields : undefined
-              })
+                output_fields: outputFields.length > 0 ? outputFields : undefined,
+              }, 'workflo-server')
               result.updated++
 
               // Queue file download for after sync completes
@@ -476,7 +452,7 @@ export class PeakfloPlugin implements TaskSourcePlugin {
                 description,
                 type: 'general',
                 priority,
-                status,
+                ...serverTaskFields(ctx.db, task),
                 assignee,
                 due_date: task.dueDate,
                 external_id: externalId,
@@ -484,6 +460,7 @@ export class PeakfloPlugin implements TaskSourcePlugin {
                 source: sourceName,
                 output_fields: outputFields.length > 0 ? outputFields : undefined
               })
+              if (created) saveServerTaskSnapshot(ctx.db, created.id, task)
               result.imported++
 
               // Queue file download for after sync completes
@@ -497,14 +474,8 @@ export class PeakfloPlugin implements TaskSourcePlugin {
           }
         }
 
-        if (
-          response.tasks.length < pageSize ||
-          page >= response.pagination.totalPages
-        ) {
-          hasMore = false
-        } else {
-          page++
-        }
+        cursor = response.nextCursor ?? undefined
+        hasMore = !!cursor
       }
 
       ctx.db.updateTaskSourceLastSynced(sourceId)
@@ -665,19 +636,6 @@ export class PeakfloPlugin implements TaskSourcePlugin {
     }
   }
 
-  private mapWorkfloStatus(status: string): TaskStatus {
-    switch (status?.toLowerCase()) {
-      case 'completed':
-        return TaskStatus.Completed
-      case 'in_progress':
-        return TaskStatus.Triaging
-      case 'pending':
-        return TaskStatus.NotStarted
-      default:
-        return TaskStatus.NotStarted
-    }
-  }
-
   async exportUpdate(
     task: TaskRecord,
     changedFields: Record<string, unknown>,
@@ -691,17 +649,32 @@ export class PeakfloPlugin implements TaskSourcePlugin {
       if (changedFields.description !== undefined) updateData.description = changedFields.description
       if (changedFields.priority !== undefined) updateData.priority = changedFields.priority
       if (changedFields.due_date !== undefined) updateData.dueDate = changedFields.due_date
-      // Note: status is NOT exported — 20x statuses (not_started, triaging, etc.)
-      // don't map to workflo statuses (pending, in_progress). Completion goes
-      // through executeAction instead.
-
+      // Human ownership is independent of the selected helper agent.
+      if (changedFields.agent_id !== undefined) {
+        const agent = changedFields.agent_id ? ctx.db.getAgent(String(changedFields.agent_id)) : undefined
+        const agentId = (agent?.config as Record<string, unknown> | undefined)?.enterprise_agent_id
+        if (changedFields.agent_id && !agentId) throw new Error('Select an agent from Workflo.')
+        updateData.agentId = agentId ?? null
+      }
+      if (changedFields.skill_ids !== undefined) {
+        const ids = (changedFields.skill_ids as string[] | null) ?? []
+        const skills = ids.map(id => ctx.db.getSkill(id)?.enterprise_skill_id)
+        if (skills.some(id => !id)) throw new Error('Sync the selected skills to Workflo first.')
+        updateData.skillIds = skills
+      }
+      const snapshot = serverTaskSnapshot(ctx.db, task.id)
+      const expectedVersion = changedFields.__expectedVersion ?? snapshot?.version
+      if (expectedVersion !== undefined) updateData.expectedVersion = expectedVersion
       if (Object.keys(updateData).length > 0) {
         await ctx.workfloApiClient.updateTask(task.external_id, updateData)
+        const current = await ctx.workfloApiClient.getTask(task.external_id)
+        saveServerTaskSnapshot(ctx.db, task.id, current)
+        ctx.db.updateTask(task.id, serverTaskFields(ctx.db, current), 'workflo-server')
       }
       return
     }
 
-    // Legacy MCP mode: no-op (uses action-based completion)
+    throw new Error('Task writes require a Workflo connection with task contract v2. Use 20x 0.0.146 or later.')
   }
 
   async executeAction(
@@ -734,59 +707,19 @@ export class PeakfloPlugin implements TaskSourcePlugin {
       if (!ctx.workfloApiClient) {
         return { success: false, error: 'Enterprise API client not available — please reconnect to enterprise' }
       }
-      await ctx.workfloApiClient.executeAction(task.external_id, outputs)
-
+      await ctx.workfloApiClient.executeAction(task.external_id, outputs, serverTaskSnapshot(ctx.db, task.id)?.version)
+      const confirmed = await ctx.workfloApiClient.getTask(task.external_id)
+      saveServerTaskSnapshot(ctx.db, task.id, confirmed)
+      if (serverTaskStatus(confirmed.status) !== TaskStatus.Completed) {
+        ctx.db.updateTask(task.id, serverTaskFields(ctx.db, confirmed), 'workflo-server')
+        return { success: false, error: 'Workflo has not completed this task. Review its current status.' }
+      }
+      ctx.db.updateTask(task.id, serverTaskFields(ctx.db, confirmed), 'workflo-server')
       return { success: true, taskUpdate: { status: TaskStatus.Completed } }
     }
 
-    // ── Legacy MCP mode ─────────────────────────────────────────
-    if (!ctx.mcpServer) {
-      return { success: false, error: 'Missing MCP server and enterprise not connected' }
-    }
+    return { success: false, error: 'Task writes require a Workflo connection with task contract v2. Reconnect using 20x 0.0.146 or later.' }
 
-    // Build outputs from all output_fields with values
-    const outputs: Record<string, unknown> = {}
-    for (const field of task.output_fields) {
-      if (field.value !== undefined && field.value !== null && field.value !== '') {
-        outputs[field.id] = field.value
-      }
-    }
-    // Override action with the explicitly passed actionId
-    outputs.action = actionId
-    if (input) outputs.reason = input
-
-    const args = {
-      taskId: task.external_id,
-      outputs
-    }
-    console.log('[peakflo] task_complete request:', JSON.stringify(args))
-
-    const callResult = await ctx.toolCaller.callTool(ctx.mcpServer, 'task_complete', args)
-    console.log('[peakflo] task_complete response:', JSON.stringify(callResult))
-
-    if (!callResult.success) {
-      return { success: false, error: callResult.error || 'Action failed' }
-    }
-
-    // Check for application-level errors in the MCP response content
-    const res = callResult.result as McpResult | undefined
-    if (res?.isError) {
-      const errText = this.extractContentText(res)
-      return { success: false, error: errText || 'Action failed' }
-    }
-    const contentText = this.extractContentText(res)
-    if (contentText) {
-      try {
-        const parsed = JSON.parse(contentText)
-        if (parsed.error) {
-          return { success: false, error: String(parsed.error) }
-        }
-      } catch {
-        // Not JSON, that's fine
-      }
-    }
-
-    return { success: true, taskUpdate: { status: TaskStatus.Completed } }
   }
 
   async getUsers(

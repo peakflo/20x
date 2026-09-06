@@ -5,7 +5,7 @@ import { join } from 'path'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask, makeAgent } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
-import { setTaskApiAgentController, setTaskApiNotifier, setTaskAutomationTrigger, startTaskApiServer, stopTaskApiServer } from './task-api-server'
+import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskAutomationTrigger, startTaskApiServer, stopTaskApiServer } from './task-api-server'
 import { TaskStatus } from '../shared/constants'
 
 /**
@@ -119,18 +119,14 @@ describe('/update_task - triage status guard', () => {
     expect(updatedTask.agent_id).toBe(agent!.id) // Agent assigned
   })
 
-  it('allows status update when task is not in triaging status', () => {
+  it('refuses direct completion even when a task is not triaging', async () => {
     const task = db.createTask(makeTask({ title: 'Normal task' }))!
     expect(task.status).toBe('not_started')
-
-    // Simulate handleRoute status guard
-    const currentTask = rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id) as { status: string }
-    expect(currentTask.status).not.toBe('triaging')
-
-    // Status update should proceed normally
-    db.updateTask(task.id, { status: 'completed' as unknown as Parameters<typeof db.updateTask>[1]['status'] })
-    const updatedTask = db.getTask(task.id)!
-    expect(updatedTask.status).toBe('completed')
+    const update = vi.spyOn(db, 'updateTask')
+    expect(await handleRoute(db, '/update_task', { task_id: task.id, status: 'completed' })).toEqual({ error: 'Workflo must confirm completion. Agents submit results for review.' })
+    expect(update).not.toHaveBeenCalled()
+    expect(db.getTask(task.id)!.status).toBe('not_started')
+    expect(rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id)).toEqual({ status: 'not_started' })
   })
 })
 

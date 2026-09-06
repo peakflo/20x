@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { Mock } from 'vitest'
 import { useTaskSourceStore } from './task-source-store'
+import { useTaskStore } from './task-store'
 import type { TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO } from '@/types'
 
 const mockElectronAPI = window.electronAPI
@@ -97,6 +98,27 @@ describe('useTaskSourceStore', () => {
   })
 
   describe('syncAllEnabled', () => {
+    it('refreshes canonical tasks while another source remains pending', async () => {
+      let finishSlow!: (value: unknown) => void
+      const slow = new Promise((resolve) => { finishSlow = resolve })
+      const result = { source_id: 'canonical', imported: 0, updated: 1, errors: [] }
+      useTaskSourceStore.setState({ sources: [
+        { id: 'canonical', enabled: true }, { id: 'slow', enabled: true }
+      ] as TaskSource[] })
+      const refresh = vi.spyOn(useTaskStore.getState(), 'fetchTasks').mockResolvedValue()
+      ;(mockElectronAPI.taskSources.sync as unknown as Mock).mockImplementation((id) =>
+        id === 'slow' ? slow : Promise.resolve(result))
+      const all = useTaskSourceStore.getState().syncAllEnabled()
+      try {
+        await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce())
+        expect(useTaskSourceStore.getState().syncingIds.has('slow')).toBe(true)
+      } finally {
+        finishSlow(result)
+        await all
+        refresh.mockRestore()
+      }
+    })
+
     it('syncs all enabled sources', async () => {
       useTaskSourceStore.setState({
         sources: [

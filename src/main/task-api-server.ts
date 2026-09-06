@@ -347,6 +347,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     case '/create_task': {
+      if (params.status === 'completed') return { error: 'Create the task in Workflo before completing it.' }
       if (!params.title) return { error: 'Title is required' }
 
       const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
@@ -428,6 +429,11 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     case '/update_task': {
+      if (params.status === 'completed') return { error: 'Workflo must confirm completion. Agents submit results for review.' }
+      if (params.status && params.status !== 'in_progress') {
+        try { db.updateTask(params.task_id as string, { status: params.status as never }) }
+        catch (error) { return { error: error instanceof Error ? error.message : 'Task status refused' } }
+      }
       const updates: string[] = []
       const qParams: unknown[] = []
 

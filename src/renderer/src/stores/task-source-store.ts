@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useTaskStore } from './task-store'
 import type { TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, ActionResult } from '@/types'
 import { taskSourceApi, pluginApi } from '@/lib/ipc-client'
 
@@ -85,6 +86,8 @@ export const useTaskSourceStore = create<TaskSourceState>((set, get) => ({
 
     try {
       const result = await taskSourceApi.sync(sourceId)
+      // Show each canonical import even while another source is still syncing.
+      await useTaskStore.getState().fetchTasks()
       set((state) => {
         const next = new Set(state.syncingIds)
         next.delete(sourceId)
