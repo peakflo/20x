@@ -17,6 +17,7 @@ import type {
   MessagePart,
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
+import { claudeCodePermissionMode } from './permission-mode'
 
 type ClaudeSDK = typeof import('@anthropic-ai/claude-agent-sdk')
 type Query = import('@anthropic-ai/claude-agent-sdk').Query
@@ -752,6 +753,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // Build options
     const secretHooks = this.buildSecretHooks(config)
     const effort = config.reasoningEffort === 'minimal' ? undefined : config.reasoningEffort
+    const claudePermissionMode = claudeCodePermissionMode(config)
+
     const options: Options = {
       cwd: config.workspaceDir,
       pathToClaudeCodeExecutable: claudePath,
@@ -761,8 +764,38 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       effort,
       systemPrompt: config.systemPrompt,
       abortController,
-      permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)
-      allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
+      /*
+       * DEFECT G1 WAS BORN ON THIS LINE.
+       *
+       * It used to read:
+       *     permissionMode: 'bypassPermissions', // Auto-approve all actions
+       *     allowDangerouslySkipPermissions: true,
+       *
+       * — a hardcode, with the per-agent `permission_mode` sitting unread in
+       * the config that was passed in. Every agent ran fully unrestricted no
+       * matter what the user chose, while the UI showed them their choice.
+       *
+       * The comment justified it with "the user has already chosen to run
+       * agent". That was true of 20x's ORIGINAL shape, where the agent ran on
+       * the user's own laptop with the user watching. It stopped being true the
+       * moment the same adapter ran unattended in a cloud sandbox with a real
+       * filesystem, which is the whole point of the sandbox.
+       *
+       * `claudeCodePermissionMode` reconstructs the user's original four-valued
+       * choice from the (permissionMode, sandboxMode) pair the runner mapped it
+       * onto — see ./permission-mode.ts for the table. Claude Code is the one
+       * backend that takes all four natively, so nothing is lost here.
+       *
+       * A config with NO permissionMode maps to 'default', NOT to
+       * 'bypassPermissions'. That is deliberate: the old behaviour must not be
+       * reachable by omission, or every caller that forgets the field silently
+       * restores the defect.
+       */
+      permissionMode: claudePermissionMode,
+      // ONLY for the mode that actually asks for it. The SDK requires this flag
+      // to honour 'bypassPermissions'; passing it unconditionally would make
+      // the mode above decorative in exactly the way G1 was.
+      ...(claudePermissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
       ...(secretHooks ? { hooks: secretHooks } : {}),
     }
 

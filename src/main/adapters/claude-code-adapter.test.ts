@@ -13,6 +13,9 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 vi.mock('child_process', () => ({ execFile: vi.fn() }))
 vi.mock('fs', () => ({ existsSync: vi.fn(() => false) }))
 
+// Same mocked `query` the adapter resolves through its dynamic import, so tests
+// can inspect exactly what the adapter handed the SDK.
+import { query } from '@anthropic-ai/claude-agent-sdk'
 import { ClaudeCodeAdapter, ClaudeSystemSubtype } from './claude-code-adapter'
 import { MessagePartType } from './coding-agent-adapter'
 
@@ -1285,5 +1288,127 @@ describe('ClaudeCodeAdapter abort classification (regression)', () => {
 
     expect(session.status).toBe('error')
     expect(session.lastError).toBe('socket hang up')
+  })
+})
+
+/**
+ * DEFECT G1 — the adapter must ACTUALLY CONSULT `claudeCodePermissionMode`.
+ *
+ * `permission-mode.test.ts` pins the pure function, but a pure function nobody
+ * calls fixes nothing: the defect was a hardcoded
+ *
+ *     permissionMode: 'bypassPermissions',
+ *     allowDangerouslySkipPermissions: true,
+ *
+ * sitting in `sendPrompt`'s options object. So these tests drive the REAL
+ * `adapter.sendPrompt(...)` and assert on the options the SDK's `query` was
+ * actually handed. Re-introducing the hardcode fails all four of them.
+ *
+ * Deliberately NOT the shape used by 'sendPrompt session continuation mode'
+ * above, which re-implements the adapter's branching inside the test body and
+ * then asserts on its own local object — that can never fail for a change made
+ * in the adapter.
+ */
+describe('sendPrompt permission mode (defect G1)', () => {
+  /**
+   * Runs the real `sendPrompt` against the mocked SDK and returns the `options`
+   * object `query` received.
+   *
+   * Nothing private is stubbed. The one piece of pre-set state is
+   * `claudeExecutablePath`, the adapter's OWN memoised result for
+   * `findClaudeExecutable()`; priming that cache is what stops the lookup from
+   * shelling out to `which claude` (whose `child_process.execFile` is mocked
+   * file-wide to a `vi.fn()` that never invokes its callback, so the promise
+   * would hang forever). The permission-mode code under test runs untouched.
+   */
+  async function captureQueryOptions(config: any): Promise<any> {
+    const queryMock = vi.mocked(query) as any
+    queryMock.mockClear()
+    // An async-iterable that ends immediately, so consumeStream drains and the
+    // stream task settles without a real Claude Code process.
+    queryMock.mockImplementation(() => ({
+      async *[Symbol.asyncIterator]() {
+        // no messages: the turn ends the moment it starts
+      },
+    }))
+
+    const adapter = new ClaudeCodeAdapter()
+    await (adapter as any).ensureSDKLoaded()
+    ;(adapter as any).claudeExecutablePath = '/usr/local/bin/claude'
+
+    const session: any = {
+      sessionId: '',
+      queryIterator: null,
+      abortController: null,
+      status: 'idle',
+      messageBuffer: [],
+      messageCursor: 0,
+      streamTask: null,
+      lastError: null,
+      config,
+      isResumed: false,
+      backgroundTasks: new Map(),
+      sawResult: false,
+      enqueuePrompt: null,
+      releasePrompt: null,
+    }
+    ;(adapter as any).sessions.set('s1', session)
+
+    await adapter.sendPrompt('s1', [{ type: MessagePartType.TEXT, text: 'hello' }] as any, config)
+    await session.streamTask
+
+    expect(queryMock).toHaveBeenCalledTimes(1)
+    return queryMock.mock.calls[0][0].options
+  }
+
+  it("passes 'default' and NO bypass flag for permissionMode 'ask'", async () => {
+    const options = await captureQueryOptions({
+      agentId: 'a',
+      taskId: 't',
+      workspaceDir: '/tmp/ws',
+      permissionMode: 'ask',
+    })
+
+    expect(options.permissionMode).toBe('default')
+    // The flag must be ABSENT, not merely falsy: the SDK treats its presence as
+    // consent, so a hardcoded `true` here would make the mode decorative.
+    expect(options.allowDangerouslySkipPermissions).toBeUndefined()
+    expect(Object.prototype.hasOwnProperty.call(options, 'allowDangerouslySkipPermissions')).toBe(false)
+  })
+
+  it("passes 'bypassPermissions' WITH the bypass flag for permissionMode 'allow'", async () => {
+    const options = await captureQueryOptions({
+      agentId: 'a',
+      taskId: 't',
+      workspaceDir: '/tmp/ws',
+      permissionMode: 'allow',
+    })
+
+    expect(options.permissionMode).toBe('bypassPermissions')
+    expect(options.allowDangerouslySkipPermissions).toBe(true)
+  })
+
+  it("passes 'plan' for permissionMode 'ask' with a read-only sandbox", async () => {
+    const options = await captureQueryOptions({
+      agentId: 'a',
+      taskId: 't',
+      workspaceDir: '/tmp/ws',
+      permissionMode: 'ask',
+      sandboxMode: 'read-only',
+    })
+
+    expect(options.permissionMode).toBe('plan')
+    expect(options.allowDangerouslySkipPermissions).toBeUndefined()
+  })
+
+  it("never reaches 'bypassPermissions' from a config that sets no permission mode", async () => {
+    // THE ANTI-REGRESSION ASSERTION. Omission is exactly the pre-G1 state; it
+    // must resolve to Claude Code's own asking mode, never back to the bypass.
+    const options = await captureQueryOptions({ agentId: 'a', taskId: 't', workspaceDir: '/tmp/ws' })
+
+    expect(options.permissionMode).toBe('default')
+    expect(options.permissionMode).not.toBe('bypassPermissions')
+    expect(options.allowDangerouslySkipPermissions).toBeUndefined()
+    expect(Object.prototype.hasOwnProperty.call(options, 'allowDangerouslySkipPermissions')).toBe(false)
   })
 })
