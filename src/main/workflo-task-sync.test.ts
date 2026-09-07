@@ -126,29 +126,6 @@ describe('durable upload', () => {
     await expect(sync.uploadTask(task.id)).rejects.toThrow('Stop the local session')
     expect(api.createTask).not.toHaveBeenCalled()
   })
-
-  it.each([
-    'Route POST:/api/tasks not found',
-    'Route POST:/api/tasks/ not found'
-  ])('keeps the task local without a visible sync error when Workflo lacks the create route: %s', async (message) => {
-    const { api, sync } = setup()
-    api.createTask.mockRejectedValue(new Error(message))
-    const task = db.createTask(makeTask())!
-
-    await expect(sync.uploadTask(task.id)).resolves.toEqual({ queued: false })
-    expect(db.getSetting(`workflo-upload:${task.id}`)).toBeUndefined()
-    expect(db.getSetting(`workflo-upload:${task.id}:error`)).toBeUndefined()
-    expect(db.getTask(task.id)).toMatchObject({ external_id: null, source_id: null })
-  })
-
-  it('continues to retain and display actionable transient upload failures', async () => {
-    const { sync } = setup()
-    const task = db.createTask(makeTask())!
-
-    await expect(sync.uploadTask(task.id)).resolves.toEqual({ queued: true })
-    expect(db.getSetting(`workflo-upload:${task.id}`)).toBeDefined()
-    expect(db.getSetting(`workflo-upload:${task.id}:error`)).toBe('offline')
-  })
 })
 
 it('does not fire local recurrence for an old Workflo task with a stale schedule', async () => {

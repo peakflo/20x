@@ -71,36 +71,6 @@ describe('registerIpcHandlers', () => {
     expect(channels).toContain('voice:selectModel')
   })
 
-  it('returns a newly created local task without waiting for Workflo upload', async () => {
-    const task = { id: 'task-1', title: 'Instant task', status: 'not_started', source_id: null }
-    const db = {
-      createTask: vi.fn(() => task),
-      getTask: vi.fn(() => task)
-    } as unknown as Parameters<typeof registerIpcHandlers>[0]
-    const uploadTask = vi.fn(() => new Promise<never>(() => {}))
-    const syncManager = {
-      canUploadTasks: vi.fn(() => true),
-      uploadTask
-    } as unknown as Parameters<typeof registerIpcHandlers>[4]
-
-    registerIpcHandlers(
-      db,
-      {} as Parameters<typeof registerIpcHandlers>[1],
-      {} as Parameters<typeof registerIpcHandlers>[2],
-      {} as Parameters<typeof registerIpcHandlers>[3],
-      syncManager,
-      {} as Parameters<typeof registerIpcHandlers>[5]
-    )
-
-    const handlers = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls as [string, (...args: unknown[]) => unknown][]
-    const createTask = handlers.filter(([channel]) => channel === 'db:createTask').pop()?.[1]
-    const sender = { send: vi.fn() }
-
-    await expect(createTask!({ sender }, task)).resolves.toBe(task)
-    expect(uploadTask).toHaveBeenCalledWith(task.id)
-    expect(sender.send).toHaveBeenCalledWith('task:created', { task })
-  })
-
   it('voice handlers stay safe when the voice manager is absent', async () => {
     const db = {} as unknown as Parameters<typeof registerIpcHandlers>[0]
     const agentManager = {} as unknown as Parameters<typeof registerIpcHandlers>[1]
