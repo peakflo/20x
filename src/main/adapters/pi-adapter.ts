@@ -112,7 +112,47 @@ export function sanitizePiMcpServerName(name: string, used: Set<string>): string
 
 export function withProviderNameLimitHint(error: string): string {
   if (!/name must be at most 64/i.test(error)) return error
-  return `${error}\n\nHint: a tool name exceeded the provider 64-character limit. 20x now shortens MCP server names automatically — retry with "continue". If it persists, rename the long MCP server in settings.`
+  return `${error}\n\nHint: a tool name exceeded the provider 64-character limit. 20x now keeps MCP tools behind short namespace proxies. Stop and start the agent to rebuild its tool list.`
+}
+
+/**
+ * Build the pi-mcp-adapter document used by 20x sessions.
+ *
+ * Keep MCP servers behind namespace proxy tools (`mcp__<server>`). Direct MCP
+ * tools concatenate the server and tool names; a 24-character server slug and
+ * a 50-character generated workflow tool already produce a 76-character name.
+ * Providers commonly reject the entire request when any tool exceeds 64
+ * characters, before the model can call a tool.
+ */
+export function buildPiMcpConfigDocument(
+  servers: NonNullable<SessionConfig['mcpServers']>,
+  onRename?: (name: string, slug: string) => void,
+): Record<string, unknown> {
+  const usedSlugs = new Set<string>()
+  const mcpServers = Object.fromEntries(Object.entries(servers).map(([name, server]) => {
+    const slug = sanitizePiMcpServerName(name, usedSlugs)
+    if (slug !== name) onRename?.(name, slug)
+    if (server.type === 'stdio') {
+      return [slug, {
+        command: server.command,
+        args: server.args ?? [],
+        env: server.env ?? {},
+      }]
+    }
+    return [slug, {
+      url: server.url,
+      headers: server.headers ?? {},
+    }]
+  }))
+
+  return {
+    settings: {
+      // This must be explicit because MCP_DIRECT_TOOLS and user-level Pi
+      // settings can otherwise expose every `<server>_<tool>` directly.
+      directTools: false,
+    },
+    mcpServers,
+  }
 }
 
 const PI_PERMISSION_EXTENSION_SOURCE = `\
@@ -302,25 +342,10 @@ export class PiAdapter implements CodingAgentAdapter {
     // Pi forwards MCP tools to the model as <server>_<tool> names, which most
     // providers cap at 64 characters. Sanitize server keys so a long display
     // name (e.g. "[Workflo] Organisation Workspace") cannot overflow the limit.
-    const usedSlugs = new Set<string>()
-    const mcpServers = Object.fromEntries(Object.entries(config.mcpServers).map(([name, server]) => {
-      const slug = sanitizePiMcpServerName(name, usedSlugs)
-      if (slug !== name) {
-        console.warn(`[PiAdapter] Renamed MCP server "${name}" to "${slug}" to fit the provider 64-char tool name limit`)
-      }
-      if (server.type === 'stdio') {
-        return [slug, {
-          command: server.command,
-          args: server.args ?? [],
-          env: server.env ?? {},
-        }]
-      }
-      return [slug, {
-        url: server.url,
-        headers: server.headers ?? {},
-      }]
-    }))
-    writeFileSync(path, `${JSON.stringify({ mcpServers }, null, 2)}\n`, { mode: 0o600 })
+    const document = buildPiMcpConfigDocument(config.mcpServers, (name, slug) => {
+      console.warn(`[PiAdapter] Renamed MCP server "${name}" to "${slug}" to fit the provider 64-char tool name limit`)
+    })
+    writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`, { mode: 0o600 })
     chmodSync(path, 0o600)
     return path
   }
@@ -352,6 +377,10 @@ export class PiAdapter implements CodingAgentAdapter {
     } as NodeJS.ProcessEnv
     delete env.AI_AGENT
     delete env.PI_CODING_AGENT
+    // A parent shell may set this globally. pi-mcp-adapter gives the variable
+    // precedence over its config, which would undo `directTools: false` and
+    // recreate overlong provider-facing names.
+    delete env.MCP_DIRECT_TOOLS
     return env
   }
 
