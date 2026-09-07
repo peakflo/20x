@@ -31,8 +31,8 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
   // every canvas task panel's entire TaskWorkspace tree.
   const openEditModal = useUIStore((s) => s.openEditModal)
   const openDeleteModal = useUIStore((s) => s.openDeleteModal)
-  // Source-backed tasks ask whether to close the task in the source system.
-  const { requestComplete, completionDialog } = useTaskCompletion()
+  // Completion is server-confirmed through the shared hook (same for every source).
+  const { requestComplete } = useTaskCompletion()
 
   const handleEdit = useCallback(() => {
     if (task) openEditModal(task.id)
@@ -149,7 +149,6 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
         onOpenSubtaskInWindow={handleOpenSubtaskInWindow}
         panelLayout={panelLayout}
       />
-      {completionDialog}
     </div>
   )
 }

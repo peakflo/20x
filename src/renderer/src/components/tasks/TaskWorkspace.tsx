@@ -20,7 +20,6 @@ import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
-import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
@@ -153,16 +152,8 @@ function TaskWorkspaceComponent({
 
   const fetchTasks = useTaskStore((s) => s.fetchTasks)
   const updateTaskInStore = useTaskStore((s) => s.updateTask)
-  const taskSources = useTaskSourceStore((s) => s.sources)
   const showProgressToast = useProgressToastStore((s) => s.show)
   const failProgressToast = useProgressToastStore((s) => s.fail)
-
-  // Undefined for a local task, which hides the completion choice in the
-  // feedback dialog.
-  const feedbackSourceName = useMemo(() => {
-    if (!task?.source_id) return undefined
-    return taskSources.find((s) => s.id === task.source_id)?.name || task.source || 'the task source'
-  }, [task?.source_id, task?.source, taskSources])
 
   // Derive subtasks reactively from the task store so status changes (e.g., from
   // mobile-initiated sessions) update immediately without needing a re-fetch.
@@ -763,13 +754,9 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const handleFeedbackSkip = useCallback(async () => {
     if (!task?.id) return
     setShowFeedback(false)
-    // Record the answer first so the completion path does not ask a second
-    // time, then use the main completion path which calls executeAction for
-    // source-backed tasks before setting the local status to Completed.
-    // updateTaskInStore persists through the API and syncs the store, so the
-    // completion path below reads the answer back.
+    // Completion is server-confirmed through the shared path for every source.
     await onCompleteTask()
-  }, [task?.id, task?.source_id, onCompleteTask, updateTaskInStore])
+  }, [task?.id, onCompleteTask])
 
   const handleSnooze = useCallback(async (isoString: string) => {
     if (!task) return
@@ -1247,8 +1234,6 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
       <FeedbackDialog
         open={showFeedback}
-        sourceName={feedbackSourceName}
-        serverManaged={task.server_managed || taskSources.find(s => s.id === task.source_id)?.plugin_id === 'peakflo'}
         onSubmit={handleFeedbackSubmit}
         onSkip={handleFeedbackSkip}
         onCancel={() => setShowFeedback(false)}

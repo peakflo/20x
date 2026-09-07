@@ -203,7 +203,8 @@ describe('TaskPanelContent', () => {
       { 'x-task-contract-version': '2', 'x-task-actor': 'human' }))
     expect(executeActionMock).toHaveBeenCalledExactlyOnceWith('complete', 'task-1', 'src-1')
     expect(updateTaskMock).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
+    // A single shared confirmation exists for every source — no source dialog.
+    expect(screen.queryByRole('dialog')).toBeNull()
     if (sourceId === null) expect(upload).toHaveBeenCalledExactlyOnceWith('task-1')
     else expect(upload).not.toHaveBeenCalled()
   })

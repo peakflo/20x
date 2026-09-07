@@ -15,11 +15,13 @@ describe('FeedbackDialog', () => {
   // lookups match more than one element.
   afterEach(cleanup)
 
-  it('does not offer local-only completion for a Workflo task', () => {
-    render(<FeedbackDialog open sourceName="Workflo" serverManaged onSubmit={onSubmit} onSkip={onSkip} onCancel={onCancel} />)
-    expect(screen.queryByTestId('choice-complete-manually')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByText('Skip'))
-    expect(onSkip).toHaveBeenCalledWith()
+  // Completion is identical for every source (Workflo, Notion, …): the dialog
+  // never offers a source-specific or local-only choice.
+  it('never offers source-specific completion choices', () => {
+    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} onCancel={onCancel} />)
+    expect(screen.queryByTestId('source-completion-choice')).toBeNull()
+    expect(screen.queryByTestId('choice-complete-manually')).toBeNull()
+    expect(screen.queryByTestId('choice-complete-at-source')).toBeNull()
   })
 
   function getDialog() {
@@ -70,19 +72,5 @@ describe('FeedbackDialog', () => {
     // Submit
     fireEvent.click(within(dialog).getByText('Submit Feedback'))
     expect(onSubmit).toHaveBeenCalledWith(4, 'Great session!')
-  })
-
-  // ── Source completion choice ──────────────────────────────
-
-  it('hides the source choice for a task with no source', () => {
-    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} onCancel={onCancel} />)
-    expect(screen.queryByTestId('source-completion-choice')).toBeNull()
-  })
-
-  it('never offers local-only completion for any source', () => {
-    render(<FeedbackDialog open sourceName="Notion" onSubmit={onSubmit} onSkip={onSkip} onCancel={onCancel} />)
-    expect(screen.queryByTestId('choice-complete-manually')).toBeNull()
-    fireEvent.click(screen.getByText('Skip'))
-    expect(onSkip).toHaveBeenCalledWith()
   })
 })

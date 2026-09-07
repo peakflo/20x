@@ -11,7 +11,8 @@ export interface CompleteTaskRequestOptions {
   onCompleted?: (task: WorkfloTask) => void
 }
 
-/** Completion is confirmed by the server. Local dismissal is a view action. */
+/** Completion is confirmed by the server. Local dismissal is a view action.
+ * All sources (Workflo, Notion, …) share this single confirmation path. */
 export function useTaskCompletion({ onToast }: UseTaskCompletionOptions = {}) {
   const executeAction = useTaskSourceStore(s => s.executeAction)
   const requestComplete = useCallback(async (taskId: string, options?: CompleteTaskRequestOptions) => {
@@ -35,5 +36,5 @@ export function useTaskCompletion({ onToast }: UseTaskCompletionOptions = {}) {
       onToast?.(error instanceof Error ? error.message : 'Task completion failed.', true)
     }
   }, [executeAction, onToast])
-  return { requestComplete, completionDialog: null }
+  return { requestComplete }
 }
