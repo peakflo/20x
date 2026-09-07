@@ -586,7 +586,7 @@ export const worktreeApi = {
     }
     return readFile(taskId, repoFullName, filePath)
   },
-  runCleanupNow: (): Promise<{ cleaned: number; errors: string[] }> => {
+  runCleanupNow: (): Promise<{ cleaned: number; errors: string[]; nodeModulesCleaned: number }> => {
     return window.electronAPI.worktree.runCleanupNow()
   }
 }

@@ -112,6 +112,7 @@ describe('WorkspaceCleanupScheduler', () => {
 
       expect(result.cleaned).toBe(0)
       expect(result.errors).toEqual([])
+      expect(result.nodeModulesCleaned).toBe(0)
     })
 
     it('does not clean tasks that are not completed', async () => {

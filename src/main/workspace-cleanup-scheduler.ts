@@ -6,6 +6,22 @@ import type { WorktreeManager } from './worktree-manager'
 import { TaskStatus } from '../shared/constants'
 import { WORKSPACES_DIR, listWorkspaceDirs } from './workspace-paths'
 import { terminateProcessesInWorkspaces, readDiskSpace, workspacePressureWarning } from './workspace-process-cleanup'
+import {
+  NODE_MODULES_GC_DAYS_KEY,
+  NODE_MODULES_GC_ENABLED_KEY,
+  NODE_MODULES_GC_LAST_RUN_KEY,
+  DEFAULT_NODE_MODULES_GC_DAYS,
+  activeStatusWorkspaceIds,
+  findWorkspacesWithLiveProcesses,
+  pruneStaleNodeModules
+} from './workspace-node-modules-gc'
+
+/** Combined outcome of a cleanup run: whole workspaces plus pruned dependency dirs. */
+export interface CleanupResult {
+  cleaned: number
+  errors: string[]
+  nodeModulesCleaned: number
+}
 
 /**
  * WorkspaceCleanupScheduler - Automatic cleanup of old completed task workspaces
@@ -15,10 +31,14 @@ import { terminateProcessesInWorkspaces, readDiskSpace, workspacePressureWarning
  * 2. Queries completed tasks where `updated_at` is older than the configured retention period
  * 3. Cleans up worktrees and workspace directories for those tasks
  * 4. Also removes orphaned workspace directories (no matching task in DB)
+ * 5. Prunes idle `node_modules` directories at any depth, for tasks in ANY status
+ *    (own enable flag + retention, on by default — deps reinstall from package.json)
  *
  * Settings:
  * - `workspace_autocleanup_enabled` — "true"/"false" (default: "false")
  * - `workspace_autocleanup_days` — number of days after completion (default: 7)
+ * - `workspace_nodemodules_gc_enabled` — "true"/"false" (default: "true")
+ * - `workspace_nodemodules_gc_days` — days of node_modules inactivity before pruning (default: 7)
  */
 export class WorkspaceCleanupScheduler {
   private dbManager: DatabaseManager
@@ -60,25 +80,33 @@ export class WorkspaceCleanupScheduler {
   }
 
   /**
-   * Manually trigger a cleanup run. Returns the number of workspaces cleaned.
+   * Manually trigger a cleanup run. Returns the number of workspaces cleaned
+   * plus the number of idle node_modules directories pruned.
    * Rejects if a cleanup is already in progress (prevents concurrent runs).
    */
-  async runNow(): Promise<{ cleaned: number; errors: string[] }> {
+  async runNow(): Promise<CleanupResult> {
     if (this.isRunning) {
-      return { cleaned: 0, errors: ['Cleanup is already in progress'] }
+      return { cleaned: 0, errors: ['Cleanup is already in progress'], nodeModulesCleaned: 0 }
     }
     this.isRunning = true
     this.sendToRenderer('workspace:cleanup-progress', { phase: 'starting', current: 0, total: 0 })
     try {
       const result = await this.doCleanup(true)
+      const nm = await this.runNodeModulesPhase(true)
+      const combined: CleanupResult = {
+        cleaned: result.cleaned,
+        errors: [...result.errors, ...nm.errors],
+        nodeModulesCleaned: nm.pruned
+      }
       this.sendToRenderer('workspace:cleanup-progress', {
         phase: 'done',
-        current: result.cleaned,
-        total: result.cleaned,
-        cleaned: result.cleaned,
-        errors: result.errors
+        current: combined.cleaned,
+        total: combined.cleaned,
+        cleaned: combined.cleaned,
+        nodeModulesCleaned: combined.nodeModulesCleaned,
+        errors: combined.errors
       })
-      return result
+      return combined
     } finally {
       this.isRunning = false
     }
@@ -90,6 +118,11 @@ export class WorkspaceCleanupScheduler {
     if (this.isRunning) return
 
     try {
+      // Idle node_modules pruning has its own flag and schedule: it is safe for
+      // every task status (only regenerable deps go), so it runs whether or not
+      // whole-workspace auto-cleanup is enabled.
+      await this.runNodeModulesGcAuto()
+
       // Check if auto-cleanup is enabled
       const enabled = this.dbManager.getSetting('workspace_autocleanup_enabled')
       if (enabled !== 'true') {
@@ -297,6 +330,99 @@ export class WorkspaceCleanupScheduler {
       if (!isNaN(parsed) && parsed >= 1) return parsed
     }
     return this.DEFAULT_RETENTION_DAYS
+  }
+
+  // ── Idle node_modules GC ──────────────────────────────
+
+  private isNodeModulesGcEnabled(): boolean {
+    const setting = this.dbManager.getSetting(NODE_MODULES_GC_ENABLED_KEY)
+    if (setting === undefined || setting === null) return true
+    return setting === 'true'
+  }
+
+  private getNodeModulesGcDays(): number {
+    const setting = this.dbManager.getSetting(NODE_MODULES_GC_DAYS_KEY)
+    if (setting) {
+      const parsed = parseInt(setting, 10)
+      if (!isNaN(parsed) && parsed >= 1) return parsed
+    }
+    return DEFAULT_NODE_MODULES_GC_DAYS
+  }
+
+  /**
+   * Automatic (scheduled) node_modules pass: own enable flag, at most once per day.
+   * Runs independently of whole-workspace auto-cleanup.
+   */
+  private async runNodeModulesGcAuto(): Promise<void> {
+    if (!this.isNodeModulesGcEnabled()) return
+    const lastRun = this.dbManager.getSetting(NODE_MODULES_GC_LAST_RUN_KEY)
+    if (lastRun) {
+      const hoursSinceLastRun = (Date.now() - new Date(lastRun).getTime()) / (1000 * 60 * 60)
+      if (hoursSinceLastRun < 23) return
+    }
+    const nm = await this.runNodeModulesPhase(false)
+    this.dbManager.setSetting(NODE_MODULES_GC_LAST_RUN_KEY, new Date().toISOString())
+    if (nm.pruned > 0) {
+      console.log(`[WorkspaceCleanup] Pruned ${nm.pruned} idle node_modules`)
+    }
+    if (nm.errors.length > 0) {
+      console.warn(`[WorkspaceCleanup] node_modules prune errors: ${nm.errors.join('; ')}`)
+    }
+  }
+
+  /**
+   * One node_modules pruning pass over every workspace on disk, regardless of
+   * task status. Workspaces with a live process rooted in them are skipped; when
+   * liveness cannot be observed (Windows, unreadable process table), tasks in an
+   * active status are skipped instead — a build lock inside node_modules must
+   * never be pulled out from under a running agent.
+   */
+  private async runNodeModulesPhase(reportProgress: boolean): Promise<{ pruned: number; errors: string[] }> {
+    if (!this.isNodeModulesGcEnabled()) return { pruned: 0, errors: [] }
+    const days = this.getNodeModulesGcDays()
+    const dirs = listWorkspaceDirs() ?? []
+    const allTasks = this.dbManager.getTasks()
+
+    let skip = findWorkspacesWithLiveProcesses(WORKSPACES_DIR, dirs)
+    if (skip === null) skip = activeStatusWorkspaceIds(allTasks)
+
+    if (reportProgress) {
+      this.sendToRenderer('workspace:cleanup-progress', {
+        phase: 'pruning',
+        current: 0,
+        total: dirs.length,
+        message: `Pruning idle node_modules (inactive > ${days} day${days !== 1 ? 's' : ''})...`
+      })
+    }
+
+    const result = pruneStaleNodeModules({
+      workspacesRoot: WORKSPACES_DIR,
+      inactiveDays: days,
+      skipWorkspaceIds: skip,
+      onProgress: reportProgress
+        ? (processed, total, currentPath) => {
+            this.sendToRenderer('workspace:cleanup-progress', {
+              phase: 'pruning',
+              current: processed,
+              total,
+              message: currentPath ? `Pruning idle node_modules...` : `Pruned idle node_modules`
+            })
+          }
+        : undefined
+    })
+
+    if (reportProgress) {
+      this.sendToRenderer('workspace:cleanup-progress', {
+        phase: 'pruning',
+        current: dirs.length,
+        total: dirs.length,
+        message: result.pruned.length > 0
+          ? `Pruned ${result.pruned.length} idle node_modules`
+          : 'No idle node_modules to prune'
+      })
+    }
+
+    return { pruned: result.pruned.length, errors: result.errors }
   }
 
   private sendToRenderer(channel: string, data: unknown): void {
