@@ -108,8 +108,15 @@ export function registerIpcHandlers(
     if (data.status === TaskStatus.Completed) throw new Error('Workflo must confirm completion.')
     let task = db.createTask(data)
     if (task && !task.source_id && syncManager.canUploadTasks()) {
-      try { await syncManager.uploadTask(task.id) }
-      catch (error) { db.setSetting(`workflo-upload:${task.id}:error`, error instanceof Error ? error.message : String(error)) }
+      const taskId = task.id
+      // Local creation is authoritative and must stay instant. Workflo upload
+      // is best-effort and reports its eventual state through task updates.
+      void syncManager.uploadTask(taskId).then(() => {
+        const syncedTask = db.getTask(taskId)
+        if (syncedTask) event.sender.send('task:updated', { taskId, updates: syncedTask })
+      }).catch((error) => {
+        console.warn('[ipc] Background Workflo task upload failed:', error)
+      })
       task = db.getTask(task.id)
     }
     // Initialize recurring task if it has a recurrence pattern
