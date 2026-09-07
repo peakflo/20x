@@ -8,6 +8,7 @@ import { projectConversationId } from '../shared/responsibilities'
 import type { ResponsibilityAgreement, ResponsibilityStep, WorkEvidence } from '../shared/responsibilities'
 import type { AgentManager } from './agent-manager'
 import { callResponsibilityTool } from './responsibility-tools'
+import { TaskControl } from './task-control'
 import { RoutineSources } from './routine-sources'
 
 let dir: string
@@ -59,6 +60,29 @@ async function finish(step: ResponsibilityStep, action = 'done', next?: string) 
 }
 
 describe('durable engineering responsibilities', () => {
+  it('lets the project root delete a task without delegation or replacement work', async () => {
+    await approve()
+    const step = snapshot().steps[0]
+    const token = manager.tokenForTask(step.taskId)!
+    const confirm = vi.fn(async () => true)
+    const service = new TaskControl(db, { withStoppedTasks: async (_ids, action, beforeStop) => { await beforeStop?.(); return action() } }, { completeTask: vi.fn() }, manager, confirm, vi.fn())
+    manager.setTaskControl(service)
+    vi.spyOn(db, 'deleteTaskAttachments').mockImplementation(() => {})
+    expect((await callResponsibilityTool(manager, token, 'manage_task', { task_id: step.taskId, action: 'delete' })).isError).toBe(true)
+    expect(confirm).not.toHaveBeenCalled()
+    const root = manager.tokenForTask(projectConversationId(project.id))!
+    const inspected = await callResponsibilityTool(manager, root, 'inspect_tasks', { task_id: step.taskId })
+    expect(JSON.stringify(inspected)).toContain(step.taskId)
+    const result = await callResponsibilityTool(manager, root, 'manage_task', { task_id: step.taskId, action: 'delete' })
+    expect(result.isError).not.toBe(true)
+    expect(db.getTask(step.taskId)).toBeUndefined()
+    expect(snapshot().responsibilities[0].state).toBe('cancelled')
+    await manager.reconcile()
+    expect(snapshot().steps).toHaveLength(1)
+    expect(runtime.startSession).toHaveBeenCalledTimes(1)
+    await service.stop()
+  })
+
   it('keeps proposals inactive and human permissions out of worker tools', async () => {
     const r = manager.propose(scope(), agreement, input())
     await manager.reconcile()

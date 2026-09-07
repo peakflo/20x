@@ -1,6 +1,6 @@
 import { ResponsibilityManager } from './responsibility-manager'
 import { registerResponsibilityIpc } from './responsibility-ipc'
-import { setResponsibilityManager } from './task-api-server'
+import { setResponsibilityManager, setTaskControl } from './task-api-server'
 import { execFile, execSync } from 'child_process'
 import { readdirSync } from 'fs'
 import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage } from 'electron'
@@ -14,6 +14,7 @@ import { GitLabManager } from './gitlab-manager'
 import { WorktreeManager } from './worktree-manager'
 import { McpToolCaller } from './mcp-tool-caller'
 import { RoutineSources } from './routine-sources'
+import { TaskControl } from './task-control'
 import { SyncManager } from './sync-manager'
 import { OAuthManager } from './oauth/oauth-manager'
 import { PluginRegistry } from './plugins/registry'
@@ -68,6 +69,7 @@ let tray: Tray | null = null
 let isQuitting = false
 let db: DatabaseManager | null = null
 let agentManager: AgentManager | null = null
+let taskControl: TaskControl | null = null
 let githubManager: GitHubManager | null = null
 let gitlabManager: GitLabManager | null = null
 let worktreeManager: WorktreeManager | null = null
@@ -276,6 +278,7 @@ async function sweepLeakedWorkspaces(graceMs?: number, orphansIgnoreTaskState = 
 }
 
 async function shutdownAppServices(): Promise<void> {
+  await taskControl?.stop()
   await responsibilityManager?.stop()
   recurrenceScheduler?.stop()
   voiceSessionManager?.shutdown()
@@ -1020,6 +1023,17 @@ app.whenReady().then(async () => {
     }
   }, undefined, undefined, new RoutineSources(db, (agentId, serverId) => agentManager!.resolveRoutineMcpConnection(agentId, serverId), server => server.source === 'enterprise' ? enterpriseAuth?.getApiUrl() : undefined))
   agentManager.setResponsibilityManager(responsibilityManager)
+  taskControl = new TaskControl(db, agentManager, syncManager, responsibilityManager, async request => {
+    if (!mainWindow || mainWindow.isDestroyed() || request.signal.aborted) return false
+    const result = await dialog.showMessageBox(mainWindow, { type: 'question', title: 'Mastermind task action', message: request.title, detail: request.detail,
+      buttons: [request.confirmLabel, 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal: request.signal })
+    return result.response === 0 && !request.signal.aborted
+  }, (channel, data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, data)
+    broadcastToMobileClients(channel, data)
+  })
+  responsibilityManager.setTaskControl(taskControl)
+  setTaskControl(taskControl)
   setResponsibilityManager(responsibilityManager)
   registerResponsibilityIpc(responsibilityManager, () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : undefined)
 

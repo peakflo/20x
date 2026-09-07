@@ -40,6 +40,8 @@ enum CodingAgentType {
   PI = 'pi'
 }
 
+class TaskControlBlockedError extends Error {}
+
 const ARTIFACT_WORKSPACE_INSTRUCTIONS = `
 
 [Workspace Deliverables]
@@ -354,6 +356,8 @@ export class AgentManager extends EventEmitter {
 
   // Track last sent status per session to detect transitions for OS notifications
   private lastSentStatus: Map<string, string> = new Map()
+  private readonly controlledTasks = new Set<string>()
+  private readonly pendingTaskOperations = new Map<string, Set<Promise<unknown>>>()
 
   /**
    * Maximum total characters allowed in partContentLengths values per session.
@@ -1897,6 +1901,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const parts: MessagePart[] = [
         { type: MessagePartType.TEXT, text: promptText }
       ]
+      this.assertTaskNotControlled(taskId)
       try {
         await adapter.sendPrompt(adapterSessionId, parts, sessionConfig)
       } catch (sendError) {
@@ -3117,6 +3122,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Uses promptAsync to send the initial prompt without blocking.
    */
   private assertLocalHelpAllowed(taskId: string): void {
+    this.assertTaskNotControlled(taskId)
     if (this.db.getSetting(`workflo-upload:${taskId}`)) throw new Error('Wait for the Workflo task upload to finish.')
     const task = serverTaskSnapshot(this.db, taskId)
     if (!task) return
@@ -3124,6 +3130,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (task.isRecurring || ['completed', 'cancelled', 'expired'].includes(task.status)) {
       throw new Error('This Workflo task cannot start a help session.')
     }
+  }
+
+  private assertTaskNotControlled(taskId: string): void {
+    if (this.controlledTasks.has(taskId)) throw new TaskControlBlockedError('Task administration is stopping this task. Wait for it to finish.')
   }
 
   /** Local help can save its session and results, but cannot set canonical status. */
@@ -3135,6 +3145,33 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
   async startSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<string> {
+    return this.trackTaskOperation(taskId, () => this.startTaskSession(agentId, taskId, workspaceDir, skipInitialPrompt))
+  }
+
+  private async trackTaskOperation<T>(taskId: string, start: () => Promise<T>): Promise<T> {
+    this.assertTaskNotControlled(taskId)
+    const starts = this.pendingTaskOperations.get(taskId) ?? new Set<Promise<unknown>>()
+    const job = start()
+    starts.add(job); this.pendingTaskOperations.set(taskId, starts)
+    try { return await job } finally { starts.delete(job); if (!starts.size) this.pendingTaskOperations.delete(taskId) }
+  }
+
+  /** Hold admission while a confirmed human action stops every owned runtime. */
+  async withStoppedTasks<T>(taskIds: string[], action: () => Promise<T>, beforeStop?: () => Promise<void>): Promise<T> {
+    const ids = new Set(taskIds.flatMap(id => [id, `heartbeat-${id}`]))
+    if ([...ids].some(id => this.controlledTasks.has(id))) throw new Error('An action is already stopping one of these tasks.')
+    for (const id of ids) this.controlledTasks.add(id)
+    try {
+      for (const id of taskIds) this.db.updateTask(id, { auto_start_agent: false, auto_complete_without_review: false, heartbeat_enabled: false })
+      const operations = await Promise.allSettled([...ids].flatMap(id => [...(this.pendingTaskOperations.get(id) ?? [])]))
+      await beforeStop?.()
+      for (const [id, session] of this.sessions) if (ids.has(session.taskId)) await this.stopSession(id, false, true)
+      if (operations.some(r => r.status === 'rejected' && !(r.reason instanceof TaskControlBlockedError))) throw new Error('A task operation failed during cleanup. Inspect its runtime before retrying this action.')
+      return await action()
+    } finally { for (const id of ids) this.controlledTasks.delete(id) }
+  }
+
+  private async startTaskSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<string> {
     this.assertLocalHelpAllowed(taskId)
     const agent = this.db.getAgent(agentId)
     if (!agent) {
@@ -3668,6 +3705,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Replays all messages to the renderer and resumes polling.
    */
   async resumeSession(agentId: string, taskId: string, sessionId: string): Promise<string> {
+    return this.trackTaskOperation(taskId, () => this.resumeTaskSession(agentId, taskId, sessionId))
+  }
+
+  private async resumeTaskSession(agentId: string, taskId: string, sessionId: string): Promise<string> {
     this.assertLocalHelpAllowed(taskId)
     console.log('[AgentManager] resumeSession called:', { agentId, taskId, sessionId })
     const agent = this.db.getAgent(agentId)
@@ -4031,7 +4072,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     this.stopAdapterPolling(sessionId)
 
     // Abort via adapter
-    const adapter = this.getAdapter(session.agentId)
+    const adapter = session.adapter ?? this.getAdapter(session.agentId)
     if (adapter) {
       try {
         const sessionConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
@@ -4080,7 +4121,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Fully destroys the session — stops polling, removes from map.
    * @param resetTaskStatus - If true, resets task status to NotStarted (default: true)
    */
-  async stopSession(sessionId: string, resetTaskStatus: boolean = true): Promise<void> {
+  async stopSession(sessionId: string, resetTaskStatus: boolean = true, requireRelease: boolean = false): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) {
       console.log(`[AgentManager] Session ${sessionId} not found`)
@@ -4096,15 +4137,16 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     // Stop polling for this session
     this.stopAdapterPolling(sessionId)
 
-    // Destroy via adapter
-    const adapter = this.getAdapter(session.agentId)
+    // Release through the instance that owns this runtime, even if its agent config changed.
+    const adapter = session.adapter ?? this.getAdapter(session.agentId)
+    if (!adapter && (requireRelease || this.responsibilities?.ownsTask(session.taskId))) throw new Error('The task runtime has no adapter available to confirm its release.')
     if (adapter) {
       try {
         const sessionConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
         await adapter.destroySession(sessionId, sessionConfig)
       } catch (error) {
         console.error(`[AgentManager] Error destroying adapter session:`, error)
-        if (this.responsibilities?.ownsTask(session.taskId)) throw error
+        if (requireRelease || this.responsibilities?.ownsTask(session.taskId)) throw error
       }
     }
 
@@ -4228,7 +4270,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
               // Resume the backend session for continuation. The transcript is
               // NOT pushed here — clients render the durable projection (snapshot
               // + deltas), which already holds the full history.
-              const resumedId = await this.resumeAdapterSession(adapter, resolvedAgentId, taskId, persistedSessionId)
+              const resumedId = await this.resumeSession(resolvedAgentId, taskId, persistedSessionId)
               session = this.sessions.get(resumedId)
               if (session) {
                 sessionId = resumedId
@@ -4283,12 +4325,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
   }
 
-  private async doSendAdapterMessage(
+  private async doSendAdapterMessage(session: AgentSession, sessionId: string, message: string, attachments?: MessageAttachmentRef[]): Promise<void> {
+    return this.trackTaskOperation(session.taskId, () => this.sendTaskMessage(session, sessionId, message, attachments))
+  }
+
+  private async sendTaskMessage(
     session: AgentSession,
     sessionId: string,
     message: string,
     attachments?: MessageAttachmentRef[]
   ): Promise<void> {
+    this.assertTaskNotControlled(session.taskId)
     session.autoAbortNotified = false
 
     if (session.status === 'error') {
@@ -4360,6 +4407,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     // Send prompt via adapter
     const promptText = this.buildMessageWithAttachmentContext(session, message, attachments)
     const parts: MessagePart[] = [{ type: MessagePartType.TEXT, text: promptText }]
+    this.assertTaskNotControlled(session.taskId)
+    if (this.sessions.get(sessionId) !== session) throw new TaskControlBlockedError('The task session was stopped before this message could be sent.')
     await session.adapter.sendPrompt(sessionId, parts, sessionConfig)
     analytics()?.record('provider.turn.sent', {
       provider: getAgentProvider(this.db.getAgent(session.agentId)),
@@ -4379,7 +4428,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
   }
 
-  async respondToPermission(
+  async respondToPermission(sessionId: string, approved: boolean, message?: string, optionId?: string, responseType?: 'permission' | 'question', requestId?: string): Promise<boolean | void> {
+    const session = this.sessions.get(sessionId) ?? this.sessions.get(this.sessionIdRedirects.get(sessionId) ?? '')
+    if (!session) throw new Error(`Session not found: ${sessionId}`)
+    return this.trackTaskOperation(session.taskId, () => this.respondToTaskPermission(sessionId, approved, message, optionId, responseType, requestId))
+  }
+
+  private async respondToTaskPermission(
     sessionId: string,
     approved: boolean,
     message?: string,
@@ -4406,7 +4461,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       decision: approved ? 'approved' : 'rejected'
     })
 
-    const adapter = this.getAdapter(session.agentId)
+    const adapter = session.adapter ?? this.getAdapter(session.agentId)
 
     const approvalAdapter = adapter && 'respondToApproval' in adapter
       && typeof (adapter as unknown as AcpAdapter).respondToApproval === 'function'
@@ -4443,6 +4498,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       console.log(`[AgentManager] Responding to question via adapter for session ${sessionId}`)
 
       const adapterConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+      this.assertTaskNotControlled(session.taskId)
+      if (this.sessions.get(sessionId) !== session) throw new TaskControlBlockedError('The task session was stopped before this answer could be sent.')
       const response = requestId
         ? await adapter.respondToQuestion(sessionId, answers, adapterConfig, requestId)
         : await adapter.respondToQuestion(sessionId, answers, adapterConfig)

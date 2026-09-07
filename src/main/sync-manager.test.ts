@@ -51,6 +51,20 @@ describe('SyncManager', () => {
     syncManager = new SyncManager(db, toolCaller, registry)
   })
 
+  describe('human completion', () => {
+    it('preserves pending source outcomes and requires the canonical completed status', async () => {
+      const task = { id: 't1', source_id: 'src1', status: TaskStatus.ReadyForReview, output_fields: [{ id: 'action', value: 'approve' }] } as TaskRecord
+      vi.mocked(db.getTask).mockReturnValue(task)
+      const execute = vi.spyOn(syncManager, 'executeAction').mockResolvedValueOnce({ success: false, error: 'Pending server confirmation' }).mockResolvedValue({ success: true })
+      expect(await syncManager.completeTask('t1')).toEqual({ success: false, error: 'Pending server confirmation' })
+      expect(execute).toHaveBeenCalledWith('approve', task, undefined, 'src1')
+      expect(await syncManager.completeTask('t1')).toMatchObject({ success: false, error: expect.stringContaining('not been confirmed') })
+      execute.mockImplementationOnce(async () => { task.status = TaskStatus.Completed; return { success: true } })
+      expect(await syncManager.completeTask('t1')).toEqual({ success: true })
+      expect(db.updateTask).not.toHaveBeenCalled()
+    })
+  })
+
   describe('importTasks', () => {
     it('imports canonical tasks without waiting for unrelated resource uploads', async () => {
       const plugin = makeMockPlugin({ id: 'peakflo' })

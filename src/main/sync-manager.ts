@@ -9,6 +9,7 @@ import type { PluginContext, PluginSyncResult, ActionResult } from './plugins/ty
 import type { WorkfloApiClient } from './workflo-api-client'
 import type { EnterpriseSyncManager } from './enterprise-sync'
 import type { SourceUser, ReassignResult } from '../shared/types'
+import { PluginActionId, TaskStatus } from '../shared/constants'
 
 export interface SyncResult {
   source_id: string
@@ -319,6 +320,23 @@ export class SyncManager {
         }
       }
     } finally { this.completionInFlight = false }
+  }
+
+  /** Human completion uses the same source action as the desktop Complete button. */
+  async completeTask(taskId: string): Promise<ActionResult> {
+    let task = this.db.getTask(taskId)
+    if (!task) return { success: false, error: 'Task not found.' }
+    if (task.status === TaskStatus.Completed) return { success: true }
+    if (!task.source_id) {
+      const upload = await this.uploadTask(task.id)
+      if (upload.queued) return { success: false, error: 'Task creation is pending in Workflo. Completion has not been accepted.' }
+      task = this.db.getTask(taskId)
+    }
+    if (!task?.source_id) return { success: false, error: 'Send this task to Workflo before completing it.' }
+    const action = task.output_fields.find(field => field.id === 'action')?.value
+    const result = await this.executeAction(action ? String(action) : PluginActionId.Complete, task, undefined, task.source_id)
+    if (result.success && this.db.getTask(taskId)?.status !== TaskStatus.Completed) return { success: false, error: 'The source action returned, but task completion has not been confirmed.' }
+    return result
   }
 
   async executeAction(

@@ -1688,6 +1688,34 @@ describe('AgentManager shutdown', () => {
   })
 })
 
+describe('confirmed task cleanup', () => {
+  it('waits for an admitted launch, stops every owned runtime, and blocks new starts', async () => {
+    const db = createMockDb()
+    const mgr = new AgentManager(db)
+    let finish!: (value: string) => void
+    vi.spyOn(mgr as any, 'startTaskSession').mockImplementation(async () => {
+      const id = await new Promise<string>(resolve => { finish = resolve })
+      ;(mgr as any).sessions.set(id, { taskId: 'task-1' })
+      return id
+    })
+    ;(mgr as any).sessions.set('heartbeat', { taskId: 'heartbeat-task-1' })
+    ;(mgr as any).sessions.set('other', { taskId: 'other-task' })
+    const release = vi.spyOn(mgr, 'stopSession').mockImplementation(async id => { (mgr as any).sessions.delete(id) })
+    const launch = mgr.startSession('agent-1', 'task-1')
+    const action = vi.fn(async () => 'done')
+    const cleanup = mgr.withStoppedTasks(['task-1'], action)
+    await expect(mgr.resumeSession('agent-1', 'task-1', 'old')).rejects.toThrow('administration is stopping')
+    expect(action).not.toHaveBeenCalled()
+    finish('late-session')
+    await launch
+    expect(await cleanup).toBe('done')
+    expect(release).toHaveBeenCalledWith('late-session', false, true)
+    expect(release).toHaveBeenCalledWith('heartbeat', false, true)
+    expect((mgr as any).sessions.has('other')).toBe(true)
+    expect(db.updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ auto_start_agent: false, heartbeat_enabled: false }))
+  })
+})
+
 describe('AgentManager session ID re-keying redirect', () => {
   function createManagerWithSession() {
     const mockDb = {
@@ -1726,8 +1754,65 @@ describe('AgentManager session ID re-keying redirect', () => {
     return { mgr, session }
   }
 
+  it('blocks admission before responsibility cancellation and releases through the live adapter', async () => {
+    const { mgr, session } = createManagerWithSession()
+    const destroySession = vi.fn(async () => undefined)
+    Object.assign(session.adapter, { destroySession })
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({})
+    const action = vi.fn(async () => undefined)
+    await mgr.withStoppedTasks(['task-1'], action, async () => {
+      await expect(mgr.respondToPermission('temp-id', true)).rejects.toThrow('administration is stopping')
+      expect(destroySession).not.toHaveBeenCalled()
+    })
+    expect(destroySession).toHaveBeenCalledOnce()
+    expect(action).toHaveBeenCalledOnce()
+  })
+
+  it('keeps an unreleased runtime tracked and refuses the confirmed task mutation', async () => {
+    const { mgr, session } = createManagerWithSession()
+    Object.assign(session.adapter, { destroySession: vi.fn().mockRejectedValue(new Error('still running')) })
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({})
+    const action = vi.fn(async () => undefined)
+    await expect(mgr.withStoppedTasks(['task-1'], action)).rejects.toThrow('still running')
+    expect(action).not.toHaveBeenCalled()
+    expect((mgr as any).sessions.get('temp-id')).toBe(session)
+  })
+
+  it('fences a question answer while waiting for session configuration', async () => {
+    const { mgr, session } = createManagerWithSession()
+    let finish!: (value: object) => void
+    let builds = 0
+    Object.assign(session.adapter, { destroySession: vi.fn(async () => undefined) })
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(session.adapter)
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockImplementation(() => ++builds === 1 ? new Promise(resolve => { finish = resolve }) : Promise.resolve({}))
+    const answer = mgr.respondToPermission('temp-id', true, 'Yes', undefined, 'question')
+    const rejected = expect(answer).rejects.toThrow('administration is stopping')
+    const action = vi.fn(async () => undefined)
+    const cleanup = mgr.withStoppedTasks(['task-1'], action)
+    expect(action).not.toHaveBeenCalled()
+    await expect(mgr.respondToPermission('temp-id', true)).rejects.toThrow('administration is stopping')
+    finish({})
+    await rejected; await cleanup
+    expect(session.adapter.respondToQuestion).not.toHaveBeenCalled()
+    expect(action).toHaveBeenCalledOnce()
+    expect((mgr as any).sessions.has('temp-id')).toBe(false)
+  })
+
+  it('does not send an in-flight follow-up after the task session has been destroyed', async () => {
+    const { mgr, session } = createManagerWithSession()
+    let finish!: (value: object) => void
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const send = (mgr as any).doSendAdapterMessage(session, 'temp-id', 'Continue')
+    ;(mgr as any).sessions.delete('temp-id')
+    finish({})
+    await expect(send).rejects.toThrow('stopped before this message')
+    expect(session.adapter.sendPrompt).not.toHaveBeenCalled()
+  })
+
   it('respondToPermission resolves re-keyed session via redirect map', async () => {
     const { mgr, session } = createManagerWithSession()
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({})
 
     // Simulate re-keying: move session from temp-id to real-id
     ;(mgr as any).sessions.delete('temp-id')
@@ -1736,6 +1821,16 @@ describe('AgentManager session ID re-keying redirect', () => {
 
     // This would throw "Session not found: temp-id" before the fix
     await expect(mgr.respondToPermission('temp-id', true, 'Yes')).resolves.not.toThrow()
+  })
+
+  it('answers the live adapter even after its agent configuration changes', async () => {
+    const { mgr, session } = createManagerWithSession()
+    const replacement = { respondToQuestion: vi.fn() }
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(replacement)
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({})
+    await mgr.respondToPermission('temp-id', true, 'Yes', undefined, 'question')
+    expect(session.adapter.respondToQuestion).toHaveBeenCalledOnce()
+    expect(replacement.respondToQuestion).not.toHaveBeenCalled()
   })
 
   it('respondToPermission still throws for truly unknown session IDs', async () => {

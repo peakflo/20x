@@ -16,6 +16,7 @@ The engineer explicitly chose 20x's lifecycle: fully quitting stops agents and m
 8. Pause a responsibility. No new work starts; existing results and questions still arrive. Take over to revoke automation and work directly. Handback starts a fresh assignment from current files and saved context.
 9. Quit and reopen. Existing workers are stopped, unresolved launches stay blocked for review, and no uncertain operation is blindly repeated.
 10. Run multiple responsibilities over a working day. Settled workers are released while their output remains available. Independent projects can progress; conflicting work in a project is serialized.
+11. Ask Mastermind to complete, close, or delete an exact task. Both All tasks and project conversations can inspect task metadata and request the action directly. Close means mark completed. The desktop confirmation shows the target, source action/outputs, dependent deletions and responsibility cancellation before anything changes.
 
 ## Product boundaries
 
@@ -60,3 +61,15 @@ Snapshots and change events are saved together before advancing progress. A fail
 - Opt-in native journey: `RUN_RESPONSIBILITY_LIVE=1 pnpm test:run src/main/responsibility-manager.live.test.ts -t 'collects a configured'`. It uses an isolated SQLite database, a temporary MCP source, and the real Codex adapter for classification and collection reasoning. It does not contact Slack or Notion.
 
 Live Slack and Notion acceptance still requires working configured connections and agreed read targets. Controlled transport tests are not evidence of those services' authentication or data coverage. The PR records the executed checks and any remaining live-service validation gaps.
+
+## Task administration
+
+Start a fresh Mastermind conversation/session to load the new tools. Ask “Find the task named X”, then “Mark task <ID> completed” or “Delete task <ID>”. Mastermind uses `inspect_tasks` and `manage_task` itself; workers do not receive these controls. Ambiguous names require clarification. A project conversation cannot manage a task owned by a different project's responsibility; use that project or All tasks.
+
+The desktop confirmation defaults to Cancel. Deletion removes the local task, its cascading subtasks/recurring instances, attachments and transcripts, matching existing task deletion. Working checkouts and saved responsibility agreements/reports remain. Linked source records are retained and may reappear on sync. Owning responsibilities are cancelled before cleanup, including when completing their task manually, so automation cannot replace manually closed work; this is not a claim that their goal was independently verified.
+
+The action blocks new launches, messages and permission answers for affected tasks, waits for admitted operations, then releases task and heartbeat runtimes. Failed release prevents deletion/completion. Changed tasks, outputs, source configuration or pending Workflo commands require review again. Agents and responsibilities may already be stopped if a later check or source action fails. Full quit cancels an unanswered confirmation and waits for a confirmed action to settle.
+
+Completion uses the same source action and outputs as the desktop Complete button. It reports success only after the database reflects source-confirmed completion. Existing Workflo requirements remain: local tasks must be eligible to upload to Workflo first; no offline/local-only completion bypass is added. A pending or rejected source action remains incomplete. A task with a pending Workflo upload or completion cannot be deleted or submitted again through these controls until that command is resolved. No automatic worktree deletion or remote task deletion is added.
+
+Task-control validation covers real HTTP MCP discovery/calls against an isolated database, root/worker tool access, explicit confirmation, cascade cleanup, stale consent, pending commands, launch/message/permission races, release failures, responsibility cancellation and quit. Human confirmation and source acceptance are controlled in tests; actual desktop clicking and a live Workflo completion are still manual acceptance checks.

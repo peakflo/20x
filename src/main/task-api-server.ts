@@ -1,4 +1,5 @@
 import type { ResponsibilityManager } from './responsibility-manager'
+import type { TaskControl } from './task-control'
 /**
  * Lightweight HTTP API server for task-management tools.
  * Runs inside the Electron main process so it can use better-sqlite3.
@@ -57,6 +58,8 @@ type TaskApiAgentController = Pick<
 
 let agentController: TaskApiAgentController | null = null
 let responsibilityManager: ResponsibilityManager | undefined
+let taskControl: TaskControl | undefined
+export function setTaskControl(service: TaskControl | undefined): void { taskControl = service }
 export function setResponsibilityManager(manager: ResponsibilityManager): void { responsibilityManager = manager }
 
 /**
@@ -255,6 +258,12 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
   const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db // Access the underlying better-sqlite3 instance
 
   switch (route) {
+    case '/inspect_tasks':
+      if (!taskControl) throw new Error('Task controls are unavailable.')
+      return taskControl.inspect(params)
+    case '/manage_task':
+      if (!taskControl) throw new Error('Task controls are unavailable.')
+      return taskControl.run(params)
     case '/create_artifact': {
       const taskId = typeof params.task_id === 'string' ? params.task_id : ''
       const title = typeof params.title === 'string' ? params.title : ''

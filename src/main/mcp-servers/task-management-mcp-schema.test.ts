@@ -78,6 +78,17 @@ describe('artifact workpiece tools', () => {
 })
 
 describe('tool sets per scope', () => {
+  it('gives task administration to Mastermind, never to project workers', async () => {
+    const invoke = async () => ({ ok: true })
+    const mastermind = { parentTaskId: null, taskId: null, artifactTaskId: 'mastermind-session' }
+    expect(listToolsForScope(mastermind).map(t => t.name)).toContain('manage_task')
+    expect((await callToolForScope('manage_task', { task_id: 't1', action: 'close' }, mastermind, invoke)).isError).not.toBe(true)
+    for (const worker of [SCOPED, { parentTaskId: null, taskId: null, artifactTaskId: 'ordinary-task' }]) {
+      expect(listToolsForScope(worker).map(t => t.name)).not.toContain('manage_task')
+      expect((await callToolForScope('manage_task', { task_id: 't1', action: 'delete' }, worker, invoke)).isError).toBe(true)
+    }
+  })
+
   it('gives a full-access session the orchestration tools and no scoped aliases', () => {
     const names = listToolsForScope(FULL_ACCESS_SCOPE).map((t) => t.name)
     expect(names).toContain('list_tasks')

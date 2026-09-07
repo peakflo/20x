@@ -14,6 +14,8 @@
  * cannot change the workpieces of another task.
  */
 import type { Tool } from '@modelcontextprotocol/server'
+import { taskControlTools } from '../task-control'
+import { isMastermindTask } from '../../shared/responsibilities'
 
 /** Which task a session may act on. All fields null means full access. */
 export type TaskMcpScope = {
@@ -961,7 +963,7 @@ async function handleScopedCall(
 export function listToolsForScope(scope: TaskMcpScope) {
   return isScopedSession(scope)
     ? [...subtaskTools, ...browserTools, ...sharedTools]
-    : [...mastermindTools, ...browserTools, ...sharedTools]
+    : [...mastermindTools, ...browserTools, ...sharedTools, ...(!scope.artifactTaskId || isMastermindTask(scope.artifactTaskId) ? taskControlTools : [])]
 }
 
 /**

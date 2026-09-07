@@ -5,13 +5,15 @@
  * mocked between the client and the database, so these tests prove that a
  * session gets its tools without any child process.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { execSync } from 'child_process'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
-import { startTaskApiServer, stopTaskApiServer, setTaskApiNotifier } from './task-api-server'
+import { startTaskApiServer, stopTaskApiServer, setTaskApiNotifier, setTaskControl } from './task-api-server'
+import { TaskControl } from './task-control'
+import type { ResponsibilityManager } from './responsibility-manager'
 import { buildTaskMcpUrl, parseScopeFromUrl } from './task-mcp-endpoint'
 
 let db: DatabaseManager
@@ -21,6 +23,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  setTaskControl(undefined)
   setTaskApiNotifier(() => undefined)
   stopTaskApiServer()
 })
@@ -68,6 +71,25 @@ describe('buildTaskMcpUrl and parseScopeFromUrl', () => {
 })
 
 describe('MCP endpoint over HTTP', () => {
+  it('runs Mastermind task inspection and confirmed deletion through the real MCP endpoint', async () => {
+    const task = db.createTask(makeTask({ title: 'Disposable test task' }))!
+    vi.spyOn(db, 'deleteTaskAttachments').mockImplementation(() => {})
+    const responsibilities = { projectForTask: () => undefined, stepForTask: () => undefined, snapshot: () => ({ responsibilities: [] }) } as unknown as ResponsibilityManager
+    const confirm = vi.fn(async () => true)
+    const service = new TaskControl(db, { withStoppedTasks: async (_ids, action) => action() }, { completeTask: vi.fn() }, responsibilities, confirm, vi.fn())
+    setTaskControl(service)
+    const port = await startTaskApiServer(db)
+    const client = await connect(buildTaskMcpUrl(port, { artifactTaskId: 'mastermind-session' }))
+    try {
+      expect((await client.listTools()).tools.map(t => t.name)).toContain('manage_task')
+      expect(textOf(await client.callTool({ name: 'inspect_tasks', arguments: { query: task.title } }))).toContain(task.id)
+      const result = await client.callTool({ name: 'manage_task', arguments: { task_id: task.id, action: 'delete' } })
+      expect(JSON.parse(textOf(result))).toMatchObject({ success: true, deletedTaskIds: [task.id] })
+      expect(confirm).toHaveBeenCalledOnce()
+      expect(db.getTask(task.id)).toBeUndefined()
+    } finally { await client.close(); await service.stop() }
+  })
+
   it('serves the full tool set to an unscoped session', async () => {
     const port = await startTaskApiServer(db)
     const client = await connect(buildTaskMcpUrl(port))
