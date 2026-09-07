@@ -244,7 +244,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('worktree:files', taskId, repos),
     readFile: (taskId: string, repoFullName: string | null, filePath: string): Promise<{ content: string; size: number; binary: boolean; truncated: boolean } | null> =>
       ipcRenderer.invoke('worktree:readFile', taskId, repoFullName, filePath),
-    runCleanupNow: (): Promise<{ cleaned: number; errors: string[] }> =>
+    runCleanupNow: (): Promise<{ cleaned: number; errors: string[]; nodeModulesCleaned: number }> =>
       ipcRenderer.invoke('workspace:runCleanupNow')
   },
   taskSources: {

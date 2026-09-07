@@ -11,6 +11,18 @@ import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard'
 import { settingsApi, mobileApi, updaterApi, worktreeApi, onWorkspaceCleanupProgress } from '@/lib/ipc-client'
 import { MASTERMIND_PREWARM_SETTING } from '@/components/orchestrator/OrchestratorPanel'
 
+/** Human-readable summary of a cleanup run, or null when there is nothing to report. */
+function describeCleanupOutcome(cleaned: number | undefined, nodeModulesCleaned: number | undefined): string | null {
+  const parts: string[] = []
+  if (cleaned !== undefined && cleaned > 0) {
+    parts.push(`Cleaned ${cleaned} workspace${cleaned !== 1 ? 's' : ''}`)
+  }
+  if (nodeModulesCleaned !== undefined && nodeModulesCleaned > 0) {
+    parts.push(`pruned ${nodeModulesCleaned} idle node_modules`)
+  }
+  return parts.length > 0 ? parts.join(', ') : null
+}
+
 export function GeneralSettings() {
   const [setupDialogOpen, setSetupDialogOpen] = useState(false)
   const [launchAtStartup, setLaunchAtStartup] = useState(false)
@@ -53,8 +65,9 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
       if (event.phase === 'done') {
         setCleanupRunning(false)
         setCleanupProgress(null)
-        if (event.cleaned !== undefined && event.cleaned > 0) {
-          setCleanupResult(`Cleaned ${event.cleaned} workspace${event.cleaned !== 1 ? 's' : ''}`)
+        const summary = describeCleanupOutcome(event.cleaned, event.nodeModulesCleaned)
+        if (summary) {
+          setCleanupResult(summary)
         } else if (event.errors && event.errors.length > 0) {
           setCleanupResult(`Cleanup finished with ${event.errors.length} error${event.errors.length !== 1 ? 's' : ''}`)
         } else {
@@ -71,6 +84,8 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
   // Workspace cleanup settings
   const [autocleanEnabled, setAutocleanEnabled] = useState(false)
   const [autocleanDays, setAutocleanDays] = useState('7')
+  const [nodeModulesGcEnabled, setNodeModulesGcEnabled] = useState(true)
+  const [nodeModulesGcDays, setNodeModulesGcDays] = useState('7')
   const [cleanupRunning, setCleanupRunning] = useState(false)
   const [cleanupResult, setCleanupResult] = useState<string | null>(null)
   const [cleanupProgress, setCleanupProgress] = useState<{ current: number; total: number; message?: string } | null>(null)
@@ -119,6 +134,12 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
 
         const cleanupDays = await settingsApi.get('workspace_autocleanup_days')
         if (cleanupDays) setAutocleanDays(cleanupDays)
+
+        const nmGcEnabled = await settingsApi.get('workspace_nodemodules_gc_enabled')
+        if (nmGcEnabled !== null) setNodeModulesGcEnabled(nmGcEnabled !== 'false')
+
+        const nmGcDays = await settingsApi.get('workspace_nodemodules_gc_days')
+        if (nmGcDays) setNodeModulesGcDays(nmGcDays)
       } catch (error) {
         console.error('Failed to load workspace cleanup settings:', error)
       }
@@ -623,12 +644,56 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
           </select>
         </div>
 
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="nodemodules-gc-enabled">Prune idle node_modules</Label>
+            <p className="text-xs text-muted-foreground">
+              Delete dependency folders untouched for more than the configured days, in every workspace.
+              Source files are kept — dependencies reinstall on the next run.
+            </p>
+          </div>
+          <Switch
+            id="nodemodules-gc-enabled"
+            checked={nodeModulesGcEnabled}
+            onCheckedChange={async (checked) => {
+              setNodeModulesGcEnabled(checked)
+              await settingsApi.set('workspace_nodemodules_gc_enabled', checked ? 'true' : 'false')
+            }}
+            disabled={loading}
+          />
+        </div>
+
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="nodemodules-gc-days">Dependency inactivity period</Label>
+            <p className="text-xs text-muted-foreground">
+              Days without changes before a node_modules folder is pruned
+            </p>
+          </div>
+          <select
+            id="nodemodules-gc-days"
+            value={nodeModulesGcDays}
+            onChange={async (e) => {
+              setNodeModulesGcDays(e.target.value)
+              await settingsApi.set('workspace_nodemodules_gc_days', e.target.value)
+            }}
+            disabled={loading || !nodeModulesGcEnabled}
+            className="bg-transparent border rounded px-2 py-1 text-sm disabled:opacity-50"
+          >
+            <option value="1">1 day</option>
+            <option value="3">3 days</option>
+            <option value="7">7 days</option>
+            <option value="14">14 days</option>
+            <option value="30">30 days</option>
+          </select>
+        </div>
+
         <div className="py-2">
           <div className="flex items-center justify-between">
             <div className="space-y-0.5">
               <Label>Manual cleanup</Label>
               <p className="text-xs text-muted-foreground">
-                Run workspace cleanup now for all eligible completed tasks
+                Run workspace cleanup and idle dependency pruning now
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -648,8 +713,9 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                     // The progress listener handles the final state via the 'done' event,
                     // but also handle the IPC response as a fallback
                     if (!cleanupProgress) {
-                      if (result.cleaned > 0) {
-                        setCleanupResult(`Cleaned ${result.cleaned} workspace${result.cleaned !== 1 ? 's' : ''}`)
+                      const summary = describeCleanupOutcome(result.cleaned, result.nodeModulesCleaned)
+                      if (summary) {
+                        setCleanupResult(summary)
                       } else if (result.errors.length > 0 && result.errors[0] === 'Cleanup is already in progress') {
                         setCleanupResult('Cleanup already in progress')
                       } else {
