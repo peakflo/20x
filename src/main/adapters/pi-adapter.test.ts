@@ -17,7 +17,13 @@ vi.mock('../enterprise-ai-gateway', () => ({
   readEnterpriseAiGatewayConfig: vi.fn(() => null),
 }))
 
-import { PiAdapter, sanitizePiMcpServerName, sanitizePiSessionName, withProviderNameLimitHint } from './pi-adapter'
+import {
+  PiAdapter,
+  buildPiMcpConfigDocument,
+  sanitizePiMcpServerName,
+  sanitizePiSessionName,
+  withProviderNameLimitHint,
+} from './pi-adapter'
 import { MessagePartType } from './coding-agent-adapter'
 
 function fakeProcess() {
@@ -516,27 +522,53 @@ describe('PiAdapter', () => {
     expect(slug).not.toMatch(/-$/)
   })
 
-  it('shortens MCP server names so combined tool names fit the 64-char limit', () => {
-    // Reproduction of the reported failure: a long display name such as
-    // "[Workflo] Organisation Workspace" plus a long tool name overflows the
-    // provider limit ("name must be at most 64 characters, got 76").
-    const longTool = `mcp__[Workflo] Organisation Workspace__${'t'.repeat(40)}`
-    expect(longTool.length).toBeGreaterThan(64)
+  it('keeps long generated workflow tools behind a short MCP namespace proxy', () => {
+    // Real Workflo workflow tools can be 50 characters. A 24-character server
+    // slug plus separator plus this tool is the reported 76-character failure.
+    const workflowTool = 'wf_peakflo_travels_voice_agent_call_summary_peakfl'
+    expect(workflowTool).toHaveLength(50)
+    expect(`${'s'.repeat(24)}__${workflowTool}`).toHaveLength(76)
 
     const used = new Set<string>()
     // Canonical alias: "[Workflo] Organisation Workspace" → "workflo"
     expect(sanitizePiMcpServerName('[Workflo] Organisation Workspace', used)).toBe('workflo')
-    const shortened = `mcp__workflo__${'t'.repeat(25)}`
-    expect(shortened.length).toBeLessThanOrEqual(64)
     // Second use dedupes instead of colliding
     expect(sanitizePiMcpServerName('[Workflo] Organisation Workspace', used)).not.toBe('workflo')
     // Generic bracket rule: "[Workflo] My tasks" → "workflo-my-tasks"
     expect(sanitizePiMcpServerName('[Workflo] My tasks', new Set())).toBe('workflo-my-tasks')
+
+    const document = buildPiMcpConfigDocument({
+      '[Workflo] Organisation Workspace': {
+        type: 'http',
+        url: 'https://example.com/mcp',
+      },
+    }) as {
+      settings: { directTools: boolean }
+      mcpServers: Record<string, unknown>
+    }
+    expect(document.settings.directTools).toBe(false)
+    expect(Object.keys(document.mcpServers)).toEqual(['workflo'])
+    // With direct tools disabled, this is the only server-specific tool name
+    // registered with the provider; the 50-character suffix stays in MCP.
+    expect('mcp__workflo').toHaveLength(12)
+  })
+
+  it('prevents the parent environment from forcing direct MCP tools back on', () => {
+    const previous = process.env.MCP_DIRECT_TOOLS
+    process.env.MCP_DIRECT_TOOLS = '*'
+    try {
+      const adapter = new PiAdapter({ getSetting: vi.fn(() => null) } as any)
+      const env = (adapter as any).processEnv({ permissionMode: 'ask' }, null)
+      expect(env.MCP_DIRECT_TOOLS).toBeUndefined()
+    } finally {
+      if (previous === undefined) delete process.env.MCP_DIRECT_TOOLS
+      else process.env.MCP_DIRECT_TOOLS = previous
+    }
   })
 
   it('adds a retry hint to provider 64-char name errors', () => {
     const hinted = withProviderNameLimitHint('Error from provider (Console): name must be at most 64 characters, got 76')
-    expect(hinted).toContain('continue')
+    expect(hinted).toContain('Stop and start the agent')
     expect(withProviderNameLimitHint('Provider unavailable')).toBe('Provider unavailable')
   })
 })
