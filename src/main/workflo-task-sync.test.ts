@@ -224,8 +224,7 @@ it('stores an offline human completion with its original version until the serve
   expect(db.getSetting(`workflo-completion:${local.id}`)).toBeUndefined()
 })
 
-it('a local draft cannot become completed without server acceptance',()=>{
+it('a source-less local task completes without server acceptance',()=>{
   const draft=db.createTask(makeTask())!
-  expect(()=>db.updateTask(draft.id,{status:'completed'})).toThrow('Workflo must confirm')
-  expect(db.getTask(draft.id)?.status).toBe('not_started')
+  expect(db.updateTask(draft.id,{status:'completed'})?.status).toBe('completed')
 })

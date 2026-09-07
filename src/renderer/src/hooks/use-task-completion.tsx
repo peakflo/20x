@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useTaskStore } from '@/stores/task-store'
-import { PluginActionId } from '@/types'
+import { PluginActionId, TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 
 export interface UseTaskCompletionOptions {
@@ -11,20 +11,19 @@ export interface CompleteTaskRequestOptions {
   onCompleted?: (task: WorkfloTask) => void
 }
 
-/** Completion is confirmed by the server. Local dismissal is a view action.
- * All sources (Workflo, Notion, …) share this single confirmation path. */
+/** Sourced completion is confirmed externally; source-less 20x tasks stay local. */
 export function useTaskCompletion({ onToast }: UseTaskCompletionOptions = {}) {
   const executeAction = useTaskSourceStore(s => s.executeAction)
   const requestComplete = useCallback(async (taskId: string, options?: CompleteTaskRequestOptions) => {
-    let task = useTaskStore.getState().tasks.find(t => t.id === taskId)
+    const task = useTaskStore.getState().tasks.find(t => t.id === taskId)
     if (!task) return
     try {
       if (!task.source_id) {
-        const upload = await window.electronAPI.taskSources.upload(task.id)
-        if (upload.queued) throw new Error('Task creation is pending in Workflo. Completion has not been accepted.')
-        await useTaskStore.getState().fetchTasks()
-        task = useTaskStore.getState().tasks.find(t => t.id === taskId)
-        if (!task?.source_id) throw new Error('Send this task to Workflo before completing it.')
+        await useTaskStore.getState().updateTask(task.id, { status: TaskStatus.Completed })
+        const completedTask = { ...task, status: TaskStatus.Completed }
+        options?.onCompleted?.(completedTask)
+        onToast?.(`"${task.title}" completed`)
+        return
       }
       const action = task.output_fields.find(f => f.id === 'action')?.value
       const result = await executeAction(action ? String(action) : PluginActionId.Complete, task.id, task.source_id)

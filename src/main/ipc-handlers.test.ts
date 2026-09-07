@@ -71,13 +71,13 @@ describe('registerIpcHandlers', () => {
     expect(channels).toContain('voice:selectModel')
   })
 
-  it('returns a newly created local task without waiting for Workflo upload', async () => {
+  it('keeps a newly created source-less task local', async () => {
     const task = { id: 'task-1', title: 'Instant task', status: 'not_started', source_id: null }
     const db = {
       createTask: vi.fn(() => task),
       getTask: vi.fn(() => task)
     } as unknown as Parameters<typeof registerIpcHandlers>[0]
-    const uploadTask = vi.fn(() => new Promise<never>(() => {}))
+    const uploadTask = vi.fn()
     const syncManager = {
       canUploadTasks: vi.fn(() => true),
       uploadTask
@@ -97,7 +97,7 @@ describe('registerIpcHandlers', () => {
     const sender = { send: vi.fn() }
 
     await expect(createTask!({ sender }, task)).resolves.toBe(task)
-    expect(uploadTask).toHaveBeenCalledWith(task.id)
+    expect(uploadTask).not.toHaveBeenCalled()
     expect(sender.send).toHaveBeenCalledWith('task:created', { task })
   })
 
