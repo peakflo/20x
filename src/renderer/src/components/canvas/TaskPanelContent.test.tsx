@@ -2,6 +2,7 @@ import { taskCompletionCommand } from '../../../../shared/task-write-contract'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { TaskPanelContent } from './TaskPanelContent'
+import { TaskStatus } from '@/types'
 
 const {
   updatePanelMock,
@@ -102,6 +103,7 @@ vi.mock('@/stores/task-store', () => {
   useTaskStore.getState = () => ({
     tasks: taskList,
     selectTask: selectTaskMock,
+    updateTask: updateTaskMock,
     fetchTasks: async () => undefined,
   })
 
@@ -185,11 +187,23 @@ describe('TaskPanelContent', () => {
     expect(addEdgeMock).not.toHaveBeenCalled()
   })
 
-  it.each([null, 'src-1'])('issues server completion for source %s without writing local completion', async (sourceId) => {
-    taskList[0].source_id = sourceId
-    const apiRequest = vi.fn()
-    const upload = vi.fn(async () => { taskList[0].source_id = 'src-1'; return { queued: false } })
+  it('completes a source-less canvas task locally without uploading it', async () => {
+    const upload = vi.fn()
     window.electronAPI.taskSources.upload = upload
+    render(<TaskPanelContent panelId="panel-1" taskId="task-1" panelLayout="both" />)
+    fireEvent.click(screen.getByText('Complete task'))
+
+    await waitFor(() => expect(updateTaskMock).toHaveBeenCalledExactlyOnceWith('task-1', {
+      status: TaskStatus.Completed,
+    }))
+    expect(upload).not.toHaveBeenCalled()
+    expect(executeActionMock).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('issues server completion for a sourced canvas task without writing local completion', async () => {
+    taskList[0].source_id = 'src-1'
+    const apiRequest = vi.fn()
     // Bridge the renderer command to the real API encoder. Credentials stay in main.
     executeActionMock.mockImplementation(async () => {
       const command = taskCompletionCommand('remote-1', { action: 'complete' }, 7)
@@ -205,7 +219,5 @@ describe('TaskPanelContent', () => {
     expect(updateTaskMock).not.toHaveBeenCalled()
     // A single shared confirmation exists for every source — no source dialog.
     expect(screen.queryByRole('dialog')).toBeNull()
-    if (sourceId === null) expect(upload).toHaveBeenCalledExactlyOnceWith('task-1')
-    else expect(upload).not.toHaveBeenCalled()
   })
 })

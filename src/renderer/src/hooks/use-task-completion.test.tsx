@@ -95,11 +95,13 @@ describe('server completion', () => {
     expect(updateTaskMock).not.toHaveBeenCalled()
     expect(screen.queryByRole('dialog')).toBeNull()
   })
-  it('requires a server task before completion',async()=>{
-    window.electronAPI.taskSources.upload = vi.fn().mockResolvedValue({queued:true})
+  it('completes a source-less 20x task locally without uploading it',async()=>{
+    const upload = vi.fn()
+    window.electronAPI.taskSources.upload = upload
     storeState.tasks=[makeTask()];render(<Harness />);fireEvent.click(screen.getByText('Complete'))
-    await waitFor(()=>expect(onToast).toHaveBeenCalledWith(expect.stringContaining('Task creation is pending'),true))
-    expect(updateTaskMock).not.toHaveBeenCalled();expect(executeActionMock).not.toHaveBeenCalled();expect(onCompleted).not.toHaveBeenCalled()
+    await waitFor(()=>expect(onCompleted).toHaveBeenCalled())
+    expect(updateTaskMock).toHaveBeenCalledWith('task-1',{status:TaskStatus.Completed})
+    expect(upload).not.toHaveBeenCalled();expect(executeActionMock).not.toHaveBeenCalled()
   })
   it('keeps a refused completion open',async()=>{
     executeActionMock.mockResolvedValue({success:false,error:'Review required'})

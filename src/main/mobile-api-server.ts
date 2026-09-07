@@ -719,26 +719,30 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     if (params.status === TaskStatus.Completed) throw Object.assign(new Error('Workflo must confirm completion.'), { status: 409 })
     const { title } = params as { title?: string }
     if (!title) throw Object.assign(new Error('title is required'), { status: 400 })
-    let task = db.createTask(params as unknown as Parameters<DatabaseManager['createTask']>[0])
+    const task = db.createTask(params as unknown as Parameters<DatabaseManager['createTask']>[0])
     if (!task) throw Object.assign(new Error('Failed to create task'), { status: 500 })
-    if (!task.source_id && syncManagerRef?.canUploadTasks()) {
-      try { await syncManagerRef.uploadTask(task.id) }
-      catch (error) { db.setSetting(`workflo-upload:${task.id}:error`, error instanceof Error ? error.message : String(error)) }
-      task = db.getTask(task.id)!
-    }
     broadcastToMobileClients('task:created', { task })
     if (notifyDesktop) notifyDesktop('task:created', { task })
     if (task.auto_start_agent) triggerTaskAutomation()
     return task
   }
 
-  // Human mobile completion uses the same durable server command as desktop.
+  // Source-less tasks are local 20x records. Only sourced tasks delegate
+  // completion to their external authority.
   const taskCompleteMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/complete$/)
   if (taskCompleteMatch) {
     const taskId = taskCompleteMatch[1]
     const task = db.getTask(taskId)
     if (!task) throw Object.assign(new Error('Task not found'), { status: 404 })
-    if (!syncManagerRef || !task.source_id || db.getTaskSource(task.source_id)?.plugin_id !== 'peakflo') {
+    if (!task.source_id) {
+      const fresh = db.updateTask(taskId, { status: TaskStatus.Completed })
+      if (fresh) {
+        broadcastToMobileClients('task:updated', { taskId, updates: fresh })
+        if (notifyDesktop) notifyDesktop('task:updated', { taskId, updates: fresh })
+      }
+      return { completed: true, status: fresh?.status }
+    }
+    if (!syncManagerRef || db.getTaskSource(task.source_id)?.plugin_id !== 'peakflo') {
       throw Object.assign(new Error('Sync this task with Workflo before completing it.'), { status: 409 })
     }
     const result = await syncManagerRef.executeAction('complete', task, undefined, task.source_id)

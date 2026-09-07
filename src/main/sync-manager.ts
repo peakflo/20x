@@ -18,6 +18,11 @@ export interface SyncResult {
   errors: string[]
 }
 
+function isUnsupportedTaskCreateRoute(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /^Route POST:\/api\/tasks\/? not found$/i.test(message.trim())
+}
+
 export class SyncManager {
   private workfloApiClient?: WorkfloApiClient
   private enterpriseSyncManager?: EnterpriseSyncManager
@@ -230,6 +235,16 @@ export class SyncManager {
           this.db.deleteSetting(key)
           this.db.deleteSetting(`${key}:error`)
         } catch (error) {
+          // Production can temporarily lag behind the desktop task-write
+          // contract. A missing create route is a capability mismatch, not a
+          // sync failure the user can act on. Keep the task local and remove
+          // the durable command so it does not show a permanent error banner.
+          if (isUnsupportedTaskCreateRoute(error)) {
+            this.db.deleteSetting(key)
+            this.db.deleteSetting(`${key}:error`)
+            console.warn('[sync] Workflo task creation is unavailable; keeping task local.')
+            continue
+          }
           // Retain the exact command and request ID after network failures.
           this.db.setSetting(`${key}:error`, error instanceof Error ? error.message : String(error))
         }

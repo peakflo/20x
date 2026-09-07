@@ -2379,7 +2379,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     }
     if (data.status === TaskStatus.Completed && origin !== 'workflo-server') {
       const task = this.getTask(id)
-      if (task && task.status !== TaskStatus.Completed) {
+      if (task?.source_id && task.status !== TaskStatus.Completed) {
         throw new Error('Workflo must confirm completion before this task can close in 20x.')
       }
     }
