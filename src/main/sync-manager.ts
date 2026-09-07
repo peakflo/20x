@@ -9,6 +9,7 @@ import type { PluginContext, PluginSyncResult, ActionResult } from './plugins/ty
 import type { WorkfloApiClient } from './workflo-api-client'
 import type { EnterpriseSyncManager } from './enterprise-sync'
 import type { SourceUser, ReassignResult } from '../shared/types'
+import { TaskStatus } from '../shared/constants'
 
 export interface SyncResult {
   source_id: string
@@ -157,7 +158,10 @@ export class SyncManager {
     // ready_for_review tasks may legitimately retain their session_id. The
     // status transition is the execution boundary; only an untouched task
     // with a persisted session can still represent active/resumable work.
-    if ((task.status === 'not_started' && task.session_id) || !['not_started', 'ready_for_review'].includes(task.status)) {
+    if (
+      (task.status === TaskStatus.NotStarted && task.session_id)
+      || (task.status !== TaskStatus.NotStarted && task.status !== TaskStatus.ReadyForReview)
+    ) {
       throw new Error('Stop the local session before sending this task to Workflo.')
     }
     const scope = this.taskUploadScope()
