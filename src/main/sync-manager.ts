@@ -9,6 +9,7 @@ import type { PluginContext, PluginSyncResult, ActionResult } from './plugins/ty
 import type { WorkfloApiClient } from './workflo-api-client'
 import type { EnterpriseSyncManager } from './enterprise-sync'
 import type { SourceUser, ReassignResult } from '../shared/types'
+import { TaskStatus } from '../shared/constants'
 
 export interface SyncResult {
   source_id: string
@@ -153,7 +154,14 @@ export class SyncManager {
   async uploadTask(taskId: string, autonomous = false): Promise<{ queued: boolean }> {
     const task = this.db.getTask(taskId)
     if (!task || task.source_id || task.external_id) throw new Error('Only a local task can be sent to Workflo.')
-    if (task.session_id || !['not_started', 'ready_for_review'].includes(task.status)) {
+    // A finished local agent run remains resumable for review, so
+    // ready_for_review tasks may legitimately retain their session_id. The
+    // status transition is the execution boundary; only an untouched task
+    // with a persisted session can still represent active/resumable work.
+    if (
+      (task.status === TaskStatus.NotStarted && task.session_id)
+      || (task.status !== TaskStatus.NotStarted && task.status !== TaskStatus.ReadyForReview)
+    ) {
       throw new Error('Stop the local session before sending this task to Workflo.')
     }
     const scope = this.taskUploadScope()

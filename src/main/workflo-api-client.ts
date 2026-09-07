@@ -221,7 +221,11 @@ export class WorkfloApiClient {
 
 
   async createTask(data: { clientRequestId: string; title: string; description: string; agentId?: string; skillIds?: string[]; assignees?: Array<{ assigneeType: string; assigneeValue: string }>; cron?: string; timezone?: string; autoCompleteWithoutReview?: boolean }): Promise<WorkfloTask> {
-    const result = await this.auth.apiRequest('POST', '/api/tasks', data, TASK_WRITE_HEADERS) as { task: WorkfloTask }
+    // The Workflo task command is registered as `POST /` under the
+    // `/api/tasks` Fastify prefix. Workflo uses strict trailing-slash routing,
+    // so `/api/tasks` is only the collection read endpoint while the create
+    // command lives at `/api/tasks/`.
+    const result = await this.auth.apiRequest('POST', '/api/tasks/', data, TASK_WRITE_HEADERS) as { task: WorkfloTask }
     return result.task
   }
 
