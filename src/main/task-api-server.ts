@@ -1,3 +1,4 @@
+import type { ResponsibilityManager } from './responsibility-manager'
 /**
  * Lightweight HTTP API server for task-management tools.
  * Runs inside the Electron main process so it can use better-sqlite3.
@@ -55,6 +56,8 @@ type TaskApiAgentController = Pick<
 >
 
 let agentController: TaskApiAgentController | null = null
+let responsibilityManager: ResponsibilityManager | undefined
+export function setResponsibilityManager(manager: ResponsibilityManager): void { responsibilityManager = manager }
 
 /**
  * What the renderer is showing. It is pushed on change and cached here, so a
@@ -180,7 +183,7 @@ export function startTaskApiServer(db: DatabaseManager): Promise<number> {
           // It replaces the per-session task-management-mcp.js child process.
           if (route === TASK_MCP_PATH) {
             await handleTaskMcpRequest(req, res, url, body, (mcpRoute, params) =>
-              handleRoute(db, mcpRoute, params)
+              handleRoute(db, mcpRoute, params), responsibilityManager
             )
             return
           }
@@ -248,6 +251,7 @@ export function stopTaskApiServer(): void {
 
 /** Exported so the routes can be tested without starting an HTTP server. */
 export async function handleRoute(db: DatabaseManager, route: string, params: Record<string, unknown>): Promise<unknown> {
+  responsibilityManager?.guardLegacyRoute(route, params)
   const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db // Access the underlying better-sqlite3 instance
 
   switch (route) {

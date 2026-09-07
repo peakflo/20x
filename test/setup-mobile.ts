@@ -1,4 +1,9 @@
-import { vi } from 'vitest'
+import { afterEach, vi } from 'vitest'
+import { act, cleanup } from '@testing-library/react'
+
+// Vitest globals are disabled, so Testing Library cannot register its automatic
+// cleanup. Drain component effects before happy-dom removes window on teardown.
+afterEach(async () => { await act(async () => { cleanup() }) })
 
 // Suppress React act() warnings in happy-dom
 ;(globalThis as unknown as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true

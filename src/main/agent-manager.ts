@@ -1,3 +1,5 @@
+import type { ResponsibilityManager } from './responsibility-manager'
+import { isMastermindTask } from '../shared/responsibilities'
 import { serverTaskSnapshot } from './workflo-task-sync'
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
@@ -250,6 +252,9 @@ export class AgentManager extends EventEmitter {
   private oauthManager: import('./oauth/oauth-manager').OAuthManager | null = null
   private enterpriseAuth: import('./enterprise-auth').EnterpriseAuth | null = null
   private externalListeners: Array<(channel: string, data: unknown) => void> = []
+  private responsibilities?: ResponsibilityManager
+  setResponsibilityManager(manager: ResponsibilityManager): void { this.responsibilities = manager }
+
   private enterpriseStateSync: import('./enterprise-state-sync').EnterpriseStateSync | null = null
 
   // ── Centralized Polling Coordinator ──
@@ -590,7 +595,7 @@ export class AgentManager extends EventEmitter {
    * Skips for mastermind sessions or tasks without repos.
    */
   private async setupWorktreeIfNeeded(taskId: string): Promise<string | undefined> {
-    if (taskId === 'mastermind-session' || taskId.startsWith('heartbeat-')) return undefined
+    if (isMastermindTask(taskId) || taskId.startsWith('heartbeat-')) return undefined
 
     if (!this.worktreeManager) return undefined
 
@@ -740,6 +745,19 @@ export class AgentManager extends EventEmitter {
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
+  /** Resolve routine connections through the same OAuth/enterprise authentication as agent sessions. */
+  async resolveRoutineMcpConnection(agentId: string, serverId: string): Promise<McpServerConfig> {
+    const entries = this.db.getAgent(agentId)?.config.mcp_servers ?? []
+    const servers = entries.map(e => this.db.getMcpServer(typeof e === 'string' ? e : e.serverId)).filter(s => !!s)
+    const server = servers.find(s => s.id === serverId)
+    if (!server || server.name === 'task-management') throw new Error('The selected agent cannot use this source connection.')
+    if (servers.filter(s => s.name === server.name).length !== 1) throw new Error('Two assigned MCP connections have the same name. Give them distinct names in MCP settings.')
+    if ('resource_url' in server.oauth_metadata && !await this.oauthManager?.getValidMcpServerToken(serverId)) throw new Error('Sign in to this source connection in MCP settings before monitoring it.')
+    const config = (await this.buildMcpServersForAdapter(agentId))[server.name]
+    if (!config) throw new Error('The source connection could not be resolved.')
+    return config
+  }
+
   private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
@@ -855,7 +873,7 @@ export class AgentManager extends EventEmitter {
       throw new Error(`Agent not found: ${agentId}`)
     }
 
-    const isMastermind = taskId === 'mastermind-session'
+    const isMastermind = isMastermindTask(taskId)
     const task = this.db.getTask(taskId)
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
@@ -917,11 +935,13 @@ export class AgentManager extends EventEmitter {
       }
     }
 
+    this.responsibilities?.configureSession(config, getTaskApiPort())
     return config
   }
 
   private shouldEnableTillDone(taskId: string, task?: TaskRecord | null): boolean {
-    if (taskId === 'mastermind-session') return false
+    if (this.responsibilities?.ownsTask(taskId)) return false
+    if (isMastermindTask(taskId)) return false
     if (taskId.startsWith('heartbeat-')) return false
     if (this.isTriageSessionTask(taskId, task)) return false
     if (task?.status === TaskStatus.AgentLearning) return false
@@ -930,7 +950,7 @@ export class AgentManager extends EventEmitter {
 
   private isTriageSessionTask(taskId: string, task?: TaskRecord | null): boolean {
     if (!task) return false
-    if (taskId === 'mastermind-session') return false
+    if (isMastermindTask(taskId)) return false
     if (taskId.startsWith('heartbeat-')) return false
     return task.status === TaskStatus.Triaging ||
       (Object.prototype.hasOwnProperty.call(task, 'agent_id') && !task.agent_id)
@@ -1575,6 +1595,8 @@ export class AgentManager extends EventEmitter {
 
     const agent = this.db.getAgent(agentId)!
 
+    this.responsibilities?.assertLaunch(taskId, workspaceDir || this.db.getWorkspaceDir(taskId))
+
     // Always use a dedicated workspace directory
     if (!workspaceDir) {
       workspaceDir = this.db.getWorkspaceDir(taskId)
@@ -1591,7 +1613,7 @@ export class AgentManager extends EventEmitter {
     // Real task sessions always get task-management access so they can triage,
     // orchestrate subtasks, and inspect live task state without depending on
     // per-agent MCP configuration.
-    const isMastermind = taskId === 'mastermind-session'
+    const isMastermind = isMastermindTask(taskId)
     const ensureTaskManagement = isMastermind || isTriageSession || isSubtask || !!task
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined })
 
@@ -1619,7 +1641,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Setup secret broker session if agent has secrets
-    const secretToken = this.setupSecretSession(agentId)
+    const secretToken = this.responsibilities?.ownsTask(taskId) ? undefined : this.setupSecretSession(agentId)
     if (secretToken) {
       const brokerPort = getSecretBrokerPort()
       if (brokerPort) {
@@ -1661,6 +1683,10 @@ export class AgentManager extends EventEmitter {
         console.warn('[AgentManager] AI gateway key refresh failed (will use cached key):', err)
       }
     }
+
+    this.responsibilities?.configureSession(sessionConfig, getTaskApiPort())
+    this.responsibilities?.assertLaunch(taskId, sessionConfig.workspaceDir)
+    workspaceDir = sessionConfig.workspaceDir
 
     // Initialize adapter
     console.log(`[AgentManager] startAdapterSession: agent=${agent.name}, coding_agent=${agent.config?.coding_agent || 'opencode'}, model=${agent.config?.model}, adapter=${adapter.constructor.name}`)
@@ -1742,7 +1768,7 @@ export class AgentManager extends EventEmitter {
     })
 
     // Record enterprise sync event: agent run started
-    if (this.enterpriseStateSync && task && !isTriageSession && taskId !== 'mastermind-session' && !taskId.startsWith('heartbeat-')) {
+    if (this.enterpriseStateSync && task && !isTriageSession && !isMastermindTask(taskId) && !taskId.startsWith('heartbeat-')) {
       this.enterpriseStateSync.recordAgentRunStarted(task, agent.name)
     }
 
@@ -2529,7 +2555,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
           // Record enterprise sync event: agent run failed
           const task = this.db.getTask(config.taskId)
-          if (this.enterpriseStateSync && task && !session.isTriageSession && session.taskId !== 'mastermind-session' && !session.taskId.startsWith('heartbeat-')) {
+          if (this.enterpriseStateSync && task && !session.isTriageSession && !isMastermindTask(session.taskId) && !session.taskId.startsWith('heartbeat-')) {
             const durationMinutes = (Date.now() - session.createdAt.getTime()) / (1000 * 60)
             const agent = this.db.getAgent(session.agentId)
             this.enterpriseStateSync.recordAgentRunCompleted(task, {
@@ -2864,6 +2890,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     adapterSessionId: string
   ): Promise<string> {
     this.assertLocalHelpAllowed(taskId)
+    this.responsibilities?.assertHumanAccess(taskId)
     // Helper: yield event loop between bursts of sync DB/FS calls
     const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
 
@@ -2885,7 +2912,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
 
     // Build MCP servers config
-    const isMastermind = taskId === 'mastermind-session'
+    const isMastermind = isMastermindTask(taskId)
     const task = this.db.getTask(taskId)
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
@@ -2917,7 +2944,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
 
     // Setup secret broker session if agent has secrets
-    const secretToken = this.setupSecretSession(agentId)
+    const secretToken = this.responsibilities?.ownsTask(taskId) ? undefined : this.setupSecretSession(agentId)
     if (secretToken) {
       const brokerPort = getSecretBrokerPort()
       if (brokerPort) {
@@ -2951,6 +2978,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     let messages: SessionMessage[]
     try {
       console.log('[AgentManager] Calling adapter.resumeSession...')
+      this.responsibilities?.configureSession(sessionConfig, getTaskApiPort())
+      workspaceDir = sessionConfig.workspaceDir
       messages = await adapter.resumeSession(adapterSessionId, sessionConfig)
       console.log('[AgentManager] adapter.resumeSession completed successfully')
     } catch (error: unknown) {
@@ -3932,7 +3961,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       await yieldEventLoop()
 
       // Auto-enable heartbeat if agent wrote a heartbeat.md file
-      this.autoEnableHeartbeat(session.taskId)
+      if (!this.responsibilities?.ownsTask(session.taskId)) this.autoEnableHeartbeat(session.taskId)
       await yieldEventLoop()
 
       // Get updated task with output fields and notify renderer
@@ -3965,7 +3994,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     })
 
     // Record enterprise sync event: agent run completed
-    if (this.enterpriseStateSync && task && !session.isTriageSession && session.taskId !== 'mastermind-session' && !session.taskId.startsWith('heartbeat-')) {
+    if (this.enterpriseStateSync && task && !session.isTriageSession && !isMastermindTask(session.taskId) && !session.taskId.startsWith('heartbeat-')) {
       const durationMinutes = (Date.now() - session.createdAt.getTime()) / (1000 * 60)
       const agent = this.db.getAgent(session.agentId)
       this.enterpriseStateSync.recordAgentRunCompleted(task, {
@@ -4075,6 +4104,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         await adapter.destroySession(sessionId, sessionConfig)
       } catch (error) {
         console.error(`[AgentManager] Error destroying adapter session:`, error)
+        if (this.responsibilities?.ownsTask(session.taskId)) throw error
       }
     }
 
@@ -4176,6 +4206,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         session = this.sessions.get(sessionId)
       }
     }
+
+    this.responsibilities?.assertHumanAccess(session?.taskId ?? taskId ?? '')
 
     // Session was destroyed — try to RESUME first (preserves conversation history),
     // then fallback to creating a new session
@@ -4298,7 +4330,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     // Record enterprise sync event: agent run started (follow-up message)
     // Each working→idle cycle is a separate agent run. Without this,
     // follow-up messages produce agent_run_completed without a matching started.
-    if (this.enterpriseStateSync && currentTask && !session.isTriageSession && session.taskId !== 'mastermind-session' && !session.taskId.startsWith('heartbeat-')) {
+    if (this.enterpriseStateSync && currentTask && !session.isTriageSession && !isMastermindTask(session.taskId) && !session.taskId.startsWith('heartbeat-')) {
       const agent = this.db.getAgent(session.agentId)
       this.enterpriseStateSync.recordAgentRunStarted(currentTask, agent?.name)
     }
@@ -4354,7 +4386,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     optionId?: string,
     responseType?: 'permission' | 'question',
     requestId?: string
-  ): Promise<void> {
+  ): Promise<boolean | void> {
     let session = this.sessions.get(sessionId)
 
     // Fallback: session ID may have been re-keyed (temp → real) by pollSingleSession.
@@ -4433,7 +4465,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             },
           })
         }
-        return
+        return false
       }
 
       // Update session and task state after the adapter accepts the response.
@@ -4512,7 +4544,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
             update: true
           }
         })
-        return
+        return false
       }
 
       // If no pending permission was found (stale prompt after watchdog abort
@@ -5536,6 +5568,7 @@ Important:
   }
 
   private sendToRenderer(channel: string, data: unknown): void {
+    this.responsibilities?.observe(channel, data)
     if (channel === 'task:updated' && data && typeof data === 'object') {
       const event = data as { taskId?: string; updates?: Record<string, unknown> }
       if (event.taskId && event.updates && serverTaskSnapshot(this.db, event.taskId)) {

@@ -15,6 +15,7 @@ vi.mock('fs', () => ({ existsSync: vi.fn(() => false) }))
 
 import { ClaudeCodeAdapter, ClaudeSystemSubtype } from './claude-code-adapter'
 import { MessagePartType } from './coding-agent-adapter'
+import { query } from '@anthropic-ai/claude-agent-sdk'
 
 /**
  * Helper: creates an adapter with a pre-populated session so we can test
@@ -893,6 +894,27 @@ describe('ClaudeCodeAdapter loadSessionHistory stable IDs (regression)', () => {
 })
 
 describe('ClaudeCodeAdapter persistent session input', () => {
+  it('keeps collector native tools disabled while retaining the scoped MCP endpoint', async () => {
+    const sdkQuery = vi.mocked(query)
+    sdkQuery.mockClear()
+    sdkQuery.mockReturnValueOnce((async function* () { yield { type: 'result', is_error: false, result: 'Collected' } })() as any)
+    const { adapter, session } = createAdapterWithSession('collector', [])
+    vi.spyOn(adapter as any, 'findClaudeExecutable').mockResolvedValue('/test/claude')
+    await adapter.initialize()
+    const mcpServers = { responsibilities: { type: 'http', url: 'http://localhost:1234/mcp?responsibility=collector' } }
+    await adapter.sendPrompt('collector', [{ type: MessagePartType.TEXT, text: 'Interpret the supplied evidence.' }], { taskId: 'collection-task', agentId: 'agent', workspaceDir: '/tmp', responsibilityRole: 'collector', mcpServers } as any)
+    expect(sdkQuery).toHaveBeenCalledOnce()
+    const options = sdkQuery.mock.calls[0][0].options!
+    expect({ tools: options.tools, mcpServers: options.mcpServers, permissionMode: options.permissionMode, allowDangerouslySkipPermissions: options.allowDangerouslySkipPermissions })
+      .toEqual({ tools: [], mcpServers, permissionMode: 'default', allowDangerouslySkipPermissions: false })
+    await session.streamTask
+  })
+
+  it('rejects legacy transcript answers for a responsibility SDK callback', async () => {
+    const { adapter } = createAdapterWithSession('s1', [])
+    await expect(adapter.respondToQuestion('s1', { answer: 'Yes' }, { authorizeTool: async () => true } as any)).rejects.toThrow('Mastermind → Decisions')
+  })
+
   it('queues a follow-up on the live query instead of closing the session', async () => {
     const { adapter, session } = createAdapterWithSession('s1', [])
     await adapter.initialize()

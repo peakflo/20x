@@ -761,8 +761,17 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       effort,
       systemPrompt: config.systemPrompt,
       abortController,
-      permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)
-      allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
+      permissionMode: config.responsibilityRole ? 'default' : 'bypassPermissions',
+      allowDangerouslySkipPermissions: !config.responsibilityRole,
+      ...((config.responsibilityRole === 'root' || config.responsibilityRole === 'collector') ? { tools: [] } : {}),
+      ...(config.authorizeTool ? {
+        canUseTool: async (name, input, request) => {
+          const result = await config.authorizeTool!(name, input, request.requestId, request.signal)
+          return result === false
+            ? { behavior: 'deny' as const, message: 'This operation is outside the current agreement or was declined by the engineer.' }
+            : { behavior: 'allow' as const, updatedInput: result === true ? input : result }
+        }
+      } : {}),
       ...(secretHooks ? { hooks: secretHooks } : {}),
     }
 
@@ -1087,6 +1096,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     answers: Record<string, string>,
     config: SessionConfig
   ): Promise<void> {
+    if (config.authorizeTool) throw new Error('Answer this request in Mastermind → Decisions to resolve its live callback.')
     // Claude Code runs with bypassPermissions, so AskUserQuestion ends the
     // session turn (it appears in permission_denials in the result message).
     // Send the user's answer as a follow-up prompt to continue the conversation.

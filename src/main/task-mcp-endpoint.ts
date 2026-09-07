@@ -24,6 +24,8 @@
  * URL, and nothing accumulates between calls.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { ResponsibilityManager } from './responsibility-manager'
+import { responsibilityTools, callResponsibilityTool } from './responsibility-tools'
 import { Server, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server'
 import {
   callToolForScope,
@@ -132,7 +134,8 @@ export async function handleTaskMcpRequest(
   res: ServerResponse,
   url: URL,
   body: string,
-  invoke: TaskApiInvoke
+  invoke: TaskApiInvoke,
+  responsibilities?: ResponsibilityManager
 ): Promise<void> {
   const scope = parseScopeFromUrl(url)
   const transport = new WebStandardStreamableHTTPServerTransport({
@@ -142,7 +145,18 @@ export async function handleTaskMcpRequest(
     // request/response only, and no tool sends server-initiated notifications.
     enableJsonResponse: true
   })
-  const server = createScopedServer(scope, invoke)
+  const token = url.searchParams.get('responsibility')
+  let server: Server
+  if (token) {
+    if (!responsibilities) throw new Error('Responsibility service is unavailable.')
+    responsibilities.scopeForToken(token)
+    server = new Server({ name: 'responsibilities', version: '1.0.0' }, { capabilities: { tools: {} } })
+    server.setRequestHandler('tools/list', async () => ({ tools: responsibilityTools(responsibilities.scopeForToken(token)) }))
+    server.setRequestHandler('tools/call', async request => {
+      const { name, arguments: args } = request.params as { name: string; arguments?: Record<string, unknown> }
+      return callResponsibilityTool(responsibilities, token, name, args)
+    })
+  } else server = createScopedServer(scope, invoke)
 
   try {
     await server.connect(transport)
