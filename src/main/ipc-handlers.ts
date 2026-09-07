@@ -106,7 +106,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle('db:createTask', async (event, data: CreateTaskData) => {
     if (data.status === TaskStatus.Completed) throw new Error('Workflo must confirm completion.')
-    let task = db.createTask(data)
+    const task = db.createTask(data)
     // Initialize recurring task if it has a recurrence pattern
     if (task && !task.server_managed && task.is_recurring && recurrenceScheduler) {
       recurrenceScheduler.initializeRecurringTask(task.id)
