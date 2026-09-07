@@ -35,6 +35,85 @@ const MAX_BUFFERED_PARTS = 1_000
 const MINIMUM_PI_VERSION = [0, 80, 5] as const
 const PI_PERMISSION_MODE_ENV = 'TWENTYX_PI_PERMISSION_MODE'
 const TERMINAL_ERROR_SETTLE_GRACE_MS = 1_000
+/**
+ * Most model providers cap function/tool `name` at 64 characters. Pi forwards
+ * MCP tools as `<server>_<tool>`-style names, so a long MCP server name (e.g.
+ * "[Workflo] Organisation Workspace") plus a long tool name overflows the
+ * limit and the whole turn fails with "name must be at most 64 characters".
+ * Keep server slugs short to leave room for the tool suffix.
+ */
+export const MAX_PI_NAME_LENGTH = 64
+export const MAX_PI_MCP_SERVER_SLUG_LENGTH = 24
+
+/**
+ * Short Pi-side aliases for MCP servers whose display names are too long to
+ * fit the provider 64-char tool-name limit. The alias is only used in the
+ * Pi `--mcp-config` file — display names in settings, docs, and other
+ * backends are untouched.
+ */
+export const PI_MCP_SERVER_ALIASES: Record<string, string> = {
+  '[Workflo] Organisation Workspace': 'workflo',
+  '[Workflo] MCP Dev Server': 'workflo-dev',
+}
+
+function slugifyPiName(value: string, maxLength: number): string {
+  return (value
+    .toLowerCase()
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+    .slice(0, maxLength)
+    .replace(/-+$/g, '') || 'mcp')
+}
+
+/**
+ * Generic rule for bracket-prefixed servers ("[Workflo] My tasks" →
+ * "workflo-my-tasks"). Returns null when the name has no bracket prefix so
+ * the caller falls back to plain slugification.
+ */
+function slugifyBracketPrefix(name: string): string | null {
+  const match = /^\[([^\]]+)\]\s*(.*)$/.exec(name)
+  if (!match) return null
+  const combined = `${match[1]}-${match[2]}`.trim()
+  if (!combined.replace(/-/g, '')) return null
+  return slugifyPiName(combined, MAX_PI_MCP_SERVER_SLUG_LENGTH)
+}
+
+export function sanitizePiSessionName(taskId: string): string {
+  const slug = taskId
+    .replace(/[^a-zA-Z0-9-_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+    .slice(0, MAX_PI_NAME_LENGTH)
+    .replace(/-+$/g, '')
+  return slug || 'pi-session'
+}
+
+export function sanitizePiMcpServerName(name: string, used: Set<string>): string {
+  // Exact aliases first (e.g. "[Workflo] Organisation Workspace" → "workflo").
+  const alias = PI_MCP_SERVER_ALIASES[name]
+  const base = alias ?? slugifyBracketPrefix(name) ?? slugifyPiName(name, MAX_PI_MCP_SERVER_SLUG_LENGTH)
+  if (!used.has(base)) {
+    used.add(base)
+    return base
+  }
+  for (let index = 2; index < 1000; index++) {
+    const suffix = `-${index}`
+    const candidate = `${base.slice(0, MAX_PI_MCP_SERVER_SLUG_LENGTH - suffix.length)}${suffix}`
+    if (!used.has(candidate)) {
+      used.add(candidate)
+      return candidate
+    }
+  }
+  const fallback = `mcp-${used.size + 1}`
+  used.add(fallback)
+  return fallback
+}
+
+export function withProviderNameLimitHint(error: string): string {
+  if (!/name must be at most 64/i.test(error)) return error
+  return `${error}\n\nHint: a tool name exceeded the provider 64-character limit. 20x now shortens MCP server names automatically — retry with "continue". If it persists, rename the long MCP server in settings.`
+}
 
 const PI_PERMISSION_EXTENSION_SOURCE = `\
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -219,16 +298,24 @@ export class PiAdapter implements CodingAgentAdapter {
     if (!config.mcpServers || Object.keys(config.mcpServers).length === 0) return undefined
     const dir = join(homedir(), '.20x', 'pi-mcp')
     mkdirSync(dir, { recursive: true })
-    const path = join(dir, `${config.taskId}-${randomUUID()}.json`)
+    const path = join(dir, `${sanitizePiSessionName(config.taskId)}-${randomUUID()}.json`)
+    // Pi forwards MCP tools to the model as <server>_<tool> names, which most
+    // providers cap at 64 characters. Sanitize server keys so a long display
+    // name (e.g. "[Workflo] Organisation Workspace") cannot overflow the limit.
+    const usedSlugs = new Set<string>()
     const mcpServers = Object.fromEntries(Object.entries(config.mcpServers).map(([name, server]) => {
+      const slug = sanitizePiMcpServerName(name, usedSlugs)
+      if (slug !== name) {
+        console.warn(`[PiAdapter] Renamed MCP server "${name}" to "${slug}" to fit the provider 64-char tool name limit`)
+      }
       if (server.type === 'stdio') {
-        return [name, {
+        return [slug, {
           command: server.command,
           args: server.args ?? [],
           env: server.env ?? {},
         }]
       }
-      return [name, {
+      return [slug, {
         url: server.url,
         headers: server.headers ?? {},
       }]
@@ -352,7 +439,7 @@ export class PiAdapter implements CodingAgentAdapter {
     const mcpConfigPath = this.buildMcpConfig(config)
     const permissionExtension = this.installPermissionExtension()
 
-    const args = ['--mode', 'rpc', '--approve', '--name', config.taskId, '--extension', permissionExtension]
+    const args = ['--mode', 'rpc', '--approve', '--name', sanitizePiSessionName(config.taskId), '--extension', permissionExtension]
     if (config.systemPrompt?.trim()) {
       args.push('--append-system-prompt', config.systemPrompt.trim())
     }
@@ -814,7 +901,7 @@ export class PiAdapter implements CodingAgentAdapter {
 
   private settlePendingTurnError(session: PiSession): void {
     if (!session.pendingTurnError) return
-    const error = session.pendingTurnError
+    const error = withProviderNameLimitHint(session.pendingTurnError)
     session.pendingTurnError = null
     session.pendingTurnErrorMonotonicTime = null
     session.lastError = error

@@ -17,7 +17,7 @@ vi.mock('../enterprise-ai-gateway', () => ({
   readEnterpriseAiGatewayConfig: vi.fn(() => null),
 }))
 
-import { PiAdapter } from './pi-adapter'
+import { PiAdapter, sanitizePiMcpServerName, sanitizePiSessionName, withProviderNameLimitHint } from './pi-adapter'
 import { MessagePartType } from './coding-agent-adapter'
 
 function fakeProcess() {
@@ -506,5 +506,37 @@ describe('PiAdapter', () => {
     )
     expect(session.pendingUiRequests.size).toBe(0)
     expect(session.status).toBe('idle')
+  })
+
+  it('keeps Pi session names within the provider 64-char limit', () => {
+    expect(sanitizePiSessionName('task-1')).toBe('task-1')
+    const long = `task_${'a'.repeat(100)}`
+    const slug = sanitizePiSessionName(long)
+    expect(slug.length).toBeLessThanOrEqual(64)
+    expect(slug).not.toMatch(/-$/)
+  })
+
+  it('shortens MCP server names so combined tool names fit the 64-char limit', () => {
+    // Reproduction of the reported failure: a long display name such as
+    // "[Workflo] Organisation Workspace" plus a long tool name overflows the
+    // provider limit ("name must be at most 64 characters, got 76").
+    const longTool = `mcp__[Workflo] Organisation Workspace__${'t'.repeat(40)}`
+    expect(longTool.length).toBeGreaterThan(64)
+
+    const used = new Set<string>()
+    // Canonical alias: "[Workflo] Organisation Workspace" → "workflo"
+    expect(sanitizePiMcpServerName('[Workflo] Organisation Workspace', used)).toBe('workflo')
+    const shortened = `mcp__workflo__${'t'.repeat(25)}`
+    expect(shortened.length).toBeLessThanOrEqual(64)
+    // Second use dedupes instead of colliding
+    expect(sanitizePiMcpServerName('[Workflo] Organisation Workspace', used)).not.toBe('workflo')
+    // Generic bracket rule: "[Workflo] My tasks" → "workflo-my-tasks"
+    expect(sanitizePiMcpServerName('[Workflo] My tasks', new Set())).toBe('workflo-my-tasks')
+  })
+
+  it('adds a retry hint to provider 64-char name errors', () => {
+    const hinted = withProviderNameLimitHint('Error from provider (Console): name must be at most 64 characters, got 76')
+    expect(hinted).toContain('continue')
+    expect(withProviderNameLimitHint('Provider unavailable')).toBe('Provider unavailable')
   })
 })

@@ -1132,7 +1132,14 @@ export function AgentTranscriptPanel({
         console.error('[AgentTranscriptPanel] Message send failed:', error)
         if (inputRef.current && !inputRef.current.value) inputRef.current.value = value
         setPendingAttachments(attachmentsAtSend)
-        dispatchShortcutFeedback('Could not send the message — the agent session did not start', true)
+        const detail = error instanceof Error && error.message ? error.message.trim() : String(error ?? '').trim()
+        // Surface the real failure (e.g. provider "name must be at most 64
+        // characters") instead of a generic "session did not start" — the text
+        // is restored above so nothing is lost and the user can retry.
+        const feedback = detail && detail !== 'No taskId'
+          ? `Could not send the message — ${detail.slice(0, 280)}`
+          : 'Could not send the message — the agent session did not start'
+        dispatchShortcutFeedback(feedback, true)
       })
     }
   }
