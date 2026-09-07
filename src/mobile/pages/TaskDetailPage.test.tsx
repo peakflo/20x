@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, fireEvent } from '@testing-library/react'
 import { ArtifactType } from '@shared/artifacts'
 import { TaskDetailPage } from './TaskDetailPage'
@@ -73,6 +73,14 @@ beforeEach(() => {
     sessions: new Map()
   })
   useArtifactStore.setState({ artifactsByTask: new Map(), loadingTaskIds: new Set() })
+})
+
+// Unmount after each test, not just before the next one: the completion tests
+// leave async store/API continuations in flight, and a still-mounted tree lets
+// React schedule render work after vitest tears down the DOM environment
+// ("ReferenceError: window is not defined" unhandled error, flaky in CI).
+afterEach(() => {
+  cleanup()
 })
 
 describe('TaskDetailPage', () => {
