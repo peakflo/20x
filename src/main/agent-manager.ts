@@ -4238,11 +4238,26 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
   /**
    * Handles errors from fire-and-forget doSendAdapterMessage calls.
-   * Sends error status to the renderer so the UI reflects the failure.
+   * Sends error status AND the real message to the renderer so the transcript
+   * shows why the send failed (instead of a generic "session did not start")
+   * and the user can retry with "continue". The session stays recoverable:
+   * the next send clears the error state (see doSendAdapterMessage).
    */
   private handleSessionError(sessionId: string, session: AgentSession, err: unknown): void {
-    console.error(`[AgentManager] Session ${sessionId} error:`, err instanceof Error ? err.message : err)
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`[AgentManager] Session ${sessionId} error:`, message)
     session.status = 'error'
+    this.sendToRenderer('agent:output', {
+      sessionId,
+      taskId: session.taskId,
+      type: 'message',
+      data: {
+        id: `send-error-${Date.now()}`,
+        role: 'system',
+        content: `Could not send the message: ${message}\n\nThe session is still here — fix the issue and retry with "continue".`,
+        partType: 'error'
+      }
+    })
     this.sendToRenderer('agent:status', {
       sessionId,
       agentId: session.agentId,
