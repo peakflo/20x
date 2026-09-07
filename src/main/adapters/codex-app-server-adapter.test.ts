@@ -148,10 +148,10 @@ describe('CodexAppServerAdapter', () => {
     } finally { vi.useRealTimers() }
   })
 
-  it('isolates responsibility tools from inherited MCP servers and plugins', async () => {
+  it.each(['root', 'collector'] as const)('isolates %s tools from inherited MCP servers and plugins', async role => {
     const adapter = adapterPrivate(new CodexAppServerAdapter())
     const session = createSession()
-    const config: SessionConfig = { taskId: 'root', agentId: 'agent', workspaceDir: '/tmp', responsibilityRole: 'root', sandboxMode: 'read-only', mcpServers: { responsibilities: { type: 'http', url: 'http://localhost:1234/mcp?responsibility=owned' } } }
+    const config: SessionConfig = { taskId: 'root', agentId: 'agent', workspaceDir: '/tmp', responsibilityRole: role, sandboxMode: 'read-only', mcpServers: { responsibilities: { type: 'http', url: 'http://localhost:1234/mcp?responsibility=owned' } } }
     session.config = config
     vi.spyOn(adapter, 'sendRpcRequest').mockResolvedValue({ config: { mcp_servers: { external: { url: 'https://external.example/mcp' } } } })
     const overrides = await adapter.sessionConfigOverrides(session, config)

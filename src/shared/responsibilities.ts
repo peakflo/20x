@@ -2,7 +2,36 @@ import type { ReasoningEffort } from './reasoning-effort'
 
 export type ResponsibilityKind = 'task' | 'goal' | 'routine'
 export type ResponsibilityState = 'proposed' | 'active' | 'paused' | 'blocked' | 'taken_over' | 'completed' | 'cancelled'
-export type WorkPhase = 'work' | 'verify' | 'classify'
+export type WorkPhase = 'work' | 'verify' | 'classify' | 'collect'
+export interface CommandSource {
+  command: string
+  args: string[]
+  description: string
+}
+export interface McpSourceRead {
+  kind: 'mcp'
+  serverId: string
+  tool: string
+  arguments: Record<string, unknown>
+  description: string
+  /** JSON pointers into the decoded tool result. */
+  pagination?: { cursorArgument: string; nextCursorPath: string; itemsPath: string; maxPages: number }
+  /** Explicit stable fields to compare; omit to retain the complete result. */
+  select?: string[]
+  /** Bound by the app, never accepted as model-supplied authority. */
+  connectionVersion?: string
+  toolVersion?: string
+  serverName?: string
+}
+export type SourceRead = McpSourceRead | (CommandSource & { kind: 'command' })
+export type RoutineSource = CommandSource | {
+  kind: 'collection'
+  description: string
+  reads: SourceRead[]
+  /** Optional bounded reasoning over collected evidence before comparison. */
+  reasoning?: string
+}
+export const isSourceCollection = (source: RoutineSource): source is Extract<RoutineSource, { kind: 'collection' }> => 'kind' in source && source.kind === 'collection'
 export interface ProjectRecord {
   id: string
   name: string
@@ -27,7 +56,7 @@ export interface ResponsibilityAgreement {
   deadline: string
   basedOn?: string
   schedule?: string
-  source?: { command: string; args: string[]; description: string }
+  source?: RoutineSource
 }
 export interface ResponsibilityRecord {
   id: string
@@ -43,7 +72,8 @@ export interface ResponsibilityRecord {
   cursor: string | null
   executionWorkspace?: string
   workspace: string | null
-  trial: { output: string; at: string; revision: number } | null
+  trial: { output: string; at: string; revision: number; evidence?: string } | null
+  lastCollectedAt?: string
   next: { phase: WorkPhase; instruction: string; eventId?: string } | null
   createdAt: string
   updatedAt: string
@@ -59,6 +89,7 @@ export interface WorkReport {
   action: 'done' | 'continue' | 'ask' | 'ignore' | 'notify' | 'task'
   next?: string
   work: WorkEvidence
+  sourceSnapshot?: string
 }
 export interface ResponsibilityStep {
   id: string
@@ -72,6 +103,7 @@ export interface ResponsibilityStep {
   expectedWork: WorkEvidence | null
   settledAt: string | null
   createdAt: string
+  collection?: { revision: number; trial: boolean; evidence: string }
 }
 export interface ResponsibilityNotice {
   id: string

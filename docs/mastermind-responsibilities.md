@@ -22,15 +22,41 @@ The engineer explicitly chose 20x's lifecycle: fully quitting stops agents and m
 - A Task is one assignment per direct human turn (a clarification renews one bounded step), a Goal authorizes necessary continuation, and a Routine authorizes recurring attention. Related Tasks do not automatically become Goals.
 - Project files may be one repository, several repositories, or a non-Git folder. A worker can create an isolated checkout inside the approved project; follow-ups retain the reported checkout.
 - Existing provider approval and sandbox controls remain in force. New orchestration tools never accept a model-supplied approval flag. Human agreement changes are available only through desktop IPC; worker tools have server-owned, revocable assignment scopes.
-- Sources are finite commands selected through conversation and explicitly trialed by the engineer. No fixed monitoring catalog or additional connector framework is required. Commands should print stable source snapshots, omitting volatile polling timestamps.
+- Sources are learned through conversation. A routine can use a finite command, configured MCP reads, or a collection combining both. MCP connections and authentication remain in the existing 20x MCP settings, with availability controlled by the selected agent's existing tool assignments. There is no Slack/Notion/Git-specific routine type or project-local configuration importer.
 - Merge, deployment, production mutation, destructive data operations, secrets and external communication require direct human approval. No source, worker result or remembered preference can enlarge that authority.
-- Step budgets include work, source classification and verification. Deadline and repeated no-progress checks stop additional admission. Pausing does not abandon observation.
+- Step budgets include work, source classification, optional collection reasoning, and verification. Deadline and repeated no-progress checks stop additional admission. Pausing does not abandon observation.
 - Results record the actual checkout, revision and working-file fingerprint. Large checkouts that exceed the bounded inspection limit require a narrower working checkout; this is reported rather than silently counted as verified.
 
 ## Validation record
 
 Implementation validation, regression coverage, and live product evidence are recorded in the PR. Unit tests with a controlled agent prove control-plane behavior, not actual provider execution. No merge or deployment is part of this change.
 
-The native Codex worker/verifier journey passed against a temporary non-Git project through the real HTTP MCP endpoint. Both tasks settled with matching file fingerprints and both runtimes were released. The full regression suite passed with process inspection enabled; focused lifecycle, provider, renderer, and IPC checks cover the final changes. Counts and commands are recorded in the PR.
+The native Codex worker/verifier journey passed against a temporary non-Git project through the real HTTP MCP endpoint. Both tasks settled with matching file fingerprints and both runtimes were released. The full regression suite passed with process inspection enabled; focused lifecycle, provider, renderer, and IPC checks cover the final changes. Commands and results are recorded in the PR.
 
 The built desktop app opened with an isolated temporary database. Visual interaction could not be completed because the computer-use service was not approved to access the generic Electron application. Renderer and IPC checks are automated; no manual desktop acceptance or full working-day soak is claimed.
+
+## Configured MCP sources
+
+Configure a connection in the existing MCP settings and assign the required tools to the project's selected agent. Then tell Mastermind what matters, for example:
+
+> Watch this Slack channel, the linked Notion release page, and this repository's CI until the end of today. Tell me about release blockers, with source references. Reading only; ask before any external action.
+
+Mastermind uses `discover_source_tools` to list assigned connections and inspect live tool input schemas. Discovery does not collect source content. Missing connections or authentication are handled through the existing settings. Actual Slack/Notion tool names depend on the configured MCP server; no names or providers are hard-coded.
+
+The proposed source lists the exact operations and arguments. A collection may combine command reads (`git`, `gh`, or another finite program) and MCP reads. Tool descriptions and annotations are untrusted metadata, not permission. The engineer must inspect the operations and confirm their read scope before running the source trial. Tools that explicitly declare write effects are rejected for collection. Credentials stay with the connection; they are not copied into the routine or its discovery response.
+
+For paginated MCP results, the proposal records the cursor argument, result-array and next-cursor JSON pointers, and a maximum page count. It must reach an explicit end within that limit. Missing fields, repeated cursors, authentication failures, tool errors, and oversized or partial reads are failures, never "no change." The comparison can select explicit stable fields (shown in the trial) to avoid volatile polling timestamps. Otherwise the full result is compared. The approved query defines coverage; a bounded recent-results query does not promise an unlimited source history or changes a source no longer exposes.
+
+The collector runs the saved reads without a model. Only a changed snapshot enters classification. Optional `source.reasoning` adds an evidence-extraction assignment before comparison when interpreting a source requires reasoning. It requires a Codex or Claude Code agent, whose native project/shell tools can be disabled; other agents can use deterministic source collection. It is limited to one minute, counts toward the agreement's step budget (including its trial), and must report a stable snapshot. Approved scope, project memory, prior results in the same responsibility lineage, and engineer answers remain available as interpretation context; they do not authorize additional source reads. The source trial shows both the derived snapshot and the actual evidence. Reasoning runs on every check when requested; it does not have a zero-model unchanged guarantee. It cannot add or modify source operations. New reads or scope changes require a revised agreement and trial.
+
+Snapshots and change events are saved together before advancing progress. A failed member of a combined collection prevents that collection from advancing; other independent routines can continue. Connection/account changes and tool-definition changes invalidate the affected read, while normal credential refresh remains in the existing auth path. Routine startup waits for authentication restoration. Each collection owns a bounded MCP session so cancelling it does not terminate ordinary integrations' sessions. Full quit cancels and waits for in-flight collection, stops agents, and leaves interrupted reasoning visibly recoverable on reopening.
+
+### Acceptance checks
+
+- Real stdio and HTTP MCP transports: schema discovery, input validation, paginated content, authentication/session headers, stable snapshots, tool errors, cancellation and local process exit.
+- Existing command collectors and mixed command/MCP collections remain supported, including a provider-neutral fixture to prevent accidental vendor coupling.
+- Human trial/approval, failed re-trial, connection and account changes, source errors without progress advancement, unchanged checks without model admission, and changed results without repeat notifications.
+- Bounded source reasoning: no native tools, budget accounting, evidence-backed trial, questions, interruption/recovery, and no ordinary worker launch from a trial recovery.
+- Opt-in native journey: `RUN_RESPONSIBILITY_LIVE=1 pnpm test:run src/main/responsibility-manager.live.test.ts -t 'collects a configured'`. It uses an isolated SQLite database, a temporary MCP source, and the real Codex adapter for classification and collection reasoning. It does not contact Slack or Notion.
+
+Live Slack and Notion acceptance still requires working configured connections and agreed read targets. Controlled transport tests are not evidence of those services' authentication or data coverage. The PR records the executed checks and any remaining live-service validation gaps.

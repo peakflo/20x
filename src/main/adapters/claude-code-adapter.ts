@@ -763,7 +763,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       abortController,
       permissionMode: config.responsibilityRole ? 'default' : 'bypassPermissions',
       allowDangerouslySkipPermissions: !config.responsibilityRole,
-      ...(config.responsibilityRole === 'root' ? { tools: [] } : {}),
+      ...((config.responsibilityRole === 'root' || config.responsibilityRole === 'collector') ? { tools: [] } : {}),
       ...(config.authorizeTool ? {
         canUseTool: async (name, input, request) => {
           const result = await config.authorizeTool!(name, input, request.requestId, request.signal)

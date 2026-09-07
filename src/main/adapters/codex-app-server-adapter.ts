@@ -832,7 +832,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
   private buildConfigOverrides(config: SessionConfig): Record<string, unknown> {
     const overrides: Record<string, unknown> = {}
-    if (config.responsibilityRole === 'root') {
+    if ((config.responsibilityRole === 'root' || config.responsibilityRole === 'collector')) {
       // Official config reference: features.shell_tool disables root command execution.
       overrides.features = { shell_tool: false }
       overrides.web_search = 'disabled'

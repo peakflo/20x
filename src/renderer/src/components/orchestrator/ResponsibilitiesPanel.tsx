@@ -5,6 +5,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { applyUiCommand } from '@/lib/ui-remote-control'
 import { Button } from '@/components/ui/Button'
 import type { ProjectRecord, ResponsibilityRecord, ResponsibilitySnapshot, ResponsibilityNotice, ProjectMemory } from '@shared/responsibilities'
+import { isSourceCollection } from '@shared/responsibilities'
 
 const empty: ResponsibilitySnapshot = { projects: [], responsibilities: [], notices: [], memory: [], steps: [] }
 const inputClass = 'w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm'
@@ -94,14 +95,27 @@ function AgreementCard({ record: r, unresolved, busy, act }: { record: Responsib
       <dl className="mt-2 space-y-2 text-xs">
         {[['Scope', a.scope], ['Success evidence', a.finish], ['Stop conditions', a.stop], ['Allowed work', a.mode === 'edit' ? 'Workspace edits within this scope' : 'Read-only investigation'], ['Budget', `${r.steps} of ${a.maxSteps} steps · until ${new Date(a.deadline).toLocaleString()}`], ['Next step', r.next?.instruction ?? 'Waiting for a result, decision, or scheduled check']].map(([label, value]) => <div key={label}><dt className="font-medium">{label}</dt><dd className="whitespace-pre-wrap text-muted-foreground">{value}</dd></div>)}
         {a.schedule && <div><dt className="font-medium">Schedule</dt><dd>{a.schedule}{r.nextAt ? ` · next ${new Date(r.nextAt).toLocaleString()}` : ''}</dd></div>}
-        {a.source && <div><dt className="font-medium">Source trial</dt><dd className="space-y-1"><p>{a.source.description}</p><code className="block break-all rounded bg-muted p-2">{a.source.command} {a.source.args.map(v => JSON.stringify(v)).join(' ')}</code><p>Run this collector to confirm the source, then inspect the sample before activation.</p></dd></div>}
+        {a.source && <div><dt className="font-medium">Source trial</dt><dd className="space-y-1"><p>{a.source.description}</p>
+          {isSourceCollection(a.source) ? <>
+            {a.source.reads.map((read, i) => <div key={i} className="rounded bg-muted p-2"><p>{read.description}</p>
+              {read.kind === 'mcp' ? <><p>{read.serverName ?? read.serverId} · {read.tool}</p><pre className="whitespace-pre-wrap break-all">{JSON.stringify(read.arguments, null, 2)}</pre>
+                {read.pagination && <p>Read up to {read.pagination.maxPages} pages. Cursor: {read.pagination.cursorArgument}; next cursor: {read.pagination.nextCursorPath}; items: {read.pagination.itemsPath}.</p>}
+                {read.select && <p>Compare fields: {read.select.join(', ')}</p>}
+              </> : <code className="block break-all">{read.command} {read.args.map(v => JSON.stringify(v)).join(' ')}</code>}
+            </div>)}
+            {a.source.reasoning && <p>Collection reasoning: {a.source.reasoning}. Each check, including the trial, uses one assignment from the budget, limited to one minute.</p>}
+            <p>Inspect the exact operations above and confirm they only read the intended scope. Connection tool descriptions do not grant permission.</p>
+          </> : <code className="block break-all rounded bg-muted p-2">{a.source.command} {a.source.args.map(v => JSON.stringify(v)).join(' ')}</code>}
+          <p>Run this collector to confirm the source, then inspect the sample before activation.</p></dd></div>}
+        {r.lastCollectedAt && <div><dt className="font-medium">Last successful check</dt><dd>{new Date(r.lastCollectedAt).toLocaleString()}</dd></div>}
         {r.trial && <div><dt className="font-medium">Collected {new Date(r.trial.at).toLocaleString()}</dt><dd><pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2">{r.trial.output || '(empty source)'}</pre></dd></div>}
+        {r.trial?.evidence && <div><dt className="font-medium">Evidence used for collection reasoning</dt><dd><pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-muted p-2">{r.trial.evidence}</pre></dd></div>}
       </dl>
     </details>
     <div className="mt-3 flex flex-wrap gap-2">
       {r.state === 'proposed' && <>
-        {a.source && <Button size="sm" variant="outline" disabled={busy} onClick={() => void act('trial')}>Run source trial</Button>}
-        <Button size="sm" disabled={busy || (!!a.source && r.trial?.revision !== r.revision)} onClick={() => void act('approve')}>{a.kind === 'routine' ? 'Approve and activate' : 'Approve and start'}</Button>
+        {a.source && <Button size="sm" variant="outline" disabled={busy || unresolved} onClick={() => void act('trial')}>{unresolved ? 'Source reasoning in progress' : 'Run source trial'}</Button>}
+        <Button size="sm" disabled={busy || unresolved || (!!a.source && r.trial?.revision !== r.revision)} onClick={() => void act('approve')}>{a.kind === 'routine' ? 'Approve and activate' : 'Approve and start'}</Button>
       </>}
       {r.state === 'active' && <Button size="sm" variant="outline" disabled={busy} onClick={() => void act('pause')}>Pause new work</Button>}
       {r.state === 'paused' && <Button size="sm" disabled={busy} onClick={() => void act('resume')}>Resume</Button>}

@@ -745,6 +745,19 @@ export class AgentManager extends EventEmitter {
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
+  /** Resolve routine connections through the same OAuth/enterprise authentication as agent sessions. */
+  async resolveRoutineMcpConnection(agentId: string, serverId: string): Promise<McpServerConfig> {
+    const entries = this.db.getAgent(agentId)?.config.mcp_servers ?? []
+    const servers = entries.map(e => this.db.getMcpServer(typeof e === 'string' ? e : e.serverId)).filter(s => !!s)
+    const server = servers.find(s => s.id === serverId)
+    if (!server || server.name === 'task-management') throw new Error('The selected agent cannot use this source connection.')
+    if (servers.filter(s => s.name === server.name).length !== 1) throw new Error('Two assigned MCP connections have the same name. Give them distinct names in MCP settings.')
+    if ('resource_url' in server.oauth_metadata && !await this.oauthManager?.getValidMcpServerToken(serverId)) throw new Error('Sign in to this source connection in MCP settings before monitoring it.')
+    const config = (await this.buildMcpServersForAdapter(agentId))[server.name]
+    if (!config) throw new Error('The source connection could not be resolved.')
+    return config
+  }
+
   private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []

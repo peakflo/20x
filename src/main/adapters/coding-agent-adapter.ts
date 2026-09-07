@@ -43,7 +43,7 @@ export interface McpServerConfig {
 
 export interface SessionConfig {
   /** Present only for 20x-managed responsibilities. Human decisions use a durable inbox. */
-  responsibilityRole?: 'root' | 'worker' | 'observer'
+  responsibilityRole?: 'root' | 'worker' | 'observer' | 'collector'
   authorizeTool?: (name: string, input: Record<string, unknown>, requestId: string, signal: AbortSignal) => Promise<boolean | Record<string, unknown>>
   agentId: string
   taskId: string

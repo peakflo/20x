@@ -8,6 +8,7 @@ import { projectConversationId } from '../shared/responsibilities'
 import type { ResponsibilityAgreement, ResponsibilityStep, WorkEvidence } from '../shared/responsibilities'
 import type { AgentManager } from './agent-manager'
 import { callResponsibilityTool } from './responsibility-tools'
+import { RoutineSources } from './routine-sources'
 
 let dir: string
 let manager: ResponsibilityManager
@@ -370,5 +371,132 @@ describe('real bounded source and working-file checks', () => {
     const before = await captureWork(dir)
     writeFileSync(join(dir, 'example.txt'), 'after')
     expect((await captureWork(dir)).fingerprint).not.toBe(before.fingerprint)
+  })
+})
+
+describe('dynamic source collection lifecycle', () => {
+  let sources: RoutineSources
+  beforeEach(async () => {
+    await manager.stop()
+    sources = new RoutineSources(db, async () => { throw new Error('No external connection needed in this lifecycle test.') })
+    vi.spyOn(sources, 'collect').mockImplementation((s, root, signal) => collect(s, root, signal))
+    manager = new ResponsibilityManager(db, runtime, vi.fn(), collect, inspect, sources)
+    manager.start(); await manager.reconcile()
+  })
+  function propose(reasoning?: string) {
+    return manager.propose(scope(), { ...agreement, kind: 'routine', schedule: '* * * * *', source: {
+      kind: 'collection', description: 'Learned monitoring', reads: [{ kind: 'command', command: 'git', args: ['status', '--porcelain'], description: 'Current checkout' }], reasoning
+    } }, input('Keep watching the selected source within this scope.'))
+  }
+  function due(id: string) {
+    db.db.prepare("UPDATE mastermind_agreements SET data=json_set(data, '$.nextAt', ?) WHERE id=?").run(new Date(Date.now() - 1000).toISOString(), id)
+  }
+  it.each(['pi', 'opencode', 'cursor'] as const)('keeps deterministic sources available on %s but rejects reasoning without native-tool isolation', backend => {
+    db.updateAgent(agreement.agentId, { config: { coding_agent: backend } })
+    expect(propose().agreement.source).toBeDefined()
+    expect(() => propose('Extract only the supplied evidence.')).toThrow('requires a Codex or Claude Code agent')
+    expect(runtime.startSession).not.toHaveBeenCalled()
+  })
+  async function finishCollection(value: string) {
+    const step = snapshot().steps.filter(s => s.phase === 'collect').at(-1)!
+    await manager.report(manager.scopeForToken(manager.tokenForTask(step.taskId)!), { summary: 'Extracted source facts', evidence: ['Supplied source evidence'], checkout: dir, action: 'done', sourceSnapshot: value })
+    sessions.get(step.taskId)!.session.status = 'idle'; await manager.reconcile()
+  }
+  it('uses the existing trial, skips unchanged collection, and preserves progress on failure', async () => {
+    const r = propose(); await manager.act(r.id, r.revision, 'trial'); await manager.act(r.id, r.revision, 'approve'); await manager.reconcile()
+    due(r.id); await manager.reconcile()
+    expect(runtime.startSession).not.toHaveBeenCalled()
+    expect(snapshot().responsibilities[0].lastCollectedAt).toBeTruthy()
+    const cursor = snapshot().responsibilities[0].cursor
+    collect.mockRejectedValueOnce(new Error('Second source incomplete'))
+    due(r.id); await manager.reconcile()
+    expect(snapshot().responsibilities[0].cursor).toBe(cursor)
+    expect(snapshot().responsibilities[0].state).toBe('blocked')
+    expect(snapshot().notices.at(-1)?.body).toContain('not an unchanged source')
+    await manager.act(r.id, r.revision, 'recover'); await manager.reconcile()
+    collect.mockResolvedValue('changed source'); due(r.id); await manager.reconcile()
+    await finish(snapshot().steps[0], 'notify')
+    due(r.id); await manager.reconcile()
+    expect(runtime.startSession).toHaveBeenCalledTimes(1)
+  })
+  it('runs a human-triggered reasoning trial with no native tools, then budgets each collection', async () => {
+    const r = propose('Extract the stable release state from the supplied evidence.')
+    await manager.act(r.id, r.revision, 'trial')
+    const step = snapshot().steps[0]
+    expect(step.collection?.trial).toBe(true)
+    expect(snapshot().responsibilities[0].trial).toBeNull()
+    await expect(manager.act(r.id, r.revision, 'approve')).rejects.toThrow('trial')
+    const config = { taskId: step.taskId, agentId: agreement.agentId, workspaceDir: dir }
+    manager.configureSession(config, 12345)
+    expect(config).toMatchObject({ responsibilityRole: 'collector', tools: { bash: false, read: false }, sandboxMode: 'read-only' })
+    const authorize = (config as unknown as { authorizeTool: (name: string, args: object, id: string, signal: AbortSignal) => Promise<boolean> }).authorizeTool
+    expect(await authorize('Bash', { command: 'echo wrong' }, 'tool-1', new AbortController().signal)).toBe(false)
+    await finishCollection('{"release":"green"}')
+    expect(inspect).not.toHaveBeenCalled()
+    expect(snapshot().responsibilities[0].trial?.output).toBe('{"release":"green"}')
+    expect(snapshot().steps[0].state).toBe('settled')
+    await manager.act(r.id, r.revision, 'approve'); await manager.reconcile(); due(r.id); await manager.reconcile()
+    await finishCollection('{"release":"green"}')
+    expect(snapshot().steps.map(s => s.phase)).toEqual(['collect', 'collect'])
+    expect(snapshot().responsibilities[0].noProgress).toBe(0)
+    expect(snapshot().responsibilities[0].steps).toBe(2)
+    expect(snapshot().notices).toHaveLength(0)
+    due(r.id); await manager.reconcile(); await finishCollection('{"release":"failed"}')
+    await manager.reconcile()
+    expect(snapshot().steps.at(-1)?.phase).toBe('classify')
+  })
+  it('recovers an interrupted reasoning trial to a proposal without authorizing routine work', async () => {
+    const r = propose('Extract source facts.')
+    await manager.act(r.id, r.revision, 'trial'); await manager.stop(); sessions.clear()
+    manager = new ResponsibilityManager(db, runtime, vi.fn(), collect, inspect, sources)
+    manager.start(); await manager.reconcile()
+    expect(snapshot().responsibilities[0].state).toBe('blocked')
+    await manager.act(r.id, r.revision, 'recover')
+    expect(snapshot().responsibilities[0]).toMatchObject({ state: 'proposed', approvedRevision: null, next: null })
+    await expect(manager.act(r.id, r.revision, 'approve')).rejects.toThrow('trial')
+    await manager.act(r.id, r.revision, 'trial')
+    expect(snapshot().steps.at(-1)?.collection?.trial).toBe(true)
+  })
+  it('stops overdue collection reasoning and keeps the trial unapproved', async () => {
+    const r = propose('Extract source facts.'); await manager.act(r.id, r.revision, 'trial')
+    const step = snapshot().steps[0]
+    db.db.prepare("UPDATE mastermind_steps SET data=json_set(data, '$.createdAt', ?) WHERE id=?").run(new Date(Date.now() - 61000).toISOString(), step.id)
+    await manager.reconcile()
+    expect(runtime.stopSession).toHaveBeenCalledWith(step.sessionId, false)
+    expect(snapshot().responsibilities[0]).toMatchObject({ state: 'blocked', approvedRevision: null, trial: null })
+    expect(snapshot().steps[0].state).toBe('held')
+    expect(snapshot().notices[0].body).toContain('one-minute limit')
+  })
+  it('waits for an aborted trial on quit and cannot save a late result', async () => {
+    const r = propose()
+    let finishRead!: () => void
+    collect.mockImplementationOnce((_source, _root, signal) => new Promise<string>(resolve => {
+      signal.addEventListener('abort', () => { finishRead = () => resolve('late source') }, { once: true })
+    }))
+    const trial = manager.act(r.id, r.revision, 'trial')
+    const rejected = expect(trial).rejects.toThrow('discarded')
+    let stopped = false
+    const stopping = manager.stop().then(() => { stopped = true })
+    await new Promise(resolve => setTimeout(resolve, 0)); expect(stopped).toBe(false)
+    finishRead(); await stopping; await rejected
+    expect(snapshot().responsibilities[0].trial).toBeNull()
+  })
+  it('requires a new successful trial after a failed recheck', async () => {
+    const r = propose(); await manager.act(r.id, r.revision, 'trial')
+    expect(snapshot().responsibilities[0].trial).not.toBeNull()
+    collect.mockRejectedValueOnce(new Error('Source unavailable'))
+    await expect(manager.act(r.id, r.revision, 'trial')).rejects.toThrow('Source unavailable')
+    expect(snapshot().responsibilities[0].trial).toBeNull()
+    await expect(manager.act(r.id, r.revision, 'approve')).rejects.toThrow('trial')
+  })
+  it('answers a collection question by returning to a source trial, without launching ordinary work', async () => {
+    const r = propose('Interpret the supplied source.')
+    await manager.act(r.id, r.revision, 'trial')
+    await finish(snapshot().steps[0], 'ask', 'Which field matters?')
+    const notice = snapshot().notices.find(n => n.kind === 'question')!
+    await manager.answer(notice.id, 'The release status.')
+    await manager.reconcile()
+    expect(snapshot().responsibilities[0]).toMatchObject({ state: 'proposed', next: null })
+    expect(runtime.startSession).toHaveBeenCalledTimes(1)
   })
 })

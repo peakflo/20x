@@ -13,6 +13,7 @@ import { GitHubManager } from './github-manager'
 import { GitLabManager } from './gitlab-manager'
 import { WorktreeManager } from './worktree-manager'
 import { McpToolCaller } from './mcp-tool-caller'
+import { RoutineSources } from './routine-sources'
 import { SyncManager } from './sync-manager'
 import { OAuthManager } from './oauth/oauth-manager'
 import { PluginRegistry } from './plugins/registry'
@@ -1017,11 +1018,10 @@ app.whenReady().then(async () => {
       mainWindow.webContents.send('responsibilities:changed')
       if (taskId) mainWindow.webContents.send('tasks:refresh')
     }
-  })
+  }, undefined, undefined, new RoutineSources(db, (agentId, serverId) => agentManager!.resolveRoutineMcpConnection(agentId, serverId), server => server.source === 'enterprise' ? enterpriseAuth?.getApiUrl() : undefined))
   agentManager.setResponsibilityManager(responsibilityManager)
   setResponsibilityManager(responsibilityManager)
   registerResponsibilityIpc(responsibilityManager, () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : undefined)
-  responsibilityManager.start()
 
   recurrenceScheduler = new RecurrenceScheduler(db)
   heartbeatScheduler = new HeartbeatScheduler(db, agentManager)
@@ -1151,6 +1151,8 @@ app.whenReady().then(async () => {
     console.log('[EnterpriseAuth] auth_session_restore_result {"status":"skipped","reason":"enterprise_auth_not_initialized"}')
   }
 
+  // Due source checks need the same restored authentication as ordinary agent sessions.
+  responsibilityManager.start()
   registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined, workspaceCleanupScheduler ?? undefined, voiceSessionManager ?? undefined, taskAutomationScheduler ?? undefined)
 
   // ── Media permission handler (design §5.9) ────────────────────────────────
