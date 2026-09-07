@@ -74,13 +74,12 @@ const onToast = vi.fn()
 const onCompleted = vi.fn()
 
 function Harness({ taskId = 'task-1' }: { taskId?: string }) {
-  const { requestComplete, completionDialog } = useTaskCompletion({ onToast })
+  const { requestComplete } = useTaskCompletion({ onToast })
   return (
     <>
       <button type="button" onClick={() => void requestComplete(taskId, { onCompleted })}>
         Complete
       </button>
-      {completionDialog}
     </>
   )
 }

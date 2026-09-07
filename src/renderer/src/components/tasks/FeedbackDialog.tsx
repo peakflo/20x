@@ -6,12 +6,6 @@ import { Textarea } from '@/components/ui/Textarea'
 
 interface FeedbackDialogProps {
   open: boolean
-  /**
-   * Display name of the external source, when the task came from one. Set it to
-   * show the completion choice; leave it undefined for a local task.
-   */
-  sourceName?: string | null
-  serverManaged?: boolean
   onSubmit: (rating: number, comment: string) => void
   onSkip: () => void
   onCancel: () => void
@@ -21,8 +15,6 @@ export function FeedbackDialog({ open, onSubmit, onSkip, onCancel }: FeedbackDia
   const [rating, setRating] = useState(0)
   const [hoveredStar, setHoveredStar] = useState(0)
   const [comment, setComment] = useState('')
-  // Defaults to closing the task at the source, which is what 20x did before
-  // the choice existed.
 
   // Reset state when dialog opens
   useEffect(() => {

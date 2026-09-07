@@ -157,9 +157,8 @@ export function AppLayout() {
 
   useEffect(() => onShortcutFeedback(({ message, isError }) => showToast(message, isError)), [showToast])
 
-  // Source-backed tasks ask the user whether to close the task in the source
-  // system or only in 20x. `completionDialog` renders that question.
-  const { requestComplete, completionDialog } = useTaskCompletion({ onToast: showToast })
+  // Completion is server-confirmed through the shared hook (same for every source).
+  const { requestComplete } = useTaskCompletion({ onToast: showToast })
 
   // A completion that the main process could not push to the source sends the
   // task back to review. Without this the user sees the task reappear with no
@@ -908,9 +907,6 @@ export function AppLayout() {
           </DialogBody>
         </DialogContent>
       </Dialog>
-
-      {/* Complete at source or manually */}
-      {completionDialog}
 
       {/* Delete Confirmation */}
       <DeleteConfirmDialog
