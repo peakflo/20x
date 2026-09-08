@@ -689,3 +689,46 @@ describe('transcript_parts.rev migration on a legacy DB (no rev column)', () => 
     expect(after).toBe(before)
   })
 })
+
+describe('updateTask completion guard for sourced tasks', () => {
+  function makeSourcedTask(pluginId = 'notion', externalId = 'page-1') {
+    const server = db.createMcpServer({ name: 'Src Server' })!
+    const source = db.createTaskSource({ mcp_server_id: server.id, name: 'Src', plugin_id: pluginId })!
+    const task = db.createTask(makeTask({
+      title: 'Sourced', status: 'ready_for_review', external_id: externalId, source_id: source.id, source: 'Src'
+    }))!
+    return { source, task }
+  }
+
+  it('refuses a local completion of a sourced task', () => {
+    const { task } = makeSourcedTask()
+    expect(() => db.updateTask(task.id, { status: 'completed' as never }))
+      .toThrow('The task source must confirm completion before this task can close in 20x.')
+    expect(db.getTask(task.id)!.status).toBe('ready_for_review')
+  })
+
+  it('completes a sourced task when the source plugin confirms it', () => {
+    const { task } = makeSourcedTask()
+    const updated = db.updateTask(task.id, { status: 'completed' as never }, 'source-plugin')
+    expect(updated!.status).toBe('completed')
+    expect(db.getTask(task.id)!.status).toBe('completed')
+  })
+
+  it('source-plugin origin cannot change the source link', () => {
+    const { task } = makeSourcedTask()
+    expect(() => db.updateTask(task.id, { external_id: 'other' }, 'source-plugin'))
+      .toThrow('Only the sync service can change a task source link.')
+  })
+
+  it('source-plugin origin cannot change the status of a Workflo-owned task', () => {
+    const { task } = makeSourcedTask('peakflo', 'wf-1')
+    expect(() => db.updateTask(task.id, { status: 'completed' as never }, 'source-plugin'))
+      .toThrow('Workflo controls task status. Use a server task action.')
+    expect(db.getTask(task.id)!.status).toBe('ready_for_review')
+  })
+
+  it('still completes a source-less local task without an origin', () => {
+    const task = db.createTask(makeTask({ status: 'ready_for_review' }))!
+    expect(db.updateTask(task.id, { status: 'completed' as never })!.status).toBe('completed')
+  })
+})

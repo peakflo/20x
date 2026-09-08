@@ -380,9 +380,11 @@ export class SyncManager {
 
     const result = await plugin.executeAction(actionId, task, input, config, ctx)
 
-    // Apply local task updates if action succeeded
+    // Apply local task updates if action succeeded. The plugin has already
+    // written the change at the source, so the source has confirmed it; the
+    // 'source-plugin' origin lets a completion pass the local sourced-task guard.
     if (result.success && result.taskUpdate && Object.keys(result.taskUpdate).length > 0) {
-      this.db.updateTask(task.id, result.taskUpdate)
+      this.db.updateTask(task.id, result.taskUpdate, 'source-plugin')
     }
 
     return result
