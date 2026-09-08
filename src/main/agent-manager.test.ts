@@ -1788,6 +1788,34 @@ describe('AgentManager session ID re-keying redirect', () => {
     expect((mgr as any).sessions.get('temp-id')).toBe(session)
   })
 
+  it('stops only the Mastermind conversation through fenced strict cleanup before switching', async () => {
+    const { mgr, session } = createManagerWithSession()
+    session.taskId = 'mastermind-session'
+    ;(mgr as any).sessions.set('worker-session', { taskId: 'worker-task' })
+    const destroySession = vi.fn().mockRejectedValueOnce(new Error('Old agent is still running')).mockResolvedValue(undefined)
+    Object.assign(session.adapter, { destroySession })
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({})
+    await expect(mgr.stopByTaskId('mastermind-session')).rejects.toThrow('Old agent is still running')
+    expect(mgr.findSessionByTaskId('mastermind-session')).toBeDefined()
+    await mgr.stopByTaskId('mastermind-session')
+    expect(mgr.findSessionByTaskId('mastermind-session')).toBeUndefined()
+    expect(mgr.findSessionByTaskId('worker-task')).toBeDefined()
+    expect(destroySession).toHaveBeenCalledTimes(2)
+  })
+
+  it('gives a replacement Mastermind agent saved context and access to history from previous agents', async () => {
+    const { mgr } = createManagerWithSession()
+    const history = [{ role: 'user', content: 'Monitor this project', partType: 'text' }, { role: 'assistant', content: 'The last check found a failure', partType: 'text' }]
+    Object.assign((mgr as any).db, { getTranscriptParts: vi.fn(() => history) })
+    vi.spyOn(mgr as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    const config = await (mgr as any).buildSessionConfig('agent-1', 'mastermind-session')
+    expect(config.systemPrompt).toContain('Monitor this project')
+    expect(config.systemPrompt).toContain('The last check found a failure')
+    expect(config.systemPrompt).toContain('not new requests or approvals')
+    expect(await mgr.getTranscriptForTask('mastermind-session')).toEqual(history.map(p => ({ role: p.role, text: p.content })))
+    expect((await (mgr as any).buildSessionConfig('agent-1', 'worker-task')).systemPrompt).not.toContain('Monitor this project')
+  })
+
   it('fences a question answer while waiting for session configuration', async () => {
     const { mgr, session } = createManagerWithSession()
     let finish!: (value: object) => void

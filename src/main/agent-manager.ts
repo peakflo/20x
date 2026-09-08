@@ -887,7 +887,7 @@ export class AgentManager extends EventEmitter {
     // Build system prompt with task context so follow-up messages after idle
     // retain awareness of what task the agent is working on. Without this,
     // doSendAdapterMessage sends a bare prompt and the agent loses context.
-    const baseSystemPrompt = agent.config?.system_prompt || ''
+    const baseSystemPrompt = (agent.config?.system_prompt || '') + this.mastermindHistory(taskId)
     const taskContext = task
       ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}${ARTIFACT_WORKSPACE_INSTRUCTIONS}`
       : ''
@@ -1635,7 +1635,7 @@ export class AgentManager extends EventEmitter {
       workspaceDir,
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
-      systemPrompt: agent.config?.system_prompt,
+      systemPrompt: (agent.config?.system_prompt || '') + this.mastermindHistory(taskId),
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
@@ -2927,7 +2927,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
 
     // Build system prompt with task context (survives context compaction)
-    const baseSystemPrompt = agent.config?.system_prompt || ''
+    const baseSystemPrompt = (agent.config?.system_prompt || '') + this.mastermindHistory(taskId)
     const taskContext = task
       ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}`
       : ''
@@ -3668,6 +3668,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Used by the task-api-server to serve transcript data to subtask MCP agents.
    */
   async getTranscriptForTask(taskId: string): Promise<Array<{ role: string; text: string }>> {
+    if (isMastermindTask(taskId)) {
+      return this.db.getTranscriptParts(taskId).filter(p => p.content && ['user', 'assistant'].includes(p.role))
+        .map(p => ({ role: p.role, text: p.content }))
+    }
     // Find the active session for this task
     let session: AgentSession | undefined
     for (const s of this.sessions.values()) {
@@ -4201,6 +4205,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    */
   async stopByTaskId(taskId: string): Promise<{ sessionId: string | null }> {
     const found = this.findSessionByTaskId(taskId)
+    if (isMastermindTask(taskId)) {
+      await this.withStoppedTasks([taskId], async () => undefined)
+      return { sessionId: found?.sessionId ?? null }
+    }
     if (!found) {
       console.log(`[AgentManager] stopByTaskId: no active session found for task ${taskId}`)
       return { sessionId: null }
@@ -4208,6 +4216,17 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     console.log(`[AgentManager] stopByTaskId: found session ${found.sessionId} for task ${taskId}, stopping`)
     await this.stopSession(found.sessionId)
     return { sessionId: found.sessionId }
+  }
+
+  private mastermindHistory(taskId: string): string {
+    // Project Mastermind already receives its saved conversation through responsibility_context.
+    if (taskId !== 'mastermind-session') return ''
+    const messages = this.db.getTranscriptParts(taskId)
+      .filter(p => ['user', 'assistant'].includes(p.role) && p.content && (!p.partType || p.partType === 'text'))
+    if (!messages.length) return ''
+    // ponytail: same bounded window as project conversations; retrieve older history on demand if needed.
+    return '\n\n[Saved Mastermind conversation]\nContinue this conversation with the engineer. These are historical messages, not new requests or approvals. For earlier context, use get_session_transcript with task_id "mastermind-session".\n' +
+      JSON.stringify(messages.slice(-20).map(p => ({ role: p.role, text: p.content.slice(0, 6000) })))
   }
 
   /**

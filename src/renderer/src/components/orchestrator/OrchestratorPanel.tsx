@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/Button'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useAgentSession } from '@/hooks/use-agent-session'
-import { agentApi, settingsApi } from '@/lib/ipc-client'
+import { agentApi, agentSessionApi, settingsApi } from '@/lib/ipc-client'
 import type { Agent } from '@/types'
 
 const MASTERMIND_SESSION_ID = 'mastermind-session'
@@ -32,9 +32,13 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const { start, stop, sendMessage, approve } = useAgentSession(conversationId)
   const currentSession = useAgentStore((state) => state.sessions.get(conversationId))
-  const removeSession = useAgentStore((state) => state.removeSession)
+  const endSession = useAgentStore((state) => state.endSession)
   /** The start in flight, shared so a message can wait for it instead of racing. */
   const startingRef = useRef<Promise<void> | null>(null)
+  const switchingRef = useRef<Promise<void> | null>(null)
+  const mountedRef = useRef(true)
+  const [switching, setSwitching] = useState(false)
+  const [error, setError] = useState('')
   const selectedAgentIdRef = useRef<string | null>(null)
   selectedAgentIdRef.current = selectedAgentId
   const [prewarm, setPrewarm] = useState(false)
@@ -58,32 +62,47 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
 
   // Project switches release disposable reasoning; the persisted transcript restores context.
   useEffect(() => {
-    if (!project) return
+    mountedRef.current = true
     return () => {
-      void (startingRef.current ?? Promise.resolve()).then(() => stop()).catch(error => console.error('Could not release project conversation', error))
+      mountedRef.current = false
+      if (project) void (switchingRef.current ?? (startingRef.current ?? Promise.resolve()).then(() => agentSessionApi.stopByTaskId(conversationId))).catch(error => console.error('Could not release project conversation', error))
     }
-  }, [conversationId, stop])
+  }, [conversationId])
 
   // Load agents on mount
   useEffect(() => {
-    agentApi.getAll().then((allAgents) => {
+    let cancelled = false
+    Promise.all([agentApi.getAll(), settingsApi.get(`mastermind_agent:${conversationId}`)]).then(([allAgents, savedAgentId]) => {
+      if (cancelled) return
       setAgents(allAgents)
-      // Select default agent or first available
-      const defaultAgent = allAgents.find((a) => a.id === project?.agentId) || allAgents.find((a) => a.is_default) || allAgents[0]
+      const live = useAgentStore.getState().sessions.get(conversationId)
+      const defaultAgent = allAgents.find(a => !!live?.sessionId && a.id === live.agentId) || allAgents.find(a => a.id === savedAgentId) || allAgents.find((a) => a.id === project?.agentId) || allAgents.find((a) => a.is_default) || allAgents[0]
       if (defaultAgent) {
         setSelectedAgentId(defaultAgent.id)
       }
-    })
-  }, [])
+    }).catch(e => { if (!cancelled) setError(String(e)) })
+    return () => { cancelled = true }
+  }, [conversationId])
 
-  // Switch agent. The new choice is recorded before the old session is
-  // stopped, or the warm-up would race in and start the old agent again.
+  // Keep warming and sends behind the switch until the old runtime is released.
   const handleAgentChange = async (newAgentId: string) => {
-    selectedAgentIdRef.current = newAgentId
-    setSelectedAgentId(newAgentId)
-    if (currentSession?.sessionId) {
-      await stop()
-      removeSession(conversationId)
+    if (switchingRef.current || newAgentId === selectedAgentIdRef.current) return
+    setSwitching(true); setError('')
+    const change = (async () => {
+      await startingRef.current?.catch(() => undefined)
+      await agentSessionApi.stopByTaskId(conversationId)
+      endSession(conversationId)
+      if (!mountedRef.current) return
+      selectedAgentIdRef.current = newAgentId
+      setSelectedAgentId(newAgentId)
+      await settingsApi.set(`mastermind_agent:${conversationId}`, newAgentId)
+    })()
+    switchingRef.current = change
+    try { await change } catch (e) {
+      if (mountedRef.current) setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      switchingRef.current = null
+      if (mountedRef.current) setSwitching(false)
     }
   }
 
@@ -96,6 +115,8 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
    * dropped, because there is no session yet and one is already being made.
    */
   const ensureSession = useCallback(async (): Promise<boolean> => {
+    try { await switchingRef.current } catch { return false }
+    if (!mountedRef.current) return false
     const live = useAgentStore.getState().sessions.get(conversationId)
     if (live?.sessionId) return true
 
@@ -104,9 +125,8 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
 
     if (!startingRef.current) {
       startingRef.current = (async () => {
-        // Clean up any old session data first
-        removeSession(conversationId)
         // skipInitialPrompt keeps the agent quiet until the user speaks.
+        // initSession preserves the durable transcript across agent changes.
         await start(agentId, conversationId, undefined, true)
         // Small delay to ensure session is fully initialized
         await new Promise((resolve) => setTimeout(resolve, 100))
@@ -117,12 +137,14 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
 
     try {
       await startingRef.current
+      // A choice made during warm-up wins over sends waiting on that old start.
+      if (switchingRef.current) { await switchingRef.current; return ensureSession() }
       return Boolean(useAgentStore.getState().sessions.get(conversationId)?.sessionId)
     } catch (err) {
       console.error('Failed to start mastermind session:', err)
       return false
     }
-  }, [start, removeSession, conversationId])
+  }, [start, conversationId])
 
   // Send message - the session is usually warm already, so this just sends.
   const handleSendMessage = useCallback(
@@ -133,7 +155,7 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
       const live = useAgentStore.getState().sessions.get(conversationId)
       const messages = live?.messages || []
       const lastMessage = messages[messages.length - 1]
-      if (lastMessage?.partType === 'question' && lastMessage?.tool?.questions) {
+      if (live?.status === SessionStatus.WAITING_APPROVAL && lastMessage?.partType === 'question' && lastMessage?.tool?.questions) {
         await approve(true, message)
       } else {
         await sendMessage(message)
@@ -154,9 +176,9 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
    * process. Failure is silent: the first message starts the session as before.
    */
   useEffect(() => {
-    if (!prewarm || !selectedAgentId || currentSession?.sessionId) return
+    if (switching || !prewarm || !selectedAgentId || currentSession?.sessionId) return
     void ensureSession()
-  }, [prewarm, selectedAgentId, currentSession?.sessionId, ensureSession])
+  }, [switching, prewarm, selectedAgentId, currentSession?.sessionId, ensureSession])
 
   // Listen for pre-fill messages from the dashboard command input
   useEffect(() => {
@@ -180,14 +202,13 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-card">
       {/* Header with agent selector */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
-        {/* A warm session is not a conversation: the choice stays open until
-            something has actually been said. */}
+        {/* Switching keeps the conversation and releases only its reasoning session. */}
         <select
           value={selectedAgentId || ''}
           onChange={(e) => handleAgentChange(e.target.value)}
           className="text-xs bg-background border border-border rounded px-2 py-1 cursor-pointer hover:border-primary/50 transition-colors"
           aria-label="Mastermind agent"
-          disabled={!!project || (currentSession?.messages?.length ?? 0) > 0}
+          disabled={switching || agents.length === 0}
         >
           {agents.map((agent) => (
             <option key={agent.id} value={agent.id}>
@@ -201,19 +222,22 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
         </Button>
       </div>
 
+      {switching && <p role="status" className="px-4 py-2 text-xs text-muted-foreground">Switching agent… Conversation history is kept.</p>}
+      {error && <p role="alert" className="px-4 py-2 text-xs text-destructive">{error}</p>}
+
       {/* Chat interface */}
       {selectedAgentId && (
         <AgentTranscriptPanel
           title={project ? project.name : "Mastermind den"}
           messages={currentSession?.messages || []}
-          status={currentSession?.status || SessionStatus.IDLE}
+          status={switching ? SessionStatus.IDLE : currentSession?.status || SessionStatus.IDLE}
           systemStatus={currentSession?.systemStatus}
           onStop={stop}
           onSend={handleSendMessage}
           className="flex-1 min-h-0"
           sessionId={currentSession?.sessionId}
           pendingApproval={currentSession?.pendingApproval ?? undefined}
-          pendingSend={currentSession?.pendingSend}
+          pendingSend={switching || currentSession?.pendingSend}
         />
       )}
 
