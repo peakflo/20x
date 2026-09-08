@@ -30,11 +30,11 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 ## How It Works
 
 <p align="center">
-  <img src="resources/process.png" alt="20x process: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → triage agent → Agent (Claude Code, Opencode, OpenAI Codex, Pi) → HITL review → Feedback" />
+  <img src="resources/process.png" alt="20x process: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → triage agent → Agent (Claude Code, Opencode, OpenAI Codex, Cursor, Pi) → HITL review → Feedback" />
 </p>
 
 1. **Tasks flow in** — from Linear, YouTrack, HubSpot, GitHub Issues, Notion, Peakflo Workflo, or created manually
-2. **Triage agent** — Assigns priority, coding agent (Claude Code, OpenCode, Codex, or Pi), relevant skills, and git repos
+2. **Triage agent** — Assigns priority, coding agent (Claude Code, OpenCode, Codex, Cursor, or Pi), relevant skills, and git repos
 3. **Agent works the task** — reads skills, git worktrees, and MCP servers; streams output in real time
 4. **HITL review** — Agents pause for human approval before risky actions
 5. **Feedback loop** — Skills and confidence levels are automatically updated after completion
@@ -42,7 +42,7 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 ## Features
 
 <p align="center">
-  <img src="resources/integrations.png" alt="20x integrations: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → 20x ↔ GitLab, Github, MCP → Claude Code, Opencode, OpenAI Codex, Pi; Skills automatically improved" />
+  <img src="resources/integrations.png" alt="20x integrations: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → 20x ↔ GitLab, Github, MCP → Claude Code, Opencode, OpenAI Codex, Cursor, Pi; Skills automatically improved" />
 </p>
 
 ### 📊 Dashboard Workspace
@@ -55,6 +55,7 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 - **Claude Code** — Anthropic's official agent SDK (Claude Sonnet 4.6)
 - **OpenCode** — Open-source coding agent
 - **Codex** — OpenAI's agent framework (GPT-6 Astra)
+- **Cursor** — Cursor's coding agent via the Agent Client Protocol
 - **Pi** — Open-source coding agent with Peakflo AI Gateway models
 - **Live transcripts** — Watch agents think and work in real time with message counts
 - **Human-in-the-loop** — Approve risky actions before execution
@@ -81,6 +82,8 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 - **Git worktree management** — Isolated branches per task
 - **Repository context** — Agents know which repos to work on (GitHub & GitLab)
 - **MCP servers** — Connect Model Context Protocol tools with auto-registration
+- **Browser MCP tools** — Expose console logs and network activity from browser panels to agents
+- **Idle workspace cleanup** — Prunes `node_modules` in workspaces idle for 7+ days to reclaim disk
 - **Local-first** — SQLite database, no cloud required
 
 ### 📋 Task Management
@@ -195,7 +198,7 @@ See [AGENTS.md](./AGENTS.md) for detailed architecture.
 
 | Layer | Technology |
 |-------|-----------|
-| Shell | Electron 34 |
+| Shell | Electron 44 |
 | Build | electron-vite |
 | Frontend | React 19 + Tailwind CSS 4 + Zustand 5 |
 | UI Components | Radix UI primitives |
@@ -203,7 +206,7 @@ See [AGENTS.md](./AGENTS.md) for detailed architecture.
 | Icons | Lucide React |
 | Font | Geist |
 | Database | SQLite (better-sqlite3, WAL mode) |
-| Agent SDKs | @opencode-ai/sdk, @anthropic-ai/claude-agent-sdk, @zed-industries/codex-acp |
+| Agent SDKs | @opencode-ai/sdk, @anthropic-ai/claude-agent-sdk, @agentclientprotocol/codex-acp |
 | Testing | Vitest + happy-dom |
 
 ## Contributing
@@ -257,6 +260,9 @@ We welcome contributions! Here's how:
 - Light theme
 
 ### Recently Shipped
+- ✅ Cursor coding agent support (Agent Client Protocol)
+- ✅ Idle workspace cleanup — node_modules pruning after 7 days
+- ✅ Browser console logs and network activity exposed via MCP
 - ✅ Dashboard workspace with Kanban board and workflow apps
 - ✅ Subtask support with ordering and drag-and-drop
 - ✅ GitLab integration (task sourcing & repositories)
