@@ -152,10 +152,15 @@ export function registerIpcHandlers(
       }
     }
 
-    const updated = db.updateTask(id, data)
+    if (data.recurrence_paused !== undefined && (Object.keys(data).length !== 1 || !recurrenceScheduler)) {
+      throw new Error('Change the schedule pause separately from other task fields.')
+    }
+    const updated = data.recurrence_paused !== undefined
+      ? recurrenceScheduler!.setPaused(id, data.recurrence_paused)
+      : db.updateTask(id, data)
 
     // Initialize recurring task schedule when recurrence is added or changed
-    if (recurrenceScheduler && updated && updated.is_recurring && updated.recurrence_pattern) {
+    if (data.recurrence_paused === undefined && recurrenceScheduler && updated && updated.is_recurring && updated.recurrence_pattern) {
       recurrenceScheduler.initializeRecurringTask(id)
     }
 

@@ -11,6 +11,24 @@ beforeEach(() => {
 })
 
 describe('Task CRUD', () => {
+  it('migrates existing schedules to unpaused and preserves a saved pause on subsequent migrations', () => {
+    const manager = new RealDatabaseManager()
+    manager.db = new RawDatabase(':memory:')
+    const internals = manager as unknown as { createTables(): void; runMigrations(): void }
+    try {
+      internals.createTables()
+      internals.runMigrations()
+      // Simulate the schema shipped before recurrence pause was introduced.
+      manager.db.exec('ALTER TABLE tasks DROP COLUMN recurrence_paused')
+      const existing = manager.createTask(makeTask({ is_recurring: true, recurrence_pattern: '*/5 * * * *' }))!
+      internals.runMigrations()
+      expect(manager.getTask(existing.id)).toMatchObject({ recurrence_paused: false, recurrence_pattern: '*/5 * * * *' })
+      manager.updateTask(existing.id, { recurrence_paused: true })
+      internals.runMigrations()
+      expect(manager.getTask(existing.id)?.recurrence_paused).toBe(true)
+    } finally { manager.db.close() }
+  })
+
   it('creates and retrieves a task', () => {
     const task = db.createTask(makeTask({ title: 'Hello World' }))
     expect(task).toBeDefined()

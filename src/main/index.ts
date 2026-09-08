@@ -1023,6 +1023,7 @@ app.whenReady().then(async () => {
     }
   }, undefined, undefined, new RoutineSources(db, (agentId, serverId) => agentManager!.resolveRoutineMcpConnection(agentId, serverId), server => server.source === 'enterprise' ? enterpriseAuth?.getApiUrl() : undefined))
   agentManager.setResponsibilityManager(responsibilityManager)
+  recurrenceScheduler = new RecurrenceScheduler(db)
   taskControl = new TaskControl(db, agentManager, syncManager, responsibilityManager, async request => {
     if (!mainWindow || mainWindow.isDestroyed() || request.signal.aborted) return false
     const result = await dialog.showMessageBox(mainWindow, { type: 'question', title: 'Mastermind task action', message: request.title, detail: request.detail,
@@ -1031,13 +1032,12 @@ app.whenReady().then(async () => {
   }, (channel, data) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, data)
     broadcastToMobileClients(channel, data)
-  })
+  }, recurrenceScheduler)
   responsibilityManager.setTaskControl(taskControl)
   setTaskControl(taskControl)
   setResponsibilityManager(responsibilityManager)
   registerResponsibilityIpc(responsibilityManager, () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : undefined)
 
-  recurrenceScheduler = new RecurrenceScheduler(db)
   heartbeatScheduler = new HeartbeatScheduler(db, agentManager)
   taskAutomationScheduler = new TaskAutomationScheduler(db, agentManager)
   // A brand-new recurring instance must not wait up to a minute to start.

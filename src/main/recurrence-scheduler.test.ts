@@ -246,6 +246,62 @@ describe('RecurrenceScheduler — handing new instances to auto-start', () => {
     expect(onInstancesCreated).not.toHaveBeenCalled()
   })
 
+  it('keeps a paused template stopped across scheduler restart and resumes only at the next future tick', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-08T09:00:00Z'))
+    const { db } = createTestDb()
+    const template = dueTemplate(db, { recurrence_pattern: '*/5 * * * *', auto_start_agent: true })
+    const other = dueTemplate(db)
+    const first = new RecurrenceScheduler(db, 'UTC')
+    try {
+      first.setPaused(template, true)
+      const restarted = new RecurrenceScheduler(db, 'UTC')
+      restarted.initializeRecurringTask(template)
+      await runTick(restarted)
+      expect(db.getTask(template)).toMatchObject({ recurrence_paused: true, next_occurrence_at: null, auto_start_agent: true })
+      expect(db.getTasks().some(t => t.recurrence_parent_id === template)).toBe(false)
+      expect(db.getTasks().some(t => t.recurrence_parent_id === other)).toBe(true)
+      vi.setSystemTime(new Date('2026-09-08T09:31:00Z'))
+      expect(restarted.setPaused(template, false).next_occurrence_at).toBe('2026-09-08T09:35:00.000Z')
+      await runTick(restarted)
+      expect(db.getTasks().some(t => t.recurrence_parent_id === template)).toBe(false)
+      vi.setSystemTime(new Date('2026-09-08T09:35:00Z'))
+      await runTick(restarted)
+      expect(db.getTasks().filter(t => t.recurrence_parent_id === template)).toHaveLength(1)
+    } finally { vi.useRealTimers(); db.db.close() }
+  })
+
+  it('rechecks a due template paused while another template was processing', async () => {
+    const { db } = createTestDb()
+    const id = dueTemplate(db)
+    const stale = db.getTask(id)!
+    const scheduler = new RecurrenceScheduler(db, 'UTC')
+    scheduler.setPaused(id, true)
+    await (scheduler as unknown as { catchUpMissedOccurrences(t: typeof stale): Promise<void> }).catchUpMissedOccurrences(stale)
+    expect(db.getTasks()).toHaveLength(1)
+    scheduler.setPaused(id, false)
+    await (scheduler as unknown as { catchUpMissedOccurrences(t: typeof stale): Promise<void> }).catchUpMissedOccurrences(stale)
+    expect(db.getTasks()).toHaveLength(1)
+    db.db.close()
+  })
+
+  it('refuses Workflo schedules and leaves an invalid schedule paused when resume fails', () => {
+    const { db } = createTestDb()
+    const scheduler = new RecurrenceScheduler(db, 'UTC')
+    const id = dueTemplate(db)
+    try {
+      scheduler.setPaused(id, true)
+      db.updateTask(id, { recurrence_pattern: 'invalid' })
+      expect(() => scheduler.setPaused(id, false)).toThrow('no next occurrence')
+      expect(db.getTask(id)?.recurrence_paused).toBe(true)
+      const mcp = db.createMcpServer({ name: 'Workflo' })!
+      const source = db.createTaskSource({ name: 'Workflo', mcp_server_id: mcp.id, plugin_id: 'peakflo' })!
+      db.updateTask(id, { source_id: source.id, external_id: 'remote', recurrence_pattern: '*/5 * * * *' }, 'workflo-server')
+      expect(() => scheduler.setPaused(id, false)).toThrow('managed by Workflo')
+      expect(db.getTask(id)?.recurrence_paused).toBe(true)
+    } finally { db.db.close() }
+  })
+
   it('copies auto_start_agent onto the instance so the automation loop can find it', async () => {
     const { db } = createTestDb()
     const templateId = dueTemplate(db, { auto_start_agent: true, auto_complete_without_review: true })

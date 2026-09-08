@@ -379,7 +379,7 @@ interface TaskDetailViewProps {
   /** Save an inline description edit. When provided, the description becomes editable. */
   onUpdateDescription?: (description: string) => void | Promise<void>
   /** Update auto-start / auto-complete flags for recurring templates */
-  onUpdateAutoFlags?: (updates: { auto_start_agent?: boolean; auto_complete_without_review?: boolean }) => void
+  onUpdateAutoFlags?: (updates: { auto_start_agent?: boolean; auto_complete_without_review?: boolean; recurrence_paused?: boolean }) => void | Promise<void>
   subtasks?: WorkfloTask[]
   parentTask?: WorkfloTask | null
   onNavigateToTask?: (taskId: string) => void
@@ -396,6 +396,8 @@ interface TaskDetailViewProps {
 }
 
 function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks, displayMode = 'full', showOutputFields = true, showPrimaryActions = true }: TaskDetailViewProps) {
+  const [scheduleBusy, setScheduleBusy] = React.useState(false)
+  const [scheduleError, setScheduleError] = React.useState('')
   // Per-field selectors — a selector-less useSkillStore() re-renders this
   // large view on every skill-store mutation.
   const skills = useSkillStore((s) => s.skills)
@@ -667,11 +669,19 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
                 <span className="text-muted-foreground flex items-center gap-2"><Repeat className="h-3.5 w-3.5" /> Recurrence</span>
                 <div className="flex flex-col gap-1">
                   <span>{formatRecurrencePattern(task.recurrence_pattern)}</span>
-                  {task.next_occurrence_at && (
+                  {task.recurrence_paused && <span className="text-xs text-muted-foreground">Schedule paused</span>}
+                  {!task.recurrence_paused && task.next_occurrence_at && (
                     <span className="text-xs text-muted-foreground">
                       Next: {formatDate(task.next_occurrence_at)}
                     </span>
                   )}
+                  {onUpdateAutoFlags && !task.server_managed && <Button size="sm" variant="outline" className="w-fit" disabled={scheduleBusy} onClick={async () => {
+                    setScheduleBusy(true); setScheduleError('')
+                    try { await onUpdateAutoFlags({ recurrence_paused: !task.recurrence_paused }) }
+                    catch (error) { setScheduleError(error instanceof Error ? error.message : 'Schedule update failed.') }
+                    finally { setScheduleBusy(false) }
+                  }}>{task.recurrence_paused ? 'Resume schedule' : 'Pause schedule'}</Button>}
+                  {scheduleError && <span role="alert" className="text-xs text-destructive">{scheduleError}</span>}
                 </div>
               </>
             )}

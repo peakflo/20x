@@ -128,6 +128,7 @@ export class RecurrenceScheduler {
       const broken = this.dbManager.db.prepare(`
         SELECT id, recurrence_pattern FROM tasks
         WHERE is_recurring = 1
+          AND recurrence_paused = 0
           AND recurrence_parent_id IS NULL
           AND recurrence_pattern IS NOT NULL
           AND next_occurrence_at IS NULL
@@ -168,6 +169,7 @@ export class RecurrenceScheduler {
       const dueTemplates = this.dbManager.db.prepare(`
         SELECT * FROM tasks
         WHERE is_recurring = 1
+          AND recurrence_paused = 0
           AND recurrence_parent_id IS NULL
           AND next_occurrence_at IS NOT NULL
           AND next_occurrence_at <= ?
@@ -216,8 +218,12 @@ export class RecurrenceScheduler {
    * then fast-forward next_occurrence_at to the next future time.
    */
   private async catchUpMissedOccurrences(template: TaskRecord): Promise<void> {
+    // Another template's awaited processing may have allowed a pause or edit.
+    const current = this.dbManager.getTask(template.id)
+    if (!current || !current.is_recurring || current.recurrence_parent_id || current.recurrence_paused) return
+    template = current
     if (isWorkfloLinkedTask(this.dbManager, template)) return
-    if (!template.recurrence_pattern || !template.next_occurrence_at) {
+    if (!template.recurrence_pattern || !template.next_occurrence_at || Date.parse(template.next_occurrence_at) > Date.now()) {
       return
     }
 
@@ -472,12 +478,25 @@ export class RecurrenceScheduler {
     }
   }
 
+  /** Pause only future instances. Existing runs and automation flags are retained. */
+  setPaused(taskId: string, paused: boolean): TaskRecord {
+    if (typeof paused !== 'boolean') throw new Error('Schedule pause must be a boolean.')
+    const task = this.dbManager.getTask(taskId)
+    if (!task || !task.is_recurring || task.recurrence_parent_id || !task.recurrence_pattern) throw new Error('Choose a recurring task template, not an individual run.')
+    if (task.server_managed || isWorkfloLinkedTask(this.dbManager, task)) throw new Error('This schedule is managed by Workflo. Change it at its source.')
+    if (!!task.recurrence_paused === paused) return task
+    // Resume from now, never backfill the deliberately paused period.
+    const next = paused ? null : this.calculateNextOccurrence(task.recurrence_pattern, new Date().toISOString())
+    if (!paused && !next) throw new Error('This schedule has no next occurrence. Edit its recurrence before resuming.')
+    return this.dbManager.updateTask(taskId, { recurrence_paused: paused, next_occurrence_at: next })!
+  }
+
   // Public method to initialize next_occurrence_at for a newly created recurring task.
   // Calculates from 1 minute ago so that a cron matching the current minute fires
   // on the very next scheduler tick instead of waiting until the next day/cycle.
   initializeRecurringTask(taskId: string): void {
     const task = this.dbManager.getTask(taskId)
-    if (!task || !task.is_recurring || !task.recurrence_pattern) {
+    if (!task || !task.is_recurring || !task.recurrence_pattern || task.recurrence_paused) {
       return
     }
 

@@ -77,3 +77,11 @@ Completion uses the same source action and outputs as the desktop Complete butto
 Include a local task showing **Agent is working** in the completion test: ask Mastermind to complete it and approve the desktop confirmation. After its agent and heartbeat runtimes stop, its saved session ID and status must not block the Workflo handoff. Session history remains available. Failed runtime release must prevent the upload, and a successful upload alone must not display Completed before Workflo confirms it.
 
 Task-control validation covers real HTTP MCP discovery/calls against an isolated database, root/worker tool access, explicit confirmation, cascade cleanup, stale consent, pending commands, launch/message/permission races, release failures, responsibility cancellation and quit. Human confirmation and source acceptance are controlled in tests; actual desktop clicking and a live Workflo completion are still manual acceptance checks.
+
+## Pausing a recurring task schedule
+
+Ask Mastermind to “pause the Slack monitor schedule.” It uses `inspect_tasks` to find the recurring template, then `manage_task` with `pause_schedule`. Confirm the named schedule in the desktop dialog. The template remains in Recurring tasks and shows Paused; its task view also offers Pause schedule / Resume schedule. Schedule controls are available to Mastermind, not worker sessions.
+
+Pause persists across quit/reopen and prevents new instances, including schedule repair. Existing runs continue; the cron, agent, automation settings and history remain. Ask to resume and confirm: the next future occurrence runs, without replaying the paused period. This controls local recurring task templates; project Routine agreements and global auto-run retain their existing separate controls. Workflo schedules must be managed at their source.
+
+To test, pause a five-minute recurring template, leave 20x open across its due time, and verify no new instance appears. Quit/reopen and check it is still paused. Resume, verify the next time is in the future, and verify exactly one new instance at that time. Confirm existing runs and unrelated schedules are retained. Declining confirmation or choosing an individual run must not change its template.

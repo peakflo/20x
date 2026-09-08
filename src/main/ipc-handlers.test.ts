@@ -32,6 +32,8 @@ vi.mock('child_process', () => ({
 
 import { ipcMain } from 'electron'
 import { registerIpcHandlers } from './ipc-handlers'
+import { createTestDb } from '../../test/helpers/db-test-helper'
+import { RecurrenceScheduler } from './recurrence-scheduler'
 
 describe('registerIpcHandlers', () => {
   beforeEach(() => {
@@ -156,6 +158,23 @@ describe('registerIpcHandlers', () => {
 })
 
 describe('db:updateTask coordinator wake-up', () => {
+  it('uses the shared schedule control for pause/resume without reinitializing its next occurrence', () => {
+    const { db } = createTestDb()
+    const scheduler = new RecurrenceScheduler(db, 'UTC')
+    const initialize = vi.spyOn(scheduler, 'initializeRecurringTask')
+    registerIpcHandlers(db, {} as never, {} as never, {} as never, {} as never, {} as never, undefined, undefined, scheduler)
+    const handler = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.filter(c => c[0] === 'db:updateTask').pop()![1]
+    const task = db.createTask({ title: 'Monitor', is_recurring: true, recurrence_pattern: '*/5 * * * *' })!
+    try {
+      expect(() => handler({}, task.id, { recurrence_paused: 'false' })).toThrow('boolean')
+      expect(() => handler({}, task.id, { recurrence_paused: true, title: 'Different' })).toThrow('separately')
+      expect(handler({}, task.id, { recurrence_paused: true })).toMatchObject({ recurrence_paused: true, next_occurrence_at: null })
+      const resumed = handler({}, task.id, { recurrence_paused: false })
+      expect(Date.parse(resumed.next_occurrence_at)).toBeGreaterThan(Date.now())
+      expect(initialize).not.toHaveBeenCalled()
+    } finally { db.db.close() }
+  })
+
   function setup(existing: Record<string, unknown>, updated: Record<string, unknown>) {
     const notifyParent = vi.fn().mockResolvedValue(undefined)
     const agentManager = { notifyParentOfSubtaskCompletion: notifyParent } as unknown as Parameters<typeof registerIpcHandlers>[1]

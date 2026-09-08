@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { TaskDetailView } from './TaskDetailView'
 import { CodingAgentType, TaskStatus } from '@/types'
 import type { Agent, WorkfloTask } from '@/types'
@@ -482,6 +482,16 @@ describe('TaskDetailView – inline description editing', () => {
 })
 
 describe('TaskDetailView – recurring task auto-start/auto-complete toggles', () => {
+  it('shows a paused schedule without a misleading next run and allows resuming it', async () => {
+    const onUpdateAutoFlags = vi.fn().mockRejectedValueOnce(new Error('Schedule changed'))
+    renderDetailView({ task: { is_recurring: true, recurrence_paused: true, recurrence_pattern: '*/5 * * * *', next_occurrence_at: '2026-09-08T09:00:00Z' }, onUpdateAutoFlags })
+    expect(screen.getByText('Schedule paused')).toBeDefined()
+    expect(screen.queryByText(/^Next:/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Resume schedule' }))
+    expect(onUpdateAutoFlags).toHaveBeenCalledWith({ recurrence_paused: false })
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Schedule changed'))
+  })
+
   it('shows auto-start and auto-complete toggles for recurring templates with agent', () => {
     const onUpdateAutoFlags = vi.fn()
     renderDetailView({

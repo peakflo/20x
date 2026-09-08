@@ -262,6 +262,7 @@ export interface TaskRow {
   feedback_rating: number | null
   feedback_comment: string | null
   is_recurring: number
+  recurrence_paused?: number
   recurrence_pattern: string | null
   recurrence_parent_id: string | null
   last_occurrence_at: string | null
@@ -360,6 +361,7 @@ export interface TaskRecord {
   feedback_rating: number | null
   feedback_comment: string | null
   is_recurring: boolean
+  recurrence_paused?: boolean
   recurrence_pattern: RecurrencePatternRecord | null
   recurrence_parent_id: string | null
   last_occurrence_at: string | null
@@ -444,6 +446,7 @@ export interface UpdateTaskData {
   feedback_rating?: number | null
   feedback_comment?: string | null
   is_recurring?: boolean
+  recurrence_paused?: boolean
   recurrence_pattern?: RecurrencePatternRecord | null
   last_occurrence_at?: string | null
   next_occurrence_at?: string | null
@@ -480,6 +483,7 @@ const UPDATABLE_COLUMNS = new Set([
   'feedback_rating',
   'feedback_comment',
   'is_recurring',
+  'recurrence_paused',
   'recurrence_pattern',
   'last_occurrence_at',
   'next_occurrence_at',
@@ -526,6 +530,7 @@ function deserializeTask(row: TaskRow): TaskRecord {
     feedback_rating: row.feedback_rating ?? null,
     feedback_comment: row.feedback_comment ?? null,
     is_recurring: row.is_recurring === 1,
+    recurrence_paused: row.recurrence_paused === 1,
     recurrence_pattern: row.recurrence_pattern
       ? (row.recurrence_pattern.startsWith('{')
           ? JSON.parse(row.recurrence_pattern) as RecurrencePatternObject
@@ -958,8 +963,9 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  * they build the schema from `CREATE TABLE`, not from the migration path.
  *
  * 8 → 9: tasks.complete_at_source
+ * 9 → 10: tasks.recurrence_paused
  */
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -1060,6 +1066,7 @@ export class DatabaseManager {
         source TEXT NOT NULL DEFAULT 'local',
         resolution TEXT,
         is_recurring INTEGER NOT NULL DEFAULT 0,
+        recurrence_paused INTEGER NOT NULL DEFAULT 0,
         recurrence_pattern TEXT DEFAULT NULL,
         recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
         last_occurrence_at TEXT DEFAULT NULL,
@@ -1297,6 +1304,7 @@ export class DatabaseManager {
         feedback_rating INTEGER DEFAULT NULL,
         feedback_comment TEXT DEFAULT NULL,
         is_recurring INTEGER NOT NULL DEFAULT 0,
+        recurrence_paused INTEGER NOT NULL DEFAULT 0,
         recurrence_pattern TEXT DEFAULT NULL,
         recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
         last_occurrence_at TEXT DEFAULT NULL,
@@ -1607,6 +1615,10 @@ export class DatabaseManager {
       console.log('[Database Migration] Updating source_id foreign key to CASCADE delete')
       this.rebuildTasksTable(columnNames)
       console.log('[Database Migration] Successfully updated source_id foreign key to CASCADE')
+    }
+
+    if (!columnNames.has('recurrence_paused')) {
+      this.db.exec('ALTER TABLE tasks ADD COLUMN recurrence_paused INTEGER NOT NULL DEFAULT 0')
     }
 
     // Add recurring task columns

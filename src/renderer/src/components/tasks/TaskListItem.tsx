@@ -159,7 +159,7 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
                 title={task.next_occurrence_at ? `Next: ${formatDate(task.next_occurrence_at)}` : undefined}
               >
                 <Repeat className="h-3 w-3" />
-                {formatRecurrenceShort(task.recurrence_pattern)}
+                {task.recurrence_paused ? 'Paused · ' : ''}{formatRecurrenceShort(task.recurrence_pattern)}
               </span>
             )}
             {task.recurrence_parent_id && (

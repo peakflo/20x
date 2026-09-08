@@ -851,8 +851,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
     if (onUpdateTask) {
       await onUpdateTask(task.id, updates)
     } else {
-      await taskApi.update(task.id, updates)
-      updateTaskInStore(task.id, updates)
+      const updated = await taskApi.update(task.id, updates)
+      updateTaskInStore(task.id, updated ?? updates)
     }
   }, [onUpdateTask, task?.id, updateTaskInStore])
 

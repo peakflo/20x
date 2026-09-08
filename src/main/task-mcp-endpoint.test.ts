@@ -13,6 +13,7 @@ import { makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
 import { startTaskApiServer, stopTaskApiServer, setTaskApiNotifier, setTaskControl } from './task-api-server'
 import { TaskControl } from './task-control'
+import { RecurrenceScheduler } from './recurrence-scheduler'
 import type { ResponsibilityManager } from './responsibility-manager'
 import { buildTaskMcpUrl, parseScopeFromUrl } from './task-mcp-endpoint'
 
@@ -71,6 +72,39 @@ describe('buildTaskMcpUrl and parseScopeFromUrl', () => {
 })
 
 describe('MCP endpoint over HTTP', () => {
+  it('pauses and resumes the exact recurring template through Mastermind, preserving runs and settings', async () => {
+    const task = db.createTask(makeTask({ title: 'Slack monitor', is_recurring: true, recurrence_pattern: '*/5 * * * *', auto_start_agent: true }))!
+    const instance = db.createTask(makeTask({ title: task.title, recurrence_parent_id: task.id }))!
+    const responsibilities = { projectForTask: () => undefined } as unknown as ResponsibilityManager
+    const confirm = vi.fn(async () => true)
+    const stop = vi.fn()
+    const service = new TaskControl(db, { withStoppedTasks: stop }, { completeTask: vi.fn() }, responsibilities, confirm, vi.fn(), new RecurrenceScheduler(db))
+    setTaskControl(service)
+    const port = await startTaskApiServer(db)
+    const client = await connect(buildTaskMcpUrl(port, { artifactTaskId: 'mastermind-session' }))
+    try {
+      const matches = JSON.parse(textOf(await client.callTool({ name: 'inspect_tasks', arguments: { query: 'Slack monitor' } })))
+      expect(matches).toEqual(expect.arrayContaining([expect.objectContaining({ id: task.id, schedule: { pattern: '*/5 * * * *', paused: false, nextAt: null } })]))
+      const manage = async (action: string, taskId = task.id) => JSON.parse(textOf(await client.callTool({ name: 'manage_task', arguments: { task_id: taskId, action } })))
+      expect(await manage('pause_schedule', instance.id)).toMatchObject({ error: expect.stringContaining('template') })
+      expect(confirm).not.toHaveBeenCalled()
+      confirm.mockResolvedValueOnce(false)
+      expect(await manage('pause_schedule')).toMatchObject({ success: false, cancelled: true })
+      expect(db.getTask(task.id)?.recurrence_paused).toBe(false)
+      expect(await manage('pause_schedule')).toMatchObject({ success: true, schedulePaused: true, nextOccurrenceAt: null })
+      expect(await manage('pause_schedule')).toMatchObject({ success: true, schedulePaused: true })
+      expect(confirm).toHaveBeenCalledTimes(2)
+      confirm.mockImplementationOnce(async () => { db.updateTask(task.id, { recurrence_pattern: '*/10 * * * *' }); return true })
+      expect(await manage('resume_schedule')).toMatchObject({ error: expect.stringContaining('changed') })
+      expect(db.getTask(task.id)?.recurrence_paused).toBe(true)
+      expect(await manage('resume_schedule')).toMatchObject({ success: true, schedulePaused: false, existingRunsUnchanged: true })
+      expect(Date.parse(db.getTask(task.id)!.next_occurrence_at!)).toBeGreaterThan(Date.now())
+      expect(db.getTask(task.id)).toMatchObject({ is_recurring: true, auto_start_agent: true, recurrence_pattern: '*/10 * * * *' })
+      expect(db.getTask(instance.id)).toEqual(instance)
+      expect(stop).not.toHaveBeenCalled()
+    } finally { await client.close(); await service.stop() }
+  })
+
   it('runs Mastermind task inspection and confirmed deletion through the real MCP endpoint', async () => {
     const task = db.createTask(makeTask({ title: 'Disposable test task' }))!
     vi.spyOn(db, 'deleteTaskAttachments').mockImplementation(() => {})
