@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync, readFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { createTestDb } from '../../test/helpers/db-test-helper'
@@ -10,6 +10,8 @@ import type { AgentManager } from './agent-manager'
 import { callResponsibilityTool } from './responsibility-tools'
 import { TaskControl } from './task-control'
 import { RoutineSources } from './routine-sources'
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
+import { startTaskApiServer, stopTaskApiServer, setTaskControl, setResponsibilityManager } from './task-api-server'
 
 let dir: string
 let manager: ResponsibilityManager
@@ -58,6 +60,101 @@ async function finish(step: ResponsibilityStep, action = 'done', next?: string) 
   sessions.get(step.taskId)!.session.status = 'idle'
   await manager.reconcile()
 }
+
+describe('deleting inactive proposals through Mastermind', () => {
+  let service: TaskControl
+  let confirm: ReturnType<typeof vi.fn<ConstructorParameters<typeof TaskControl>[4]>>
+  const rootCall = (name: string, args: Record<string, unknown>) => callResponsibilityTool(manager, manager.tokenForTask(projectConversationId(project.id))!, name, args)
+
+  beforeEach(() => {
+    confirm = vi.fn(async () => true)
+    service = new TaskControl(db, { withStoppedTasks: vi.fn() }, { completeTask: vi.fn() }, manager, confirm, vi.fn())
+    manager.setTaskControl(service)
+  })
+  afterEach(async () => { await service.stop() })
+
+  it('discovers and deletes Goal/Routine proposals over real HTTP, retaining source evidence and unrelated data', async () => {
+    const human = input('Propose a goal and a recurring workflow')
+    const goal = manager.propose(scope(), agreement, human)
+    const routine = manager.propose(scope(), { ...agreement, kind: 'routine', title: 'Recurring project updates', schedule: '*/5 * * * *', source: { command: 'test-source', args: [], description: 'Project updates' } }, human)
+    await manager.act(routine.id, routine.revision, 'trial')
+    manager.remember(project.id, 'preference', 'Keep updates brief')
+    writeFileSync(join(dir, 'evidence.txt'), 'keep this evidence')
+    const ordinary = db.createTask({ title: 'Unrelated task' })!
+    setTaskControl(service); setResponsibilityManager(manager)
+    const port = await startTaskApiServer(db)
+    const client = new Client({ name: 'proposal-deletion-test', version: '1.0.0' })
+    await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp?artifact=mastermind-session`)))
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = await client.callTool({ name, arguments: args })
+      return JSON.parse((result.content as Array<{ text: string }>)[0].text)
+    }
+    try {
+      expect((await client.listTools()).tools.map(t => t.name)).toContain('delete_responsibility_proposal')
+      expect(await call('inspect_responsibilities', { query: 'Recurring project' })).toMatchObject([{ id: routine.id, kind: 'routine', state: 'proposed' }])
+      confirm.mockResolvedValueOnce(false)
+      expect(await call('delete_responsibility_proposal', { responsibility_id: goal.id, approved: true })).toMatchObject({ success: false, cancelled: true })
+      expect(snapshot().responsibilities).toHaveLength(2)
+      expect(await rootCall('delete_responsibility_proposal', { responsibility_id: goal.id })).not.toHaveProperty('isError', true)
+      expect(await call('delete_responsibility_proposal', { responsibility_id: routine.id })).toMatchObject({ success: true, deleted: true, responsibilityId: routine.id })
+      expect(confirm.mock.calls.at(-1)![0].detail).toContain(`Proposal: ${routine.id}`)
+      expect(snapshot().responsibilities).toEqual([])
+      const retained = JSON.parse((db.db.prepare('SELECT data FROM mastermind_agreements WHERE id = ?').get(routine.id) as { data: string }).data)
+      expect(retained).toMatchObject({ state: 'cancelled', deletedAt: expect.any(String), trial: { output: '{"release":"green"}' } })
+      expect(manager.propose(scope(), agreement, human).deletedAt).toBeTruthy()
+      await expect(manager.act(goal.id, goal.revision, 'approve')).rejects.toThrow('deleted')
+      expect(db.getTask(ordinary.id)).toBeDefined()
+      expect(snapshot().memory).toHaveLength(1)
+      expect(readFileSync(join(dir, 'evidence.txt'), 'utf8')).toBe('keep this evidence')
+      await manager.reconcile()
+      expect(runtime.startSession).not.toHaveBeenCalled()
+      const reopened = new ResponsibilityManager(db, runtime)
+      expect(reopened.snapshot().responsibilities).toEqual([])
+    } finally {
+      await client.close(); stopTaskApiServer(); setTaskControl(undefined); setResponsibilityManager(undefined)
+    }
+  })
+
+  it('rejects cross-project and worker deletion, and refuses an agreement activated during confirmation', async () => {
+    const proposal = manager.propose(scope(), agreement, input())
+    mkdirSync(join(dir, 'other'))
+    const other = manager.createProject('Other project', join(dir, 'other'), project.agentId)
+    await expect(service.deleteProposal({ responsibility_id: proposal.id }, other.id)).rejects.toThrow('another project')
+    expect(confirm).not.toHaveBeenCalled()
+    confirm.mockImplementationOnce(async () => { await manager.act(proposal.id, proposal.revision, 'approve'); return true })
+    await expect(service.deleteProposal({ responsibility_id: proposal.id })).rejects.toThrow('inactive proposals')
+    await manager.reconcile()
+    const step = snapshot().steps[0]
+    const worker = manager.tokenForTask(step.taskId)!
+    expect((await callResponsibilityTool(manager, worker, 'delete_responsibility_proposal', { responsibility_id: proposal.id })).isError).toBe(true)
+    expect(snapshot().responsibilities[0].state).toBe('active')
+  })
+
+  it('rejects stale confirmation and unfinished source trials without losing the proposal', async () => {
+    const proposal = manager.propose(scope(), { ...agreement, kind: 'routine', schedule: '* * * * *', source: { command: 'test-source', args: [], description: 'Project updates' } }, input())
+    confirm.mockImplementationOnce(async () => { manager.propose(scope(), { ...proposal.agreement, title: 'Revised goal' }, input('Revise the proposal'), proposal.id); return true })
+    await expect(service.deleteProposal({ responsibility_id: proposal.id })).rejects.toThrow('changed while confirmation')
+    let finishCollection!: (value: string) => void
+    collect.mockImplementationOnce(() => new Promise(resolve => { finishCollection = resolve }))
+    const trial = manager.act(proposal.id, 2, 'trial')
+    await expect(service.deleteProposal({ responsibility_id: proposal.id })).rejects.toThrow('source trial')
+    finishCollection('{"release":"green"}'); await trial
+    expect(snapshot().responsibilities).toHaveLength(1)
+    expect(await service.deleteProposal({ responsibility_id: proposal.id })).toMatchObject({ success: true })
+  })
+
+  it('shares the confirmation lock with task actions and leaves proposals intact on quit', async () => {
+    const proposal = manager.propose(scope(), agreement, input())
+    const task = db.createTask({ title: 'Ordinary task' })!
+    confirm.mockImplementationOnce(({ signal }) => new Promise(resolve => signal.addEventListener('abort', () => resolve(false), { once: true })))
+    const pending = service.deleteProposal({ responsibility_id: proposal.id })
+    await expect(service.run({ task_id: task.id, action: 'delete' })).rejects.toThrow('already waiting')
+    await service.stop()
+    expect(await pending).toMatchObject({ success: false, cancelled: true })
+    expect(snapshot().responsibilities).toHaveLength(1)
+    expect(db.getTask(task.id)).toBeDefined()
+  })
+})
 
 describe('durable engineering responsibilities', () => {
   it('expands pasted home paths while retaining canonical folder validation and deduplication', () => {

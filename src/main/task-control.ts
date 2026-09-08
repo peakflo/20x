@@ -11,6 +11,14 @@ import { isWorkfloLinkedTask } from './workflo-task-sync'
 
 export const taskControlTools: Tool[] = [
   {
+    name: 'inspect_responsibilities', description: 'Find saved project Task, Goal and Routine agreements by title or exact responsibility ID. Includes inactive proposals shown in Automation and Mastermind Work, which are distinct from ordinary 20x tasks. Use before deleting a proposal; clarify ambiguous matches.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string' }, responsibility_id: { type: 'string' } } }
+  },
+  {
+    name: 'delete_responsibility_proposal', description: 'Ask the engineer to confirm deleting an exact inactive Task, Goal or Routine proposal from Mastermind Work and Automation. Retains any source-trial tasks, results, files and project memory. Refuses active or changed agreements and unresolved source trials; does not cancel running work. Use manage_task for ordinary task or recurring-task deletion. Mastermind administration: do not delegate or use computer control. No model approval flag; report only the returned outcome.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { responsibility_id: { type: 'string' } }, required: ['responsibility_id'] }
+  },
+  {
     name: 'inspect_tasks', description: 'Find 20x tasks, including recurring schedule templates, by title or exact ID before managing them. Returns task metadata, source, responsibility ownership and schedule state. Clarify ambiguous matches with the engineer. To pause a schedule choose its recurring template, not an individual run.',
     inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string' }, task_id: { type: 'string' }, runs: { type: 'boolean', description: 'With task_id, list recent checks for that schedule.' }, run_id: { type: 'string', description: 'Read this run including its transcript and archived artifact paths.' }, before: { type: 'string', description: 'List runs due before this ISO timestamp.' } } }
   },
@@ -78,19 +86,43 @@ export class TaskControl {
     return tasks
   }
 
+  inspectResponsibilities(args: Record<string, unknown>, projectId?: string): unknown {
+    const snapshot = this.responsibilities.snapshot(projectId)
+    const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : ''
+    return snapshot.responsibilities.filter(r => (!args.responsibility_id || r.id === args.responsibility_id) && (!query || r.agreement.title.toLowerCase().includes(query) || r.id === query))
+      .map(r => ({ id: r.id, title: r.agreement.title, kind: r.agreement.kind, state: r.state, revision: r.revision, project: snapshot.projects.find(p => p.id === r.projectId)?.name ?? r.projectId }))
+  }
+
+  async deleteProposal(args: Record<string, unknown>, projectId?: string): Promise<unknown> {
+    return this.runExclusive(async () => {
+      const proposal = this.responsibilities.proposalForDeletion(args.responsibility_id, projectId)
+      const project = this.responsibilities.snapshot(proposal.projectId).projects.find(p => p.id === proposal.projectId)
+      const approved = await this.confirm({ title: `Delete ${proposal.agreement.kind} proposal “${proposal.agreement.title}”?`, confirmLabel: 'Delete proposal', signal: this.shutdown.signal,
+        detail: `Project: ${project?.name ?? proposal.projectId}\nProposal: ${proposal.id}\nRevision: ${proposal.revision}\nObjective: ${proposal.agreement.objective}\n\nRemove this inactive proposal from Work and Automation. Any source-trial tasks, saved results, files, and project memory remain. Running or changed proposals cannot be deleted with this confirmation.` })
+      if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, responsibilityId: proposal.id }
+      this.responsibilities.deleteProposal(proposal.id, proposal, projectId)
+      return { success: true, deleted: true, responsibilityId: proposal.id, title: proposal.agreement.title }
+    })
+  }
+
+  private async runExclusive(action: () => Promise<unknown>): Promise<unknown> {
+    this.shutdown.signal.throwIfAborted()
+    if (this.pending) throw new Error('A task action is already waiting or running. Do not submit another action yet.')
+    const job = action()
+    this.pending = job
+    try { return await job } finally { this.pending = undefined }
+  }
+
   async run(args: Record<string, unknown>, projectId?: string): Promise<unknown> {
     this.shutdown.signal.throwIfAborted()
     const task = this.task(args.task_id, projectId)
     const action = args.action === 'close' ? 'complete' : args.action
     if (action !== 'complete' && action !== 'delete' && action !== 'pause_schedule' && action !== 'resume_schedule' && action !== 'reuse_schedule' && action !== 'separate_schedule' && action !== 'recover_schedule') throw new Error('Choose complete, close, delete, pause_schedule, or resume_schedule.')
-    if (this.pending) throw new Error('A task action is already waiting or running. Do not submit another action yet.')
-    const job = action === 'reuse_schedule' || action === 'separate_schedule' || action === 'recover_schedule'
+    return this.runExclusive(() => action === 'reuse_schedule' || action === 'separate_schedule' || action === 'recover_schedule'
       ? this.configureSchedule(task, action, projectId)
       : action === 'pause_schedule' || action === 'resume_schedule'
       ? this.changeSchedule(task, action === 'pause_schedule', projectId)
-      : this.perform(task, action, projectId)
-    this.pending = job
-    try { return await job } finally { this.pending = undefined }
+      : this.perform(task, action, projectId))
   }
 
   private async configureSchedule(task: TaskRecord, action: string, projectId?: string): Promise<unknown> {

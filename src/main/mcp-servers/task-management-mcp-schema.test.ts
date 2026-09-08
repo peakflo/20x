@@ -82,9 +82,13 @@ describe('tool sets per scope', () => {
     const invoke = async () => ({ ok: true })
     const mastermind = { parentTaskId: null, taskId: null, artifactTaskId: 'mastermind-session' }
     expect(listToolsForScope(mastermind).map(t => t.name)).toContain('manage_task')
+    expect(listToolsForScope(mastermind).map(t => t.name)).toContain('delete_responsibility_proposal')
+    expect((await callToolForScope('delete_responsibility_proposal', { responsibility_id: 'proposal' }, mastermind, invoke)).isError).not.toBe(true)
     expect((await callToolForScope('manage_task', { task_id: 't1', action: 'close' }, mastermind, invoke)).isError).not.toBe(true)
     for (const worker of [SCOPED, { parentTaskId: null, taskId: null, artifactTaskId: 'ordinary-task' }]) {
       expect(listToolsForScope(worker).map(t => t.name)).not.toContain('manage_task')
+      expect(listToolsForScope(worker).map(t => t.name)).not.toContain('delete_responsibility_proposal')
+      expect((await callToolForScope('delete_responsibility_proposal', { responsibility_id: 'proposal' }, worker, invoke)).isError).toBe(true)
       expect((await callToolForScope('manage_task', { task_id: 't1', action: 'delete' }, worker, invoke)).isError).toBe(true)
     }
   })

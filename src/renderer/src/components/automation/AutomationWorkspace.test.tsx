@@ -89,6 +89,10 @@ it('updates from task events and project notifications while the page stays open
   snapshot.responsibilities[0].state = 'blocked'
   await act(async () => changed())
   expect(await screen.findByText('Blocked')).toBeInTheDocument()
+  snapshot.responsibilities = []
+  await act(async () => changed())
+  expect(screen.queryByText('New goal')).not.toBeInTheDocument()
+  expect(screen.getByText('New schedule')).toBeInTheDocument()
   act(() => useTaskStore.setState({ tasks: [] }))
   expect(screen.queryByText('New schedule')).not.toBeInTheDocument()
 })

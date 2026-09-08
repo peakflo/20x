@@ -106,6 +106,8 @@ export async function callResponsibilityTool(manager: ResponsibilityManager, tok
       case 'responsibility_context': result = manager.context(scope); break
       case 'inspect_tasks': result = await manager.controlTasks(scope, args, true); break
       case 'manage_task': result = await manager.controlTasks(scope, args); break
+      case 'inspect_responsibilities': result = await manager.controlTasks(scope, args, true, 'proposal'); break
+      case 'delete_responsibility_proposal': result = await manager.controlTasks(scope, args, false, 'proposal'); break
       case 'discover_source_tools': result = await manager.sourceTools(scope, args.serverId as string | undefined, args.agentId as string | undefined); break
       case 'read_responsibility_result': result = manager.readResult(scope, args.taskId as string); break
       case 'delegate_responsibility': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined); break

@@ -61,7 +61,7 @@ let agentController: TaskApiAgentController | null = null
 let responsibilityManager: ResponsibilityManager | undefined
 let taskControl: TaskControl | undefined
 export function setTaskControl(service: TaskControl | undefined): void { taskControl = service }
-export function setResponsibilityManager(manager: ResponsibilityManager): void { responsibilityManager = manager }
+export function setResponsibilityManager(manager: ResponsibilityManager | undefined): void { responsibilityManager = manager }
 
 /**
  * What the renderer is showing. It is pushed on change and cached here, so a
@@ -262,6 +262,12 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     case '/inspect_tasks':
       if (!taskControl) throw new Error('Task controls are unavailable.')
       return taskControl.inspect(params)
+    case '/inspect_responsibilities':
+      if (!taskControl) throw new Error('Task controls are unavailable.')
+      return taskControl.inspectResponsibilities(params)
+    case '/delete_responsibility_proposal':
+      if (!taskControl) throw new Error('Task controls are unavailable.')
+      return taskControl.deleteProposal(params)
     case '/manage_task':
       if (!taskControl) throw new Error('Task controls are unavailable.')
       return taskControl.run(params)

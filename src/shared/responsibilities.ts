@@ -66,6 +66,8 @@ export interface ResponsibilityRecord {
   approvedRevision: number | null
   humanInputId: string
   state: ResponsibilityState
+  /** Deleted proposals remain as history for any source-trial tasks. */
+  deletedAt?: string
   steps: number
   noProgress: number
   nextAt: string | null
