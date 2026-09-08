@@ -421,6 +421,8 @@ export interface CreateTaskData {
   cron?: string
 }
 
+export type TaskUpdateOrigin = 'workflo-server' | 'source-plugin'
+
 export interface UpdateTaskData {
   external_id?: string | null
   source_id?: string | null
@@ -2362,7 +2364,18 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return this.getTask(id)
   }
 
-  updateTask(id: string, data: UpdateTaskData, origin?: 'workflo-server'): TaskRecord | undefined {
+  /**
+   * `origin` names who vouches for this write:
+   * - `'workflo-server'`: the Workflo sync service. It may change the source
+   *   link and the status of a Workflo-owned task.
+   * - `'source-plugin'`: a task-source plugin whose `executeAction` succeeded
+   *   at the source (Notion, Linear, YouTrack, GitHub, HubSpot). The source
+   *   has confirmed the change, so the local completion guard is satisfied.
+   *   It may not touch the source link or a Workflo-owned task.
+   * - `undefined`: a local caller (renderer, agent, API). Sourced tasks may
+   *   not be completed locally; they close through the source.
+   */
+  updateTask(id: string, data: UpdateTaskData, origin?: TaskUpdateOrigin): TaskRecord | undefined {
     if (origin !== 'workflo-server' && ('external_id' in data || 'source_id' in data || 'source' in data)) {
       throw new Error('Only the sync service can change a task source link.')
     }
@@ -2377,10 +2390,10 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         throw new Error('This task is completed in Workflo.')
       }
     }
-    if (data.status === TaskStatus.Completed && origin !== 'workflo-server') {
+    if (data.status === TaskStatus.Completed && origin === undefined) {
       const task = this.getTask(id)
       if (task?.source_id && task.status !== TaskStatus.Completed) {
-        throw new Error('Workflo must confirm completion before this task can close in 20x.')
+        throw new Error('The task source must confirm completion before this task can close in 20x.')
       }
     }
     const setClauses: string[] = []

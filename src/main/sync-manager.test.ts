@@ -5,6 +5,8 @@ import type { DatabaseManager, TaskRecord } from './database'
 import type { McpToolCaller } from './mcp-tool-caller'
 import type { PluginRegistry } from './plugins/registry'
 import type { TaskSourcePlugin } from './plugins/types'
+import { createTestDb } from '../../test/helpers/db-test-helper'
+import { makeTask } from '../../test/helpers/task-fixtures'
 
 function makeMockDb(): DatabaseManager {
   return {
@@ -243,7 +245,27 @@ describe('SyncManager', () => {
       const result = await syncManager.executeAction('approve', task, undefined, 'src-1')
 
       expect(result.success).toBe(true)
-      expect(db.updateTask).toHaveBeenCalledWith('t1', { status: TaskStatus.Completed })
+      expect(db.updateTask).toHaveBeenCalledWith('t1', { status: TaskStatus.Completed }, 'source-plugin')
+    })
+
+    it('closes a Notion-style sourced task locally once the plugin confirms completion (real db)', async () => {
+      // Regression: the sourced-task completion guard in Database.updateTask
+      // rejected the plugin's own confirmed taskUpdate, so the source was
+      // marked done while 20x threw "must confirm completion".
+      const { db: realDb } = createTestDb()
+      const server = realDb.createMcpServer({ name: 'Notion' })!
+      const source = realDb.createTaskSource({ mcp_server_id: server.id, name: 'Notion', plugin_id: 'notion' })!
+      const task = realDb.createTask(makeTask({
+        title: 'Notion page', status: TaskStatus.ReadyForReview, external_id: 'page-1', source_id: source.id, source: 'Notion'
+      }))!
+      const plugin = makeMockPlugin({ id: 'notion' })
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
+      const realSync = new SyncManager(realDb, toolCaller, registry)
+
+      const result = await realSync.executeAction('complete', task, undefined, source.id)
+
+      expect(result).toEqual({ success: true, taskUpdate: { status: TaskStatus.Completed } })
+      expect(realDb.getTask(task.id)!.status).toBe(TaskStatus.Completed)
     })
   })
 })
