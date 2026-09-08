@@ -86,7 +86,7 @@ export interface VoiceTurnStart {
 /** What the renderer is showing when the turn starts. Main trusts nothing here. */
 export interface VoiceUiContext {
   selectedTaskId?: string | null
-  view?: VoiceViewName
+  view?: VoiceViewName | 'automation'
   /** The approval visible on screen right now, if any. */
   pendingApproval?: { taskId: string; sessionId: string } | null
   /** Task IDs the user can currently see. Used only to rank candidates. */

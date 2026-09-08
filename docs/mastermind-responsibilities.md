@@ -20,6 +20,8 @@ The engineer explicitly chose 20x's lifecycle: fully quitting stops agents and m
 
 ## Product boundaries
 
+The left sidebar's **Automation** page is a read-only overview across all projects. It lists recurring task templates once (including existing separate-task schedules), plus project Goals and Routines, with their saved status, timing, and next step. Paused and completed records remain visible. It refreshes from existing task and responsibility events, independently of task filters or the selected Mastermind project. It adds no schedule controls or execution behavior; changes still happen through Mastermind or existing task controls.
+
 - A Task is one assignment per direct human turn (a clarification renews one bounded step), a Goal authorizes necessary continuation, and a Routine authorizes recurring attention. Related Tasks do not automatically become Goals.
 - Project files may be one repository, several repositories, or a non-Git folder. A worker can create an isolated checkout inside the approved project; follow-ups retain the reported checkout.
 - Existing provider approval and sandbox controls remain in force. New orchestration tools never accept a model-supplied approval flag. Human agreement changes are available only through desktop IPC; worker tools have server-owned, revocable assignment scopes.

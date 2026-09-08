@@ -6,7 +6,7 @@ import {
   PanelRightOpen, FileDiff, PackageOpen, Copy, GitBranch, Mic, CircleHelp,
   CircleCheck, Clock3, Play, Trash2, LogOut, ListTree, CornerUpLeft, type LucideIcon
 } from 'lucide-react'
-import { useUIStore } from '@/stores/ui-store'
+import { useUIStore, type SidebarView } from '@/stores/ui-store'
 import { useThemeStore } from '@/stores/theme-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useSkillStore } from '@/stores/skill-store'
@@ -87,12 +87,13 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
   const close = () => onOpenChange(false)
 
   const items = useMemo<CommandItem[]>(() => {
-    const goto = (view: 'dashboard' | 'canvas' | 'tasks' | 'skills') => () => { closeModal(); setSidebarView(view); close() }
+    const goto = (view: SidebarView) => () => { closeModal(); setSidebarView(view); close() }
     const base: CommandItem[] = [
       { id: 'nav-dashboard', group: 'Navigation', label: 'Go to Dashboard', icon: LayoutDashboard, keywords: 'home overview', shortcut: `G D · ${mod}1`, run: goto('dashboard') },
       { id: 'nav-canvas', group: 'Navigation', label: 'Go to Canvas', icon: Layers, keywords: 'board panels', shortcut: `${mod}2`, run: goto('canvas') },
       { id: 'nav-tasks', group: 'Navigation', label: 'Go to Tasks', icon: CheckSquare, keywords: 'todo list', shortcut: `G T · ${mod}3`, run: goto('tasks') },
       { id: 'nav-skills', group: 'Navigation', label: 'Go to Skills', icon: Zap, keywords: 'abilities', shortcut: `G S · ${mod}4`, run: goto('skills') },
+      { id: 'nav-automation', group: 'Navigation', label: 'Go to Automation', icon: Clock3, keywords: 'schedules recurring routines goals', shortcut: `${mod}5`, run: goto('automation') },
       { id: 'nav-next-task', group: 'Navigation', label: 'Next visible task', icon: ArrowDown, shortcut: 'J', run: () => { actions.nextTask(); close() } },
       { id: 'nav-previous-task', group: 'Navigation', label: 'Previous visible task', icon: ArrowUp, shortcut: 'K', run: () => { actions.previousTask(); close() } },
       { id: 'nav-open-task', group: 'Navigation', label: 'Open selected task', icon: ExternalLink, shortcut: 'Enter', run: () => { actions.openTask(); close() } },
