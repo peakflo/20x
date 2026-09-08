@@ -31,7 +31,8 @@ export class SyncManager {
     private db: DatabaseManager,
     private toolCaller: McpToolCaller,
     private pluginRegistry: PluginRegistry,
-    private oauthManager?: OAuthManager
+    private oauthManager?: OAuthManager,
+    private isLocalTaskStopped?: (taskId: string) => boolean
   ) {
   }
 
@@ -153,8 +154,10 @@ export class SyncManager {
   /** A durable command, retried on reconnect and on each task sync. */
   async uploadTask(taskId: string, autonomous = false): Promise<{ queued: boolean }> {
     const task = this.db.getTask(taskId)
-    if (!task || task.source_id || task.external_id) throw new Error('Only a local task can be sent to Workflo.')
-    if (task.session_id || !['not_started', 'ready_for_review'].includes(task.status)) {
+    if (!task || task.source_id || task.external_id || task.status === TaskStatus.Completed) throw new Error('Only an unfinished local task can be sent to Workflo.')
+    // session_id is a resume/history cursor and status survives confirmed cleanup.
+    // Only the runtime owner's confirmed cleanup fence can override these saved fields.
+    if (!this.isLocalTaskStopped?.(taskId) && (task.session_id || !['not_started', 'ready_for_review'].includes(task.status))) {
       throw new Error('Stop the local session before sending this task to Workflo.')
     }
     const scope = this.taskUploadScope()

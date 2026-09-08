@@ -106,6 +106,18 @@ describe('durable upload', () => {
     expect(api.createTask).not.toHaveBeenCalled()
     expect(db.getSetting(`workflo-upload:${task.id}`)).toBeDefined()
   })
+
+  it('keeps upload conservative without confirmed cleanup, including completed local tasks', async () => {
+    const { api, sync } = setup()
+    const task = db.createTask(makeTask())!
+    db.updateTask(task.id, { session_id: 'saved-session' })
+    await expect(sync.uploadTask(task.id)).rejects.toThrow('Stop the local session')
+    db.updateTask(task.id, { session_id: null, status: 'agent_working' })
+    await expect(sync.uploadTask(task.id)).rejects.toThrow('Stop the local session')
+    db.updateTask(task.id, { status: 'completed' }, 'workflo-server')
+    await expect(sync.uploadTask(task.id)).rejects.toThrow('Only an unfinished local task')
+    expect(api.createTask).not.toHaveBeenCalled()
+  })
 })
 
 it('does not fire local recurrence for an old Workflo task with a stale schedule', async () => {

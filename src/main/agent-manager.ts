@@ -356,7 +356,7 @@ export class AgentManager extends EventEmitter {
 
   // Track last sent status per session to detect transitions for OS notifications
   private lastSentStatus: Map<string, string> = new Map()
-  private readonly controlledTasks = new Set<string>()
+  private readonly controlledTasks = new Map<string, 'stopping' | 'stopped'>()
   private readonly pendingTaskOperations = new Map<string, Set<Promise<unknown>>>()
 
   /**
@@ -3160,13 +3160,14 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   async withStoppedTasks<T>(taskIds: string[], action: () => Promise<T>, beforeStop?: () => Promise<void>): Promise<T> {
     const ids = new Set(taskIds.flatMap(id => [id, `heartbeat-${id}`]))
     if ([...ids].some(id => this.controlledTasks.has(id))) throw new Error('An action is already stopping one of these tasks.')
-    for (const id of ids) this.controlledTasks.add(id)
+    for (const id of ids) this.controlledTasks.set(id, 'stopping')
     try {
       for (const id of taskIds) this.db.updateTask(id, { auto_start_agent: false, auto_complete_without_review: false, heartbeat_enabled: false })
       const operations = await Promise.allSettled([...ids].flatMap(id => [...(this.pendingTaskOperations.get(id) ?? [])]))
       await beforeStop?.()
       for (const [id, session] of this.sessions) if (ids.has(session.taskId)) await this.stopSession(id, false, true)
       if (operations.some(r => r.status === 'rejected' && !(r.reason instanceof TaskControlBlockedError))) throw new Error('A task operation failed during cleanup. Inspect its runtime before retrying this action.')
+      for (const id of ids) this.controlledTasks.set(id, 'stopped')
       return await action()
     } finally { for (const id of ids) this.controlledTasks.delete(id) }
   }
@@ -3369,6 +3370,10 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return undefined
   }
 
+  /** True only inside a confirmed action, after strict cleanup and while admission is held. */
+  isTaskStoppedForControl(taskId: string): boolean {
+    return this.controlledTasks.get(taskId) === 'stopped'
+  }
 
   /**
    * Check if a task has a live (working) session in memory.

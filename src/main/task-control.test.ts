@@ -3,6 +3,10 @@ import { createTestDb } from '../../test/helpers/db-test-helper'
 import { TaskControl } from './task-control'
 import type { ResponsibilityManager } from './responsibility-manager'
 import { TaskStatus } from '../shared/constants'
+import { AgentManager } from './agent-manager'
+import { SyncManager } from './sync-manager'
+import { PeakfloPlugin } from './plugins/peakflo-plugin'
+import type { WorkfloTask } from './workflo-api-client'
 
 let db: ReturnType<typeof createTestDb>['db']
 let confirm: ReturnType<typeof vi.fn<ConstructorParameters<typeof TaskControl>[4]>>
@@ -25,6 +29,56 @@ beforeEach(() => {
 afterEach(async () => { await control.stop(); db.db.close() })
 
 describe('Mastermind task administration', () => {
+  it('stops a working local task, retains its history, and waits for Workflo to confirm completion', async () => {
+    db.db.exec('ALTER TABLE tasks ADD COLUMN heartbeat_enabled INTEGER NOT NULL DEFAULT 0')
+    const agent = db.createAgent({ name: 'Agent', config: { enterprise_agent_id: 'remote-agent' } as never })!
+    const t = db.createTask({ title: 'Working task', status: TaskStatus.AgentWorking })!
+    db.updateTask(t.id, { agent_id: agent.id, session_id: 'saved-session' })
+    db.upsertTranscriptParts(t.id, [{ id: 'answer', role: 'assistant', content: 'Work so far' }])
+    const history = db.getTranscriptParts(t.id)
+    db.setSetting('enterprise_tenant_id', 'tenant-1')
+    const agents = new AgentManager(db)
+    const destroySession = vi.fn(async () => undefined)
+    type Session = NonNullable<ReturnType<AgentManager['findSessionByTaskId']>>['session']
+    const session: Session = { id: 'saved-session', taskId: t.id, agentId: agent.id, status: 'working', createdAt: new Date(),
+      seenMessageIds: new Set(), seenPartIds: new Set(), partContentLengths: new Map(), adapter: { destroySession } as unknown as Session['adapter'] }
+    Object.assign(agents, { sessions: new Map([[session.id, session]]) })
+    vi.spyOn(agents as unknown as { buildSessionConfig(): Promise<object> }, 'buildSessionConfig').mockResolvedValue({})
+    const remote = { id: 'remote-task', title: t.title, status: 'not_started', version: 1, agentId: 'remote-agent', skillIds: [],
+      executionMode: 'human', assignees: [], isRecurring: false, taskData: null } as unknown as WorkfloTask
+    const api = { getDomain: () => 'api.test', createTask: vi.fn(async () => {
+      expect(destroySession).toHaveBeenCalledWith('saved-session', {})
+      expect(agents.isTaskStoppedForControl(t.id)).toBe(true)
+      expect(agents.findSessionByTaskId(t.id)).toBeUndefined()
+      expect(db.getTask(t.id)).toMatchObject({ session_id: 'saved-session', status: TaskStatus.AgentWorking })
+      return remote
+    }), executeAction: vi.fn(async () => undefined), getTask: vi.fn(async () => remote) }
+    const sync = new SyncManager(db, {} as never, { get: () => new PeakfloPlugin() } as never, undefined, id => agents.isTaskStoppedForControl(id))
+    Object.assign(sync, { workfloApiClient: api, enterpriseUserId: 'user-1' })
+    const responsibilities = { projectForTask: () => undefined, stepForTask: () => undefined, snapshot: () => ({ responsibilities: [] }) } as unknown as ResponsibilityManager
+    control = new TaskControl(db, agents, sync, responsibilities, confirm, notify)
+    try {
+      for (const status of ['working', 'idle', 'waiting_approval', 'error'] as const) {
+        session.status = status
+        await expect(sync.uploadTask(t.id)).rejects.toThrow('Stop the local session')
+      }
+      session.status = 'working'
+      destroySession.mockRejectedValueOnce(new Error('Runtime release failed'))
+      await expect(control.run({ task_id: t.id, action: 'complete' })).rejects.toThrow('Runtime release failed')
+      expect(agents.isTaskStoppedForControl(t.id)).toBe(false)
+      expect(api.createTask).not.toHaveBeenCalled()
+      expect(await control.run({ task_id: t.id, action: 'complete' })).toMatchObject({ success: false })
+      expect(agents.isTaskStoppedForControl(t.id)).toBe(false)
+      expect(db.getTask(t.id)?.status).not.toBe(TaskStatus.Completed)
+      expect(api.createTask).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'remote-agent' }))
+      expect(api.executeAction).toHaveBeenCalledWith('remote-task', { action: 'complete' }, 1)
+      api.getTask.mockResolvedValue({ ...remote, status: 'completed', version: 2 })
+      await sync.flushTaskCompletions()
+      expect(db.getTask(t.id)).toMatchObject({ status: TaskStatus.Completed, session_id: 'saved-session' })
+      expect(db.getTranscriptParts(t.id)).toEqual(history)
+    } finally { await agents.stopAllSessions() }
+  })
+
   it('treats close as completion and reports only the source result', async () => {
     const t = task()
     complete.mockResolvedValueOnce({ success: false, error: 'Completion pending' })

@@ -1013,7 +1013,7 @@ app.whenReady().then(async () => {
   pluginRegistry.register(new NotionPlugin())
   pluginRegistry.register(new YouTrackPlugin())
 
-  syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
+  syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager, taskId => agentManager!.isTaskStoppedForControl(taskId))
   agentManager.setSyncManager(syncManager)
 
   responsibilityManager = new ResponsibilityManager(db, agentManager, taskId => {

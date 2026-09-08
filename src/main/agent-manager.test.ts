@@ -1698,17 +1698,26 @@ describe('confirmed task cleanup', () => {
       ;(mgr as any).sessions.set(id, { taskId: 'task-1' })
       return id
     })
-    ;(mgr as any).sessions.set('heartbeat', { taskId: 'heartbeat-task-1' })
     ;(mgr as any).sessions.set('other', { taskId: 'other-task' })
     const release = vi.spyOn(mgr, 'stopSession').mockImplementation(async id => { (mgr as any).sessions.delete(id) })
+    expect(mgr.isTaskStoppedForControl('task-1')).toBe(false)
     const launch = mgr.startSession('agent-1', 'task-1')
-    const action = vi.fn(async () => 'done')
+    ;(mgr as any).sessions.set('heartbeat', { taskId: 'heartbeat-task-1' })
+    const action = vi.fn(async () => {
+      expect(mgr.isTaskStoppedForControl('task-1')).toBe(true)
+      expect(mgr.isTaskStoppedForControl('other-task')).toBe(false)
+      expect(release).toHaveBeenCalledWith('heartbeat', false, true)
+      expect(release).toHaveBeenCalledWith('late-session', false, true)
+      return 'done'
+    })
     const cleanup = mgr.withStoppedTasks(['task-1'], action)
+    expect(mgr.isTaskStoppedForControl('task-1')).toBe(false)
     await expect(mgr.resumeSession('agent-1', 'task-1', 'old')).rejects.toThrow('administration is stopping')
     expect(action).not.toHaveBeenCalled()
     finish('late-session')
     await launch
     expect(await cleanup).toBe('done')
+    expect(mgr.isTaskStoppedForControl('task-1')).toBe(false)
     expect(release).toHaveBeenCalledWith('late-session', false, true)
     expect(release).toHaveBeenCalledWith('heartbeat', false, true)
     expect((mgr as any).sessions.has('other')).toBe(true)
