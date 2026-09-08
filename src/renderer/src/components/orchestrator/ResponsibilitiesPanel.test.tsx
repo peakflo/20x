@@ -22,12 +22,37 @@ beforeEach(() => {
   cleanup()
   snapshot = { projects: [{ id: 'project', name: 'Example project', root: '/example', agentId: 'agent', createdAt: '2026-01-01' }], responsibilities: [structuredClone(agreement)], notices: [], memory: [], steps: [] }
   api = {
-    snapshot: vi.fn(async () => structuredClone(snapshot)), createProject: vi.fn(), act: vi.fn(async () => {}), answer: vi.fn(async () => {}), remember: vi.fn(async () => {}), forget: vi.fn(async () => {}), onChanged: vi.fn(() => () => {})
+    snapshot: vi.fn(async () => structuredClone(snapshot)), pickProjectFolder: vi.fn(async () => null), createProject: vi.fn(), act: vi.fn(async () => {}), answer: vi.fn(async () => {}), remember: vi.fn(async () => {}), forget: vi.fn(async () => {}), onChanged: vi.fn(() => () => {})
   }
   window.electronAPI.responsibilities = api
 })
 
 describe('project responsibility controls', () => {
+  it('fills the selected folder, preserves it on cancellation, and creates only on explicit submit', async () => {
+    render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Add engineering project' }))
+    await screen.findByRole('option', { name: 'Engineer' })
+    fireEvent.change(screen.getByLabelText('Project name'), { target: { value: 'Peakflo' } })
+    const field = screen.getByLabelText('Project folder')
+    fireEvent.change(field, { target: { value: '~/old-folder' } })
+    vi.mocked(api.pickProjectFolder).mockResolvedValueOnce('/Users/example/Project with spaces')
+    fireEvent.click(screen.getByRole('button', { name: 'Select folder' }))
+    await waitFor(() => expect(field).toHaveValue('/Users/example/Project with spaces'))
+    expect(api.createProject).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Select folder' }))
+    await waitFor(() => expect(api.pickProjectFolder).toHaveBeenCalledTimes(2))
+    expect(field).toHaveValue('/Users/example/Project with spaces')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create project' })).not.toBeDisabled())
+    vi.mocked(api.createProject).mockImplementationOnce(async (name, root, agentId) => {
+      const created = { id: 'new-project', name, root, agentId, createdAt: '2026-01-01' }
+      snapshot.projects.push(created)
+      return created
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Create project' }))
+    await waitFor(() => expect(api.createProject).toHaveBeenCalledWith('Peakflo', '/Users/example/Project with spaces', 'agent'))
+    await waitFor(() => expect(screen.getByLabelText('Engineering project')).toHaveValue('new-project'))
+  })
+
   it('requires a source trial before approval and sends the exact agreement revision', async () => {
     const selectProject = vi.fn()
     render(<ResponsibilitiesPanel onProjectChange={selectProject} />)

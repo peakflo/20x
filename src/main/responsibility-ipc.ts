@@ -1,4 +1,4 @@
-import { ipcMain, type WebContents, type IpcMainInvokeEvent } from 'electron'
+import { dialog, ipcMain, type WebContents, type IpcMainInvokeEvent } from 'electron'
 import type { ResponsibilityManager } from './responsibility-manager'
 
 let manager: ResponsibilityManager | undefined
@@ -16,6 +16,11 @@ export function recordResponsibilityHumanInput(taskId: string, message: string, 
 export function registerResponsibilityIpc(service: ResponsibilityManager, mainWindow: () => WebContents | undefined): void {
   manager = service; desktop = mainWindow
   ipcMain.handle('responsibilities:snapshot', (event, projectId?: string) => { assertDesktop(event); return service.snapshot(projectId) })
+  ipcMain.handle('responsibilities:pickProjectFolder', async event => {
+    assertDesktop(event)
+    const result = await dialog.showOpenDialog({ title: 'Select project folder', buttonLabel: 'Select folder', properties: ['openDirectory'] })
+    return result.canceled ? null : result.filePaths[0] ?? null
+  })
   ipcMain.handle('responsibilities:createProject', (event, name: string, root: string, agentId: string) => { assertDesktop(event); return service.createProject(name, root, agentId) })
   ipcMain.handle('responsibilities:act', (event, id: string, revision: number, action: string) => { assertDesktop(event); return service.act(id, revision, action) })
   ipcMain.handle('responsibilities:answer', (event, id: string, answer: string, approved?: boolean) => { assertDesktop(event); return service.answer(id, answer, approved) })

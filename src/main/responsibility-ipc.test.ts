@@ -1,7 +1,24 @@
 import { expect, it, vi } from 'vitest'
-import { ipcMain, type WebContents, type IpcMainInvokeEvent } from 'electron'
+import { dialog, ipcMain, type WebContents, type IpcMainInvokeEvent } from 'electron'
 import { registerResponsibilityIpc, recordResponsibilityHumanInput } from './responsibility-ipc'
 import type { ResponsibilityManager } from './responsibility-manager'
+
+it('opens a directory picker only for the desktop and returns no path on cancellation', async () => {
+  vi.mocked(ipcMain.handle).mockClear()
+  const service = {} as ResponsibilityManager
+  const main = { mainFrame: {} } as WebContents
+  registerResponsibilityIpc(service, () => main)
+  const handle = vi.mocked(ipcMain.handle).mock.calls.find(([name]) => name === 'responsibilities:pickProjectFolder')![1]
+  await expect(handle({ sender: main, senderFrame: {} } as IpcMainInvokeEvent)).rejects.toThrow('main 20x window')
+  expect(dialog.showOpenDialog).not.toHaveBeenCalled()
+  const event = { sender: main, senderFrame: main.mainFrame } as IpcMainInvokeEvent
+  vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: false, filePaths: ['/project with spaces'] })
+  expect(await handle(event)).toBe('/project with spaces')
+  expect(dialog.showOpenDialog).toHaveBeenCalledWith(expect.objectContaining({ properties: ['openDirectory'] }))
+  vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: true, filePaths: ['/ignored'] })
+  expect(await handle(event)).toBeNull()
+  vi.mocked(ipcMain.handle).mockClear()
+})
 
 it('accepts agreement approvals and human provenance only from the main desktop frame', () => {
   const service = { act: vi.fn(), ownsTask: () => true, recordHumanInput: vi.fn() } as unknown as ResponsibilityManager

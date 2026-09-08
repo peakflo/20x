@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { realpathSync, existsSync, mkdirSync, lstatSync } from 'node:fs'
 import { resolve, relative, isAbsolute, join } from 'node:path'
+import { homedir } from 'node:os'
 import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager } from './database'
 import type { AgentManager } from './agent-manager'
@@ -136,7 +137,14 @@ export class ResponsibilityManager {
 
   createProject(name: string, root: string, agentId: string): ProjectRecord {
     if (!this.db.getAgent(agentId)) throw new Error('Choose an available agent.')
-    const path = canonical(text(root, 'Project folder'))
+    const folder = text(root, 'Project folder')
+    let path: string
+    try {
+      path = canonical(folder === '~' ? homedir() : folder.startsWith('~/') ? join(homedir(), folder.slice(2)) : folder)
+    } catch (error) {
+      if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) throw new Error('Project folder was not found. Select an existing folder.')
+      throw error
+    }
     if (!lstatSync(path).isDirectory()) throw new Error('Choose a project folder.')
     const existing = this.all<ProjectRecord>('projects').find(p => p.root === path)
     if (existing) return existing

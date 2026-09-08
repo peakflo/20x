@@ -149,15 +149,32 @@ function NoticeCard({ notice: n, busy, answer }: { notice: ResponsibilityNotice;
 
 function ProjectForm({ busy, onCreate }: { busy: boolean; onCreate: (name: string, root: string, agentId: string) => Promise<void> }) {
   const [agents, setAgents] = useState<Array<{ id: string; name: string }>>([])
+  const [root, setRoot] = useState('')
+  const [picking, setPicking] = useState(false)
+  const [error, setError] = useState('')
+  const pickFolder = async () => {
+    setPicking(true); setError('')
+    try {
+      const folder = await window.electronAPI.responsibilities.pickProjectFolder()
+      if (folder !== null) setRoot(folder)
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setPicking(false) }
+  }
   useEffect(() => { void agentApi.getAll().then(setAgents) }, [])
   return <form className="mb-4 space-y-2" onSubmit={e => {
     e.preventDefault(); const data = new FormData(e.currentTarget)
     void onCreate(String(data.get('name')), String(data.get('root')), String(data.get('agent')))
   }}>
     <label className="block text-xs">Project name<input name="name" className={inputClass} required maxLength={160} /></label>
-    <label className="block text-xs">Project folder<input name="root" className={inputClass} required placeholder="/path/to/project" /></label>
+    <div className="space-y-1">
+      <label htmlFor="mastermind-project-folder" className="block text-xs">Project folder</label>
+      <div className="flex items-center gap-2">
+        <input id="mastermind-project-folder" name="root" className={`${inputClass} min-w-0 flex-1`} value={root} onChange={e => setRoot(e.target.value)} required placeholder="/path/to/project" />
+        <Button type="button" size="sm" variant="outline" disabled={busy || picking} onClick={() => void pickFolder()}>Select folder</Button>
+      </div>
+    </div>
+    {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
     <label className="block text-xs">Default agent<select name="agent" className={inputClass} required>{agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
-    <Button size="sm" disabled={busy}>Create project</Button>
+    <Button size="sm" disabled={busy || picking}>Create project</Button>
   </form>
 }
 

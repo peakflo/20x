@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join, relative } from 'node:path'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { ResponsibilityManager, captureWork, collectSource } from './responsibility-manager'
 import { projectConversationId } from '../shared/responsibilities'
@@ -60,6 +60,18 @@ async function finish(step: ResponsibilityStep, action = 'done', next?: string) 
 }
 
 describe('durable engineering responsibilities', () => {
+  it('expands pasted home paths while retaining canonical folder validation and deduplication', () => {
+    const folder = join(dir, 'Project with spaces')
+    mkdirSync(folder)
+    const saved = manager.createProject('Pasted folder', `~/${relative(homedir(), folder)}`, project.agentId)
+    expect(saved.root).toBe(realpathSync(folder))
+    expect(manager.createProject('Same folder', folder, project.agentId).id).toBe(saved.id)
+    expect(() => manager.createProject('Missing folder', join(dir, 'missing'), project.agentId)).toThrow('Select an existing folder')
+    const file = join(dir, 'file.txt')
+    writeFileSync(file, 'not a folder')
+    expect(() => manager.createProject('File', file, project.agentId)).toThrow('Choose a project folder')
+  })
+
   it('lets the project root delete a task without delegation or replacement work', async () => {
     await approve()
     const step = snapshot().steps[0]

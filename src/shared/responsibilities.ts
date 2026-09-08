@@ -137,6 +137,7 @@ export interface ResponsibilitySnapshot {
 }
 export interface ResponsibilitiesApi {
   snapshot(projectId?: string): Promise<ResponsibilitySnapshot>
+  pickProjectFolder(): Promise<string | null>
   createProject(name: string, root: string, agentId: string): Promise<ProjectRecord>
   act(id: string, revision: number, action: 'approve' | 'trial' | 'pause' | 'resume' | 'cancel' | 'takeover' | 'handback' | 'recover'): Promise<void>
   answer(id: string, answer: string, approved?: boolean): Promise<void>

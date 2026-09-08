@@ -5,6 +5,7 @@ import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
 
 const responsibilities: ResponsibilitiesApi = {
   snapshot: projectId => ipcRenderer.invoke('responsibilities:snapshot', projectId),
+  pickProjectFolder: () => ipcRenderer.invoke('responsibilities:pickProjectFolder'),
   createProject: (name, root, agentId) => ipcRenderer.invoke('responsibilities:createProject', name, root, agentId),
   act: (id, revision, action) => ipcRenderer.invoke('responsibilities:act', id, revision, action),
   answer: (id, answer, approved) => ipcRenderer.invoke('responsibilities:answer', id, answer, approved),
