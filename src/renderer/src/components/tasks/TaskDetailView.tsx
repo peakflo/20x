@@ -1,3 +1,5 @@
+import { ScheduleRunHistory } from './ScheduleRunHistory'
+import { isReusableSchedule } from '@shared/schedule-runs'
 import React, { useEffect } from 'react'
 import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight, ChevronDown, GripVertical, Layers, Settings2, AlertCircle, SquareArrowOutUpRight, Terminal } from 'lucide-react'
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
@@ -548,7 +550,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
                   {canStartAgent && onStartAgent && (
                     <Button variant="outline" size="sm" onClick={onStartAgent} className="h-7 gap-1.5 px-3">
                       <Play className="h-3 w-3" />
-                      Start
+                      {isReusableSchedule(task) ? 'Run check' : 'Start'}
                     </Button>
                   )}
                 </div>
@@ -668,7 +670,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
               <>
                 <span className="text-muted-foreground flex items-center gap-2"><Repeat className="h-3.5 w-3.5" /> Recurrence</span>
                 <div className="flex flex-col gap-1">
-                  <span>{formatRecurrencePattern(task.recurrence_pattern)}</span>
+                  <span>{formatRecurrencePattern(task.recurrence_pattern)} · {task.recurrence_mode === 'reuse' ? 'Reuse one task' : 'Create a task each time'}</span>
                   {task.recurrence_paused && <span className="text-xs text-muted-foreground">Schedule paused</span>}
                   {!task.recurrence_paused && task.next_occurrence_at && (
                     <span className="text-xs text-muted-foreground">
@@ -685,6 +687,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
                 </div>
               </>
             )}
+            {(task.is_recurring || task.recurrence_mode === 'reuse') && !task.recurrence_parent_id && <div className="col-span-2"><ScheduleRunHistory taskId={task.id} key={task.id} hideEmpty={task.recurrence_mode !== 'reuse'} /></div>}
             {task.is_recurring && !task.recurrence_parent_id && task.agent_id && onUpdateAutoFlags && (
               <>
                 <span className="text-muted-foreground flex items-center gap-2"><Play className="h-3.5 w-3.5" /> Auto-start</span>
@@ -701,11 +704,12 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
                 <label className="flex items-center gap-2 cursor-pointer" data-testid="auto-complete-toggle">
                   <input
                     type="checkbox"
-                    checked={task.auto_complete_without_review}
+                    checked={!isReusableSchedule(task) && task.auto_complete_without_review}
+                    disabled={isReusableSchedule(task)}
                     onChange={(e) => onUpdateAutoFlags({ auto_complete_without_review: e.target.checked })}
                     className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
                   />
-                  <span className="text-sm">Auto-complete without review</span>
+                  <span className="text-sm">{isReusableSchedule(task) ? 'Task stays open between checks' : 'Auto-complete without review'}</span>
                 </label>
               </>
             )}
@@ -804,7 +808,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
             type AgentAction = { label: string; icon: typeof Play; onClick: () => void; testId: string }
             let agentAction: AgentAction | null = null
             if (canStartAgent && onStartAgent) {
-              agentAction = { label: 'Start Task', icon: Play, onClick: onStartAgent, testId: 'main-cta-start' }
+              agentAction = { label: isReusableSchedule(task) ? 'Run check' : 'Start Task', icon: Play, onClick: onStartAgent, testId: 'main-cta-start' }
             } else if (canResumeAgent && onResumeAgent) {
               agentAction = { label: 'Resume Session', icon: History, onClick: onResumeAgent, testId: 'main-cta-resume' }
             } else if (canRestartAgent && onRestartAgent) {

@@ -1,3 +1,4 @@
+import { isReusableSchedule } from '../shared/schedule-runs'
 import { randomUUID } from 'crypto'
 import { serverTaskFields, saveServerTaskSnapshot, serverTaskSnapshot } from './workflo-task-sync'
 import type { DatabaseManager, TaskRecord } from './database'
@@ -157,7 +158,7 @@ export class SyncManager {
     if (!task || task.source_id || task.external_id || task.status === TaskStatus.Completed) throw new Error('Only an unfinished local task can be sent to Workflo.')
     // session_id is a resume/history cursor and status survives confirmed cleanup.
     // Only the runtime owner's confirmed cleanup fence can override these saved fields.
-    if (!this.isLocalTaskStopped?.(taskId) && (task.session_id || !['not_started', 'ready_for_review'].includes(task.status))) {
+    if (!this.isLocalTaskStopped?.(taskId) && (isReusableSchedule(task) || task.session_id || !['not_started', 'ready_for_review'].includes(task.status))) {
       throw new Error('Stop the local session before sending this task to Workflo.')
     }
     const scope = this.taskUploadScope()
@@ -179,12 +180,12 @@ export class SyncManager {
         agentId, skillIds: skills,
         // Selecting an agent for help does not transfer human ownership.
         assignees: autonomous ? [{ assigneeType: 'agent', assigneeValue: agentId }] : [{ assigneeType: 'user', assigneeValue: this.enterpriseUserId }],
-        cron: task.is_recurring ? task.recurrence_pattern ?? undefined : undefined,
+        cron: task.is_recurring && !isReusableSchedule(task) ? task.recurrence_pattern ?? undefined : undefined,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         autoCompleteWithoutReview: autonomous && task.auto_complete_without_review
       } }))
     }
-    this.db.updateTask(taskId, { auto_start_agent: false, is_recurring: false, recurrence_pattern: null, next_occurrence_at: null })
+    this.db.updateTask(taskId, { auto_start_agent: false, is_recurring: false, recurrence_pattern: null, next_occurrence_at: null }, 'workflo-server')
     await this.flushTaskUploads()
     return { queued: !!this.db.getSetting(key) }
   }
@@ -330,6 +331,10 @@ export class SyncManager {
     let task = this.db.getTask(taskId)
     if (!task) return { success: false, error: 'Task not found.' }
     if (task.status === TaskStatus.Completed) return { success: true }
+    if (isReusableSchedule(task)) {
+      this.db.updateTask(taskId, { recurrence_paused: true, next_occurrence_at: null })
+      if (!this.isLocalTaskStopped?.(taskId)) return { success: false, error: 'Complete reusable schedules through Mastermind so their running check is stopped first.' }
+    }
     if (!task.source_id) {
       const upload = await this.uploadTask(task.id)
       if (upload.queued) return { success: false, error: 'Task creation is pending in Workflo. Completion has not been accepted.' }

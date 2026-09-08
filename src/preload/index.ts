@@ -20,6 +20,8 @@ const responsibilities: ResponsibilitiesApi = {
 contextBridge.exposeInMainWorld('electronAPI', {
   responsibilities,
   db: {
+    getScheduleRuns: (id: string, runId?: string, before?: string) => ipcRenderer.invoke('db:getScheduleRuns', id, runId, before),
+    manageScheduleTask: (id: string, action: string) => ipcRenderer.invoke('db:manageScheduleTask', id, action),
     getTasks: (): Promise<unknown[]> => ipcRenderer.invoke('db:getTasks'),
     getTask: (id: string): Promise<unknown> => ipcRenderer.invoke('db:getTask', id),
     createTask: (data: Record<string, unknown>): Promise<unknown> =>

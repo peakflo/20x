@@ -29,6 +29,7 @@ import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, UpdateAgentDTO, CreateAgentDTO } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
 import { isAgentConfigured } from '@shared/agent-utils'
+import { isReusableSchedule } from '@shared/schedule-runs'
 import { useUIStore } from '@/stores/ui-store'
 import { useArtifactStore, PinnedArtifactTabId } from '@/stores/artifact-store'
 import { artifactApi } from '@/lib/ipc-client'
@@ -364,17 +365,19 @@ function TaskWorkspaceComponent({
   }, [task?.id]) // intentionally run only on mount/task switch
 
   const handleStartSession = useCallback(async () => {
-    if (!task?.agent_id || startingRef.current || session.sessionId) return
+    if (!task?.agent_id || startingRef.current || (session.sessionId && !isReusableSchedule(task))) return
     startingRef.current = true
 
     try {
       await start(task.agent_id, task.id)
     } catch (err) {
       console.error('Failed to start session:', err)
+      showProgressToast(`start-${task.id}`, 'Check could not start')
+      failProgressToast(`start-${task.id}`, String(err))
     } finally {
       startingRef.current = false
     }
-  }, [task?.agent_id, task?.id, session.sessionId, start])
+  }, [task, session.sessionId, start, showProgressToast, failProgressToast])
 
   const handleResumeSession = useCallback(async () => {
     if (!task?.agent_id || !task?.session_id || startingRef.current || session.sessionId) return
@@ -641,6 +644,17 @@ function TaskWorkspaceComponent({
   // ── Feedback orchestration ──────────────────────────────────
 
   const handleCompleteTask = useCallback(async () => {
+    if (task && isReusableSchedule(task)) {
+      try {
+        const result = await taskApi.manageScheduleTask(task.id, 'complete')
+        if (result.error) throw new Error(result.error)
+        fetchTasks()
+      } catch (error) {
+        showProgressToast(`complete-${task.id}`, 'Completion not confirmed')
+        failProgressToast(`complete-${task.id}`, String(error))
+      }
+      return
+    }
     // Show feedback if there's an active session OR a resumable session
     const hasActiveSession = session.sessionId && session.messages.length > 0
     const hasResumableSession = !session.sessionId && task?.session_id
@@ -658,7 +672,7 @@ function TaskWorkspaceComponent({
     } else {
       await onCompleteTask()
     }
-  }, [session.sessionId, session.messages.length, task?.session_id, onCompleteTask])
+  }, [session.sessionId, session.messages.length, task, onCompleteTask, fetchTasks, showProgressToast, failProgressToast])
 
   const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
     if (!task?.agent_id || !task?.id) return
@@ -805,6 +819,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
   const handleStartFreshSession = useCallback(async () => {
     if (!task?.agent_id) return
+    if (isReusableSchedule(task)) { await handleStartSession(); return }
     startingRef.current = true
     try {
       // Stop current session if it exists
@@ -823,7 +838,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
     } finally {
       startingRef.current = false
     }
-  }, [task?.agent_id, task?.id, session.sessionId, start, stop, removeSession, onUpdateTask])
+  }, [task, session.sessionId, start, stop, removeSession, onUpdateTask, handleStartSession])
 
   const handleEditAgent = useCallback((agentId: string) => setEditingAgentId(agentId), [])
   const handleSaveAgent = useCallback(async (data: CreateAgentDTO | UpdateAgentDTO) => {
@@ -925,6 +940,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
     const assignedAgent = task.agent_id ? agents.find((agent) => agent.id === task.agent_id) : null
     const triageAgent = !task.agent_id ? (agents.find((agent) => agent.is_default) || agents[0] || null) : null
     const idle = session.status === SessionStatus.IDLE
+    if (isReusableSchedule(task)) { if (idle && task.status !== TaskStatus.Completed) void handleStartSession(); return }
     if (task.agent_id && isAgentConfigured(assignedAgent) && !task.session_id && !session.sessionId && idle && task.status !== TaskStatus.Completed) {
       void handleStartSession()
     } else if (task.agent_id && task.session_id && !session.sessionId && idle && session.messages.length === 0) {
@@ -1011,16 +1027,17 @@ Update existing skills that were helpful or create new ones for patterns worth r
   // Triage uses the default agent (or the first agent in the list as a fallback).
   const triageAgent = !task.agent_id ? (agents.find((a) => a.is_default) || agents[0] || null) : null
   const triageAgentConfigured = isAgentConfigured(triageAgent)
-  const canResume = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length === 0
-  const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length > 0
-  const canStart = task.agent_id && assignedAgentConfigured && !task.session_id && !session.sessionId && session.status === SessionStatus.IDLE
+  const reusable = isReusableSchedule(task)
+  const canResume = !reusable && task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length === 0
+  const canRestart = !reusable && task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length > 0
+  const canStart = task.agent_id && assignedAgentConfigured && (reusable || (!task.session_id && !session.sessionId)) && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed
   const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging
 
   let primaryAction: TaskPrimaryAction | null = null
   let handlePrimaryAction: (() => void) | undefined
-  if (task.status === TaskStatus.ReadyForReview || task.status === TaskStatus.Completed) {
+  if ((!reusable && task.status === TaskStatus.ReadyForReview) || task.status === TaskStatus.Completed) {
     if (task.status !== TaskStatus.Completed) {
       primaryAction = TaskPrimaryAction.COMPLETE
       handlePrimaryAction = () => void handleCompleteTask()

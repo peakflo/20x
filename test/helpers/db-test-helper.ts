@@ -90,6 +90,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       feedback_comment TEXT DEFAULT NULL,
       is_recurring INTEGER NOT NULL DEFAULT 0,
       recurrence_paused INTEGER NOT NULL DEFAULT 0,
+      recurrence_mode TEXT NOT NULL DEFAULT 'separate',
       recurrence_pattern TEXT DEFAULT NULL,
       recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       last_occurrence_at TEXT DEFAULT NULL,

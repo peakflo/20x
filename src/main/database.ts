@@ -1,3 +1,4 @@
+import { recurrenceMode, isReusableSchedule, type RecurrenceMode } from '../shared/schedule-runs'
 import { isWorkfloLinkedTask } from './workflo-task-sync'
 import Database from 'better-sqlite3'
 import { app, safeStorage } from 'electron'
@@ -262,6 +263,7 @@ export interface TaskRow {
   feedback_rating: number | null
   feedback_comment: string | null
   is_recurring: number
+  recurrence_mode?: RecurrenceMode
   recurrence_paused?: number
   recurrence_pattern: string | null
   recurrence_parent_id: string | null
@@ -361,6 +363,7 @@ export interface TaskRecord {
   feedback_rating: number | null
   feedback_comment: string | null
   is_recurring: boolean
+  recurrence_mode?: RecurrenceMode
   recurrence_paused?: boolean
   recurrence_pattern: RecurrencePatternRecord | null
   recurrence_parent_id: string | null
@@ -412,6 +415,7 @@ export interface CreateTaskData {
   external_id?: string
   source_id?: string
   source?: string
+  recurrence_mode?: RecurrenceMode
   is_recurring?: boolean
   recurrence_pattern?: RecurrencePatternRecord | null
   recurrence_parent_id?: string | null
@@ -446,6 +450,7 @@ export interface UpdateTaskData {
   feedback_rating?: number | null
   feedback_comment?: string | null
   is_recurring?: boolean
+  recurrence_mode?: RecurrenceMode
   recurrence_paused?: boolean
   recurrence_pattern?: RecurrencePatternRecord | null
   last_occurrence_at?: string | null
@@ -484,6 +489,7 @@ const UPDATABLE_COLUMNS = new Set([
   'feedback_comment',
   'is_recurring',
   'recurrence_paused',
+  'recurrence_mode',
   'recurrence_pattern',
   'last_occurrence_at',
   'next_occurrence_at',
@@ -964,8 +970,9 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  *
  * 8 → 9: tasks.complete_at_source
  * 9 → 10: tasks.recurrence_paused
+ * 10 → 11: tasks.recurrence_mode (existing schedules stay separate)
  */
-const SCHEMA_VERSION = 10
+const SCHEMA_VERSION = 11
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -1067,6 +1074,7 @@ export class DatabaseManager {
         resolution TEXT,
         is_recurring INTEGER NOT NULL DEFAULT 0,
         recurrence_paused INTEGER NOT NULL DEFAULT 0,
+        recurrence_mode TEXT NOT NULL DEFAULT 'separate',
         recurrence_pattern TEXT DEFAULT NULL,
         recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
         last_occurrence_at TEXT DEFAULT NULL,
@@ -1305,6 +1313,7 @@ export class DatabaseManager {
         feedback_comment TEXT DEFAULT NULL,
         is_recurring INTEGER NOT NULL DEFAULT 0,
         recurrence_paused INTEGER NOT NULL DEFAULT 0,
+        recurrence_mode TEXT NOT NULL DEFAULT 'separate',
         recurrence_pattern TEXT DEFAULT NULL,
         recurrence_parent_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
         last_occurrence_at TEXT DEFAULT NULL,
@@ -1617,6 +1626,9 @@ export class DatabaseManager {
       console.log('[Database Migration] Successfully updated source_id foreign key to CASCADE')
     }
 
+    if (!columnNames.has('recurrence_mode')) {
+      this.db.exec("ALTER TABLE tasks ADD COLUMN recurrence_mode TEXT NOT NULL DEFAULT 'separate'")
+    }
     if (!columnNames.has('recurrence_paused')) {
       this.db.exec('ALTER TABLE tasks ADD COLUMN recurrence_paused INTEGER NOT NULL DEFAULT 0')
     }
@@ -2319,6 +2331,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
     // If cron shorthand is provided, use it
     const isRecurring = data.cron ? true : !!data.is_recurring
+    const mode = recurrenceMode(data.recurrence_mode, isRecurring && !data.source_id ? 'reuse' : 'separate')
     const recurrencePattern = data.cron
       ? data.cron
       : data.recurrence_pattern
@@ -2338,12 +2351,12 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       INSERT INTO tasks (
         id, title, description, type, priority, status, assignee, due_date,
         labels, attachments, repos, output_fields, external_id, source_id, source,
-        is_recurring, recurrence_pattern, recurrence_parent_id,
+        is_recurring, recurrence_pattern, recurrence_parent_id, recurrence_mode,
         auto_start_agent, auto_complete_without_review,
         parent_task_id, sort_order,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.title,
@@ -2363,8 +2376,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       isRecurring ? 1 : 0,
       recurrencePattern,
       data.recurrence_parent_id ?? null,
+      mode,
       data.auto_start_agent ? 1 : 0,
-      data.auto_complete_without_review ? 1 : 0,
+      isRecurring && mode === 'reuse' ? 0 : data.auto_complete_without_review ? 1 : 0,
       data.parent_task_id ?? null,
       sortOrder,
       now,
@@ -2374,7 +2388,13 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return this.getTask(id)
   }
 
-  updateTask(id: string, data: UpdateTaskData, origin?: 'workflo-server'): TaskRecord | undefined {
+  updateTask(id: string, data: UpdateTaskData, origin?: 'workflo-server' | 'schedule-control'): TaskRecord | undefined {
+    if (data.is_recurring === false && origin !== 'workflo-server' && isReusableSchedule(this.getTask(id))) throw new Error('Pause and change this schedule to separate tasks before removing recurrence.')
+    if (data.recurrence_mode !== undefined) {
+      recurrenceMode(data.recurrence_mode)
+      if (origin !== 'schedule-control' && data.recurrence_mode !== this.getTask(id)?.recurrence_mode) throw new Error('Change execution mode through the schedule controls.')
+    }
+    if (data.auto_complete_without_review && isReusableSchedule({ ...this.getTask(id)!, ...data } as TaskRecord)) throw new Error('Reusable schedules keep their task open; individual checks do not auto-complete the task.')
     if (origin !== 'workflo-server' && ('external_id' in data || 'source_id' in data || 'source' in data)) {
       throw new Error('Only the sync service can change a task source link.')
     }

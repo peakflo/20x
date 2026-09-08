@@ -72,6 +72,29 @@ describe('buildTaskMcpUrl and parseScopeFromUrl', () => {
 })
 
 describe('MCP endpoint over HTTP', () => {
+  it('defaults new MCP schedules to reuse and confirms conversion without changing their paused state', async () => {
+    const responsibilities = { projectForTask: () => undefined } as unknown as ResponsibilityManager
+    const confirm = vi.fn(async () => true)
+    const service = new TaskControl(db, { withStoppedTasks: vi.fn() }, { completeTask: vi.fn() }, responsibilities, confirm, vi.fn(), new RecurrenceScheduler(db))
+    setTaskControl(service)
+    const port = await startTaskApiServer(db)
+    const client = await connect(buildTaskMcpUrl(port, { artifactTaskId: 'mastermind-session' }))
+    try {
+      const created = JSON.parse(textOf(await client.callTool({ name: 'create_task', arguments: { title: 'Repeated check', cron: '*/5 * * * *', auto_complete_without_review: true } })))
+      const id = created.task.id
+      expect(db.getTask(id)).toMatchObject({ recurrence_mode: 'reuse', auto_complete_without_review: false })
+      const manage = async (action: string) => JSON.parse(textOf(await client.callTool({ name: 'manage_task', arguments: { task_id: id, action } })))
+      expect(await manage('separate_schedule')).toMatchObject({ error: expect.stringContaining('paused') })
+      expect(await manage('pause_schedule')).toMatchObject({ success: true })
+      confirm.mockResolvedValueOnce(false)
+      expect(await manage('separate_schedule')).toMatchObject({ cancelled: true })
+      expect(db.getTask(id)?.recurrence_mode).toBe('reuse')
+      expect(await manage('separate_schedule')).toMatchObject({ success: true, mode: 'separate', schedulePaused: true })
+      expect(await manage('reuse_schedule')).toMatchObject({ success: true, mode: 'reuse', schedulePaused: true })
+      expect(JSON.parse(textOf(await client.callTool({ name: 'inspect_tasks', arguments: { task_id: id, runs: true } })))).toEqual([])
+    } finally { await client.close(); await service.stop() }
+  })
+
   it('pauses and resumes the exact recurring template through Mastermind, preserving runs and settings', async () => {
     const task = db.createTask(makeTask({ title: 'Slack monitor', is_recurring: true, recurrence_pattern: '*/5 * * * *', auto_start_agent: true }))!
     const instance = db.createTask(makeTask({ title: task.title, recurrence_parent_id: task.id }))!
@@ -84,7 +107,7 @@ describe('MCP endpoint over HTTP', () => {
     const client = await connect(buildTaskMcpUrl(port, { artifactTaskId: 'mastermind-session' }))
     try {
       const matches = JSON.parse(textOf(await client.callTool({ name: 'inspect_tasks', arguments: { query: 'Slack monitor' } })))
-      expect(matches).toEqual(expect.arrayContaining([expect.objectContaining({ id: task.id, schedule: { pattern: '*/5 * * * *', paused: false, nextAt: null } })]))
+      expect(matches).toEqual(expect.arrayContaining([expect.objectContaining({ id: task.id, schedule: { pattern: '*/5 * * * *', mode: 'separate', paused: false, nextAt: null } })]))
       const manage = async (action: string, taskId = task.id) => JSON.parse(textOf(await client.callTool({ name: 'manage_task', arguments: { task_id: taskId, action } })))
       expect(await manage('pause_schedule', instance.id)).toMatchObject({ error: expect.stringContaining('template') })
       expect(confirm).not.toHaveBeenCalled()

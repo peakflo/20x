@@ -1,3 +1,5 @@
+import { isReusableSchedule, recurrenceMode, type RecurrenceMode } from '../shared/schedule-runs'
+import type { ScheduleRuns } from './schedule-runs'
 import { isWorkfloLinkedTask } from './workflo-task-sync'
 import { BrowserWindow } from 'electron'
 import { CronExpressionParser } from 'cron-parser'
@@ -85,7 +87,7 @@ export class RecurrenceScheduler {
   /** Instances created during the current tick. */
   private createdInstanceCount = 0
 
-  constructor(dbManager: DatabaseManager, timezone?: string) {
+  constructor(dbManager: DatabaseManager, timezone?: string, private runs?: ScheduleRuns) {
     this.dbManager = dbManager
     this.timezone = timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
   }
@@ -160,6 +162,7 @@ export class RecurrenceScheduler {
 
   private async checkAndCreateDueInstances(): Promise<void> {
     try {
+      await this.runs?.reconcile()
       // Repair any templates missing next_occurrence_at (e.g. recurrence added via update)
       this.repairMissingNextOccurrence()
 
@@ -230,7 +233,15 @@ export class RecurrenceScheduler {
     const now = new Date()
 
     // Create one instance for the current (latest missed) occurrence
-    this.createInstanceFromTemplate(template, template.next_occurrence_at)
+    if (isReusableSchedule(template)) {
+      if (!this.runs) throw new Error('Schedule execution is unavailable.')
+      if (template.status === TaskStatus.Completed) { this.setPaused(template.id, true); return }
+      const run = this.runs.pending(template.id, template.next_occurrence_at)
+      if (run.state === 'pending' && template.auto_start_agent) {
+        // Reservation happens synchronously; a slow provider must not delay other schedules.
+        void this.runs.start(template.id, undefined, true).catch(error => console.error('[RecurrenceScheduler] Reusable check did not start:', error))
+      }
+    } else this.createInstanceFromTemplate(template, template.next_occurrence_at)
 
     // Fast-forward: find the next future occurrence after NOW
     let nextOccurrence = this.calculateNextOccurrence(
@@ -271,7 +282,7 @@ export class RecurrenceScheduler {
       template.id
     )
 
-    console.log(`[RecurrenceScheduler] Created 1 instance for template "${template.title}", next: ${nextOccurrence}`)
+    console.log(`[RecurrenceScheduler] Processed occurrence for schedule "${template.title}", next: ${nextOccurrence}`)
   }
 
   private createInstanceFromTemplate(template: TaskRecord, occurrenceTime: string): void {
@@ -478,15 +489,36 @@ export class RecurrenceScheduler {
     }
   }
 
+  history(taskId: string, runId?: string, before?: string): unknown { return this.runs?.history(taskId, runId, before) ?? [] }
+
+  setMode(taskId: string, value: unknown): TaskRecord {
+    const mode: RecurrenceMode = recurrenceMode(value)
+    const task = this.dbManager.getTask(taskId)
+    if (!task || !task.is_recurring || task.recurrence_parent_id || task.server_managed || isWorkfloLinkedTask(this.dbManager, task)) throw new Error('Choose a local recurring schedule.')
+    if ((task.recurrence_mode || 'separate') === mode) return task
+    if (!task.recurrence_paused || (this.runs?.active(taskId) && this.runs.active(taskId)?.state !== 'pending') || this.dbManager.getTasks().some(t => t.recurrence_parent_id === taskId && ['agent_working', 'triaging', 'agent_learning'].includes(t.status))) throw new Error('Pause the schedule and resolve its current check before changing execution mode.')
+    this.runs?.assertModeChange(taskId)
+    this.runs?.discardPending(taskId)
+    return this.dbManager.updateTask(taskId, { recurrence_mode: mode, auto_complete_without_review: false }, 'schedule-control')!
+  }
+
+  async releaseForControl(taskId: string): Promise<void> { await this.runs?.releaseForControl(taskId) }
+
+  async recover(taskId: string): Promise<void> {
+    if (!this.runs) throw new Error('Schedule execution is unavailable.')
+    await this.runs.recover(taskId)
+  }
+
   /** Pause only future instances. Existing runs and automation flags are retained. */
   setPaused(taskId: string, paused: boolean): TaskRecord {
     if (typeof paused !== 'boolean') throw new Error('Schedule pause must be a boolean.')
     const task = this.dbManager.getTask(taskId)
-    if (!task || !task.is_recurring || task.recurrence_parent_id || !task.recurrence_pattern) throw new Error('Choose a recurring task template, not an individual run.')
+    if (!task || !task.is_recurring || task.recurrence_parent_id || (!paused && !task.recurrence_pattern)) throw new Error('Choose a recurring task template, not an individual run.')
     if (task.server_managed || isWorkfloLinkedTask(this.dbManager, task)) throw new Error('This schedule is managed by Workflo. Change it at its source.')
     if (!!task.recurrence_paused === paused) return task
+    if (!paused && this.runs?.active(taskId)?.state === 'interrupted') throw new Error('Inspect and release the interrupted check before resuming.')
     // Resume from now, never backfill the deliberately paused period.
-    const next = paused ? null : this.calculateNextOccurrence(task.recurrence_pattern, new Date().toISOString())
+    const next = paused ? null : this.calculateNextOccurrence(task.recurrence_pattern!, new Date().toISOString())
     if (!paused && !next) throw new Error('This schedule has no next occurrence. Edit its recurrence before resuming.')
     return this.dbManager.updateTask(taskId, { recurrence_paused: paused, next_occurrence_at: next })!
   }

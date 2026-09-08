@@ -12,11 +12,11 @@ import { isWorkfloLinkedTask } from './workflo-task-sync'
 export const taskControlTools: Tool[] = [
   {
     name: 'inspect_tasks', description: 'Find 20x tasks, including recurring schedule templates, by title or exact ID before managing them. Returns task metadata, source, responsibility ownership and schedule state. Clarify ambiguous matches with the engineer. To pause a schedule choose its recurring template, not an individual run.',
-    inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string' }, task_id: { type: 'string' } } }
+    inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string' }, task_id: { type: 'string' }, runs: { type: 'boolean', description: 'With task_id, list recent checks for that schedule.' }, run_id: { type: 'string', description: 'Read this run including its transcript and archived artifact paths.' }, before: { type: 'string', description: 'List runs due before this ISO timestamp.' } } }
   },
   {
-    name: 'manage_task', description: 'Ask the engineer to confirm completing, deleting, or pausing/resuming the schedule of an exact 20x task. Close means complete, not close its panel. pause_schedule and resume_schedule target a local recurring template: pause stops future instances, preserves existing runs and settings; resume starts at the next future occurrence without replaying the paused period. This does not control project Routine agreements or global auto-run. This is task administration performed by Mastermind itself, not delegated project work or computer use. Completion follows the existing task-source confirmation flow. Deletion removes the local task and its subtasks, stops their agents and cancels their responsibilities. Never treat a declined, pending or failed action as completed. There is no model-supplied approval flag.',
-    inputSchema: { type: 'object', additionalProperties: false, properties: { task_id: { type: 'string' }, action: { type: 'string', enum: ['complete', 'close', 'delete', 'pause_schedule', 'resume_schedule'] } }, required: ['task_id', 'action'] }
+    name: 'manage_task', description: 'Ask the engineer to confirm completing, deleting, or pausing/resuming the schedule of an exact 20x task. Close means complete, not close its panel. pause_schedule and resume_schedule target a local recurring template: pause stops future instances, preserves existing runs and settings; resume starts at the next future occurrence without replaying the paused period. reuse_schedule/separate_schedule change execution mode only on a paused schedule with no unresolved check. recover_schedule releases an inspected interrupted check, retaining its history and leaving scheduling paused. Use inspect_tasks with runs or run_id to read history. This does not control project Routine agreements or global auto-run. This is task administration performed by Mastermind itself, not delegated project work or computer use. Completion follows the existing task-source confirmation flow. Deletion removes the local task and its subtasks, stops their agents and cancels their responsibilities. Never treat a declined, pending or failed action as completed. There is no model-supplied approval flag.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { task_id: { type: 'string' }, action: { type: 'string', enum: ['complete', 'close', 'delete', 'pause_schedule', 'resume_schedule', 'reuse_schedule', 'separate_schedule', 'recover_schedule'] } }, required: ['task_id', 'action'] }
   }
 ]
 
@@ -40,7 +40,7 @@ export class TaskControl {
     private readonly responsibilities: ResponsibilityManager,
     private readonly confirm: (request: Confirmation) => Promise<boolean>,
     private readonly notify: (channel: string, data: unknown) => void,
-    private readonly recurrence?: Pick<RecurrenceScheduler, 'setPaused'>
+    private readonly recurrence?: Pick<RecurrenceScheduler, 'setPaused' | 'setMode' | 'history' | 'recover' | 'releaseForControl'>
   ) {}
 
   private task(id: unknown, projectId?: string): TaskRecord {
@@ -53,6 +53,10 @@ export class TaskControl {
   }
 
   inspect(args: Record<string, unknown>, projectId?: string): unknown {
+    if (args.runs || args.run_id) {
+      const task = this.task(args.task_id, projectId)
+      return this.recurrence?.history(task.id, typeof args.run_id === 'string' ? args.run_id : undefined, typeof args.before === 'string' ? args.before : undefined) ?? []
+    }
     const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : ''
     const tasks = args.task_id ? [this.task(args.task_id, projectId)] : this.db.getTasks()
     return tasks.filter(t => {
@@ -62,7 +66,7 @@ export class TaskControl {
       source: t.source_id ? this.db.getTaskSource(t.source_id)?.name ?? t.source : 'Local task',
       project: this.responsibilities.projectForTask(t.id)?.name ?? null, updatedAt: t.updated_at,
       recurrenceParentId: t.recurrence_parent_id,
-      schedule: t.is_recurring && !t.recurrence_parent_id ? { pattern: t.recurrence_pattern, paused: !!t.recurrence_paused, nextAt: t.next_occurrence_at } : null }))
+      schedule: t.is_recurring && !t.recurrence_parent_id ? { pattern: t.recurrence_pattern, mode: t.recurrence_mode || 'separate', paused: !!t.recurrence_paused, nextAt: t.next_occurrence_at } : null }))
   }
 
   private tree(task: TaskRecord): TaskRecord[] {
@@ -78,13 +82,30 @@ export class TaskControl {
     this.shutdown.signal.throwIfAborted()
     const task = this.task(args.task_id, projectId)
     const action = args.action === 'close' ? 'complete' : args.action
-    if (action !== 'complete' && action !== 'delete' && action !== 'pause_schedule' && action !== 'resume_schedule') throw new Error('Choose complete, close, delete, pause_schedule, or resume_schedule.')
+    if (action !== 'complete' && action !== 'delete' && action !== 'pause_schedule' && action !== 'resume_schedule' && action !== 'reuse_schedule' && action !== 'separate_schedule' && action !== 'recover_schedule') throw new Error('Choose complete, close, delete, pause_schedule, or resume_schedule.')
     if (this.pending) throw new Error('A task action is already waiting or running. Do not submit another action yet.')
-    const job = action === 'pause_schedule' || action === 'resume_schedule'
+    const job = action === 'reuse_schedule' || action === 'separate_schedule' || action === 'recover_schedule'
+      ? this.configureSchedule(task, action, projectId)
+      : action === 'pause_schedule' || action === 'resume_schedule'
       ? this.changeSchedule(task, action === 'pause_schedule', projectId)
       : this.perform(task, action, projectId)
     this.pending = job
     try { return await job } finally { this.pending = undefined }
+  }
+
+  private async configureSchedule(task: TaskRecord, action: string, projectId?: string): Promise<unknown> {
+    if (!this.recurrence) throw new Error('Schedule controls are unavailable.')
+    if (!task.is_recurring || task.recurrence_parent_id || task.server_managed || isWorkfloLinkedTask(this.db, task) || !task.recurrence_paused) throw new Error('Choose a paused local schedule.')
+    const snapshot = JSON.stringify(task)
+    const approved = await this.confirm({ title: `Update schedule for “${task.title}”?`, confirmLabel: action === 'recover_schedule' ? 'Release interrupted check' : 'Change execution mode', signal: this.shutdown.signal,
+      detail: `Task: ${task.id}\n${action === 'recover_schedule' ? 'Confirm you inspected the interrupted check. Stop any remaining runtime and retain the partial history. Scheduling stays paused.' : `Use ${action === 'reuse_schedule' ? 'one persistent task with individual run history' : 'a separate task for each occurrence'}. Existing tasks and results remain. Task auto-completion is disabled; scheduling stays paused.`}` })
+    if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, taskId: task.id }
+    if (JSON.stringify(this.task(task.id, projectId)) !== snapshot) throw new Error('The task changed. Inspect it and confirm again.')
+    if (action === 'recover_schedule') await this.recurrence.recover(task.id)
+    else this.recurrence.setMode(task.id, action === 'reuse_schedule' ? 'reuse' : 'separate')
+    const updated = this.db.getTask(task.id)
+    this.notify('task:updated', { taskId: task.id, updates: updated })
+    return { success: true, taskId: task.id, mode: updated?.recurrence_mode, schedulePaused: updated?.recurrence_paused }
   }
 
   private async changeSchedule(task: TaskRecord, paused: boolean, projectId?: string): Promise<unknown> {
@@ -117,7 +138,7 @@ export class TaskControl {
       return step ? [step.responsibilityId] : []
     }))]
     const agreements = this.responsibilities.snapshot().responsibilities.filter(r => owners.includes(r.id))
-    const snapshot = fingerprint(affected)
+    let snapshot = fingerprint(affected)
     const sourceSnapshot = JSON.stringify(task.source_id ? this.db.getTaskSource(task.source_id) : null)
     const account = this.db.getSetting('workflo-sync-scope')
     const unchanged = () => {
@@ -132,12 +153,16 @@ export class TaskControl {
       detail: `Task: ${task.id}\nSource: ${source}\n` +
         (action === 'delete' ? `Delete this local task, its ${affected.length - 1} dependent tasks (subtasks and recurring instances), attachments and transcripts. Working checkouts are retained. A linked source is not deleted and may restore the task on sync.\n` : `Run source action: ${task.output_fields.find(f => f.id === 'action')?.value || PluginActionId.Complete}. Submitted output fields: ${JSON.stringify(task.output_fields)}. ${task.source_id ? 'Completion requires confirmation from this source.' : 'This local task must first be sent to Workflo; a Workflo connection, eligible agent and skills are required. Completion requires Workflo confirmation.'}\n`) +
         (agreements.length ? `Stop and cancel these responsibilities so they cannot schedule replacement work: ${agreements.map(r => r.agreement.title).join(', ')}. Their saved agreements and reports remain.\n` : '') +
+        (affected.some(t => t.is_recurring && !t.recurrence_parent_id) ? 'Pause future checks for the affected schedules, including if completion cannot be confirmed.\n' : '') +
         'Active agents for the affected tasks will be stopped before changing the tasks.' })
     if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, taskId: task.id }
     unchanged()
     const latest = this.responsibilities.snapshot().responsibilities.filter(r => owners.includes(r.id))
     if (JSON.stringify(latest) !== JSON.stringify(agreements)) throw new Error('The responsibility changed while confirmation was open. Review it again.')
     return this.agents.withStoppedTasks(affected.map(t => t.id), async () => {
+      this.shutdown.signal.throwIfAborted()
+      unchanged()
+      for (const item of affected) if (item.is_recurring && !item.recurrence_parent_id) await this.recurrence?.releaseForControl(item.id)
       this.shutdown.signal.throwIfAborted()
       unchanged()
       if (action === 'delete') {
@@ -153,6 +178,13 @@ export class TaskControl {
       this.notify('tasks:refresh', {})
       return { ...result, taskId: task.id, status: this.db.getTask(task.id)?.status }
     }, async () => {
+      unchanged()
+      const expected = affected.map(item => {
+        if (!item.is_recurring || item.recurrence_parent_id || item.server_managed || isWorkfloLinkedTask(this.db, item) || !this.recurrence) return item
+        const paused = this.recurrence.setPaused(item.id, true)
+        return { ...item, recurrence_paused: paused.recurrence_paused, next_occurrence_at: paused.next_occurrence_at }
+      })
+      snapshot = fingerprint(expected)
       for (const owner of latest) await this.responsibilities.act(owner.id, owner.revision, 'cancel')
     })
   }

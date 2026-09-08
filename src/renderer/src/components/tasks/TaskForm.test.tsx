@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react'
 import { TaskForm } from './TaskForm'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
@@ -47,10 +47,22 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
 }
 
 describe('TaskForm – auto-start / auto-complete toggles', () => {
+  it('defaults a new schedule to reuse and disables task auto-completion', async () => {
+    const submit = vi.fn()
+    render(<TaskForm onSubmit={submit} onCancel={vi.fn()} />)
+    fireEvent.change(screen.getByPlaceholderText('What needs to be done?'), { target: { value: 'Monitor' } })
+    fireEvent.click(screen.getByText('Additional fields'))
+    await act(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+    fireEvent.click(screen.getByLabelText('Recurring Task'))
+    await waitFor(() => expect(screen.getByLabelText('Schedule execution')).toHaveValue('reuse'))
+    expect(screen.getByTestId('form-auto-complete-toggle').querySelector('input')).toBeDisabled()
+    fireEvent.click(screen.getByText('Create Task'))
+    await waitFor(() => expect(submit).toHaveBeenCalledWith(expect.objectContaining({ is_recurring: true, recurrence_mode: 'reuse', auto_complete_without_review: false })))
+  })
   it('does not show automation section when recurrence is disabled', () => {
     render(<TaskForm onSubmit={vi.fn()} onCancel={vi.fn()} />)
     expect(screen.queryByTestId('auto-flags-section')).toBeNull()
-    expect(screen.queryByText('Auto-start agent on new instances')).toBeNull()
+    expect(screen.queryByText('Auto-start scheduled checks')).toBeNull()
     expect(screen.queryByText('Auto-complete without review')).toBeNull()
   })
 
@@ -64,7 +76,7 @@ describe('TaskForm – auto-start / auto-complete toggles', () => {
     render(<TaskForm task={task} onSubmit={vi.fn()} onCancel={vi.fn()} />)
 
     expect(screen.getByTestId('auto-flags-section')).toBeDefined()
-    expect(screen.getByText('Auto-start agent on new instances')).toBeDefined()
+    expect(screen.getByText('Auto-start scheduled checks')).toBeDefined()
     expect(screen.getByText('Auto-complete without review')).toBeDefined()
   })
 

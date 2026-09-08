@@ -158,6 +158,21 @@ describe('registerIpcHandlers', () => {
 })
 
 describe('db:updateTask coordinator wake-up', () => {
+  it('saves ordinary forms and converts paused schedules through the same mode guard', () => {
+    const { db } = createTestDb()
+    const scheduler = new RecurrenceScheduler(db)
+    registerIpcHandlers(db, {} as never, {} as never, {} as never, {} as never, {} as never, undefined, undefined, scheduler)
+    const handler = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.filter(c => c[0] === 'db:updateTask').pop()![1]
+    const task = db.createTask({ title: 'Ordinary task' })!
+    try {
+      expect(handler({}, task.id, { title: 'Edited', is_recurring: false, recurrence_mode: 'separate' })).toMatchObject({ title: 'Edited' })
+      expect(handler({}, task.id, { is_recurring: true, recurrence_pattern: '*/5 * * * *', recurrence_mode: 'reuse' })).toMatchObject({ recurrence_mode: 'reuse' })
+      expect(() => handler({}, task.id, { is_recurring: false })).toThrow('Pause')
+      expect(() => handler({}, task.id, { is_recurring: false, recurrence_mode: 'separate' })).toThrow('Pause')
+      scheduler.setPaused(task.id, true)
+      expect(handler({}, task.id, { is_recurring: false, recurrence_mode: 'separate' })).toMatchObject({ is_recurring: false })
+    } finally { db.db.close() }
+  })
   it('uses the shared schedule control for pause/resume without reinitializing its next occurrence', () => {
     const { db } = createTestDb()
     const scheduler = new RecurrenceScheduler(db, 'UTC')

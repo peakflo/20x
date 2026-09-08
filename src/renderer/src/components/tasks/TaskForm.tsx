@@ -45,6 +45,7 @@ export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
   const [attachments, setAttachments] = useState<FileAttachment[]>([])
   const [outputFields, setOutputFields] = useState<OutputField[]>([])
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([])
+  const [executionMode, setExecutionMode] = useState<'reuse' | 'separate'>('reuse')
   const [recurrencePattern, setRecurrencePattern] = useState<RecurrencePattern | null>(null)
   const [autoStartAgent, setAutoStartAgent] = useState(false)
   const [autoCompleteWithoutReview, setAutoCompleteWithoutReview] = useState(false)
@@ -67,6 +68,7 @@ export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
       setAttachments(task.attachments)
       setOutputFields(task.output_fields)
       setRecurrencePattern(task.recurrence_pattern)
+      setExecutionMode(task.is_recurring ? task.recurrence_mode || 'separate' : 'reuse')
       setAutoStartAgent(task.auto_start_agent)
       setAutoCompleteWithoutReview(task.auto_complete_without_review)
 
@@ -111,8 +113,9 @@ export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
         output_fields: outputFields,
         is_recurring: !!recurrencePattern,
         recurrence_pattern: recurrencePattern,
+        recurrence_mode: recurrencePattern ? executionMode : task?.is_recurring ? 'separate' : undefined,
         auto_start_agent: !!recurrencePattern && autoStartAgent,
-        auto_complete_without_review: !!recurrencePattern && autoCompleteWithoutReview
+        auto_complete_without_review: !!recurrencePattern && executionMode === 'separate' && autoCompleteWithoutReview
       }
 
       if (!task && pendingFiles.length > 0) {
@@ -219,6 +222,12 @@ export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
             {recurrencePattern && (
               <div className="space-y-3 pt-4 mt-4 border-t border-border" data-testid="auto-flags-section">
                 <p className="text-sm font-medium text-muted-foreground">Automation</p>
+                <label className="block text-sm">Execution
+                  <select aria-label="Schedule execution" className="ml-2 rounded border bg-background p-1" value={executionMode} disabled={!!task?.is_recurring && !task.recurrence_paused} onChange={e => setExecutionMode(e.target.value as 'reuse' | 'separate')}>
+                    <option value="reuse">Reuse one task</option><option value="separate">Create a task each time</option>
+                  </select>
+                </label>
+                {task?.is_recurring && !task.recurrence_paused && <p className="text-xs text-muted-foreground">Pause the schedule before changing execution mode.</p>}
                 <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-start-toggle">
                   <input
                     type="checkbox"
@@ -226,16 +235,17 @@ export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
                     onChange={(e) => setAutoStartAgent(e.target.checked)}
                     className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
                   />
-                  <span className="text-sm">Auto-start agent on new instances</span>
+                  <span className="text-sm">Auto-start scheduled checks</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer" data-testid="form-auto-complete-toggle">
                   <input
                     type="checkbox"
-                    checked={autoCompleteWithoutReview}
+                    checked={executionMode === 'separate' && autoCompleteWithoutReview}
+                    disabled={executionMode === 'reuse'}
                     onChange={(e) => setAutoCompleteWithoutReview(e.target.checked)}
                     className="h-4 w-4 rounded border-border bg-background text-primary cursor-pointer"
                   />
-                  <span className="text-sm">Auto-complete without review</span>
+                  <span className="text-sm">{executionMode === 'reuse' ? 'The task stays open between checks' : 'Auto-complete without review'}</span>
                 </label>
               </div>
             )}

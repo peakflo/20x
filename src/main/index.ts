@@ -1,3 +1,4 @@
+import { ScheduleRuns } from './schedule-runs'
 import { ResponsibilityManager } from './responsibility-manager'
 import { registerResponsibilityIpc } from './responsibility-ipc'
 import { setResponsibilityManager, setTaskControl } from './task-api-server'
@@ -79,6 +80,7 @@ let pluginRegistry: PluginRegistry | null = null
 let oauthManager: OAuthManager | null = null
 let enterpriseAuth: EnterpriseAuth | null = null
 let responsibilityManager: ResponsibilityManager | null = null
+let scheduleRuns: ScheduleRuns | null = null
 let recurrenceScheduler: RecurrenceScheduler | null = null
 let heartbeatScheduler: HeartbeatScheduler | null = null
 let taskAutomationScheduler: TaskAutomationScheduler | null = null
@@ -278,9 +280,10 @@ async function sweepLeakedWorkspaces(graceMs?: number, orphansIgnoreTaskState = 
 }
 
 async function shutdownAppServices(): Promise<void> {
+  recurrenceScheduler?.stop()
+  await scheduleRuns?.stop()
   await taskControl?.stop()
   await responsibilityManager?.stop()
-  recurrenceScheduler?.stop()
   voiceSessionManager?.shutdown()
   enterpriseHeartbeatInstance?.stop()
   heartbeatScheduler?.stop()
@@ -1023,7 +1026,11 @@ app.whenReady().then(async () => {
     }
   }, undefined, undefined, new RoutineSources(db, (agentId, serverId) => agentManager!.resolveRoutineMcpConnection(agentId, serverId), server => server.source === 'enterprise' ? enterpriseAuth?.getApiUrl() : undefined))
   agentManager.setResponsibilityManager(responsibilityManager)
-  recurrenceScheduler = new RecurrenceScheduler(db)
+  scheduleRuns = new ScheduleRuns(db, agentManager, taskId => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task:updated', { taskId, updates: db!.getTask(taskId) })
+  })
+  agentManager.setScheduleRuns(scheduleRuns)
+  recurrenceScheduler = new RecurrenceScheduler(db, undefined, scheduleRuns)
   taskControl = new TaskControl(db, agentManager, syncManager, responsibilityManager, async request => {
     if (!mainWindow || mainWindow.isDestroyed() || request.signal.aborted) return false
     const result = await dialog.showMessageBox(mainWindow, { type: 'question', title: 'Mastermind task action', message: request.title, detail: request.detail,
@@ -1167,7 +1174,7 @@ app.whenReady().then(async () => {
 
   // Due source checks need the same restored authentication as ordinary agent sessions.
   responsibilityManager.start()
-  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined, workspaceCleanupScheduler ?? undefined, voiceSessionManager ?? undefined, taskAutomationScheduler ?? undefined)
+  registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined, workspaceCleanupScheduler ?? undefined, voiceSessionManager ?? undefined, taskAutomationScheduler ?? undefined, taskControl ?? undefined)
 
   // ── Media permission handler (design §5.9) ────────────────────────────────
   // Grant the microphone only to the 20x renderer, and only while voice is on.

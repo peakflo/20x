@@ -11,6 +11,24 @@ beforeEach(() => {
 })
 
 describe('Task CRUD', () => {
+  it('migrates old schedules to separate mode while new schedules default to reuse', () => {
+    const manager = new RealDatabaseManager()
+    manager.db = new RawDatabase(':memory:')
+    const schema = manager as unknown as { createTables(): void; runMigrations(): void }
+    try {
+      schema.createTables(); schema.runMigrations()
+      const old = manager.createTask({ title: 'Old schedule', is_recurring: true, recurrence_pattern: '*/5 * * * *' })!
+      manager.db.exec('ALTER TABLE tasks DROP COLUMN recurrence_mode')
+      schema.runMigrations()
+      expect(manager.getTask(old.id)?.recurrence_mode).toBe('separate')
+      const added = manager.createTask({ title: 'New schedule', is_recurring: true, recurrence_pattern: '*/5 * * * *', auto_complete_without_review: true })!
+      expect(added).toMatchObject({ recurrence_mode: 'reuse', auto_complete_without_review: false })
+      schema.runMigrations()
+      expect(manager.getTask(added.id)?.recurrence_mode).toBe('reuse')
+      expect(() => manager.updateTask(added.id, { recurrence_mode: 'separate' })).toThrow('schedule controls')
+    } finally { manager.db.close() }
+  })
+
   it('migrates existing schedules to unpaused and preserves a saved pause on subsequent migrations', () => {
     const manager = new RealDatabaseManager()
     manager.db = new RawDatabase(':memory:')

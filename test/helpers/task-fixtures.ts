@@ -3,6 +3,7 @@ import type { CreateTaskData, CreateAgentData, CreateSkillData } from '../../src
 export function makeTask(overrides: Partial<CreateTaskData> = {}): CreateTaskData {
   return {
     title: 'Test Task',
+    recurrence_mode: 'separate', // Existing fixtures exercise the original per-occurrence behavior.
     description: 'A test task description',
     type: 'general',
     priority: 'medium',

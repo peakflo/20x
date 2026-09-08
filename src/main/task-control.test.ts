@@ -7,6 +7,7 @@ import { AgentManager } from './agent-manager'
 import { SyncManager } from './sync-manager'
 import { PeakfloPlugin } from './plugins/peakflo-plugin'
 import type { WorkfloTask } from './workflo-api-client'
+import { RecurrenceScheduler } from './recurrence-scheduler'
 
 let db: ReturnType<typeof createTestDb>['db']
 let confirm: ReturnType<typeof vi.fn<ConstructorParameters<typeof TaskControl>[4]>>
@@ -29,10 +30,10 @@ beforeEach(() => {
 afterEach(async () => { await control.stop(); db.db.close() })
 
 describe('Mastermind task administration', () => {
-  it('stops a working local task, retains its history, and waits for Workflo to confirm completion', async () => {
+  it.each([false, true])('stops a working local task, retains its history, and waits for Workflo to confirm completion (reuse: %s)', async reusable => {
     db.db.exec('ALTER TABLE tasks ADD COLUMN heartbeat_enabled INTEGER NOT NULL DEFAULT 0')
     const agent = db.createAgent({ name: 'Agent', config: { enterprise_agent_id: 'remote-agent' } as never })!
-    const t = db.createTask({ title: 'Working task', status: TaskStatus.AgentWorking })!
+    const t = db.createTask({ title: 'Working task', status: TaskStatus.AgentWorking, is_recurring: reusable, recurrence_pattern: reusable ? '*/5 * * * *' : null })!
     db.updateTask(t.id, { agent_id: agent.id, session_id: 'saved-session' })
     db.upsertTranscriptParts(t.id, [{ id: 'answer', role: 'assistant', content: 'Work so far' }])
     const history = db.getTranscriptParts(t.id)
@@ -56,7 +57,7 @@ describe('Mastermind task administration', () => {
     const sync = new SyncManager(db, {} as never, { get: () => new PeakfloPlugin() } as never, undefined, id => agents.isTaskStoppedForControl(id))
     Object.assign(sync, { workfloApiClient: api, enterpriseUserId: 'user-1' })
     const responsibilities = { projectForTask: () => undefined, stepForTask: () => undefined, snapshot: () => ({ responsibilities: [] }) } as unknown as ResponsibilityManager
-    control = new TaskControl(db, agents, sync, responsibilities, confirm, notify)
+    control = new TaskControl(db, agents, sync, responsibilities, confirm, notify, new RecurrenceScheduler(db))
     try {
       for (const status of ['working', 'idle', 'waiting_approval', 'error'] as const) {
         session.status = status
@@ -71,6 +72,11 @@ describe('Mastermind task administration', () => {
       expect(agents.isTaskStoppedForControl(t.id)).toBe(false)
       expect(db.getTask(t.id)?.status).not.toBe(TaskStatus.Completed)
       expect(api.createTask).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'remote-agent' }))
+      if (reusable) {
+        expect(api.createTask).toHaveBeenCalledWith(expect.objectContaining({ autoCompleteWithoutReview: false }))
+        expect(api.createTask).not.toHaveBeenCalledWith(expect.objectContaining({ cron: expect.anything() }))
+        expect(db.getTask(t.id)?.recurrence_paused).toBe(true)
+      }
       expect(api.executeAction).toHaveBeenCalledWith('remote-task', { action: 'complete' }, 1)
       api.getTask.mockResolvedValue({ ...remote, status: 'completed', version: 2 })
       await sync.flushTaskCompletions()

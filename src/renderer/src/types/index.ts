@@ -322,6 +322,7 @@ export interface WorkfloTask {
   feedback_comment: string | null
   is_recurring: boolean
   recurrence_paused?: boolean
+  recurrence_mode?: 'reuse' | 'separate'
   recurrence_pattern: RecurrencePattern | null
   recurrence_parent_id: string | null
   last_occurrence_at: string | null
@@ -352,6 +353,7 @@ export interface CreateTaskDTO {
   attachments?: FileAttachment[]
   repos?: string[]
   output_fields?: OutputField[]
+  recurrence_mode?: 'reuse' | 'separate'
   is_recurring?: boolean
   recurrence_pattern?: RecurrencePattern | null
   recurrence_parent_id?: string | null
@@ -363,6 +365,7 @@ export interface CreateTaskDTO {
 
 export interface UpdateTaskDTO {
   recurrence_paused?: boolean
+  recurrence_mode?: 'reuse' | 'separate'
   title?: string
   description?: string
   type?: TaskType

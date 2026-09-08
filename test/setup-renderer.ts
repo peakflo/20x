@@ -28,6 +28,8 @@ export const eventCallbacks = {
 
 const mockElectronAPI = {
   db: {
+    getScheduleRuns: vi.fn().mockResolvedValue([]),
+    manageScheduleTask: vi.fn().mockResolvedValue({ success: false, cancelled: true }),
     getTasks: vi.fn().mockResolvedValue([]),
     getTask: vi.fn().mockResolvedValue(undefined),
     createTask: vi.fn().mockResolvedValue({}),

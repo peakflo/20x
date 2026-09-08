@@ -138,6 +138,17 @@ describe('clampTranscriptWidth', () => {
 })
 
 describe('TaskWorkspace keyboard actions', () => {
+  it('starts a new check from saved schedule history and completes through task administration', async () => {
+    Object.assign(window.electronAPI.db, { getScheduleRuns: vi.fn(async () => []), manageScheduleTask: vi.fn(async () => ({ success: false, cancelled: true })) })
+    const task = makeRendererTask({ is_recurring: true, recurrence_mode: 'reuse', recurrence_pattern: '*/5 * * * *', session_id: 'old-check', status: TaskStatus.ReadyForReview })
+    renderWorkspace(task, [makeAgent({ config: { model: 'test-model' } })])
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.RUN, taskId: task.id }))
+    await waitFor(() => expect(window.electronAPI.agentSession.start).toHaveBeenCalledWith('agent-1', task.id, undefined, undefined))
+    expect(window.electronAPI.agentSession.resume).not.toHaveBeenCalled()
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.COMPLETE, taskId: task.id }))
+    await waitFor(() => expect(window.electronAPI.db.manageScheduleTask).toHaveBeenCalledWith(task.id, 'complete'))
+    expect(screen.queryByText('Session Feedback')).not.toBeInTheDocument()
+  })
   it('opens session feedback instead of completing immediately', () => {
     const task = makeRendererTask({
       status: TaskStatus.ReadyForReview,

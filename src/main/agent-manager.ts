@@ -1,3 +1,5 @@
+import { isReusableSchedule } from '../shared/schedule-runs'
+import type { ScheduleRuns } from './schedule-runs'
 import type { ResponsibilityManager } from './responsibility-manager'
 import { isMastermindTask } from '../shared/responsibilities'
 import { serverTaskSnapshot } from './workflo-task-sync'
@@ -83,6 +85,7 @@ interface AgentSession {
   id: string
   agentId: string
   taskId: string
+  scheduleRunId?: string
   workspaceDir?: string
   status: 'idle' | 'working' | 'error' | 'waiting_approval'
   createdAt: Date
@@ -256,6 +259,12 @@ export class AgentManager extends EventEmitter {
   private externalListeners: Array<(channel: string, data: unknown) => void> = []
   private responsibilities?: ResponsibilityManager
   setResponsibilityManager(manager: ResponsibilityManager): void { this.responsibilities = manager }
+  private scheduleRuns?: ScheduleRuns
+  setScheduleRuns(runs: ScheduleRuns): void { this.scheduleRuns = runs }
+  async startScheduledRun(taskId: string, agentId: string): Promise<string> {
+    if (this.scheduleRuns?.active(taskId)?.state !== 'starting') throw new Error('No admitted check owns this launch.')
+    return this.trackTaskOperation(taskId, () => this.startTaskSession(agentId, taskId))
+  }
 
   private enterpriseStateSync: import('./enterprise-state-sync').EnterpriseStateSync | null = null
 
@@ -1635,7 +1644,7 @@ export class AgentManager extends EventEmitter {
       workspaceDir,
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
-      systemPrompt: (agent.config?.system_prompt || '') + this.mastermindHistory(taskId),
+      systemPrompt: (agent.config?.system_prompt || '') + this.mastermindHistory(taskId) + (this.scheduleRuns?.context(taskId) || ''),
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
@@ -1746,6 +1755,8 @@ export class AgentManager extends EventEmitter {
       isTriageSession,
       secretSessionToken: secretToken
     })
+
+    if (isReusableSchedule(task)) this.scheduleRuns!.bind(taskId, adapterSessionId)
 
     // Store session ID in database
     this.updateTaskFromLocalAgent(taskId, { session_id: adapterSessionId })
@@ -3145,6 +3156,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
   async startSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<string> {
+    if (isReusableSchedule(this.db.getTask(taskId))) {
+      this.assertTaskNotControlled(taskId)
+      if (!this.scheduleRuns) throw new Error('Schedule execution is unavailable.')
+      return this.scheduleRuns.start(taskId, agentId)
+    }
     return this.trackTaskOperation(taskId, () => this.startTaskSession(agentId, taskId, workspaceDir, skipInitialPrompt))
   }
 
@@ -3157,12 +3173,12 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   }
 
   /** Hold admission while a confirmed human action stops every owned runtime. */
-  async withStoppedTasks<T>(taskIds: string[], action: () => Promise<T>, beforeStop?: () => Promise<void>): Promise<T> {
+  async withStoppedTasks<T>(taskIds: string[], action: () => Promise<T>, beforeStop?: () => Promise<void>, disableAutomation = true): Promise<T> {
     const ids = new Set(taskIds.flatMap(id => [id, `heartbeat-${id}`]))
     if ([...ids].some(id => this.controlledTasks.has(id))) throw new Error('An action is already stopping one of these tasks.')
     for (const id of ids) this.controlledTasks.set(id, 'stopping')
     try {
-      for (const id of taskIds) this.db.updateTask(id, { auto_start_agent: false, auto_complete_without_review: false, heartbeat_enabled: false })
+      if (disableAutomation) for (const id of taskIds) this.db.updateTask(id, { auto_start_agent: false, auto_complete_without_review: false, heartbeat_enabled: false })
       const operations = await Promise.allSettled([...ids].flatMap(id => [...(this.pendingTaskOperations.get(id) ?? [])]))
       await beforeStop?.()
       for (const [id, session] of this.sessions) if (ids.has(session.taskId)) await this.stopSession(id, false, true)
@@ -3203,7 +3219,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       throw new Error(`Task not found: ${taskId}`)
     }
 
-    const preferSubtasks = opts?.preferSubtasks !== false
+    const preferSubtasks = !isReusableSchedule(task) && opts?.preferSubtasks !== false
     const allowTriage = opts?.allowTriage !== false
 
     if (preferSubtasks) {
@@ -3548,6 +3564,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const sessionId = task?.session_id
     const agentId = task?.agent_id
     if (!sessionId || !agentId) return
+    // Scheduled history is captured with its owning run ID, never backfilled as unscoped parts.
+    if (isReusableSchedule(task)) return
 
     const adapter = this.getAdapter(agentId)
     if (!adapter || typeof adapter.getPersistedMessages !== 'function') return
@@ -3714,6 +3732,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Replays all messages to the renderer and resumes polling.
    */
   async resumeSession(agentId: string, taskId: string, sessionId: string): Promise<string> {
+    if (isReusableSchedule(this.db.getTask(taskId))) throw new Error('Start a new check instead of resuming a historical scheduled session.')
     return this.trackTaskOperation(taskId, () => this.resumeTaskSession(agentId, taskId, sessionId))
   }
 
@@ -3761,6 +3780,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const normalize = (s: string): string => s.replace(/\s+/g, ' ').trim().toLowerCase()
       const existingContent = new Set(
         this.db.getTranscriptParts(session.taskId)
+          .filter(p => !session.scheduleRunId || p.partId.startsWith(`run:${session.scheduleRunId}:`))
           .filter((p) => p.content)
           .map((p) => normalize(p.content))
       )
@@ -4011,7 +4031,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       await yieldEventLoop()
 
       // Auto-enable heartbeat if agent wrote a heartbeat.md file
-      if (!this.responsibilities?.ownsTask(session.taskId)) this.autoEnableHeartbeat(session.taskId)
+      if (!this.responsibilities?.ownsTask(session.taskId) && !isReusableSchedule(task)) this.autoEnableHeartbeat(session.taskId)
       await yieldEventLoop()
 
       // Get updated task with output fields and notify renderer
@@ -4274,6 +4294,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     }
 
     this.responsibilities?.assertHumanAccess(session?.taskId ?? taskId ?? '')
+    this.scheduleRuns?.assertMessage(session?.taskId ?? taskId ?? '', sessionId)
 
     // Session was destroyed — try to RESUME first (preserves conversation history),
     // then fallback to creating a new session
@@ -4480,6 +4501,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     }
     if (!session) throw new Error(`Session not found: ${sessionId}`)
+    this.scheduleRuns?.assertMessage(session.taskId, sessionId)
     analytics()?.record('provider.request.responded', {
       provider: getAgentProvider(this.db.getAgent(session.agentId)),
       decision: approved ? 'approved' : 'rejected'
@@ -5649,6 +5671,7 @@ Important:
   }
 
   private sendToRenderer(channel: string, data: unknown): void {
+    if (this.scheduleRuns && !this.scheduleRuns.event(channel, data)) return
     this.responsibilities?.observe(channel, data)
     if (channel === 'task:updated' && data && typeof data === 'object') {
       const event = data as { taskId?: string; updates?: Record<string, unknown> }

@@ -1,3 +1,4 @@
+import { recurrenceMode, isReusableSchedule } from '../shared/schedule-runs'
 import type { ResponsibilityManager } from './responsibility-manager'
 import type { TaskControl } from './task-control'
 /**
@@ -368,6 +369,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
       // Support both new cron field and legacy is_recurring + recurrence_pattern
       const isRecurring = params.cron ? 1 : (params.is_recurring ? 1 : 0)
+      const mode = recurrenceMode(params.recurrence_mode, isRecurring ? 'reuse' : 'separate')
       const recurrencePattern = params.cron
         ? params.cron
         : params.recurrence_pattern
@@ -395,8 +397,8 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       }
 
       rawDb.prepare(`
-        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, next_occurrence_at, parent_task_id, auto_start_agent, auto_complete_without_review, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, recurrence_mode, next_occurrence_at, parent_task_id, auto_start_agent, auto_complete_without_review, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         params.title,
@@ -411,10 +413,11 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         params.skill_ids ? JSON.stringify(params.skill_ids) : null,
         isRecurring,
         recurrencePattern,
+        mode,
         nextOccurrenceAt,
         params.parent_task_id || null,
         params.auto_start_agent === true ? 1 : 0,
-        params.auto_complete_without_review === true ? 1 : 0,
+        mode === 'reuse' ? 0 : params.auto_complete_without_review === true ? 1 : 0,
         now,
         now
       )
@@ -442,6 +445,8 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     case '/update_task': {
+      if (params.recurrence_mode !== undefined) return { error: 'Use Mastermind schedule controls to change execution mode.' }
+      if (params.auto_complete_without_review === true && isReusableSchedule(db.getTask(params.task_id as string))) return { error: 'Reusable schedule tasks stay open between checks.' }
       if (params.status === 'completed') return { error: 'Workflo must confirm completion. Agents submit results for review.' }
       if (params.status && params.status !== 'in_progress') {
         try { db.updateTask(params.task_id as string, { status: params.status as never }) }

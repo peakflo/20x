@@ -23,6 +23,8 @@ import type {
 } from '@shared/voice-tts'
 
 export const taskApi = {
+  getScheduleRuns: (id: string, runId?: string, before?: string): Promise<unknown> => window.electronAPI.db.getScheduleRuns(id, runId, before),
+  manageScheduleTask: (id: string, action: string) => window.electronAPI.db.manageScheduleTask(id, action),
   getAll: (): Promise<WorkfloTask[]> => {
     return window.electronAPI.db.getTasks()
   },

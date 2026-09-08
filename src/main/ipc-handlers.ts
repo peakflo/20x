@@ -1,3 +1,4 @@
+import { isReusableSchedule } from '../shared/schedule-runs'
 import { recordResponsibilityHumanInput } from './responsibility-ipc'
 import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
 import * as childProcess from 'child_process'
@@ -92,13 +93,20 @@ export function registerIpcHandlers(
   gitlabManager?: GitLabManager,
   workspaceCleanupScheduler?: import('./workspace-cleanup-scheduler').WorkspaceCleanupScheduler,
   voiceSessionManager?: import('./voice/voice-session-manager').VoiceSessionManager,
-  taskAutomationScheduler?: import('./task-automation-scheduler').TaskAutomationScheduler
+  taskAutomationScheduler?: import('./task-automation-scheduler').TaskAutomationScheduler,
+  taskControl?: import('./task-control').TaskControl
 ): void {
   // Mutable references — created on selectTenant, cleared on logout
   let enterpriseHeartbeat = initialEnterpriseHeartbeat
   let enterpriseStateSync = initialEnterpriseStateSync
   ipcMain.handle('db:getTasks', () => {
     return db.getTasks()
+  })
+
+  ipcMain.handle('db:getScheduleRuns', (_, taskId: string, runId?: string, before?: string) => recurrenceScheduler?.history(taskId, runId, before) ?? [])
+  ipcMain.handle('db:manageScheduleTask', (_, taskId: string, action: string) => {
+    if (!taskControl) throw new Error('Task controls unavailable.')
+    return taskControl.run({ task_id: taskId, action })
   })
 
   ipcMain.handle('db:getTask', (_, id: string) => {
@@ -108,7 +116,7 @@ export function registerIpcHandlers(
   ipcMain.handle('db:createTask', async (event, data: CreateTaskData) => {
     if (data.status === TaskStatus.Completed) throw new Error('Workflo must confirm completion.')
     let task = db.createTask(data)
-    if (task && !task.source_id && syncManager.canUploadTasks()) {
+    if (task && !isReusableSchedule(task) && !task.source_id && syncManager.canUploadTasks()) {
       try { await syncManager.uploadTask(task.id) }
       catch (error) { db.setSetting(`workflo-upload:${task.id}:error`, error instanceof Error ? error.message : String(error)) }
       task = db.getTask(task.id)
@@ -155,9 +163,15 @@ export function registerIpcHandlers(
     if (data.recurrence_paused !== undefined && (Object.keys(data).length !== 1 || !recurrenceScheduler)) {
       throw new Error('Change the schedule pause separately from other task fields.')
     }
-    const updated = data.recurrence_paused !== undefined
-      ? recurrenceScheduler!.setPaused(id, data.recurrence_paused)
-      : db.updateTask(id, data)
+    if (data.recurrence_mode !== undefined && !recurrenceScheduler) throw new Error('Schedule controls unavailable.')
+    const update = () => {
+      if (data.recurrence_mode !== undefined) {
+        if (!db.getTask(id)?.is_recurring && data.is_recurring) return db.updateTask(id, data, 'schedule-control')
+        if (db.getTask(id)?.is_recurring) recurrenceScheduler!.setMode(id, data.recurrence_mode)
+      }
+      return data.recurrence_paused !== undefined ? recurrenceScheduler!.setPaused(id, data.recurrence_paused) : db.updateTask(id, data)
+    }
+    const updated = data.recurrence_mode !== undefined ? db.db.transaction(update)() : update()
 
     // Initialize recurring task schedule when recurrence is added or changed
     if (data.recurrence_paused === undefined && recurrenceScheduler && updated && updated.is_recurring && updated.recurrence_pattern) {
@@ -232,8 +246,13 @@ export function registerIpcHandlers(
     return updated
   })
 
-  ipcMain.handle('db:deleteTask', (event, id: string) => {
+  ipcMain.handle('db:deleteTask', async (event, id: string) => {
     const existing = db.getTask(id)
+    if (isReusableSchedule(existing)) {
+      if (!taskControl) throw new Error('Task controls unavailable.')
+      const result = await taskControl.run({ task_id: id, action: 'delete' }) as { success: boolean }
+      return result.success
+    }
     const success = db.deleteTask(id)
     if (success) {
       event.sender.send('task:deleted', { taskId: id })
