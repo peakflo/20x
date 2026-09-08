@@ -223,6 +223,38 @@ Second paragraph.`
         expect(navigator.clipboard.writeText).toHaveBeenCalledWith(mermaidCode)
       })
     })
+
+    // The mocked `mermaid.render()` above resolves `<svg data-testid="mermaid-svg">`
+    // — scoped to THAT, not a bare `svg` selector, because `CopyCodeButton`'s
+    // own icon is also an inline `<svg>` and is present from the first render.
+    const mermaidSvgSelector = 'svg[data-testid="mermaid-svg"]'
+
+    it('renders a STILL-STREAMING (unclosed) mermaid fence as a code block, never a diagram', async () => {
+      vi.mocked(mermaid).render.mockClear()
+      const streamingSnapshot = `Building a diagram:\n\n\`\`\`mermaid\n${mermaidCode}`
+      const { container } = render(<Markdown>{streamingSnapshot}</Markdown>)
+
+      // Give any pending mermaid work a chance to run, then assert it never did.
+      await new Promise(resolve => setTimeout(resolve, 0))
+      expect(container.querySelector(mermaidSvgSelector)).not.toBeInTheDocument()
+      expect(container.querySelector('pre')).toBeInTheDocument()
+      expect(container.querySelector('pre')).toHaveTextContent('A[Start] --> B[End]')
+      expect(vi.mocked(mermaid).render).not.toHaveBeenCalled()
+    })
+
+    it('renders the diagram once the SAME fence closes on a later render (simulating the next streaming tick)', async () => {
+      vi.mocked(mermaid).render.mockClear()
+      const streamingSnapshot = `Building a diagram:\n\n\`\`\`mermaid\n${mermaidCode}`
+      const finalSnapshot = `Building a diagram:\n\n\`\`\`mermaid\n${mermaidCode}\n\`\`\` `
+      const { container, rerender } = render(<Markdown>{streamingSnapshot}</Markdown>)
+      expect(container.querySelector(mermaidSvgSelector)).not.toBeInTheDocument()
+
+      rerender(<Markdown>{finalSnapshot}</Markdown>)
+
+      await waitFor(() => {
+        expect(container.querySelector(mermaidSvgSelector)).toBeInTheDocument()
+      })
+    })
   })
 
   describe('Links', () => {

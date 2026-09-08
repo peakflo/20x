@@ -3,6 +3,15 @@
  *
  * Provides consistent markdown rendering across the application with proper styling.
  * Used in: task descriptions, agent transcripts, plugin documentation.
+ *
+ * MERMAID STREAMING GUARD: `AgentTranscriptPanel` feeds this component
+ * growing text token by token while an agent turn is in flight, with no
+ * "streaming" flag passed down. `markIncompleteMermaidFences` runs on
+ * `children` before ReactMarkdown ever sees it, so a still-open ```mermaid
+ * fence renders as an ordinary code block instead of re-running
+ * `mermaid.render()` against half-written syntax on every token. See its
+ * own header in `@/lib/mermaid-fence` for why only the trailing fence can
+ * ever need this.
  */
 
 import React, { Fragment, memo, useMemo, useState } from 'react'
@@ -10,6 +19,7 @@ import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Check, Copy } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { markIncompleteMermaidFences } from '@/lib/mermaid-fence'
 import { MermaidDiagram } from './MermaidDiagram'
 
 /** Allow the default safe protocols plus our local app-attachment:// scheme */
@@ -292,6 +302,11 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
     ),
   }), [classes, highlightQuery]) // Only recreate when rendered styling or highlight changes
 
+  // Pure string transform. `memo` above already gates re-renders of this
+  // component on `children` changing, so an unrelated parent re-render never
+  // re-scans text that has not changed.
+  const content = markIncompleteMermaidFences(children)
+
   return (
     <div className={cn('markdown-content min-w-0', classes.base, className)}>
       <ReactMarkdown
@@ -299,7 +314,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
         urlTransform={urlTransform}
         components={components}
       >
-        {children}
+        {content}
       </ReactMarkdown>
     </div>
   )
