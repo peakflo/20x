@@ -35,6 +35,10 @@ const mockElectronAPI = {
     deleteTask: vi.fn().mockResolvedValue(true),
     getSubtasks: vi.fn().mockResolvedValue([])
   },
+  tasks: {
+    getWorkspaceDir: vi.fn().mockResolvedValue('/tmp/test-workspace'),
+    completeLocally: vi.fn().mockResolvedValue({})
+  },
   mcpServers: {
     getAll: vi.fn().mockResolvedValue([]),
     get: vi.fn().mockResolvedValue(undefined),

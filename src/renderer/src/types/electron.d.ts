@@ -226,6 +226,8 @@ interface ElectronAPI {
   }
   tasks: {
     getWorkspaceDir: (taskId: string) => Promise<string>
+    /** "Only in 20x" for a non-Workflo sourced task; the main process owns the guard. */
+    completeLocally: (taskId: string) => Promise<WorkfloTask | undefined>
   }
   /** The preload bridge always exposes every artifact capability, including
    * the desktop-only file clipboard action. */

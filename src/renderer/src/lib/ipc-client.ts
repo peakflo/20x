@@ -49,6 +49,14 @@ export const taskApi = {
 
   reorderSubtasks: (parentId: string, orderedIds: string[]): Promise<boolean> => {
     return window.electronAPI.db.reorderSubtasks(parentId, orderedIds)
+  },
+
+  /**
+   * Completes a task that came from a non-Workflo source in 20x only, leaving
+   * the source untouched. The main process refuses source-less and Workflo tasks.
+   */
+  completeLocally: (id: string): Promise<WorkfloTask | undefined> => {
+    return window.electronAPI.tasks.completeLocally(id)
   }
 }
 

@@ -263,6 +263,12 @@ export class SyncManager {
     if (!plugin) return
 
     const fields = { ...changedFields }
+    // The user chose "Only in 20x" for this task: pushing a status (e.g. marking
+    // the Notion page done) would close it at the source against that choice.
+    // Other edits still sync.
+    if (task.complete_at_source === false && 'status' in fields) {
+      delete fields.status
+    }
     // Internal completion control — never a source field.
     delete fields.complete_at_source
     if (Object.keys(fields).length === 0) return

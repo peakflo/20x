@@ -157,8 +157,9 @@ export function AppLayout() {
 
   useEffect(() => onShortcutFeedback(({ message, isError }) => showToast(message, isError)), [showToast])
 
-  // Completion is server-confirmed through the shared hook (same for every source).
-  const { requestComplete } = useTaskCompletion({ onToast: showToast })
+  // Tasks from a non-Workflo source ask whether to update the source too or
+  // complete in 20x only. `completionDialog` renders that question.
+  const { requestComplete, completionDialog } = useTaskCompletion({ onToast: showToast })
 
   // A completion that the main process could not push to the source sends the
   // task back to review. Without this the user sees the task reappear with no
@@ -907,6 +908,9 @@ export function AppLayout() {
           </DialogBody>
         </DialogContent>
       </Dialog>
+
+      {/* Update the task source too, or only in 20x */}
+      {completionDialog}
 
       {/* Delete Confirmation */}
       <DeleteConfirmDialog

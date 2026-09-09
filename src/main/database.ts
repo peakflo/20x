@@ -421,7 +421,7 @@ export interface CreateTaskData {
   cron?: string
 }
 
-export type TaskUpdateOrigin = 'workflo-server' | 'source-plugin'
+export type TaskUpdateOrigin = 'workflo-server' | 'source-plugin' | 'user-local'
 
 export interface UpdateTaskData {
   external_id?: string | null
@@ -2372,6 +2372,11 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
    *   at the source (Notion, Linear, YouTrack, GitHub, HubSpot). The source
    *   has confirmed the change, so the local completion guard is satisfied.
    *   It may not touch the source link or a Workflo-owned task.
+   * - `'user-local'`: the user chose "Only in 20x" for a non-Workflo sourced
+   *   task. Only the main-process `task:completeLocally` handler passes it, so
+   *   the renderer cannot forge it through `UpdateTaskData`. It satisfies only
+   *   the local completion guard; the source link and Workflo-owned status
+   *   guards still apply.
    * - `undefined`: a local caller (renderer, agent, API). Sourced tasks may
    *   not be completed locally; they close through the source.
    */

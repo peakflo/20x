@@ -73,40 +73,201 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
 const onToast = vi.fn()
 const onCompleted = vi.fn()
 
+function completeLocallyMock() {
+  return window.electronAPI.tasks.completeLocally as unknown as ReturnType<typeof vi.fn>
+}
+
 function Harness({ taskId = 'task-1' }: { taskId?: string }) {
-  const { requestComplete } = useTaskCompletion({ onToast })
+  const { requestComplete, completionDialog } = useTaskCompletion({ onToast })
   return (
     <>
       <button type="button" onClick={() => void requestComplete(taskId, { onCompleted })}>
         Complete
       </button>
+      {completionDialog}
     </>
   )
 }
 
-describe('server completion', () => {
-  beforeEach(() => { vi.clearAllMocks(); executeActionMock.mockResolvedValue({success:true}); storeState.tasks=[] })
+const notionSource = { id: 'src-notion', name: 'Notion', plugin_id: 'notion' }
+const workfloSource = { id: 'src-wf', name: 'Workflo', plugin_id: 'peakflo' }
+
+describe('useTaskCompletion', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    executeActionMock.mockResolvedValue({ success: true })
+    completeLocallyMock().mockResolvedValue({})
+    storeState.tasks = []
+    storeState.sources = [notionSource, workfloSource]
+  })
   afterEach(cleanup)
-  it('always calls the source and never writes local completion', async () => {
-    storeState.tasks=[makeTask({source_id:'src-1',complete_at_source:false})]
-    render(<Harness />); fireEvent.click(screen.getByText('Complete'))
-    await waitFor(()=>expect(onCompleted).toHaveBeenCalled())
-    expect(executeActionMock).toHaveBeenCalledWith(PluginActionId.Complete,'task-1','src-1')
-    expect(updateTaskMock).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog')).toBeNull()
+
+  describe('source-less 20x task', () => {
+    it('completes locally without asking or uploading', async () => {
+      const upload = vi.fn()
+      window.electronAPI.taskSources.upload = upload
+      storeState.tasks = [makeTask()]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+
+      await waitFor(() => expect(onCompleted).toHaveBeenCalled())
+      expect(updateTaskMock).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+      expect(upload).not.toHaveBeenCalled()
+      expect(executeActionMock).not.toHaveBeenCalled()
+      expect(completeLocallyMock()).not.toHaveBeenCalled()
+      expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
+    })
   })
-  it('completes a source-less 20x task locally without uploading it',async()=>{
-    const upload = vi.fn()
-    window.electronAPI.taskSources.upload = upload
-    storeState.tasks=[makeTask()];render(<Harness />);fireEvent.click(screen.getByText('Complete'))
-    await waitFor(()=>expect(onCompleted).toHaveBeenCalled())
-    expect(updateTaskMock).toHaveBeenCalledWith('task-1',{status:TaskStatus.Completed})
-    expect(upload).not.toHaveBeenCalled();expect(executeActionMock).not.toHaveBeenCalled()
+
+  describe('Workflo task', () => {
+    it.each([
+      ['source plugin peakflo', makeTask({ source_id: 'src-wf' })],
+      ['server_managed flag', makeTask({ source_id: 'src-other', server_managed: true })]
+    ])('completes through the server action with no dialog (%s)', async (_label, task) => {
+      storeState.tasks = [task]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+
+      await waitFor(() => expect(onCompleted).toHaveBeenCalled())
+      expect(executeActionMock).toHaveBeenCalledWith(PluginActionId.Complete, 'task-1', task.source_id)
+      expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
+      expect(completeLocallyMock()).not.toHaveBeenCalled()
+      // Workflo tasks never record a completion choice.
+      expect(updateTaskMock).not.toHaveBeenCalled()
+    })
+
+    it('keeps a refused completion open', async () => {
+      executeActionMock.mockResolvedValue({ success: false, error: 'Review required' })
+      storeState.tasks = [makeTask({ source_id: 'src-wf' })]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith('Review required', true))
+      expect(updateTaskMock).not.toHaveBeenCalled()
+      expect(onCompleted).not.toHaveBeenCalled()
+    })
   })
-  it('keeps a refused completion open',async()=>{
-    executeActionMock.mockResolvedValue({success:false,error:'Review required'})
-    storeState.tasks=[makeTask({source_id:'src-1'})];render(<Harness />);fireEvent.click(screen.getByText('Complete'))
-    await waitFor(()=>expect(onToast).toHaveBeenCalledWith('Review required',true))
-    expect(updateTaskMock).not.toHaveBeenCalled();expect(onCompleted).not.toHaveBeenCalled()
+
+  describe('Notion-style sourced task', () => {
+    it('asks before doing anything', async () => {
+      storeState.tasks = [makeTask({ source_id: 'src-notion' })]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+
+      expect(await screen.findByTestId('complete-at-source-dialog')).toBeTruthy()
+      expect(screen.getByText('Complete in Notion?')).toBeTruthy()
+      expect(screen.getByTestId('complete-at-source')).toHaveTextContent('Update Notion too')
+      expect(screen.getByTestId('complete-manually')).toHaveTextContent('Only in 20x')
+      expect(executeActionMock).not.toHaveBeenCalled()
+      expect(updateTaskMock).not.toHaveBeenCalled()
+      expect(completeLocallyMock()).not.toHaveBeenCalled()
+    })
+
+    it('"Only in 20x" goes through task:completeLocally and never touches the source', async () => {
+      storeState.tasks = [makeTask({ source_id: 'src-notion' })]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+      fireEvent.click(await screen.findByTestId('complete-manually'))
+
+      await waitFor(() => expect(completeLocallyMock()).toHaveBeenCalledWith('task-1'))
+      expect(executeActionMock).not.toHaveBeenCalled()
+      // No renderer status write: the guard lives in the main process.
+      expect(updateTaskMock).not.toHaveBeenCalled()
+      expect(onCompleted).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-1', status: TaskStatus.Completed }))
+      expect(onToast).toHaveBeenCalledWith('"Fix the login bug" completed in 20x only')
+      await waitFor(() => expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull())
+    })
+
+    it('"Update Notion too" runs the source action, then records the choice without a status', async () => {
+      storeState.tasks = [makeTask({ source_id: 'src-notion' })]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+      fireEvent.click(await screen.findByTestId('complete-at-source'))
+
+      await waitFor(() => expect(executeActionMock).toHaveBeenCalledWith(PluginActionId.Complete, 'task-1', 'src-notion'))
+      await waitFor(() => expect(updateTaskMock).toHaveBeenCalledWith('task-1', { complete_at_source: true }))
+      expect(updateTaskMock).not.toHaveBeenCalledWith('task-1', expect.objectContaining({ status: TaskStatus.Completed }))
+      expect(completeLocallyMock()).not.toHaveBeenCalled()
+      expect(onToast).toHaveBeenCalledWith('"Fix the login bug" completed')
+      await waitFor(() => expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull())
+    })
+
+    it('uses the action output field as the source action id', async () => {
+      storeState.tasks = [makeTask({
+        source_id: 'src-notion',
+        output_fields: [{ id: 'action', value: PluginActionId.Approve }] as WorkfloTask['output_fields']
+      })]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+      fireEvent.click(await screen.findByTestId('complete-at-source'))
+
+      await waitFor(() => expect(executeActionMock).toHaveBeenCalledWith(PluginActionId.Approve, 'task-1', 'src-notion'))
+    })
+
+    it('keeps the dialog open and reports the error when the source refuses', async () => {
+      executeActionMock.mockResolvedValue({ success: false, error: 'Notion rejected the update' })
+      storeState.tasks = [makeTask({ source_id: 'src-notion' })]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+      fireEvent.click(await screen.findByTestId('complete-at-source'))
+
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith('Notion rejected the update', true))
+      expect(updateTaskMock).not.toHaveBeenCalled()
+      expect(onCompleted).not.toHaveBeenCalled()
+      expect(screen.getByTestId('complete-at-source-dialog')).toBeTruthy()
+    })
+
+    it('keeps the dialog open when the main process refuses "Only in 20x"', async () => {
+      completeLocallyMock().mockRejectedValue(new Error('Workflo controls task status.'))
+      storeState.tasks = [makeTask({ source_id: 'src-notion' })]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+      fireEvent.click(await screen.findByTestId('complete-manually'))
+
+      await waitFor(() => expect(onToast).toHaveBeenCalledWith('Workflo controls task status.', true))
+      expect(onCompleted).not.toHaveBeenCalled()
+      expect(screen.getByTestId('complete-at-source-dialog')).toBeTruthy()
+    })
+
+    it('completes nothing when the user cancels', async () => {
+      storeState.tasks = [makeTask({ source_id: 'src-notion' })]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+      fireEvent.click(await screen.findByText('Cancel'))
+
+      await waitFor(() => expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull())
+      expect(executeActionMock).not.toHaveBeenCalled()
+      expect(updateTaskMock).not.toHaveBeenCalled()
+      expect(completeLocallyMock()).not.toHaveBeenCalled()
+    })
+
+    it('honours a stored "Only in 20x" answer without asking', async () => {
+      storeState.tasks = [makeTask({ source_id: 'src-notion', complete_at_source: false })]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+
+      await waitFor(() => expect(completeLocallyMock()).toHaveBeenCalledWith('task-1'))
+      expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
+      expect(executeActionMock).not.toHaveBeenCalled()
+    })
+
+    it('honours a stored "update the source too" answer without asking', async () => {
+      storeState.tasks = [makeTask({ source_id: 'src-notion', complete_at_source: true })]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+
+      await waitFor(() => expect(executeActionMock).toHaveBeenCalledWith(PluginActionId.Complete, 'task-1', 'src-notion'))
+      expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
+      expect(completeLocallyMock()).not.toHaveBeenCalled()
+    })
+
+    it('falls back to the task source label when the source record is not loaded', async () => {
+      storeState.sources = []
+      storeState.tasks = [makeTask({ source_id: 'src-linear', source: 'linear' })]
+      render(<Harness />)
+      fireEvent.click(screen.getByText('Complete'))
+
+      expect(await screen.findByText('Complete in linear?')).toBeTruthy()
+    })
   })
 })
