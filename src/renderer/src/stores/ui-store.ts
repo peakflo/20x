@@ -5,7 +5,7 @@ import type { TaskPriority } from '@/types'
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
 export type ActiveModal = 'create' | 'edit' | 'delete' | 'settings' | 'repo-selector' | 'gh-setup' | null
-export type SidebarView = 'tasks' | 'skills' | 'dashboard' | 'canvas' | 'automation'
+export type SidebarView = 'tasks' | 'skills' | 'dashboard' | 'canvas' | 'automation' | 'factories'
 
 // ── Persisted sidebar layout (localStorage) ──
 const SIDEBAR_WIDTH_KEY = 'ui-sidebar-width'
@@ -52,6 +52,11 @@ interface UIState {
   createTaskPrefill: { title: string; description: string } | null
   /** Whether the Mastermind drawer is open (global) */
   showOrchestrator: boolean
+  mastermindDraft: { id: string; projectId: string; text: string } | null
+  draftInMastermind: (projectId: string, text: string) => void
+  clearMastermindDraft: (id: string) => void
+  canvasResponsibilityId: string | null
+  showResponsibilityOnCanvas: (id: string) => void
   /** Whether the contextual (tasks/skills) sidebar is collapsed (persisted) */
   sidebarCollapsed: boolean
   /** Contextual sidebar width in px (persisted) */
@@ -113,6 +118,11 @@ export const useUIStore = create<UIState>((set) => ({
   canvasPendingApp: null,
   createTaskPrefill: null,
   showOrchestrator: false,
+  mastermindDraft: null,
+  draftInMastermind: (projectId, text) => set({ showOrchestrator: true, mastermindDraft: { id: crypto.randomUUID(), projectId, text } }),
+  clearMastermindDraft: (id) => set(s => s.mastermindDraft?.id === id ? { mastermindDraft: null } : {}),
+  canvasResponsibilityId: null,
+  showResponsibilityOnCanvas: (id) => set({ canvasResponsibilityId: id, sidebarView: 'canvas', dashboardPreviewTaskId: null }),
   sidebarCollapsed: readStoredCollapsed(),
   sidebarWidth: readStoredWidth(),
 

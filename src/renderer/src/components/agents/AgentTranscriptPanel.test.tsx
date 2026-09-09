@@ -388,3 +388,20 @@ git push 2>&1 | tail -2`
     expect(screen.queryByRole('button', { name: /workflow-builder/i })).toBeNull()
   })
 })
+
+it('prefills a Factory request without sending and preserves existing composer text', () => {
+  cleanup()
+  const onSend = vi.fn()
+  const applied = vi.fn()
+  const props = { messages: [], status: SessionStatus.IDLE, onStop: vi.fn(), onSend, onDraftApplied: applied }
+  const view = render(<AgentTranscriptPanel {...props} />)
+  const field = screen.getByPlaceholderText('Write a message...')
+  fireEvent.change(field, { target: { value: 'My existing note' } })
+  view.rerender(<AgentTranscriptPanel {...props} draft={{ id: 'draft', text: 'Use PR Review for these PRs' }} />)
+  expect(field).toHaveValue('My existing note\n\nUse PR Review for these PRs')
+  expect(applied).toHaveBeenCalledWith('draft')
+  expect(onSend).not.toHaveBeenCalled()
+  view.rerender(<AgentTranscriptPanel {...props} draft={{ id: 'draft', text: 'Use PR Review for these PRs' }} />)
+  expect(field).toHaveValue('My existing note\n\nUse PR Review for these PRs')
+  cleanup()
+})

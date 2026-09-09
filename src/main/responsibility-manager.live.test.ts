@@ -141,3 +141,58 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     }
   }, 8 * 60000)
 })
+
+describe.skipIf(process.env.RUN_RESPONSIBILITY_LIVE !== '1')('Factory native execution', () => {
+  it('runs a native Factory branch, human handoff and independent verification', async () => {
+    const fixture = mkdtempSync(join(tmpdir(), '20x-factory-live-'))
+    const root = join(fixture, 'project'); mkdirSync(root)
+    writeFileSync(join(root, 'answer.txt'), 'before\n')
+    writeFileSync(join(root, 'AGENTS.md'), 'For this isolated acceptance fixture, include FACTORY_PROJECT_CONTEXT=loaded in your final responsibility report summary. Work only in this folder.\n')
+    const { db } = createTestDb()
+    db.getWorkspaceDir = taskId => { const path = join(fixture, 'sessions', taskId); mkdirSync(path, { recursive: true }); return path }
+    const agent = db.createAgent({ name: 'Factory acceptance', config: { coding_agent: 'codex', model: process.env.RESPONSIBILITY_LIVE_MODEL ?? 'gpt-5.6-luna', reasoning_effort: 'medium', permission_mode: 'ask', sandbox_mode: 'workspace-write' } })!
+    const agents = new AgentManager(db)
+    const manager = new ResponsibilityManager(db, agents)
+    agents.setResponsibilityManager(manager); setResponsibilityManager(manager); setTaskApiAgentController(agents)
+    await startTaskApiServer(db)
+    try {
+      manager.start(); await manager.reconcile()
+      const project = manager.createProject('Factory acceptance', root, agent.id)
+      const taskId = projectConversationId(project.id)
+      const human = manager.recordHumanInput(taskId, 'In this temporary test project only, review answer.txt; if it is not exactly after followed by a newline, have a separate assignment fix it. Then ask me before independent verification. No external sources, secrets, installs or communication.')!
+      const scope = manager.scopeForToken(manager.tokenForTask(taskId)!)
+      manager.proposeFactory(scope, { humanInputId: human.id, name: 'Review and correct fixture', diagram: 'review -> needs correction? -> fix -> human -> verify', guide: 'First create ONE read-only review assignment to inspect answer.txt and report whether it contains exactly after followed by one newline. If the report says it needs correction, create ONE separate edit assignment to make that exact change. If already correct, skip editing. After the worker reports that the file is correct, ask the engineer exactly: Proceed with independent verification? Do not request more work until answered. After the engineer explicitly says yes, report done to request independent verification. Never ask that same question twice. Never create a separate verification task yourself; 20x performs the independent verification when you report done.' })
+      manager.decideFactory(manager.snapshot().factoryProposals![0].id, true)
+      const f = manager.snapshot().factories![0]
+      const r = manager.propose(scope, { kind: 'goal', title: 'Factory native acceptance', objective: human.text, scope: `Only ${root}; inspect and edit answer.txt. Follow project instructions.`, finish: 'answer.txt contains exactly after followed by one newline, confirmed independently after the engineer answers.', stop: 'Ask before any action beyond the fixture. Stop after independent verification.', mode: 'edit', priority: 'high', agentId: agent.id, factoryId: f.id, maxSteps: 12, deadline: new Date(Date.now() + 12 * 60000).toISOString() }, human.id)
+      await manager.act(r.id, r.revision, 'approve')
+      let answered = false
+      const deadline = Date.now() + 10 * 60000
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 500)); await manager.reconcile()
+        const snap = manager.snapshot()
+        const pending = snap.notices.find(n => n.state === 'pending' && n.kind !== 'result')
+        if (pending) {
+          if (pending.kind !== 'question' || !/Proceed with independent verification\?/i.test(pending.body) || answered) throw new Error(`Native Factory requires unexpected intervention: ${pending.body}`)
+          expect(readFileSync(join(root, 'answer.txt'), 'utf8')).toBe('after\n')
+          await manager.answer(pending.id, 'Yes, proceed with independent verification of answer.txt only.')
+          answered = true
+        }
+        if (snap.responsibilities[0].state === 'completed') break
+      }
+      const snap = manager.snapshot()
+      console.log('NATIVE_FACTORY_TRACE', JSON.stringify(snap.steps.map(s => ({ phase: s.phase, instruction: s.instruction, report: s.report }))))
+      expect(answered).toBe(true)
+      expect(snap.responsibilities[0].state).toBe('completed')
+      expect(snap.steps.filter(s => s.phase === 'work')).toHaveLength(2)
+      expect(snap.steps.filter(s => s.phase === 'work').every(s => s.report?.summary.includes('FACTORY_PROJECT_CONTEXT=loaded'))).toBe(true)
+      expect(snap.steps.at(-1)?.phase).toBe('verify')
+      expect(snap.steps.every(s => s.state === 'settled')).toBe(true)
+      expect(readFileSync(join(root, 'answer.txt'), 'utf8')).toBe('after\n')
+      expect(snap.steps.every(s => !agents.findSessionByTaskId(s.taskId))).toBe(true)
+      console.log('NATIVE_FACTORY_RECEIPT', JSON.stringify({ model: agent.config.model, answered, phases: snap.steps.map(s => ({ taskId: s.taskId, phase: s.phase, state: s.state, sessionId: s.sessionId, predecessors: s.predecessorTaskIds })), finalState: snap.responsibilities[0].state }))
+    } finally {
+      await manager.stop(); await agents.stopAllSessions(); stopTaskApiServer(); setResponsibilityManager(undefined); db.db.close(); rmSync(fixture, { recursive: true, force: true })
+    }
+  }, 12 * 60000)
+})

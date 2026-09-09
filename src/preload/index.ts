@@ -11,6 +11,7 @@ const responsibilities: ResponsibilitiesApi = {
   answer: (id, answer, approved) => ipcRenderer.invoke('responsibilities:answer', id, answer, approved),
   remember: (projectId, kind, text, id) => ipcRenderer.invoke('responsibilities:remember', projectId, kind, text, id),
   forget: id => ipcRenderer.invoke('responsibilities:forget', id),
+  decideFactory: (id, approve) => ipcRenderer.invoke('responsibilities:decideFactory', id, approve),
   onChanged: callback => {
     const handler = (): void => callback()
     ipcRenderer.on('responsibilities:changed', handler)

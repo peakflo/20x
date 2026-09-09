@@ -35,3 +35,15 @@ it('accepts agreement approvals and human provenance only from the main desktop 
   expect(service.act).toHaveBeenCalledWith('goal', 1, 'approve')
   expect(service.recordHumanInput).toHaveBeenCalledWith('project', 'My actual request')
 })
+
+it('keeps Factory confirmation on the trusted desktop frame', () => {
+  vi.mocked(ipcMain.handle).mockClear()
+  const service = { decideFactory: vi.fn() } as unknown as ResponsibilityManager
+  const main = { mainFrame: {} } as WebContents
+  registerResponsibilityIpc(service, () => main)
+  const handle = vi.mocked(ipcMain.handle).mock.calls.find(([name]) => name === 'responsibilities:decideFactory')![1]
+  expect(() => handle({ sender: main, senderFrame: {} } as IpcMainInvokeEvent, 'preview', true)).toThrow('main 20x window')
+  expect(service.decideFactory).not.toHaveBeenCalled()
+  handle({ sender: main, senderFrame: main.mainFrame } as IpcMainInvokeEvent, 'preview', true)
+  expect(service.decideFactory).toHaveBeenCalledWith('preview', true)
+})

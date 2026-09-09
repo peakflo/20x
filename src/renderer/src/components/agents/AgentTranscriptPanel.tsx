@@ -258,6 +258,8 @@ interface AgentTranscriptPanelProps {
   pendingApproval?: { action: string; description: string } | null
   /** User sent a message and the backend is still resuming the session. */
   pendingSend?: boolean
+  draft?: { id: string; text: string }
+  onDraftApplied?: (id: string) => void
 }
 
 export interface ComposerAttachment {
@@ -809,7 +811,9 @@ export function AgentTranscriptPanel({
   taskId,
   agentId,
   pendingApproval,
-  pendingSend
+  pendingSend,
+  draft,
+  onDraftApplied
 }: AgentTranscriptPanelProps) {
   // The user sent and the backend is still resuming — status still reads idle.
   const isStarting = !!pendingSend && status !== SessionStatus.WORKING && status !== SessionStatus.WAITING_APPROVAL
@@ -947,6 +951,14 @@ export function AgentTranscriptPanel({
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 128)}px` // max ~6 lines
   }, [])
+  const appliedDraft = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const field = inputRef.current
+    if (!draft || !field || appliedDraft.current === draft.id) return
+    appliedDraft.current = draft.id
+    field.value = field.value ? `${field.value}\n\n${draft.text}` : draft.text
+    autoResize(); field.focus(); onDraftApplied?.(draft.id)
+  }, [draft, onDraftApplied, autoResize, onSend])
 
   // Detect if the session ended due to an error (last message is error/retry and status is idle)
   const lastErrorMessage = useMemo(() => {

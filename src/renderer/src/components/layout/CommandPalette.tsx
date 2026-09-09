@@ -93,6 +93,7 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
       { id: 'nav-canvas', group: 'Navigation', label: 'Go to Canvas', icon: Layers, keywords: 'board panels', shortcut: `${mod}2`, run: goto('canvas') },
       { id: 'nav-tasks', group: 'Navigation', label: 'Go to Tasks', icon: CheckSquare, keywords: 'todo list', shortcut: `G T · ${mod}3`, run: goto('tasks') },
       { id: 'nav-skills', group: 'Navigation', label: 'Go to Skills', icon: Zap, keywords: 'abilities', shortcut: `G S · ${mod}4`, run: goto('skills') },
+      { id: 'nav-factories', group: 'Navigation', label: 'Go to Factories', icon: Clock3, keywords: 'workflow templates guides', shortcut: `${mod}6`, run: goto('factories') },
       { id: 'nav-automation', group: 'Navigation', label: 'Go to Automation', icon: Clock3, keywords: 'schedules recurring routines goals', shortcut: `${mod}5`, run: goto('automation') },
       { id: 'nav-next-task', group: 'Navigation', label: 'Next visible task', icon: ArrowDown, shortcut: 'J', run: () => { actions.nextTask(); close() } },
       { id: 'nav-previous-task', group: 'Navigation', label: 'Previous visible task', icon: ArrowUp, shortcut: 'K', run: () => { actions.previousTask(); close() } },

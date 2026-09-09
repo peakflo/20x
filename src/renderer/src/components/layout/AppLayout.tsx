@@ -19,6 +19,7 @@ import { TopBarVoiceButton } from '@/components/voice/TopBarVoiceButton'
 const SkillWorkspace = lazy(() => import('@/components/skills/SkillWorkspace').then(m => ({ default: m.SkillWorkspace })))
 const SettingsWorkspace = lazy(() => import('@/components/settings/SettingsWorkspace').then(m => ({ default: m.SettingsWorkspace })))
 const DashboardWorkspace = lazy(() => import('@/components/dashboard/DashboardWorkspace').then(m => ({ default: m.DashboardWorkspace })))
+const FactoriesWorkspace = lazy(() => import('@/components/factories/FactoriesWorkspace').then(m => ({ default: m.FactoriesWorkspace })))
 const AutomationWorkspace = lazy(() => import('@/components/automation/AutomationWorkspace').then(m => ({ default: m.AutomationWorkspace })))
 const OrchestratorPanel = lazy(() => import('@/components/orchestrator/OrchestratorPanel').then(m => ({ default: m.OrchestratorPanel })))
 import { useTasks } from '@/hooks/use-tasks'
@@ -32,7 +33,7 @@ import { isOverdue, isSnoozed } from '@/lib/utils'
 import { captureAnalyticsEvent, capturePageView } from '@/lib/analytics'
 import { TaskStatus } from '@/types'
 import type { FileAttachment, OutputField, UpdateTaskDTO } from '@/types'
-import { MessageSquare, LayoutDashboard, CheckSquare, Zap, Settings, Layers, PanelLeftClose, PanelLeftOpen, Search, CalendarClock } from 'lucide-react'
+import { MessageSquare, LayoutDashboard, CheckSquare, Zap, Settings, Layers, PanelLeftClose, PanelLeftOpen, Search, CalendarClock, Factory } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { ThemeToggle } from './ThemeToggle'
 import { StatusBar } from './StatusBar'
@@ -55,7 +56,8 @@ const NAV_ITEMS: { key: SidebarView; label: string; icon: typeof LayoutDashboard
   { key: 'canvas', label: 'Canvas', icon: Layers },
   { key: 'tasks', label: 'Tasks', icon: CheckSquare },
   { key: 'skills', label: 'Skills', icon: Zap },
-  { key: 'automation', label: 'Automation', icon: CalendarClock }
+  { key: 'automation', label: 'Automation', icon: CalendarClock },
+  { key: 'factories', label: 'Factories', icon: Factory }
 ]
 
 export function AppLayout() {
@@ -246,7 +248,7 @@ export function AppLayout() {
     if (dashboardPreviewTaskId) await completeTask(dashboardPreviewTaskId)
   }, [completeTask, dashboardPreviewTaskId])
 
-  const activeTaskId = dashboardPreviewTaskId || (sidebarView === 'automation' ? null : selectedTaskId) || null
+  const activeTaskId = dashboardPreviewTaskId || (['automation', 'factories'].includes(sidebarView) ? null : selectedTaskId) || null
   const handleNavigateFromDashboardPreview = useCallback(
     (taskId: string) => {
       closeDashboardPreview()
@@ -810,6 +812,8 @@ export function AppLayout() {
               <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Loading...</div>}>
                 <DashboardWorkspace />
               </Suspense>
+            ) : sidebarView === 'factories' ? (
+              <Suspense fallback={null}><FactoriesWorkspace /></Suspense>
             ) : sidebarView === 'automation' ? (
               <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Loading...</div>}>
                 <AutomationWorkspace />

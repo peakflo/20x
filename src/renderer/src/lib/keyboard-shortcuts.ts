@@ -36,7 +36,7 @@ export const KEYBOARD_SHORTCUT_GROUPS = [
       { keys: ['I'], label: 'Focus message composer' },
       { keys: ['Type'], label: 'Just start typing to focus composer' },
       { keys: ['Cmd/Ctrl', 'K'], label: 'Open command palette' },
-      { keys: ['Cmd/Ctrl', '1–5'], label: 'Switch main view' }
+      { keys: ['Cmd/Ctrl', '1–6'], label: 'Switch main view' }
     ]
   },
   {

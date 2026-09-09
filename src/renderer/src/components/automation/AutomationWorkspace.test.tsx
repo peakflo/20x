@@ -41,7 +41,7 @@ beforeEach(() => {
   api = {
     snapshot: vi.fn(async () => structuredClone(snapshot)),
     onChanged: vi.fn(listener => { changed = listener; return unsubscribe }),
-    pickProjectFolder: vi.fn(), createProject: vi.fn(), act: vi.fn(), answer: vi.fn(), remember: vi.fn(), forget: vi.fn()
+    pickProjectFolder: vi.fn(), createProject: vi.fn(), act: vi.fn(), answer: vi.fn(), remember: vi.fn(), decideFactory: vi.fn(), forget: vi.fn()
   }
   window.electronAPI.responsibilities = api
 })

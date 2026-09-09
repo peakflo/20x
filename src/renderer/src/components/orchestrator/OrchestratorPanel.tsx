@@ -8,6 +8,7 @@ import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { agentApi, agentSessionApi, settingsApi } from '@/lib/ipc-client'
 import type { Agent } from '@/types'
+import { useUIStore } from '@/stores/ui-store'
 
 const MASTERMIND_SESSION_ID = 'mastermind-session'
 
@@ -27,6 +28,8 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
 }
 
 function MastermindConversation({ onClose, project }: OrchestratorPanelProps & { project: ProjectRecord | null }) {
+  const draft = useUIStore(s => s.mastermindDraft)
+  const clearDraft = useUIStore(s => s.clearMastermindDraft)
   const conversationId = project ? projectConversationId(project.id) : MASTERMIND_SESSION_ID
   const [agents, setAgents] = useState<Agent[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
@@ -234,6 +237,8 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
           systemStatus={currentSession?.systemStatus}
           onStop={stop}
           onSend={handleSendMessage}
+          draft={draft?.projectId === project?.id ? draft ?? undefined : undefined}
+          onDraftApplied={clearDraft}
           className="flex-1 min-h-0"
           sessionId={currentSession?.sessionId}
           pendingApproval={currentSession?.pendingApproval ?? undefined}

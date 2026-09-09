@@ -2,7 +2,31 @@ import type { ReasoningEffort } from './reasoning-effort'
 
 export type ResponsibilityKind = 'task' | 'goal' | 'routine'
 export type ResponsibilityState = 'proposed' | 'active' | 'paused' | 'blocked' | 'taken_over' | 'completed' | 'cancelled'
-export type WorkPhase = 'work' | 'verify' | 'classify' | 'collect'
+export type WorkPhase = 'work' | 'verify' | 'classify' | 'collect' | 'coordinate'
+export interface FactoryDefinition {
+  id: string
+  projectId: string
+  name: string
+  diagram: string
+  guide: string
+  provenance: string
+  createdAt: string
+  updatedAt: string
+}
+export interface FactoryProposal {
+  id: string
+  definition: FactoryDefinition
+  operation: 'save' | 'delete'
+  replacesDigest: string | null
+}
+export interface FactoryAgent {
+  id: string
+  name: string
+  backend?: string
+  model?: string
+  reasoningEffort?: ReasoningEffort
+  configDigest: string
+}
 export interface CommandSource {
   command: string
   args: string[]
@@ -55,6 +79,11 @@ export interface ResponsibilityAgreement {
   maxSteps: number
   deadline: string
   basedOn?: string
+  factoryId?: string
+  /** Server-owned snapshots, never model-supplied authority. */
+  factory?: FactoryDefinition
+  factoryAgents?: FactoryAgent[]
+  allowedAgentIds?: string[]
   schedule?: string
   source?: RoutineSource
 }
@@ -76,7 +105,10 @@ export interface ResponsibilityRecord {
   workspace: string | null
   trial: { output: string; at: string; revision: number; evidence?: string } | null
   lastCollectedAt?: string
-  next: { phase: WorkPhase; instruction: string; eventId?: string } | null
+  /** Factory selected for the current Routine event only. */
+  eventFactory?: FactoryDefinition
+  factoryStartStep?: number
+  next: { phase: WorkPhase; instruction: string; eventId?: string; agentId?: string; predecessorTaskIds?: string[] } | null
   createdAt: string
   updatedAt: string
 }
@@ -92,6 +124,10 @@ export interface WorkReport {
   next?: string
   work: WorkEvidence
   sourceSnapshot?: string
+  agentId?: string
+  factoryId?: string
+  predecessorTaskIds?: string[]
+  factory?: FactoryDefinition
 }
 export interface ResponsibilityStep {
   id: string
@@ -106,6 +142,9 @@ export interface ResponsibilityStep {
   settledAt: string | null
   createdAt: string
   collection?: { revision: number; trial: boolean; evidence: string }
+  agent?: FactoryAgent
+  factory?: FactoryDefinition
+  predecessorTaskIds?: string[]
 }
 export interface ResponsibilityNotice {
   id: string
@@ -136,6 +175,8 @@ export interface ResponsibilitySnapshot {
   notices: ResponsibilityNotice[]
   memory: ProjectMemory[]
   steps: ResponsibilityStep[]
+  factories?: FactoryDefinition[]
+  factoryProposals?: FactoryProposal[]
 }
 export interface ResponsibilitiesApi {
   snapshot(projectId?: string): Promise<ResponsibilitySnapshot>
@@ -145,6 +186,7 @@ export interface ResponsibilitiesApi {
   answer(id: string, answer: string, approved?: boolean): Promise<void>
   remember(projectId: string, kind: 'fact' | 'preference', text: string, id?: string): Promise<void>
   forget(id: string): Promise<void>
+  decideFactory(proposalId: string, approve: boolean): Promise<void>
   onChanged(callback: () => void): () => void
 }
 export const projectConversationId = (id: string): string => `mastermind-project-${id}`

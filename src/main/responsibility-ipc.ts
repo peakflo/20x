@@ -26,4 +26,5 @@ export function registerResponsibilityIpc(service: ResponsibilityManager, mainWi
   ipcMain.handle('responsibilities:answer', (event, id: string, answer: string, approved?: boolean) => { assertDesktop(event); return service.answer(id, answer, approved) })
   ipcMain.handle('responsibilities:remember', (event, projectId: string, kind: 'fact' | 'preference', text: string, id?: string) => { assertDesktop(event); return service.remember(projectId, kind, text, id) })
   ipcMain.handle('responsibilities:forget', (event, id: string) => { assertDesktop(event); return service.forget(id) })
+  ipcMain.handle('responsibilities:decideFactory', (event, id: string, approve: boolean) => { assertDesktop(event); return service.decideFactory(id, approve) })
 }

@@ -633,3 +633,205 @@ describe('dynamic source collection lifecycle', () => {
     expect(runtime.startSession).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('Factories through the existing responsibility lifecycle', () => {
+  function saveFactory(name = 'PR Review', guide = 'Review, fix valid findings within scope, then independently verify. Ask the engineer at a handoff.') {
+    manager.proposeFactory(scope(), { humanInputId: input('Teach this work pattern'), name, diagram: 'graph TD\n A[Review] --> B{Findings?}\n B --> C[Fix]\n C --> D[Verify]', guide })
+    const preview = snapshot().factoryProposals![0]
+    manager.decideFactory(preview.id, true)
+    return snapshot().factories!.find(f => f.name === name)!
+  }
+  async function advance(action: string, next?: string, extra: Record<string, unknown> = {}) {
+    const step = snapshot().steps.filter(s => s.state === 'running').at(-1)!
+    expect(step).toBeDefined()
+    await manager.report(manager.scopeForToken(manager.tokenForTask(step.taskId)!), { summary: `${step.phase}: ${next ?? action}`, evidence: ['Fixture evidence'], checkout: dir, action, next, ...extra })
+    sessions.get(step.taskId)!.session.status = 'idle'
+    await manager.reconcile()
+    return step
+  }
+
+  it('requires exact desktop confirmation and invalidates revised previews; workers cannot mutate guides', async () => {
+    const args = { humanInputId: input('Teach PR Review'), name: 'PR Review', diagram: 'review -> done', guide: 'Review within the approved scope.' }
+    manager.proposeFactory(scope(), args)
+    const old = snapshot().factoryProposals![0]
+    expect(snapshot().factories).toEqual([])
+    manager.proposeFactory(scope(), { ...args, guide: 'Revised exact instructions.' })
+    expect(() => manager.decideFactory(old.id, true)).toThrow('expired')
+    manager.decideFactory(snapshot().factoryProposals![0].id, false)
+    expect(snapshot().factories).toEqual([])
+    const factory = saveFactory()
+    expect(factory.guide).toContain('Review, fix')
+    expect(factory.provenance).toContain('Engineer confirmed')
+    const r = manager.delegate(scope(), input('Review this exact task'), 'Review', undefined, factory.id)
+    await manager.reconcile()
+    const step = snapshot().steps[0]
+    const token = manager.tokenForTask(step.taskId)!
+    expect((await callResponsibilityTool(manager, token, 'propose_factory', args)).isError).toBe(true)
+    expect((await callResponsibilityTool(manager, token, 'delete_factory', { ...args, factoryId: factory.id })).isError).toBe(true)
+    expect(() => manager.proposeFactory(scope(), { ...args, humanInputId: 'external-report' })).toThrow('direct engineer')
+    expect(r.agreement.maxSteps).toBe(1)
+    await advance('done')
+    expect(snapshot().responsibilities[0].state).toBe('completed')
+    expect(snapshot().steps).toHaveLength(1)
+  })
+
+  it('exposes the Factory proposal and read paths over real scoped HTTP MCP without model approval', async () => {
+    setResponsibilityManager(manager)
+    const port = await startTaskApiServer(db)
+    const token = manager.tokenForTask(projectConversationId(project.id))!
+    const client = new Client({ name: 'factory-transport', version: '1' })
+    try {
+      await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp?responsibility=${token}`)))
+      const names = (await client.listTools()).tools.map(t => t.name)
+      expect(names).toEqual(expect.arrayContaining(['read_factory', 'propose_factory', 'delete_factory']))
+      expect(names).not.toContain('approve_factory')
+      const proposed = await client.callTool({ name: 'propose_factory', arguments: { humanInputId: input('Teach a local review guide'), name: 'Transport review', diagram: 'review -> done', guide: 'Read only and report privately.' } })
+      expect(proposed.isError).not.toBe(true)
+      expect(snapshot().factories).toEqual([])
+      const preview = snapshot().factoryProposals![0]
+      manager.decideFactory(preview.id, true)
+      const catalog = await client.callTool({ name: 'read_factory', arguments: {} })
+      expect(JSON.parse((catalog.content as Array<{ text: string }>)[0].text)).toEqual([{ id: preview.definition.id, name: 'Transport review' }])
+      const invalid = await client.callTool({ name: 'propose_factory', arguments: { humanInputId: 'worker-result', name: 'Unauthorized', diagram: 'x', guide: 'x' } })
+      expect(invalid.isError).toBe(true)
+    } finally { await client.close(); stopTaskApiServer(); setResponsibilityManager(undefined) }
+  })
+
+  it('runs review, conditional fix and independent verification with approved agents, snapshots and task links', async () => {
+    const f = saveFactory()
+    const developer = db.createAgent({ name: 'Developer', config: { coding_agent: 'codex', model: 'developer-model', reasoning_effort: 'medium' } })!
+    await approve({ ...agreement, factoryId: f.id, allowedAgentIds: [developer.id] })
+    const first = snapshot().steps[0]
+    expect(first.phase).toBe('coordinate')
+    const config = { taskId: first.taskId, agentId: project.agentId, workspaceDir: dir }
+    manager.configureSession(config, 1234)
+    expect(config).toMatchObject({ responsibilityRole: 'collector', sandboxMode: 'read-only', tools: { bash: false, read: false } })
+    await advance('task', 'Review the code')
+    const reviewed = await advance('done')
+    const coordinator = snapshot().steps.at(-1)!
+    await expect(manager.report(manager.scopeForToken(manager.tokenForTask(coordinator.taskId)!), { action: 'task', summary: 'outside profile', evidence: ['none'], checkout: dir, next: 'Fix', agentId: 'unapproved' })).rejects.toThrow('outside the approved')
+    await advance('task', 'Fix only the agreed finding', { agentId: developer.id, predecessorTaskIds: [reviewed.taskId] })
+    const fixing = snapshot().steps.at(-1)!
+    expect(fixing.agent?.id).toBe(developer.id)
+    expect(fixing.predecessorTaskIds).toEqual([reviewed.taskId])
+    expect(db.getTask(fixing.taskId)?.agent_id).toBe(developer.id)
+    manager.proposeFactory(scope(), { humanInputId: input('Delete the saved template'), factoryId: f.id }, 'delete')
+    manager.decideFactory(snapshot().factoryProposals![0].id, true)
+    expect(snapshot().factories).toEqual([])
+    expect(manager.readFactory(manager.scopeForToken(manager.tokenForTask(fixing.taskId)!), f.id)).toMatchObject({ guide: f.guide })
+    await advance('done')
+    await advance('done')
+    expect(snapshot().steps.at(-1)?.phase).toBe('verify')
+    expect(snapshot().responsibilities[0].state).toBe('active')
+    await advance('done')
+    expect(snapshot().responsibilities[0].state).toBe('completed')
+    expect(snapshot().steps.map(s => s.phase)).toEqual(['coordinate', 'work', 'coordinate', 'work', 'coordinate', 'verify'])
+    expect(snapshot().steps.every(s => s.state === 'settled' && s.factory?.id === f.id)).toBe(true)
+    expect(sessions.size).toBe(0)
+    expect(new ResponsibilityManager(db, runtime).snapshot().steps[0].factory?.guide).toBe(f.guide)
+  })
+
+  it('skips unnecessary work, respects pause, and hands a settled task back for direct pickup', async () => {
+    const f = saveFactory()
+    const r = await approve({ ...agreement, factoryId: f.id })
+    await advance('task', 'Review only')
+    const reviewed = await advance('done')
+    await manager.act(r.id, r.revision, 'pause')
+    await advance('ask', 'Review is ready. Please decide whether any further work is needed.')
+    expect(snapshot().steps).toHaveLength(3)
+    expect(snapshot().notices.some(n => n.kind === 'question' && n.stepId === snapshot().steps[2].id)).toBe(true)
+    await manager.act(r.id, r.revision, 'takeover')
+    expect(snapshot().steps.find(s => s.taskId === reviewed.taskId)?.state).toBe('held')
+    expect(manager.recordHumanInput(reviewed.taskId, 'I will inspect this task now')).toBeDefined()
+    const config = { taskId: reviewed.taskId, agentId: project.agentId, workspaceDir: dir }
+    manager.configureSession(config, 1234)
+    expect(config).toMatchObject({ systemPrompt: expect.stringContaining('engineer has taken direct control') })
+    expect(sessions.size).toBe(0)
+    inspect.mockResolvedValue({ ...evidence(), fingerprint: 'engineer-edited-files' })
+    await manager.act(r.id, r.revision, 'handback'); await manager.reconcile()
+    await advance('task', 'Inspect the engineer changes before any further work')
+    expect(snapshot().steps.at(-1)?.phase).toBe('work')
+    expect(snapshot().responsibilities[0].state).toBe('active')
+  })
+
+  it('returns worker handoff answers to coordination and verifies the latest changed files without repeating the worker', async () => {
+    const f = saveFactory()
+    await approve({ ...agreement, factoryId: f.id })
+    await advance('task', 'Review')
+    await advance('done')
+    await advance('task', 'Fix')
+    inspect.mockResolvedValue({ ...evidence(), fingerprint: 'corrected-files' })
+    await advance('ask', 'Proceed with verification?')
+    const question = snapshot().notices.find(n => n.kind === 'question')!
+    await manager.answer(question.id, 'Yes, verify the corrected files')
+    await manager.reconcile()
+    expect(snapshot().steps.at(-1)?.phase).toBe('coordinate')
+    await advance('done')
+    expect(snapshot().steps.at(-1)?.expectedWork?.fingerprint).toBe('corrected-files')
+    await advance('done')
+    expect(snapshot().steps.filter(s => s.phase === 'work')).toHaveLength(2)
+    expect(snapshot().responsibilities[0].state).toBe('completed')
+  })
+
+  it('keeps unrelated Tasks on their normal path and rejects missing/cross-project or changed agent choices', async () => {
+    const f = saveFactory()
+    expect(() => manager.propose(scope(), { ...agreement, factoryId: 'missing' }, input())).toThrow('Factory not found')
+    mkdirSync(join(dir, 'other'))
+    const other = manager.createProject('Other', join(dir, 'other'), project.agentId)
+    expect(() => manager.factories.read(f.id, other.id)).toThrow('Factory not found')
+    const proposed = manager.propose(scope(), { ...agreement, factoryId: f.id }, input())
+    db.updateAgent(project.agentId, { config: { coding_agent: 'codex', model: 'changed-model' } })
+    await expect(manager.act(proposed.id, proposed.revision, 'approve')).rejects.toThrow('configuration changed')
+    const ordinary = manager.delegate(scope(), input('Inspect an unrelated file'), 'Unrelated')
+    expect(ordinary.agreement.factory).toBeUndefined()
+    await manager.reconcile()
+    expect(snapshot().steps.at(-1)?.phase).toBe('work')
+  })
+
+  it('lets a Routine classifier select a current guide and keeps the selected snapshot through deletion', async () => {
+    const f = saveFactory()
+    const r = await approve({ ...agreement, kind: 'routine', schedule: '* * * * *' })
+    // Use a deterministic fixture event; no live source state is touched.
+    db.db.prepare("UPDATE mastermind_agreements SET data=json_set(data, '$.next', json(?)) WHERE id=?").run(JSON.stringify({ phase: 'classify', instruction: 'A review is needed' }), r.id)
+    await manager.reconcile()
+    await advance('task', 'Review the changed project', { factoryId: f.id })
+    manager.proposeFactory(scope(), { humanInputId: input('Delete this template'), factoryId: f.id }, 'delete')
+    manager.decideFactory(snapshot().factoryProposals![0].id, true)
+    await advance('task', 'Review evidence')
+    await advance('done')
+    await advance('done')
+    await advance('done')
+    const current = snapshot().responsibilities[0]
+    expect(current.state).toBe('active')
+    expect(current.next).toBeNull()
+    expect(current.eventFactory).toBeUndefined()
+    expect(snapshot().steps.filter(s => s.phase === 'work')).toHaveLength(1)
+  })
+
+  it('fences a live interrupted Factory launch on restart without creating a replacement', async () => {
+    const f = saveFactory()
+    await approve({ ...agreement, factoryId: f.id })
+    expect(snapshot().steps[0].state).toBe('running')
+    await manager.stop()
+    const reopened = new ResponsibilityManager(db, runtime)
+    reopened.start(); await reopened.reconcile()
+    expect(reopened.snapshot().steps[0].state).toBe('unknown')
+    expect(reopened.snapshot().responsibilities[0].state).toBe('blocked')
+    expect(runtime.startSession).toHaveBeenCalledTimes(1)
+    await reopened.stop()
+  })
+
+  it('bounds progress and does not relaunch interrupted Factory work on reopening', async () => {
+    const f = saveFactory()
+    await approve({ ...agreement, factoryId: f.id, maxSteps: 2 })
+    await advance('task', 'Review within the budget')
+    await advance('done')
+    expect(snapshot().responsibilities[0].state).toBe('blocked')
+    expect(snapshot().steps).toHaveLength(2)
+    expect(snapshot().notices.some(n => n.body.includes('step, or no-progress limit'))).toBe(true)
+    await manager.stop()
+    const reopened = new ResponsibilityManager(db, runtime)
+    reopened.start(); await reopened.reconcile(); await reopened.stop()
+    expect(snapshot().steps).toHaveLength(2)
+  })
+})

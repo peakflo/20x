@@ -22,6 +22,7 @@ import { CanvasMinimap } from './CanvasMinimap'
 import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskStatus } from '@/types'
+import { FactoryCanvas } from '@/components/factories/FactoryCanvas'
 import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
 
 /**
@@ -957,6 +958,7 @@ export function InfiniteCanvas() {
 
   return (
     <div data-canvas-root="true" className="overflow-hidden bg-[var(--canvas-bg)]" style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <FactoryCanvas />
       {/* Canvas container */}
       <div
         ref={containerRef}

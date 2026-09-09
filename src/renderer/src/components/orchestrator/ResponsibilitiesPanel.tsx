@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FolderPlus } from 'lucide-react'
 import { agentApi, settingsApi } from '@/lib/ipc-client'
 import { useTaskStore } from '@/stores/task-store'
@@ -6,6 +6,8 @@ import { applyUiCommand } from '@/lib/ui-remote-control'
 import { Button } from '@/components/ui/Button'
 import type { ProjectRecord, ResponsibilityRecord, ResponsibilitySnapshot, ResponsibilityNotice, ProjectMemory } from '@shared/responsibilities'
 import { isSourceCollection } from '@shared/responsibilities'
+import { FactoryConfirmation, FactoryGuide } from '@/components/factories/FactoriesWorkspace'
+import { useUIStore } from '@/stores/ui-store'
 
 const empty: ResponsibilitySnapshot = { projects: [], responsibilities: [], notices: [], memory: [], steps: [] }
 const inputClass = 'w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm'
@@ -19,13 +21,21 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const projectChosen = useRef(false)
+  const draft = useUIStore(s => s.mastermindDraft)
+  useEffect(() => {
+    if (!draft) return
+    projectChosen.current = true
+    setProjectId(draft.projectId); setExpanded(true)
+    void settingsApi.set('mastermind_project', draft.projectId).catch(e => setError(String(e)))
+  }, [draft])
   const refresh = useCallback(async () => {
     if (api) setSnapshot(await api.snapshot())
   }, [api])
   useEffect(() => {
     if (!api) return
     void refresh().catch(e => setError(String(e)))
-    void settingsApi.get('mastermind_project').then(id => { if (id) setProjectId(id) })
+    void settingsApi.get('mastermind_project').then(id => { if (id && !projectChosen.current) setProjectId(id) })
     return api.onChanged(() => { void refresh().catch(e => setError(String(e))) })
   }, [api, refresh])
   useEffect(() => { onProjectChange(snapshot.projects.find(p => p.id === projectId) ?? null) }, [projectId, snapshot.projects, onProjectChange])
@@ -40,12 +50,14 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
   const pending = notices.filter(n => n.state === 'pending' && n.kind !== 'result')
   const unread = notices.filter(n => n.state === 'pending' && n.kind === 'result')
   const proposals = records.filter(r => r.state === 'proposed')
+  const factoryProposals = (snapshot.factoryProposals ?? []).filter(p => p.definition.projectId === projectId)
   return <section aria-label="Project responsibilities" className="shrink-0 rounded-2xl border border-border bg-card shadow-card">
     <div className="flex items-center gap-2 p-2">
       <button aria-label={expanded ? 'Collapse responsibilities' : 'Show responsibilities'} onClick={() => setExpanded(!expanded)} className="rounded p-1 hover:bg-accent">
         {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
       </button>
       <select aria-label="Engineering project" className={`${inputClass} min-w-0 flex-1`} value={projectId} onChange={e => {
+        projectChosen.current = true
         setProjectId(e.target.value); void settingsApi.set('mastermind_project', e.target.value)
       }}>
         <option value="">All tasks · choose a project</option>
@@ -53,15 +65,16 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
       </select>
       <Button size="sm" variant="ghost" aria-label="Add engineering project" onClick={() => { setCreating(!creating); setExpanded(true) }}><FolderPlus size={16} /></Button>
     </div>
-    {(pending.length > 0 || proposals.length > 0 || unread.length > 0) && <button onClick={() => { setExpanded(true); setTab(pending.length || unread.length ? 'decisions' : 'work') }} className="mx-3 mb-2 text-left text-xs font-medium text-primary" aria-live="polite">
-      {pending.length > 0 ? `${pending.length} decision${pending.length === 1 ? '' : 's'} need you` : proposals.length ? `${proposals.length} agreement${proposals.length === 1 ? '' : 's'} to review` : `${unread.length} result${unread.length === 1 ? '' : 's'} ready`}
+    {(pending.length > 0 || proposals.length > 0 || unread.length > 0 || factoryProposals.length > 0) && <button onClick={() => { setExpanded(true); setTab(pending.length || unread.length ? 'decisions' : 'work') }} className="mx-3 mb-2 text-left text-xs font-medium text-primary" aria-live="polite">
+      {factoryProposals.length ? `${factoryProposals.length} Factory preview(s) to review` : pending.length > 0 ? `${pending.length} decision${pending.length === 1 ? '' : 's'} need you` : proposals.length ? `${proposals.length} agreement${proposals.length === 1 ? '' : 's'} to review` : `${unread.length} result${unread.length === 1 ? '' : 's'} ready`}
     </button>}
     {error && <p role="alert" className="px-3 pb-2 text-sm text-destructive">{error}</p>}
     {expanded && <div className="max-h-[45vh] overflow-y-auto border-t border-border p-3">
       {creating && <ProjectForm busy={busy} onCreate={(name, root, agentId) => run(async () => {
-        const p = await api.createProject(name, root, agentId); setProjectId(p.id); await settingsApi.set('mastermind_project', p.id); setCreating(false)
+        const p = await api.createProject(name, root, agentId); projectChosen.current = true; setProjectId(p.id); await settingsApi.set('mastermind_project', p.id); setCreating(false)
       })} />}
       {!projectId ? <p className="text-sm text-muted-foreground">Choose a project to teach Mastermind what matters, delegate work, and keep its agreements separate.</p> : <>
+        <div className="mb-3 space-y-3">{factoryProposals.map(p => <FactoryConfirmation key={p.id} proposal={p} busy={busy} decide={(id, approve) => run(() => api.decideFactory(id, approve))} />)}</div>
         <div role="tablist" aria-label="Responsibility views" className="mb-3 flex gap-1">
           {(['work', 'decisions', 'memory'] as const).map(value => <button key={value} role="tab" aria-selected={tab === value} onClick={() => setTab(value)} className={`rounded-md px-3 py-1 text-xs capitalize ${tab === value ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'}`}>{value}</button>)}
         </div>
@@ -76,7 +89,7 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
         </div>}
         {tab === 'decisions' && <div className="space-y-3">
           {notices.length === 0 && <p className="text-sm text-muted-foreground">Results and questions arrive here, even when the conversation is busy.</p>}
-          {[...notices].sort((a, b) => Number(b.state === 'pending') - Number(a.state === 'pending') || b.createdAt.localeCompare(a.createdAt)).map(n => <NoticeCard key={n.id} notice={n} busy={busy} answer={(answer, approved) => run(() => api.answer(n.id, answer, approved))} />)}
+          {[...notices].sort((a, b) => Number(b.state === 'pending') - Number(a.state === 'pending') || b.createdAt.localeCompare(a.createdAt)).map(n => <NoticeCard key={n.id} notice={n} busy={busy} openTask={() => run(async () => { const step = snapshot.steps.find(s => s.id === n.stepId); const target = step?.phase === 'coordinate' ? [...snapshot.steps].reverse().find(s => s.responsibilityId === n.responsibilityId && s.phase === 'work' && s.createdAt <= step.createdAt) ?? step : step; if (!target) throw new Error('No task is linked to this notice.'); await useTaskStore.getState().fetchTasks(); const result = applyUiCommand({ kind: 'open_task', taskId: target.taskId, where: 'modal' }); if (!result.applied) throw new Error(result.detail) })} answer={(answer, approved) => run(() => api.answer(n.id, answer, approved))} />)}
         </div>}
         {tab === 'memory' && <MemoryEditor key={projectId} memory={snapshot.memory.filter(m => m.projectId === projectId)} busy={busy} save={(kind, value, id) => run(() => api.remember(projectId, kind, value, id))} forget={id => run(() => api.forget(id))} />}
         <p className="mt-3 text-[11px] text-muted-foreground">Fully quitting 20x stops agents and monitoring. Saved work and decisions remain available when you reopen.</p>
@@ -90,6 +103,8 @@ function AgreementCard({ record: r, unresolved, busy, act }: { record: Responsib
   return <article className="rounded-lg border border-border p-3 text-sm">
     <div className="flex items-start justify-between gap-2"><strong>{a.title}</strong><span className="text-xs capitalize text-muted-foreground">{a.kind} · {r.state.replace('_', ' ')}</span></div>
     <p className="mt-1 whitespace-pre-wrap">{a.objective}</p>
+    {a.factory && <details className="mt-2"><summary className="cursor-pointer">Factory: {a.factory.name}</summary><FactoryGuide definition={a.factory} /></details>}
+    {a.factoryAgents && <p className="mt-2 text-xs text-muted-foreground">Approved agents: {a.factoryAgents.map(agent => `${agent.name} (${agent.backend ?? 'default'} · ${agent.model ?? 'default model'})`).join(', ')}</p>}
     <details className="mt-2" open={r.state === 'proposed'}>
       <summary className="cursor-pointer text-xs text-muted-foreground">Agreement and evidence</summary>
       <dl className="mt-2 space-y-2 text-xs">
@@ -113,6 +128,7 @@ function AgreementCard({ record: r, unresolved, busy, act }: { record: Responsib
       </dl>
     </details>
     <div className="mt-3 flex flex-wrap gap-2">
+      {(a.factory || r.eventFactory) && <Button size="sm" variant="outline" onClick={() => useUIStore.getState().showResponsibilityOnCanvas(r.id)}>Show on canvas</Button>}
       {r.state === 'proposed' && <>
         {a.source && <Button size="sm" variant="outline" disabled={busy || unresolved} onClick={() => void act('trial')}>{unresolved ? 'Source reasoning in progress' : 'Run source trial'}</Button>}
         <Button size="sm" disabled={busy || unresolved || (!!a.source && r.trial?.revision !== r.revision)} onClick={() => void act('approve')}>{a.kind === 'routine' ? 'Approve and activate' : 'Approve and start'}</Button>
@@ -129,12 +145,13 @@ function AgreementCard({ record: r, unresolved, busy, act }: { record: Responsib
   </article>
 }
 
-function NoticeCard({ notice: n, busy, answer }: { notice: ResponsibilityNotice; busy: boolean; answer: (answer: string, approved?: boolean) => Promise<void> }) {
+function NoticeCard({ notice: n, busy, answer, openTask }: { notice: ResponsibilityNotice; busy: boolean; openTask: () => Promise<void>; answer: (answer: string, approved?: boolean) => Promise<void> }) {
   const [reply, setReply] = useState('')
   const [answers, setAnswers] = useState<Record<string, string>>({})
   return <article className="rounded-lg border border-border p-3 text-sm">
     <div className="flex justify-between gap-2"><strong>{n.title}</strong><span className="text-xs text-muted-foreground">{n.state}</span></div>
     <p className="mt-2 whitespace-pre-wrap break-words">{n.body}</p>
+    {n.stepId && <Button className="mt-2" size="sm" variant="outline" disabled={busy} onClick={() => void openTask()}>Open task</Button>}
     {n.answer && <p className="mt-2 whitespace-pre-wrap text-muted-foreground">Your answer: {n.answer}</p>}
     {n.state === 'expired' && <p className="mt-2 text-xs text-muted-foreground">The original request is no longer live. Inspect and recover its responsibility.</p>}
     {n.state === 'pending' && n.kind === 'recovery' && <p className="mt-2 text-xs text-muted-foreground">Open Work to inspect the agreement, then recover or take over.</p>}
