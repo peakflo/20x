@@ -2192,7 +2192,12 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       }
       maxRev = rev
     })
-    txn()
+    // Reserve the WAL writer slot before reading seq/rev. A deferred
+    // transaction can take a read snapshot while another connection is
+    // writing, then fail immediately with SQLITE_BUSY when it tries to upgrade
+    // that stale snapshot. BEGIN IMMEDIATE lets busy_timeout wait for the
+    // writer and only calculates the counters after the lock is acquired.
+    txn.immediate()
     return { maxRev, changedPartIds }
   }
 
