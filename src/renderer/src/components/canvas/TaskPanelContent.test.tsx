@@ -34,6 +34,8 @@ const {
       parent_task_id: null,
       output_fields: [],
       source_id: null as string | null,
+      server_managed: false as boolean,
+      complete_at_source: null as boolean | null,
       repos: [],
       priority: 'medium',
       type: 'general',
@@ -122,7 +124,13 @@ vi.mock('@/stores/ui-store', () => ({
 }))
 
 vi.mock('@/stores/task-source-store', () => {
-  const state = { sources: [], executeAction: executeActionMock }
+  const state = {
+    sources: [
+      { id: 'src-1', name: 'Workflo', plugin_id: 'peakflo' },
+      { id: 'src-notion', name: 'Notion', plugin_id: 'notion' },
+    ],
+    executeAction: executeActionMock,
+  }
   const useTaskSourceStore = (selector: (value: typeof state) => unknown) => selector(state)
   useTaskSourceStore.getState = () => state
   return { useTaskSourceStore }
@@ -136,6 +144,8 @@ describe('TaskPanelContent', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     taskList[0].source_id = null
+    taskList[0].server_managed = false
+    taskList[0].complete_at_source = null
     canvasState.panels = [
       { id: 'panel-1', type: 'task', refId: 'task-1', x: 100, y: 200, width: 1020, height: 780 },
     ]
@@ -198,10 +208,10 @@ describe('TaskPanelContent', () => {
     }))
     expect(upload).not.toHaveBeenCalled()
     expect(executeActionMock).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
   })
 
-  it('issues server completion for a sourced canvas task without writing local completion', async () => {
+  it('issues server completion for a Workflo canvas task without writing local completion', async () => {
     taskList[0].source_id = 'src-1'
     const apiRequest = vi.fn()
     // Bridge the renderer command to the real API encoder. Credentials stay in main.
@@ -217,7 +227,24 @@ describe('TaskPanelContent', () => {
       { 'x-task-contract-version': '2', 'x-task-actor': 'human' }))
     expect(executeActionMock).toHaveBeenCalledExactlyOnceWith('complete', 'task-1', 'src-1')
     expect(updateTaskMock).not.toHaveBeenCalled()
-    // A single shared confirmation exists for every source — no source dialog.
-    expect(screen.queryByRole('dialog')).toBeNull()
+    // Workflo owns task status: the server confirms completion, no choice is offered.
+    expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
+  })
+
+  it('asks a Notion canvas task whether to update Notion too or complete only in 20x', async () => {
+    taskList[0].source_id = 'src-notion'
+    const completeLocally = window.electronAPI.tasks.completeLocally as unknown as ReturnType<typeof vi.fn>
+    render(<TaskPanelContent panelId="panel-1" taskId="task-1" panelLayout="both" />)
+    fireEvent.click(screen.getByText('Complete task'))
+
+    expect(await screen.findByTestId('complete-at-source-dialog')).toBeInTheDocument()
+    expect(screen.getByTestId('complete-at-source')).toHaveTextContent('Update Notion too')
+    expect(executeActionMock).not.toHaveBeenCalled()
+    expect(updateTaskMock).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByTestId('complete-manually'))
+    await waitFor(() => expect(completeLocally).toHaveBeenCalledWith('task-1'))
+    expect(executeActionMock).not.toHaveBeenCalled()
+    expect(updateTaskMock).not.toHaveBeenCalled()
   })
 })

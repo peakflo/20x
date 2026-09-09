@@ -136,18 +136,18 @@ export function registerIpcHandlers(
     return task
   })
 
-  ipcMain.handle('db:updateTask', (_, id: string, data: UpdateTaskData) => {
-    // Capture previous status before updating (for enterprise sync)
-    let previousStatus: string | undefined
-    if (data.status) {
-      const existing = db.getTask(id)
-      if (existing && existing.status !== data.status) {
-        previousStatus = existing.status
-      }
-    }
-
-    const updated = db.updateTask(id, data)
-
+  /**
+   * Everything that must happen after a task row changes, whichever handler
+   * wrote it. `db:updateTask` and `task:completeLocally` both run this so a
+   * completion chosen as "Only in 20x" behaves exactly like any other
+   * completion for schedulers, enterprise sync, analytics and coordinators.
+   */
+  const afterTaskUpdate = (
+    id: string,
+    data: UpdateTaskData,
+    previousStatus: string | undefined,
+    updated: ReturnType<DatabaseManager['updateTask']>
+  ): void => {
     // Initialize recurring task schedule when recurrence is added or changed
     if (recurrenceScheduler && updated && updated.is_recurring && updated.recurrence_pattern) {
       recurrenceScheduler.initializeRecurringTask(id)
@@ -217,7 +217,39 @@ export function registerIpcHandlers(
         hasSource: !!updated.source_id
       })
     }
+  }
 
+  ipcMain.handle('db:updateTask', (_, id: string, data: UpdateTaskData) => {
+    // Capture previous status before updating (for enterprise sync)
+    let previousStatus: string | undefined
+    if (data.status) {
+      const existing = db.getTask(id)
+      if (existing && existing.status !== data.status) {
+        previousStatus = existing.status
+      }
+    }
+
+    const updated = db.updateTask(id, data)
+    afterTaskUpdate(id, data, previousStatus, updated)
+    return updated
+  })
+
+  // "Only in 20x": close a task that came from a non-Workflo source without
+  // touching the source. The origin that lets this write past the completion
+  // guard lives here, in the main process, so a renderer cannot request it
+  // through `db:updateTask`. Workflo tasks never take this route — the server
+  // owns their status and confirms completion through a task action.
+  ipcMain.handle('task:completeLocally', (_, id: string) => {
+    const task = db.getTask(id)
+    if (!task) throw new Error('Task not found.')
+    if (!task.source_id) throw new Error('Only a task that came from a task source can be completed in 20x only.')
+    if (task.server_managed || db.getTaskSource(task.source_id)?.plugin_id === 'peakflo') {
+      throw new Error('Workflo controls task status. Use a server task action.')
+    }
+    const data: UpdateTaskData = { status: TaskStatus.Completed, complete_at_source: false }
+    const previousStatus = task.status !== TaskStatus.Completed ? task.status : undefined
+    const updated = db.updateTask(id, data, 'user-local')
+    afterTaskUpdate(id, data, previousStatus, updated)
     return updated
   })
 

@@ -16,7 +16,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   tasks: {
     getWorkspaceDir: (taskId: string): Promise<string> =>
-      ipcRenderer.invoke('tasks:getWorkspaceDir', taskId)
+      ipcRenderer.invoke('tasks:getWorkspaceDir', taskId),
+    completeLocally: (taskId: string): Promise<unknown> =>
+      ipcRenderer.invoke('task:completeLocally', taskId)
   },
   artifacts: {
     scan: (taskId: string): Promise<ArtifactFileEntry[]> =>

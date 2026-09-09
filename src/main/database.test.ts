@@ -731,4 +731,32 @@ describe('updateTask completion guard for sourced tasks', () => {
     const task = db.createTask(makeTask({ status: 'ready_for_review' }))!
     expect(db.updateTask(task.id, { status: 'completed' as never })!.status).toBe('completed')
   })
+
+  // ── 'user-local': the user chose "Only in 20x" ────────────────────────────
+
+  it('user-local origin completes a Notion-style sourced task without the source', () => {
+    const { task } = makeSourcedTask()
+    const updated = db.updateTask(task.id, { status: 'completed' as never, complete_at_source: false }, 'user-local')
+    expect(updated!.status).toBe('completed')
+    const stored = db.getTask(task.id)!
+    expect(stored.status).toBe('completed')
+    expect(stored.complete_at_source).toBe(false)
+    // The source link is untouched.
+    expect(stored.source_id).toBe(task.source_id)
+    expect(stored.external_id).toBe('page-1')
+  })
+
+  it('user-local origin is still refused for a Workflo-owned task', () => {
+    const { task } = makeSourcedTask('peakflo', 'wf-1')
+    expect(() => db.updateTask(task.id, { status: 'completed' as never }, 'user-local'))
+      .toThrow('Workflo controls task status. Use a server task action.')
+    expect(db.getTask(task.id)!.status).toBe('ready_for_review')
+  })
+
+  it('user-local origin cannot change the source link', () => {
+    const { task } = makeSourcedTask()
+    expect(() => db.updateTask(task.id, { source_id: null }, 'user-local'))
+      .toThrow('Only the sync service can change a task source link.')
+    expect(db.getTask(task.id)!.source_id).toBe(task.source_id)
+  })
 })

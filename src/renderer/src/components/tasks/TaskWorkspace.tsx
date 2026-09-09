@@ -20,6 +20,7 @@ import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
+import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
@@ -152,8 +153,20 @@ function TaskWorkspaceComponent({
 
   const fetchTasks = useTaskStore((s) => s.fetchTasks)
   const updateTaskInStore = useTaskStore((s) => s.updateTask)
+  const taskSources = useTaskSourceStore((s) => s.sources)
   const showProgressToast = useProgressToastStore((s) => s.show)
   const failProgressToast = useProgressToastStore((s) => s.fail)
+
+  // Undefined for a local task, which hides the completion choice in the
+  // feedback dialog. Workflo tasks hide it too: the server confirms completion.
+  const feedbackSourceName = useMemo(() => {
+    if (!task?.source_id) return undefined
+    return taskSources.find((s) => s.id === task.source_id)?.name || task.source || 'the task source'
+  }, [task?.source_id, task?.source, taskSources])
+  const feedbackServerManaged = useMemo(() => {
+    if (!task) return false
+    return !!task.server_managed || taskSources.find((s) => s.id === task.source_id)?.plugin_id === 'peakflo'
+  }, [task, taskSources])
 
   // Derive subtasks reactively from the task store so status changes (e.g., from
   // mobile-initiated sessions) update immediately without needing a re-fetch.
@@ -651,7 +664,7 @@ function TaskWorkspaceComponent({
     }
   }, [session.sessionId, session.messages.length, task?.session_id, onCompleteTask])
 
-  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
+  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string, completeAtSource?: boolean) => {
     if (!task?.agent_id || !task?.id) return
     setShowFeedback(false)
 
@@ -662,6 +675,9 @@ function TaskWorkspaceComponent({
     }
 
     // Persist feedback + set task to Learning status - prevents auto-stop useEffect.
+    // `complete_at_source` records the user's answer here, because the learning
+    // session finishes in the main process, where no dialog can be shown, and
+    // the completion path must not ask a second time.
     console.log('[TaskWorkspace] Setting task status to AgentLearning:', task.id)
     let updatedTask: WorkfloTask | null | undefined
     try {
@@ -669,6 +685,7 @@ function TaskWorkspaceComponent({
         status: TaskStatus.AgentLearning,
         feedback_rating: rating,
         feedback_comment: comment || null,
+        ...(completeAtSource !== undefined && task.source_id ? { complete_at_source: completeAtSource } : {})
       })
     } catch (error) {
       // The dialog is already closed at this point, so a rejected write left the
@@ -749,14 +766,20 @@ Update existing skills that were helpful or create new ones for patterns worth r
       console.error('Failed to send feedback:', error)
       await taskApi.update(task.id, { status: TaskStatus.ReadyForReview })
     }
-  }, [ensureChatSession, sendMessage, session.sessionId, task?.id])
+  }, [ensureChatSession, sendMessage, session.sessionId, task?.id, task?.source_id])
 
-  const handleFeedbackSkip = useCallback(async () => {
+  const handleFeedbackSkip = useCallback(async (completeAtSource?: boolean) => {
     if (!task?.id) return
     setShowFeedback(false)
-    // Completion is server-confirmed through the shared path for every source.
+    // Record the answer first so the completion path does not ask a second
+    // time. updateTaskInStore persists through the API and syncs the store, so
+    // the completion path below reads the answer back. The write carries no
+    // status, so it passes the sourced-task completion guard.
+    if (completeAtSource !== undefined && task.source_id) {
+      await updateTaskInStore(task.id, { complete_at_source: completeAtSource })
+    }
     await onCompleteTask()
-  }, [task?.id, onCompleteTask])
+  }, [task?.id, task?.source_id, onCompleteTask, updateTaskInStore])
 
   const handleSnooze = useCallback(async (isoString: string) => {
     if (!task) return
@@ -1234,6 +1257,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
       <FeedbackDialog
         open={showFeedback}
+        sourceName={feedbackSourceName}
+        serverManaged={feedbackServerManaged}
         onSubmit={handleFeedbackSubmit}
         onSkip={handleFeedbackSkip}
         onCancel={() => setShowFeedback(false)}

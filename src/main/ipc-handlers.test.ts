@@ -252,3 +252,98 @@ describe('db:updateTask coordinator wake-up', () => {
     expect(notifyParent).not.toHaveBeenCalled()
   })
 })
+
+describe('task:completeLocally ("Only in 20x")', () => {
+  function setup(task: Record<string, unknown> | undefined, source: Record<string, unknown> | undefined) {
+    const notifyParent = vi.fn().mockResolvedValue(undefined)
+    const agentManager = { notifyParentOfSubtaskCompletion: notifyParent } as unknown as Parameters<typeof registerIpcHandlers>[1]
+    const updateTask = vi.fn((_id: string, data: Record<string, unknown>) => (task ? { ...task, ...data } : undefined))
+    const db = {
+      getTask: vi.fn(() => task),
+      getTaskSource: vi.fn(() => source),
+      updateTask
+    } as unknown as Parameters<typeof registerIpcHandlers>[0]
+    const disableHeartbeat = vi.fn()
+    const heartbeatScheduler = { disableHeartbeat } as unknown as NonNullable<Parameters<typeof registerIpcHandlers>[11]>
+    const recordTaskCompleted = vi.fn()
+    const enterpriseStateSync = {
+      recordTaskCompleted,
+      recordTaskStatusChange: vi.fn(),
+      recordFeedbackSubmitted: vi.fn()
+    } as unknown as NonNullable<Parameters<typeof registerIpcHandlers>[13]>
+
+    registerIpcHandlers(
+      db, agentManager, {} as never, {} as never, {} as never, {} as never,
+      undefined, undefined, undefined, undefined, undefined,
+      heartbeatScheduler, undefined, enterpriseStateSync
+    )
+
+    const handleCalls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls as [string, (...args: unknown[]) => unknown][]
+    const completeLocally = handleCalls.filter((call) => call[0] === 'task:completeLocally').pop()?.[1]
+    expect(completeLocally).toBeDefined()
+    return { completeLocally: completeLocally!, updateTask, notifyParent, disableHeartbeat, recordTaskCompleted }
+  }
+
+  it('completes a Notion-style sourced task with origin user-local and complete_at_source=false', async () => {
+    const task = {
+      id: 'task-1', status: 'ready_for_review', source_id: 'src-notion', external_id: 'page-1',
+      parent_task_id: 'parent-1', heartbeat_enabled: true, type: 'general', priority: 'medium'
+    }
+    const { completeLocally, updateTask, notifyParent, disableHeartbeat, recordTaskCompleted } =
+      setup(task, { id: 'src-notion', plugin_id: 'notion' })
+
+    const result = await completeLocally({}, 'task-1')
+
+    expect(updateTask).toHaveBeenCalledExactlyOnceWith(
+      'task-1', { status: 'completed', complete_at_source: false }, 'user-local'
+    )
+    expect(result).toMatchObject({ status: 'completed', complete_at_source: false })
+    // The shared post-update side effects run exactly like for db:updateTask.
+    expect(disableHeartbeat).toHaveBeenCalledWith('task-1')
+    expect(recordTaskCompleted).toHaveBeenCalledWith(expect.objectContaining({ id: 'task-1', status: 'completed' }))
+    expect(notifyParent).toHaveBeenCalledWith('parent-1', 'task-1')
+  })
+
+  it('refuses a Workflo task (plugin peakflo) so the server keeps status ownership', async () => {
+    const task = { id: 'task-2', status: 'ready_for_review', source_id: 'src-wf', external_id: 'wf-1' }
+    const { completeLocally, updateTask } = setup(task, { id: 'src-wf', plugin_id: 'peakflo' })
+
+    await expect(async () => completeLocally({}, 'task-2')).rejects.toThrow('Workflo controls task status')
+    expect(updateTask).not.toHaveBeenCalled()
+  })
+
+  it('refuses a server-managed task even without a source record', async () => {
+    const task = { id: 'task-2b', status: 'ready_for_review', source_id: 'src-wf', external_id: 'wf-2', server_managed: true }
+    const { completeLocally, updateTask } = setup(task, undefined)
+
+    await expect(async () => completeLocally({}, 'task-2b')).rejects.toThrow('Workflo controls task status')
+    expect(updateTask).not.toHaveBeenCalled()
+  })
+
+  it('refuses a source-less task — those complete through db:updateTask', async () => {
+    const task = { id: 'task-3', status: 'ready_for_review', source_id: null, external_id: null }
+    const { completeLocally, updateTask } = setup(task, undefined)
+
+    await expect(async () => completeLocally({}, 'task-3')).rejects.toThrow(/task source/)
+    expect(updateTask).not.toHaveBeenCalled()
+  })
+
+  it('refuses an unknown task', async () => {
+    const { completeLocally, updateTask } = setup(undefined, undefined)
+
+    await expect(async () => completeLocally({}, 'missing')).rejects.toThrow('Task not found')
+    expect(updateTask).not.toHaveBeenCalled()
+  })
+
+  it('db:updateTask cannot reach the user-local origin', () => {
+    const task = { id: 'task-4', status: 'ready_for_review', source_id: 'src-notion', external_id: 'page-1' }
+    const { updateTask } = setup(task, { id: 'src-notion', plugin_id: 'notion' })
+    const handleCalls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls as [string, (...args: unknown[]) => unknown][]
+    const updateHandler = handleCalls.filter((call) => call[0] === 'db:updateTask').pop()?.[1]
+
+    updateHandler!({}, 'task-4', { status: 'completed', complete_at_source: false })
+
+    // The renderer's data object is passed through without any origin.
+    expect(updateTask).toHaveBeenCalledExactlyOnceWith('task-4', { status: 'completed', complete_at_source: false })
+  })
+})
