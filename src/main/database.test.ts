@@ -1,3 +1,8 @@
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it, expect, beforeEach } from 'vitest'
 import RawDatabase from 'better-sqlite3'
 import { createTestDb } from '../../test/helpers/db-test-helper'
@@ -480,6 +485,69 @@ describe('Closed database behavior', () => {
 })
 
 describe('Durable transcript projection', () => {
+  it('waits for a concurrent writer before calculating transcript sequence and revision', async () => {
+    const dir = mkdtempSync(join(tmpdir(), '20x-transcript-lock-'))
+    const dbPath = join(dir, 'transcript.db')
+    const rawDb = new RawDatabase(dbPath)
+    rawDb.pragma('journal_mode = WAL')
+    rawDb.pragma('busy_timeout = 1000')
+    rawDb.exec(`
+      CREATE TABLE transcript_parts (
+        task_id TEXT NOT NULL,
+        part_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        role TEXT NOT NULL DEFAULT 'system',
+        content TEXT NOT NULL DEFAULT '',
+        part_type TEXT,
+        tool TEXT,
+        payload TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        rev INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (task_id, part_id)
+      )
+    `)
+    const manager = new RealDatabaseManager()
+    manager.db = rawDb
+
+    const lockHolder = spawn(process.execPath, ['-e', `
+      const Database = require('better-sqlite3')
+      const db = new Database(process.argv[1])
+      db.pragma('journal_mode = WAL')
+      db.exec('BEGIN IMMEDIATE')
+      db.prepare('INSERT INTO transcript_parts (task_id, part_id, seq, role, content, created_at, updated_at, rev) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .run('task-1', 'other-process', 1, 'assistant', 'concurrent write', 1, 1, 1)
+      process.stdout.write('locked\\n')
+      setTimeout(() => {
+        db.exec('COMMIT')
+        db.close()
+      }, 200)
+    `, dbPath], {
+      cwd: process.cwd(),
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+
+    try {
+      await once(lockHolder.stdout!, 'data')
+
+      expect(() => manager.upsertTranscriptParts('task-1', [
+        { id: 'p1', role: 'assistant', content: 'persisted after contention' }
+      ])).not.toThrow()
+
+      if (lockHolder.exitCode === null) await once(lockHolder, 'exit')
+      expect(manager.getTranscriptParts('task-1').map((part) => [part.partId, part.seq, part.rev]))
+        .toEqual([
+          ['other-process', 1, 1],
+          ['p1', 2, 2]
+        ])
+    } finally {
+      if (lockHolder.exitCode === null) lockHolder.kill()
+      rawDb.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('assigns monotonic per-task seq to new parts', () => {
     db.upsertTranscriptParts('task-1', [
       { id: 'p1', role: 'user', content: 'hello' },
