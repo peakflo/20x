@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { AgentTranscriptPanel } from './AgentTranscriptPanel'
 import { SessionStatus } from '@/stores/agent-store'
+import { onShortcutFeedback } from '@/lib/keyboard-shortcuts'
 
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -91,6 +92,21 @@ describe('AgentTranscriptPanel error display', () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()
+  })
+
+  it('preserves a rejected reply and explains the actual failure without the IPC wrapper', async () => {
+    const reason = 'Take over this responsibility before sending direct input to its worker.'
+    const feedback = vi.fn()
+    const unsubscribe = onShortcutFeedback(feedback)
+    try {
+      render(<AgentTranscriptPanel messages={[]} status={SessionStatus.IDLE} onStop={() => undefined}
+        onSend={async () => { throw new Error(`Error invoking remote method 'agentSession:send': Error: ${reason}`) }} />)
+      const composer = screen.getByPlaceholderText('Write a message...')
+      fireEvent.change(composer, { target: { value: 'Continue with these findings' } })
+      fireEvent.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(feedback).toHaveBeenCalledWith({ message: `Could not send the message — ${reason}`, isError: true }))
+      expect(composer).toHaveValue('Continue with these findings')
+    } finally { unsubscribe() }
   })
 
   it('does not render a separate banner for an error already shown as the final message', () => {

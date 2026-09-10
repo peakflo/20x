@@ -1144,7 +1144,9 @@ export function AgentTranscriptPanel({
         console.error('[AgentTranscriptPanel] Message send failed:', error)
         if (inputRef.current && !inputRef.current.value) inputRef.current.value = value
         setPendingAttachments(attachmentsAtSend)
-        dispatchShortcutFeedback('Could not send the message — the agent session did not start', true)
+        const reason = (error instanceof Error ? error.message : typeof error === 'string' ? error : '')
+          .replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
+        dispatchShortcutFeedback(reason ? `Could not send the message — ${reason}` : 'Could not send the message. Please try again.', true)
       })
     }
   }
