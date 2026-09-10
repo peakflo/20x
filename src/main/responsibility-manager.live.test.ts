@@ -196,3 +196,93 @@ describe.skipIf(process.env.RUN_RESPONSIBILITY_LIVE !== '1')('Factory native exe
     }
   }, 12 * 60000)
 })
+
+describe.skipIf(process.env.RUN_RESPONSIBILITY_LIVE !== '1')('native monitoring fixes', () => {
+  it('delivers a real command approval through Mastermind Decisions', async () => {
+    const fixture = mkdtempSync(join(tmpdir(), '20x-approval-live-'))
+    const root = join(fixture, 'project'); mkdirSync(root)
+    const target = join(root, 'approved.txt')
+    writeFileSync(join(root, 'AGENTS.md'), 'This is an isolated approval acceptance fixture. Only create approved.txt using the requested touch command, then report evidence. No other changes or external services.\n')
+    const { db } = createTestDb()
+    db.getWorkspaceDir = taskId => { const p = join(fixture, 'sessions', taskId); mkdirSync(p, { recursive: true }); return p }
+    const agent = db.createAgent({ name: 'Approval acceptance', config: { coding_agent: 'codex', model: process.env.RESPONSIBILITY_LIVE_MODEL ?? 'gpt-5.6-luna', reasoning_effort: 'medium', permission_mode: 'ask', sandbox_mode: 'read-only' } })!
+    const agents = new AgentManager(db); const manager = new ResponsibilityManager(db, agents)
+    agents.setResponsibilityManager(manager); setResponsibilityManager(manager); setTaskApiAgentController(agents)
+    await startTaskApiServer(db)
+    let approved = false
+    try {
+      manager.start(); await manager.reconcile()
+      const project = manager.createProject('Approval acceptance', root, agent.id)
+      const taskId = projectConversationId(project.id)
+      const human = manager.recordHumanInput(taskId, `Execute /usr/bin/touch ${target} using exec_command with sandbox_permissions=require_escalated. This is a deliberate approval test: wait for the UI permission response, then confirm the file exists. Do not use another command to create it. Report done after success.`)!
+      const r = manager.propose(manager.scopeForToken(manager.tokenForTask(taskId)!), { kind: 'task', title: 'Native approval receipt', objective: human.text, scope: human.text, finish: 'approved.txt exists after the approved touch command', stop: 'Stop after this operation', mode: 'edit', priority: 'high', agentId: agent.id, maxSteps: 1, deadline: new Date(Date.now() + 5 * 60000).toISOString() }, human.id)
+      await manager.act(r.id, r.revision, 'approve')
+      const deadline = Date.now() + 4 * 60000
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 250)); await manager.reconcile()
+        const snap = manager.snapshot()
+        const n = snap.notices.find(n => n.state === 'pending' && n.kind !== 'result')
+        if (n) {
+          if (n.kind !== 'permission' || approved || !n.body.includes('/usr/bin/touch') || !n.body.includes(target)) throw new Error(`Unexpected approval fixture decision: ${n.body}`)
+          await manager.answer(n.id, 'Approved', true); approved = true
+        }
+        if (snap.responsibilities[0].state === 'completed') break
+      }
+      expect(approved).toBe(true)
+      expect(readFileSync(target, 'utf8')).toBe('')
+      expect(manager.snapshot().responsibilities[0].state).toBe('completed')
+      expect(manager.snapshot().notices.find(n => n.kind === 'permission')).toMatchObject({ state: 'answered', answer: 'Approved' })
+      console.log('NATIVE_APPROVAL_RECEIPT', JSON.stringify({ approved, state: manager.snapshot().responsibilities[0].state, session: manager.snapshot().steps[0].sessionId }))
+    } finally { await manager.stop(); await agents.stopAllSessions(); stopTaskApiServer(); setResponsibilityManager(undefined); db.db.close(); rmSync(fixture, { recursive: true, force: true }) }
+  }, 6 * 60000)
+
+  it('prepares and activates a Routine, checks twice, and stops after native verification', async () => {
+    const fixture = mkdtempSync(join(tmpdir(), '20x-monitor-live-'))
+    const root = join(fixture, 'project'); mkdirSync(root)
+    const state = join(root, 'evidence.json'); writeFileSync(state, '{"deployed":true,"persisted":false}')
+    writeFileSync(join(root, 'AGENTS.md'), `MONITOR_CONTEXT=loaded. This is an isolated local fixture. Its only source is /bin/cat with args [${JSON.stringify(state)}]. Monitor every ten minutes. Success requires deployed=true AND persisted=true in that source. Until both hold, notify and continue. Report complete when both hold, requesting independent verification. No external sources or file changes. Include MONITOR_CONTEXT=loaded in the preparation report.\n`)
+    const { db } = createTestDb()
+    db.getWorkspaceDir = taskId => { const p = join(fixture, 'sessions', taskId); mkdirSync(p, { recursive: true }); return p }
+    const agent = db.createAgent({ name: 'Monitoring acceptance', config: { coding_agent: 'codex', model: process.env.RESPONSIBILITY_LIVE_MODEL ?? 'gpt-5.6-luna', reasoning_effort: 'medium', permission_mode: 'allow', sandbox_mode: 'danger-full-access' } })!
+    const agents = new AgentManager(db); const manager = new ResponsibilityManager(db, agents)
+    agents.setResponsibilityManager(manager); setResponsibilityManager(manager); setTaskApiAgentController(agents)
+    await startTaskApiServer(db)
+    const until = async (done: () => boolean) => {
+      const deadline = Date.now() + 3 * 60000
+      while (!done() && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 250)); await manager.reconcile()
+        const issue = manager.snapshot().notices.find(n => n.state === 'pending' && n.kind !== 'result')
+        if (issue) throw new Error(`Native monitoring needs intervention: ${issue.body}`)
+      }
+      expect(done()).toBe(true)
+    }
+    try {
+      manager.start(); await manager.reconcile()
+      const project = manager.createProject('Monitoring acceptance', root, agent.id)
+      const taskId = projectConversationId(project.id)
+      const routineDeadline = new Date(Date.now() + 3600000).toISOString()
+      const human = manager.recordHumanInput(taskId, `Read the workspace instructions and prepare a Routine monitoring ${state} every ten minutes. Stop only after deployed=true AND persisted=true are independently verified. Use the finite /bin/cat command from AGENTS.md as the only source, without collection reasoning. Allow 12 steps and a one-hour deadline at exactly ${routineDeadline}. This is preparation and a proposal only; I will run the trial and activate it. No external services or file edits.`)!
+      const prepared = manager.delegate(manager.scopeForToken(manager.tokenForTask(taskId)!), human.id, 'Prepare recurring fixture monitoring', undefined, undefined, true)
+      await until(() => manager.snapshot().responsibilities.find(r => r.id === prepared.id)?.state === 'completed')
+      const prep = manager.snapshot().responsibilities.find(r => r.id === prepared.id)!
+      expect(manager.snapshot().steps.find(s => s.responsibilityId === prep.id && s.phase === 'work')?.report?.summary).toContain('MONITOR_CONTEXT=loaded')
+      const routine = manager.snapshot().responsibilities.find(r => r.id === prep.routineSetup?.proposalId)!
+      expect(routine).toMatchObject({ state: 'proposed', nextAt: null, agreement: { kind: 'routine', schedule: '*/10 * * * *', maxSteps: 12, deadline: routineDeadline, stopOnSuccess: true, access: { permissionMode: 'allow', sandboxMode: 'danger-full-access' } } })
+      await manager.act(routine.id, routine.revision, 'trial'); await manager.act(routine.id, routine.revision, 'approve'); await manager.reconcile()
+      const due = () => db.db.prepare("UPDATE mastermind_agreements SET data=json_set(data, '$.nextAt', ?) WHERE id=?").run(new Date(Date.now() - 1000).toISOString(), routine.id)
+      due(); await manager.reconcile()
+      await until(() => manager.snapshot().steps.some(s => s.responsibilityId === routine.id && s.phase === 'classify' && s.state === 'settled'))
+      expect(manager.snapshot().responsibilities.find(r => r.id === routine.id)?.state).toBe('active')
+      writeFileSync(state, '{"deployed":true,"persisted":true}'); due(); await manager.reconcile()
+      await until(() => manager.snapshot().responsibilities.find(r => r.id === routine.id)?.state === 'completed')
+      const before = manager.snapshot().steps.length
+      await manager.reconcile(); expect(manager.snapshot().steps).toHaveLength(before)
+      const result = manager.snapshot().responsibilities.find(r => r.id === routine.id)!
+      expect(result.nextAt).toBeNull()
+      const steps = manager.snapshot().steps.filter(s => s.responsibilityId === routine.id)
+      expect(steps.map(s => s.phase)).toEqual(['classify', 'classify', 'verify'])
+      expect(steps.every(s => s.state === 'settled')).toBe(true)
+      console.log('NATIVE_MONITOR_RECEIPT', JSON.stringify({ proposal: routine.id, setup: prep.state, state: result.state, nextAt: result.nextAt, phases: manager.snapshot().steps.map(s => ({ phase: s.phase, sessionId: s.sessionId, state: s.state })) }))
+    } finally { await manager.stop(); await agents.stopAllSessions(); stopTaskApiServer(); setResponsibilityManager(undefined); db.db.close(); rmSync(fixture, { recursive: true, force: true }) }
+  }, 12 * 60000)
+})

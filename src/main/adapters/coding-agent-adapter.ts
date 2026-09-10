@@ -59,6 +59,8 @@ export interface SessionConfig {
   authMethod?: 'subscription' | 'api_key'
   permissionMode?: 'ask' | 'allow'
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  /** Server-owned snapshot of the selected agent's configured execution access. */
+  responsibilityAccess?: boolean
   apiKeys?: {
     openai?: string
     anthropic?: string

@@ -46,6 +46,7 @@ const agreement = {
     factoryId: { ...string, description: 'Optional exact project Factory. Its definition is snapshotted by 20x.' },
     allowedAgentIds: { type: 'array', items: string, maxItems: 20, description: 'Additional existing agents shown in the execution approval. Omit to use the selected project agent.' },
     schedule: { ...string, description: 'Routine cron expression. Timers run while 20x is open.' },
+    stopOnSuccess: { type: 'boolean', description: 'Routine only: stop scheduling after independent verification of the finish criteria. Omit for ongoing monitoring.' },
     source: sourceSchema
   },
   required: ['kind', 'title', 'objective', 'scope', 'finish', 'stop', 'mode', 'agentId', 'priority', 'maxSteps', 'deadline']
@@ -82,6 +83,10 @@ const rootTools: Tool[] = [
     inputSchema: { type: 'object', properties: { humanInputId: string, id: string }, required: ['humanInputId'] }
   },
   {
+    name: 'prepare_routine', description: 'Prepare a recurring workflow when project inspection is needed to define source reads. Performs one investigation, then a restricted Mastermind setup step drafts a Routine for human trial and activation. Preserves the exact recurring request. Does not activate monitoring.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: string, title: string, basedOn: string }, required: ['humanInputId', 'title'] }
+  },
+  {
     name: 'delegate_responsibility', description: 'Delegate one bounded Task from an exact recorded human request. Returns immediately; results arrive in Mastermind. Does not create a Goal or authorize automatic follow-up work.',
     inputSchema: { type: 'object', properties: { humanInputId: string, title: string, basedOn: string, factoryId: string }, required: ['humanInputId', 'title'] }
   },
@@ -102,7 +107,7 @@ const workerTools: Tool[] = [
       type: 'object', additionalProperties: false,
       properties: {
         summary: string, evidence: { type: 'array', items: string, minItems: 1, maxItems: 30 }, checkout: string,
-        action: { type: 'string', enum: ['done', 'continue', 'ask', 'ignore', 'notify', 'task'], description: 'Work: done/ask. Verification: done/continue/ask. Source classification: ignore/notify/ask/task. Factory coordination: task/done/ask.' },
+        action: { type: 'string', enum: ['done', 'continue', 'ask', 'ignore', 'notify', 'task', 'complete'], description: 'Work: done/ask. Verification: done/continue/ask. Source classification: ignore/notify/ask/task. Factory coordination: task/done/ask. Setup: propose a Routine, then done/ask. Work or classification may use complete only for a Routine with approved stopOnSuccess, requesting independent verification before monitoring stops.' },
         next: { ...string, description: 'Concrete next assignment or exact question. Required for continue, task and ask.' },
         sourceSnapshot: { ...string, description: 'Collection reasoning only: stable JSON or text extracted from the supplied evidence. Required for done in phase collect. Do not invent facts or add a current timestamp.' },
         agentId: { ...string, description: 'Factory coordination task only: choose an agent already approved for this execution.' },
@@ -112,7 +117,7 @@ const workerTools: Tool[] = [
     }
   }
 ]
-export const responsibilityTools = (scope: ResponsibilityScope): Tool[] => scope.stepId ? workerTools : rootTools
+export const responsibilityTools = (scope: ResponsibilityScope): Tool[] => !scope.stepId ? rootTools : scope.phase === 'setup' ? [...workerTools, ...rootTools.filter(t => ['propose_responsibility', 'discover_source_tools'].includes(t.name))] : workerTools
 
 export async function callResponsibilityTool(manager: ResponsibilityManager, token: string, name: string, args: Record<string, unknown> = {}) {
   try {
@@ -131,6 +136,7 @@ export async function callResponsibilityTool(manager: ResponsibilityManager, tok
       case 'discover_source_tools': result = await manager.sourceTools(scope, args.serverId as string | undefined, args.agentId as string | undefined); break
       case 'read_responsibility_result': result = manager.readResult(scope, args.taskId as string); break
       case 'delegate_responsibility': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, args.factoryId as string | undefined); break
+      case 'prepare_routine': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, undefined, true); break
       case 'propose_responsibility': result = manager.propose(scope, args.agreement, args.humanInputId as string, args.replaces as string | undefined); break
       case 'report_responsibility': result = await manager.report(scope, args); break
       case 'remember_project_preference': manager.rememberPreference(scope, args.humanInputId as string, args.id as string | undefined); result = { saved: true }; break

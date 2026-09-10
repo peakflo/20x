@@ -165,7 +165,9 @@ describe('CodexAppServerAdapter', () => {
     adapter.handleRpcMessage(session, { jsonrpc: '2.0', id: 22, method: 'item/commandExecution/requestApproval', params: { command: 'current operation' } })
     expect(await instance.respondToApproval('thread-1', true, undefined, '21')).toBe(false)
     expect(session.process.stdin.write).not.toHaveBeenCalled()
-    expect(await instance.respondToApproval('thread-1', true, undefined, '22')).toBe(true)
+    const responding = instance.respondToApproval('thread-1', true, undefined, '22')
+    adapter.handleRpcMessage(session, { method: 'serverRequest/resolved', params: { requestId: 22 } })
+    expect(await responding).toBe(true)
     expect(session.process.stdin.write).toHaveBeenCalledTimes(1)
   })
 
@@ -822,7 +824,10 @@ describe('CodexAppServerAdapter', () => {
       responseKind: 'commandExecution'
     })
 
-    await adapterInstance.respondToApproval('thread-1', true)
+    const responding = adapterInstance.respondToApproval('thread-1', true, 'approved')
+    expect(session.pendingApproval).not.toBeNull()
+    adapter.handleRpcMessage(session, { method: 'serverRequest/resolved', params: { requestId: 7 } })
+    await responding
 
     // The second argument is the guard callback that keeps a dead pipe from
     // crashing the main process (see child-stream-guards.ts).
@@ -1439,5 +1444,44 @@ describe('CodexAppServerAdapter app-server error notifications', () => {
       expect(session.lastError).toBeNull()
       expect(adapter.convertEventToMessageParts(completed, new Set(), new Set(), new Map(), session)).toEqual([])
     }
+  })
+})
+
+
+describe('Codex approval delivery', () => {
+  it.each([['approved', true, 'accept'], ['approved-for-session', true, 'acceptForSession'], ['abort', false, 'cancel'], ['denied', false, 'decline'], ['approved', false, 'cancel']])('translates %s and waits for the exact acknowledgement', async (choice, approved, expected) => {
+    const instance = new CodexAppServerAdapter(); const adapter = adapterPrivate(instance); const session = createSession()
+    adapter.sessions.set('thread-1', session)
+    adapter.handleRpcMessage(session, { id: 0, method: 'item/commandExecution/requestApproval', params: { command: 'read source' } })
+    const response = instance.respondToApproval('thread-1', approved as boolean, choice as string, '0')
+    expect(JSON.parse(session.process.stdin.write.mock.calls[0][0]).result).toEqual({ decision: expected })
+    adapter.handleRpcMessage(session, { method: 'serverRequest/resolved', params: { requestId: 99 } })
+    expect(session.pendingApproval).not.toBeNull()
+    adapter.handleRpcMessage(session, { method: 'serverRequest/resolved', params: { requestId: 0 } })
+    expect(await response).toBe(true)
+  })
+
+  it('preserves a server-supplied command policy amendment', async () => {
+    const instance = new CodexAppServerAdapter(); const adapter = adapterPrivate(instance); const session = createSession()
+    adapter.sessions.set('thread-1', session)
+    const decision = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['gh', 'run', 'list'] } }
+    adapter.handleRpcMessage(session, { id: 1, method: 'item/commandExecution/requestApproval', params: { availableDecisions: ['accept', decision, 'cancel'] } })
+    const response = instance.respondToApproval('thread-1', true, 'acceptWithExecpolicyAmendment', '1')
+    expect(JSON.parse(session.process.stdin.write.mock.calls[0][0]).result).toEqual({ decision })
+    adapter.handleRpcMessage(session, { method: 'serverRequest/resolved', params: { requestId: 1 } })
+    await response
+  })
+
+  it('reports an unconfirmed response instead of claiming approval succeeded', async () => {
+    vi.useFakeTimers()
+    try {
+      const instance = new CodexAppServerAdapter(); const adapter = adapterPrivate(instance); const session = createSession()
+      adapter.sessions.set('thread-1', session)
+      adapter.handleRpcMessage(session, { id: 1, method: 'item/commandExecution/requestApproval', params: {} })
+      const result = expect(instance.respondToApproval('thread-1', true, 'approved', '1')).rejects.toThrow('did not confirm')
+      await vi.advanceTimersByTimeAsync(15000); await result
+      expect(await instance.respondToApproval('thread-1', true, undefined, '1')).toBe(false)
+      expect(session.process.stdin.write).toHaveBeenCalledOnce()
+    } finally { vi.useRealTimers() }
   })
 })

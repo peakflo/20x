@@ -4611,6 +4611,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       if (!selectedOption && message) {
         const answerMap: Record<string, string> = {
           'Always': 'approved-for-session',
+          'Allow for Session': 'approved-for-session',
+          'Allow this command in future': 'acceptWithExecpolicyAmendment',
+          'Allow': 'approved',
+          'Deny': 'denied',
+          'Deny and Stop': 'abort',
           'Yes': 'approved',
           'No, provide feedback': 'abort',
           'No': 'abort'

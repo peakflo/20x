@@ -66,7 +66,10 @@ interface PendingApproval {
     optionId: string
     name: string
     kind: string
+    decision?: unknown
   }>
+  permissions?: unknown
+  delivery?: { resolve: () => void; reject: (error: Error) => void }
   responseKind: 'execCommand' | 'commandExecution' | 'fileChange' | 'permissions' | 'elicitation' | 'userInput' | 'generic'
 }
 
@@ -341,6 +344,8 @@ function decisionLabel(decision: string): string {
     case 'accept':
     case 'approved':
       return 'Allow'
+    case 'acceptWithExecpolicyAmendment':
+      return 'Allow this command in future'
     case 'acceptForSession':
     case 'approved_for_session':
       return 'Allow for Session'
@@ -654,18 +659,23 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const approval = session.pendingApproval
     if (!approval || (requestId !== undefined && String(approval.requestId) !== requestId)) return false
 
+    if (approval.delivery) throw new Error('This approval response is already awaiting Codex confirmation.')
     const selected = optionId || approval.options.find((option) =>
       approved
-        ? ['acceptForSession', 'accept', 'approved_for_session', 'approved'].includes(option.optionId)
+        ? ['accept', 'approved'].includes(option.optionId)
         : ['cancel', 'abort', 'decline', 'denied'].includes(option.optionId)
     )?.optionId || (approved ? 'accept' : 'cancel')
-    const response = this.buildApprovalResponse(approval.responseKind, selected, approved)
-
-    this.sendRpcResponse(session, approval.requestId, response)
-    session.pendingApproval = null
-    if (!approved) {
-      session.status = SessionStatusType.IDLE
-    }
+    const response = this.buildApprovalResponse(approval.responseKind, selected, approved, approval)
+    await new Promise<void>((resolveDelivery, rejectDelivery) => {
+      const timer = setTimeout(() => finish(new Error('Codex did not confirm the approval response. Inspect the task before retrying.')), 15000)
+      const finish = (error?: Error): void => {
+        clearTimeout(timer)
+        if (session.pendingApproval === approval) session.pendingApproval = null
+        if (error) rejectDelivery(error); else resolveDelivery()
+      }
+      approval.delivery = { resolve: () => finish(), reject: finish }
+      if (!writeToChildStdin(session.process, `${JSON.stringify({ jsonrpc: '2.0', id: approval.requestId, result: response })}\n`, 'CodexAppServerAdapter')) finish(new Error('Codex disconnected before the approval response could be delivered.'))
+    })
     return true
   }
 
@@ -728,6 +738,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     })
     child.on('exit', (code, signal) => {
       console.log(`[CodexAppServerAdapter] process exited: code=${code}, signal=${signal}`)
+      session.pendingApproval?.delivery?.reject(new Error('Codex disconnected before confirming the approval.'))
       if (code !== 0 && code !== null) {
         session.status = SessionStatusType.ERROR
         session.lastError = `Codex app-server exited with code ${code}`
@@ -845,7 +856,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     }
     if (this.resolveSandboxMode(config) === 'workspace-write') {
       overrides.sandbox_workspace_write = {
-        network_access: !config.responsibilityRole,
+        network_access: (!config.responsibilityRole || !!config.responsibilityAccess),
         writable_roots: this.buildRuntimeWorkspaceRoots(config.workspaceDir)
       }
     }
@@ -1064,6 +1075,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (notification.method === 'serverRequest/resolved') {
       const requestId = params.requestId
       if (session.pendingApproval && String(session.pendingApproval.requestId) === String(requestId)) {
+        session.pendingApproval.delivery?.resolve()
         session.pendingApproval = null
         if (session.status === SessionStatusType.WAITING_APPROVAL) {
           session.status = SessionStatusType.BUSY
@@ -1096,7 +1108,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
           return {
             optionId,
             name: decisionLabel(optionId),
-            kind: optionId.includes('accept') || optionId === 'approved' ? 'allow' : 'reject'
+            kind: optionId.includes('accept') || optionId === 'approved' ? 'allow' : 'reject',
+            ...(typeof decision === 'object' ? { decision } : {})
           }
         })
       : [
@@ -1109,7 +1122,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       toolCallId,
       question: summarizeApproval(params, request.method),
       options: approvalOptions,
-      responseKind
+      responseKind,
+      permissions: params.permissions
     }
     session.status = SessionStatusType.WAITING_APPROVAL
     this.onDataAvailable?.(session.threadId || session.sessionId)
@@ -1118,16 +1132,22 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   private buildApprovalResponse(
     responseKind: PendingApproval['responseKind'],
     selected: string,
-    approved: boolean
+    approved: boolean,
+    approval?: PendingApproval
   ): unknown {
     switch (responseKind) {
       case 'execCommand':
         return { decision: approved ? (selected === 'approved_for_session' ? 'approved_for_session' : 'approved') : (selected === 'denied' ? 'denied' : 'abort') }
       case 'commandExecution':
-        return { decision: selected }
       case 'fileChange':
-      case 'permissions':
+        // AgentManager and ACP callers use legacy names; v2 requires accept/cancel.
+        selected = ({ approved: 'accept', approved_for_session: 'acceptForSession', 'approved-for-session': 'acceptForSession', denied: 'decline', abort: 'cancel' } as Record<string, string>)[selected] ?? selected
+        if (!approved && selected.startsWith('accept')) selected = 'cancel'
+        if (approval?.options.find(o => o.optionId === selected)?.decision) return { decision: approval.options.find(o => o.optionId === selected)!.decision }
+        if (!['accept', 'acceptForSession', 'decline', 'cancel'].includes(selected)) throw new Error('This Codex approval option is no longer supported.')
         return { decision: selected }
+      case 'permissions':
+        return { permissions: approved ? approval?.permissions ?? {} : {}, scope: 'turn' }
       case 'elicitation':
         return approved
           ? { action: 'accept', content: {} }
@@ -1165,14 +1185,14 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   private buildSandboxPolicy(config: SessionConfig): CodexSandboxPolicy {
     switch (this.resolveSandboxMode(config)) {
       case 'read-only':
-        return { type: 'readOnly', networkAccess: !config.responsibilityRole }
+        return { type: 'readOnly', networkAccess: (!config.responsibilityRole || !!config.responsibilityAccess) }
       case 'danger-full-access':
         return { type: 'dangerFullAccess' }
       case 'workspace-write':
       default:
         return {
           type: 'workspaceWrite',
-          networkAccess: !config.responsibilityRole,
+          networkAccess: (!config.responsibilityRole || !!config.responsibilityAccess),
           writableRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir)
         }
     }

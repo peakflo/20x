@@ -835,3 +835,140 @@ describe('Factories through the existing responsibility lifecycle', () => {
     expect(snapshot().steps).toHaveLength(2)
   })
 })
+
+describe('configured worker access and recurring setup', () => {
+  it('captures access from settings, ignores supplied grants, and retains legacy restrictions', async () => {
+    db.updateAgent(project.agentId, { config: { ...db.getAgent(project.agentId)!.config, permission_mode: 'allow', sandbox_mode: 'danger-full-access' } })
+    const r = await approve({ ...agreement, mode: 'read', access: { permissionMode: 'ask', sandboxMode: 'read-only' } })
+    const step = snapshot().steps[0]
+    const config = { taskId: step.taskId, agentId: project.agentId, workspaceDir: dir }
+    manager.configureSession(config, 1234)
+    expect(config).toMatchObject({ permissionMode: 'allow', sandboxMode: 'danger-full-access', responsibilityAccess: true })
+    db.updateAgent(project.agentId, { config: { ...db.getAgent(project.agentId)!.config, permission_mode: 'ask', sandbox_mode: 'read-only' } })
+    manager.configureSession(config, 1234)
+    expect(config).toMatchObject({ permissionMode: 'allow', sandboxMode: 'danger-full-access' })
+    db.db.prepare("UPDATE mastermind_agreements SET data=json_remove(data, '$.agreement.access') WHERE id=?").run(r.id)
+    manager.configureSession(config, 1234)
+    expect(config).toMatchObject({ permissionMode: 'ask', sandboxMode: 'read-only', responsibilityAccess: false })
+    const root = { taskId: projectConversationId(project.id), agentId: project.agentId, workspaceDir: dir }
+    manager.configureSession(root, 1234)
+    expect(root).toMatchObject({ responsibilityRole: 'root', permissionMode: 'ask', sandboxMode: 'read-only', tools: { bash: false } })
+  })
+
+  it('requires a fresh preview when agent access changes before approval', async () => {
+    const r = manager.propose(scope(), agreement, input())
+    db.updateAgent(project.agentId, { config: { ...db.getAgent(project.agentId)!.config, sandbox_mode: 'danger-full-access' } })
+    await expect(manager.act(r.id, r.revision, 'approve')).rejects.toThrow('access changed')
+  })
+
+  it('keeps full-access settings out of classification permission callbacks', async () => {
+    db.updateAgent(project.agentId, { config: { ...db.getAgent(project.agentId)!.config, permission_mode: 'allow', sandbox_mode: 'danger-full-access' } })
+    const r = manager.propose(scope(), { ...agreement, kind: 'routine', schedule: '* * * * *', source: { command: 'read-fixture', args: [], description: 'Read evidence' } }, input())
+    await manager.act(r.id, r.revision, 'trial'); await manager.act(r.id, r.revision, 'approve'); await manager.reconcile()
+    collect.mockResolvedValue('changed evidence')
+    db.db.prepare("UPDATE mastermind_agreements SET data=json_set(data, '$.nextAt', ?) WHERE id=?").run(new Date(Date.now() - 1000).toISOString(), r.id)
+    await manager.reconcile()
+    const step = snapshot().steps[0]
+    expect(step.phase).toBe('classify')
+    const config: import('./adapters/coding-agent-adapter').SessionConfig = { taskId: step.taskId, agentId: project.agentId, workspaceDir: dir }
+    manager.configureSession(config, 1234)
+    expect(config).toMatchObject({ permissionMode: 'ask', sandboxMode: 'read-only', responsibilityAccess: false })
+    const abort = new AbortController()
+    const answer = config.authorizeTool!('Bash', { command: 'external action' }, 'classification-tool', abort.signal)
+    expect(snapshot().notices.some(n => n.kind === 'permission' && n.state === 'pending')).toBe(true)
+    abort.abort(); expect(await answer).toBe(false)
+  })
+
+  it('retains recurring intent through preparation and a restricted setup step to an inactive proposal', async () => {
+    const human = input('Inspect the workspace and monitor every ten minutes until the evidence proves success')
+    const root = manager.tokenForTask(projectConversationId(project.id))!
+    expect((await callResponsibilityTool(manager, root, 'prepare_routine', { humanInputId: human, title: 'Prepare recurring verification' })).isError).not.toBe(true)
+    await manager.reconcile()
+    const prep = snapshot().responsibilities[0]
+    const work = snapshot().steps[0]
+    expect(prep).toMatchObject({ routineSetup: {}, agreement: { maxSteps: 2 }, nextAt: null })
+    expect((await callResponsibilityTool(manager, manager.tokenForTask(work.taskId)!, 'propose_responsibility', { agreement, humanInputId: human })).isError).toBe(true)
+    await finish(work)
+    const setup = snapshot().steps.at(-1)!
+    expect(setup.phase).toBe('setup')
+    const config = { taskId: setup.taskId, agentId: project.agentId, workspaceDir: dir }
+    manager.configureSession(config, 1234)
+    expect(config).toMatchObject({ responsibilityRole: 'collector', tools: { bash: false, read: false }, responsibilityAccess: false })
+    const token = manager.tokenForTask(setup.taskId)!
+    const candidate = { ...agreement, basedOn: prep.id, kind: 'routine', schedule: '*/10 * * * *', stopOnSuccess: true, source: { command: 'read-fixture', args: [], description: 'Read approved evidence' } }
+    expect((await callResponsibilityTool(manager, token, 'propose_responsibility', { agreement: candidate, humanInputId: input('Different human request') })).isError).toBe(true)
+    expect((await callResponsibilityTool(manager, token, 'propose_responsibility', { agreement: candidate, humanInputId: human })).isError).not.toBe(true)
+    await finish(setup)
+    const routine = snapshot().responsibilities.find(r => r.agreement.kind === 'routine')!
+    expect(snapshot().responsibilities.find(r => r.id === prep.id)).toMatchObject({ state: 'completed', routineSetup: { proposalId: routine.id } })
+    expect(routine).toMatchObject({ preparedFrom: prep.id, state: 'proposed', nextAt: null, agreement: { schedule: '*/10 * * * *', stopOnSuccess: true } })
+    expect(collect).not.toHaveBeenCalled()
+    await expect(manager.act(routine.id, routine.revision, 'approve')).rejects.toThrow('trial')
+    await manager.act(routine.id, routine.revision, 'trial')
+    await manager.act(routine.id, routine.revision, 'approve')
+    expect(snapshot().responsibilities.find(r => r.id === routine.id)).toMatchObject({ state: 'active', nextAt: expect.any(String) })
+  })
+
+  it('shows failed permission delivery without accepting a replacement request', async () => {
+    await approve(); const step = snapshot().steps[0]; const live = sessions.get(step.taskId)!
+    live.session.status = 'waiting_approval'
+    manager.observe('agent:approval', { taskId: step.taskId, sessionId: live.sessionId, requestId: '1', description: 'Read source' })
+    vi.mocked(runtime.respondToPermission).mockRejectedValueOnce(new Error('Codex did not confirm approval'))
+    const n = snapshot().notices[0]
+    await expect(manager.answer(n.id, 'Approved', true)).rejects.toThrow('did not confirm')
+    expect(snapshot().notices.find(v => v.id === n.id)).toMatchObject({ state: 'expired', deliveryError: 'Codex did not confirm approval' })
+    await expect(manager.answer(n.id, 'Approved', true)).rejects.toThrow('expired')
+  })
+})
+
+describe('Routine verified completion', () => {
+  async function create(stopOnSuccess = true) {
+    const r = manager.propose(scope(), { ...agreement, kind: 'routine', mode: 'read', schedule: '*/10 * * * *', stopOnSuccess, source: { command: 'read-fixture', args: [], description: 'Evidence' } }, input('Monitor until success'))
+    await manager.act(r.id, r.revision, 'trial'); await manager.act(r.id, r.revision, 'approve')
+    return r
+  }
+  const due = (id: string) => db.db.prepare("UPDATE mastermind_agreements SET data=json_set(data, '$.nextAt', ?) WHERE id=?").run(new Date(Date.now() - 1000).toISOString(), id)
+
+  it('checks twice without overlapping, verifies success, and never schedules a third check', async () => {
+    collect.mockResolvedValue('{"persisted":false}')
+    const r = await create(); due(r.id); await manager.reconcile()
+    await finish(snapshot().steps.at(-1)!, 'notify')
+    collect.mockResolvedValue('{"persisted":true}'); due(r.id); await manager.reconcile()
+    const check = snapshot().steps.at(-1)!
+    const calls = collect.mock.calls.length
+    due(r.id); await manager.reconcile(); expect(collect).toHaveBeenCalledTimes(calls)
+    await finish(check, 'complete')
+    const verify = snapshot().steps.at(-1)!
+    expect(verify).toMatchObject({ phase: 'verify', completeRoutine: true })
+    expect(snapshot().responsibilities[0].state).toBe('active')
+    await finish(verify)
+    expect(snapshot().responsibilities[0]).toMatchObject({ state: 'completed', nextAt: null, next: null })
+    due(r.id); await manager.reconcile(); expect(collect).toHaveBeenCalledTimes(calls)
+    expect(snapshot().notices.at(-1)?.body).toContain('No further checks')
+  })
+
+  it('continues monitoring after unsuccessful verification, and blocks on missing access', async () => {
+    const r = await create(); due(r.id); await manager.reconcile()
+    await finish(snapshot().steps.at(-1)!, 'complete')
+    await finish(snapshot().steps.at(-1)!, 'continue', 'No matching row has been observed yet')
+    expect(snapshot().responsibilities[0]).toMatchObject({ state: 'active', next: null })
+    collect.mockRejectedValueOnce(new Error('Tunnel unavailable')); due(r.id); await manager.reconcile()
+    expect(snapshot().responsibilities[0].state).toBe('blocked')
+  })
+
+  it('requires explicit completion authority and preserves it through an answered verification question', async () => {
+    const r = await create(false); collect.mockResolvedValue('changed'); due(r.id); await manager.reconcile()
+    await expect(finish(snapshot().steps.at(-1)!, 'complete')).rejects.toThrow('not valid')
+    await finish(snapshot().steps.at(-1)!, 'notify')
+    await manager.act(r.id, r.revision, 'pause')
+    const revised = manager.propose(scope(), { ...snapshot().responsibilities[0].agreement, stopOnSuccess: true }, input('Stop after verified success'), r.id)
+    await manager.act(r.id, revised.revision, 'trial'); await manager.act(r.id, revised.revision, 'approve')
+    await manager.reconcile(); due(r.id); await manager.reconcile(); await finish(snapshot().steps.at(-1)!, 'complete')
+    await finish(snapshot().steps.at(-1)!, 'ask', 'Clarify the observed evidence')
+    await manager.answer(snapshot().notices.find(n => n.kind === 'question')!.id, 'Verify the supplied evidence only')
+    await manager.reconcile()
+    expect(snapshot().steps.at(-1)).toMatchObject({ phase: 'verify', completeRoutine: true })
+    await finish(snapshot().steps.at(-1)!)
+    expect(snapshot().responsibilities[0].state).toBe('completed')
+  })
+})

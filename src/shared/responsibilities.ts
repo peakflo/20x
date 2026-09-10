@@ -2,7 +2,11 @@ import type { ReasoningEffort } from './reasoning-effort'
 
 export type ResponsibilityKind = 'task' | 'goal' | 'routine'
 export type ResponsibilityState = 'proposed' | 'active' | 'paused' | 'blocked' | 'taken_over' | 'completed' | 'cancelled'
-export type WorkPhase = 'work' | 'verify' | 'classify' | 'collect' | 'coordinate'
+export type WorkPhase = 'work' | 'verify' | 'classify' | 'collect' | 'coordinate' | 'setup'
+export interface ExecutionAccess {
+  permissionMode: 'ask' | 'allow'
+  sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access'
+}
 export interface FactoryDefinition {
   id: string
   projectId: string
@@ -26,6 +30,7 @@ export interface FactoryAgent {
   model?: string
   reasoningEffort?: ReasoningEffort
   configDigest: string
+  access?: ExecutionAccess
 }
 export interface CommandSource {
   command: string
@@ -86,6 +91,9 @@ export interface ResponsibilityAgreement {
   allowedAgentIds?: string[]
   schedule?: string
   source?: RoutineSource
+  stopOnSuccess?: boolean
+  /** Captured from agent settings by 20x, never accepted from a model. */
+  access?: ExecutionAccess
 }
 export interface ResponsibilityRecord {
   id: string
@@ -108,7 +116,10 @@ export interface ResponsibilityRecord {
   /** Factory selected for the current Routine event only. */
   eventFactory?: FactoryDefinition
   factoryStartStep?: number
-  next: { phase: WorkPhase; instruction: string; eventId?: string; agentId?: string; predecessorTaskIds?: string[] } | null
+  routineSetup?: { proposalId?: string }
+  /** Preparation evidence; unlike basedOn, this does not require the setup task to finish first. */
+  preparedFrom?: string
+  next: { phase: WorkPhase; instruction: string; eventId?: string; agentId?: string; predecessorTaskIds?: string[]; completeRoutine?: boolean } | null
   createdAt: string
   updatedAt: string
 }
@@ -120,7 +131,7 @@ export interface WorkEvidence {
 export interface WorkReport {
   summary: string
   evidence: string[]
-  action: 'done' | 'continue' | 'ask' | 'ignore' | 'notify' | 'task'
+  action: 'done' | 'continue' | 'ask' | 'ignore' | 'notify' | 'task' | 'complete'
   next?: string
   work: WorkEvidence
   sourceSnapshot?: string
@@ -141,6 +152,7 @@ export interface ResponsibilityStep {
   expectedWork: WorkEvidence | null
   settledAt: string | null
   createdAt: string
+  completeRoutine?: boolean
   collection?: { revision: number; trial: boolean; evidence: string }
   agent?: FactoryAgent
   factory?: FactoryDefinition
@@ -156,6 +168,7 @@ export interface ResponsibilityNotice {
   body: string
   state: 'pending' | 'delivering' | 'answered' | 'read' | 'expired'
   answer: string | null
+  deliveryError?: string
   callback?: boolean
   questions?: Array<{ question: string; header: string }>
   recipient: { sessionId: string; requestId: string; responseType: 'permission' | 'question' } | null

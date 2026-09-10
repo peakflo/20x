@@ -89,3 +89,16 @@ describe('project responsibility controls', () => {
     expect(api.act).not.toHaveBeenCalled()
   })
 })
+
+it('shows captured access and verified-stop behavior, and sends permission approval without requiring text', async () => {
+  snapshot.responsibilities[0].agreement.access = { permissionMode: 'allow', sandboxMode: 'danger-full-access' }
+  snapshot.responsibilities[0].agreement.stopOnSuccess = true
+  snapshot.notices = [{ id: 'permission', projectId: 'project', responsibilityId: 'work', stepId: 'step', kind: 'permission', title: 'Read source', body: 'Allow source access?', state: 'pending', answer: null, recipient: { sessionId: 'session', requestId: '0', responseType: 'permission' }, createdAt: '2026-01-01' }]
+  render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+  fireEvent.click(await screen.findByText('1 decision need you'))
+  fireEvent.click(screen.getByRole('button', { name: 'Approve this request' }))
+  await waitFor(() => expect(api.answer).toHaveBeenCalledWith('permission', 'Approved', true))
+  fireEvent.click(screen.getByRole('tab', { name: 'work' }))
+  expect(screen.getByText(/Full access — read-only work is an instruction/)).toBeInTheDocument()
+  expect(screen.getByText(/Stop scheduling once the success evidence/)).toBeInTheDocument()
+})

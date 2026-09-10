@@ -103,8 +103,11 @@ function AgreementCard({ record: r, unresolved, busy, act }: { record: Responsib
   return <article className="rounded-lg border border-border p-3 text-sm">
     <div className="flex items-start justify-between gap-2"><strong>{a.title}</strong><span className="text-xs capitalize text-muted-foreground">{a.kind} · {r.state.replace('_', ' ')}</span></div>
     <p className="mt-1 whitespace-pre-wrap">{a.objective}</p>
+    {r.routineSetup && <p className="mt-2 text-xs text-muted-foreground">{r.routineSetup.proposalId ? 'Preparation finished. The saved Routine agreement shows its trial, activation and monitoring status.' : 'Preparing recurring workflow: investigation and Routine proposal. Monitoring is not active yet.'}</p>}
+    {a.access && <p className="mt-2 text-xs text-muted-foreground">Worker access: {a.access.permissionMode === 'allow' ? 'Use configured permissions automatically' : 'Ask when required'} · {a.access.sandboxMode === 'danger-full-access' ? 'Full access — read-only work is an instruction, not a sandbox restriction' : a.access.sandboxMode}. Saved for this execution.</p>}
+    {a.stopOnSuccess && <p className="mt-2 text-xs text-muted-foreground">Stop scheduling once the success evidence is independently verified.</p>}
     {a.factory && <details className="mt-2"><summary className="cursor-pointer">Factory: {a.factory.name}</summary><FactoryGuide definition={a.factory} /></details>}
-    {a.factoryAgents && <p className="mt-2 text-xs text-muted-foreground">Approved agents: {a.factoryAgents.map(agent => `${agent.name} (${agent.backend ?? 'default'} · ${agent.model ?? 'default model'})`).join(', ')}</p>}
+    {a.factoryAgents && <p className="mt-2 text-xs text-muted-foreground">Approved agents: {a.factoryAgents.map(agent => `${agent.name} (${agent.backend ?? 'default'} · ${agent.model ?? 'default model'}${agent.access ? ` · ${agent.access.sandboxMode} · ${agent.access.permissionMode}` : ''})`).join(', ')}</p>}
     <details className="mt-2" open={r.state === 'proposed'}>
       <summary className="cursor-pointer text-xs text-muted-foreground">Agreement and evidence</summary>
       <dl className="mt-2 space-y-2 text-xs">
@@ -153,6 +156,7 @@ function NoticeCard({ notice: n, busy, answer, openTask }: { notice: Responsibil
     <p className="mt-2 whitespace-pre-wrap break-words">{n.body}</p>
     {n.stepId && <Button className="mt-2" size="sm" variant="outline" disabled={busy} onClick={() => void openTask()}>Open task</Button>}
     {n.answer && <p className="mt-2 whitespace-pre-wrap text-muted-foreground">Your answer: {n.answer}</p>}
+    {n.deliveryError && <p role="alert" className="mt-2 text-xs text-destructive">Approval delivery failed or is unconfirmed: {n.deliveryError}</p>}
     {n.state === 'expired' && <p className="mt-2 text-xs text-muted-foreground">The original request is no longer live. Inspect and recover its responsibility.</p>}
     {n.state === 'pending' && n.kind === 'recovery' && <p className="mt-2 text-xs text-muted-foreground">Open Work to inspect the agreement, then recover or take over.</p>}
     {n.state === 'pending' && n.kind === 'result' && <Button size="sm" variant="ghost" onClick={() => void answer('Read')} disabled={busy}>Mark read</Button>}
