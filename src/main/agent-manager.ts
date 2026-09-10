@@ -1,3 +1,4 @@
+import { guardedIpcSend } from './guarded-ipc-send'
 import { serverTaskSnapshot } from './workflo-task-sync'
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
@@ -5453,7 +5454,7 @@ Important:
   private sendTranscriptChangedNow(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>, maxRev: number): void {
     const payload = { taskId, parts, maxRev }
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('transcript:changed', payload)
+      guardedIpcSend(this.mainWindow.webContents, 'transcript:changed', payload)
     }
     for (const fn of this.externalListeners) {
       try { fn('transcript:changed', payload) } catch { /* ignore */ }
@@ -5543,7 +5544,7 @@ Important:
   private sendArtifactUpdated(artifact: Artifact): void {
     const artifactPayload = { taskId: artifact.taskId, artifact }
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('artifact:updated', artifactPayload)
+      guardedIpcSend(this.mainWindow.webContents, 'artifact:updated', artifactPayload)
     }
     for (const fn of this.externalListeners) {
       try { fn('artifact:updated', artifactPayload) } catch { /* ignore */ }
@@ -5574,7 +5575,7 @@ Important:
     }
 
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send(channel, data)
+      guardedIpcSend(this.mainWindow.webContents, channel, data)
     }
     // Also notify external listeners (mobile API WebSocket)
     for (const fn of this.externalListeners) {

@@ -1,3 +1,4 @@
+import { guardedIpcSend } from './guarded-ipc-send'
 import { execFile, execSync } from 'child_process'
 import { readdirSync } from 'fs'
 import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage } from 'electron'
@@ -89,7 +90,7 @@ let isShuttingDown = false
  */
 function broadcastVoiceEvent(channel: string, data: unknown): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, data)
+    guardedIpcSend(mainWindow.webContents, channel, data)
   }
   broadcastToMobileClients(channel, data)
 }
@@ -104,7 +105,7 @@ function broadcastVoiceEvent(channel: string, data: unknown): void {
  */
 function sendVoiceEventToRenderer(channel: string, data: unknown): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, data)
+    guardedIpcSend(mainWindow.webContents, channel, data)
   }
 }
 
@@ -363,7 +364,7 @@ function createWindow(): void {
 
     // Periodic overdue check — nudges renderer every 60s
     setInterval(() => {
-      mainWindow?.webContents.send('overdue:check')
+      guardedIpcSend(mainWindow?.webContents, 'overdue:check')
     }, 60_000)
   })
 
@@ -496,7 +497,7 @@ function createWindow(): void {
   // Wire up task-api-server notifications to the renderer
   setTaskApiNotifier((channel, data) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(channel, data)
+      guardedIpcSend(mainWindow.webContents, channel, data)
     }
     broadcastToMobileClients(channel, data)
   })
@@ -519,7 +520,7 @@ function createWindow(): void {
   // Wire up mobile-api-server notifications to the renderer
   setMobileApiNotifier((channel, data) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(channel, data)
+      guardedIpcSend(mainWindow.webContents, channel, data)
     }
   })
 }
@@ -535,7 +536,7 @@ function buildAppMenu(): void {
     label: 'Check for Updates…',
     click: () => {
       mainWindow?.show()
-      mainWindow?.webContents.send('menu:check-for-updates')
+      guardedIpcSend(mainWindow?.webContents, 'menu:check-for-updates')
     }
   }
 
@@ -688,14 +689,14 @@ app.on('open-url', (event, url) => {
             if (mainWindow) {
               clearInterval(checkWindow)
               console.log('[OAuth] Sending callback to renderer')
-              mainWindow.webContents.send('oauth:callback', { code, state })
+              guardedIpcSend(mainWindow.webContents, 'oauth:callback', { code, state })
             }
           }, 100)
           // Timeout after 10 seconds
           setTimeout(() => clearInterval(checkWindow), 10000)
         } else {
           console.log('[OAuth] Sending callback to renderer')
-          mainWindow.webContents.send('oauth:callback', { code, state })
+          guardedIpcSend(mainWindow.webContents, 'oauth:callback', { code, state })
         }
       } else {
         console.error('[OAuth] Missing code or state in callback URL')

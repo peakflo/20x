@@ -1,3 +1,4 @@
+import { guardedIpcSend } from './guarded-ipc-send'
 import { isWorkfloLinkedTask } from './workflo-task-sync'
 import { BrowserWindow } from 'electron'
 import { CronExpressionParser } from 'cron-parser'
@@ -192,7 +193,7 @@ export class RecurrenceScheduler {
 
       // Notify renderer to refresh tasks
       if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-        this.mainWindow.webContents.send('tasks:refresh')
+        guardedIpcSend(this.mainWindow.webContents, 'tasks:refresh')
       }
 
       // Hand the new instances to whoever owns auto-start. This is a
@@ -324,7 +325,7 @@ export class RecurrenceScheduler {
           agent_id: task.agent_id,
           recurrence_parent_id: task.recurrence_parent_id
         })
-        this.mainWindow.webContents.send('task:created', { task })
+        guardedIpcSend(this.mainWindow.webContents, 'task:created', { task })
       }
     }
   }
