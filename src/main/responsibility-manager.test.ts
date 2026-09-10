@@ -935,6 +935,11 @@ describe('Routine verified completion', () => {
     await finish(snapshot().steps.at(-1)!, 'notify')
     collect.mockResolvedValue('{"persisted":true}'); due(r.id); await manager.reconcile()
     const check = snapshot().steps.at(-1)!
+    const config: import('./adapters/coding-agent-adapter').SessionConfig = { taskId: check.taskId, agentId: project.agentId, workspaceDir: dir }
+    manager.configureSession(config, 1234)
+    expect(config.systemPrompt).toContain(`"currentSourceSnapshot":${JSON.stringify(check.instruction)}`)
+    expect(config.systemPrompt).toContain(snapshot().steps[0].taskId)
+    expect(config.systemPrompt).not.toContain(snapshot().steps[0].report!.summary)
     const calls = collect.mock.calls.length
     due(r.id); await manager.reconcile(); expect(collect).toHaveBeenCalledTimes(calls)
     await finish(check, 'complete')
