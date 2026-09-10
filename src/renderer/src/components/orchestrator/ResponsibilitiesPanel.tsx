@@ -4,6 +4,7 @@ import { agentApi, settingsApi } from '@/lib/ipc-client'
 import { useTaskStore } from '@/stores/task-store'
 import { applyUiCommand } from '@/lib/ui-remote-control'
 import { Button } from '@/components/ui/Button'
+import { CollapsibleDescription } from '@/components/ui/CollapsibleDescription'
 import type { ProjectRecord, ResponsibilityRecord, ResponsibilitySnapshot, ResponsibilityNotice, ProjectMemory } from '@shared/responsibilities'
 import { isSourceCollection } from '@shared/responsibilities'
 import { FactoryConfirmation, FactoryGuide } from '@/components/factories/FactoriesWorkspace'
@@ -83,7 +84,7 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
           {records.map(r => <div key={r.id}><AgreementCard record={r} unresolved={snapshot.steps.some(s => s.responsibilityId === r.id && !['held', 'settled'].includes(s.state))} busy={busy} act={action => run(() => api.act(r.id, r.revision, action))} />
             {snapshot.steps.filter(s => s.responsibilityId === r.id).map(s => <div key={s.id} className="ml-2 mt-1 rounded border border-border p-2 text-xs">
               <button className="font-medium text-primary underline" onClick={() => void run(async () => { await useTaskStore.getState().fetchTasks(); const opened = applyUiCommand({ kind: 'open_task', taskId: s.taskId, where: 'modal' }); if (!opened.applied) throw new Error(opened.detail) })}>Open {s.phase} · {s.state.replace('_', ' ')}</button>
-              {s.report && <details className="mt-1"><summary className="cursor-pointer">{s.report.summary}</summary><p className="mt-1 break-all">{s.report.work.checkout} · {s.report.work.revision}</p><ul className="mt-1 list-inside list-disc">{s.report.evidence.map((e, i) => <li className="break-words" key={i}>{e}</li>)}</ul></details>}
+              {s.report && <details className="mt-1"><summary className="cursor-pointer">Result and evidence</summary><p className="mt-2 whitespace-pre-wrap">{s.report.summary}</p><p className="mt-1 break-all">{s.report.work.checkout} · {s.report.work.revision}</p><ul className="mt-1 list-inside list-disc">{s.report.evidence.map((e, i) => <li className="break-words" key={i}>{e}</li>)}</ul></details>}
             </div>)}
           </div>)}
         </div>}
@@ -101,16 +102,18 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
 function AgreementCard({ record: r, unresolved, busy, act }: { record: ResponsibilityRecord; unresolved: boolean; busy: boolean; act: (action: Parameters<NonNullable<typeof window.electronAPI.responsibilities>['act']>[2]) => Promise<void> }) {
   const a = r.agreement
   return <article className="rounded-lg border border-border p-3 text-sm">
-    <div className="flex items-start justify-between gap-2"><strong>{a.title}</strong><span className="text-xs capitalize text-muted-foreground">{a.kind} · {r.state.replace('_', ' ')}</span></div>
-    <p className="mt-1 whitespace-pre-wrap">{a.objective}</p>
-    {r.routineSetup && <p className="mt-2 text-xs text-muted-foreground">{r.routineSetup.proposalId ? 'Preparation finished. The saved Routine agreement shows its trial, activation and monitoring status.' : 'Preparing recurring workflow: investigation and Routine proposal. Monitoring is not active yet.'}</p>}
-    {a.access && <p className="mt-2 text-xs text-muted-foreground">Worker access: {a.access.permissionMode === 'allow' ? 'Use configured permissions automatically' : 'Ask when required'} · {a.access.sandboxMode === 'danger-full-access' ? 'Full access — read-only work is an instruction, not a sandbox restriction' : a.access.sandboxMode}. Saved for this execution.</p>}
+    <div className="mb-2 flex justify-between gap-2 text-xs capitalize text-muted-foreground"><span>{a.kind}</span><span>{r.state.replace('_', ' ')}</span></div>
+    <CollapsibleDescription taskId={`work-title-${r.id}`} description={a.title} collapsedLines={2} className="[&_p]:font-semibold" />
+    <CollapsibleDescription taskId={`work-summary-${r.id}`} description={a.summary ?? a.objective} collapsedLines={3} className="mt-2 text-muted-foreground" />
+    {r.routineSetup && <p className="mt-2 text-xs text-muted-foreground">{r.routineSetup.proposalId ? 'Routine proposal saved.' : 'Preparing a routine. Monitoring has not started.'}</p>}
     {a.stopOnSuccess && <p className="mt-2 text-xs text-muted-foreground">Stop scheduling once the success evidence is independently verified.</p>}
     {a.factory && <details className="mt-2"><summary className="cursor-pointer">Factory: {a.factory.name}</summary><FactoryGuide definition={a.factory} /></details>}
-    {a.factoryAgents && <p className="mt-2 text-xs text-muted-foreground">Approved agents: {a.factoryAgents.map(agent => `${agent.name} (${agent.backend ?? 'default'} · ${agent.model ?? 'default model'}${agent.access ? ` · ${agent.access.sandboxMode} · ${agent.access.permissionMode}` : ''})`).join(', ')}</p>}
     <details className="mt-2" open={r.state === 'proposed'}>
       <summary className="cursor-pointer text-xs text-muted-foreground">Agreement and evidence</summary>
+      {a.access && <p className="mt-2 text-xs text-muted-foreground">Worker access: {a.access.permissionMode === 'allow' ? 'Use configured permissions automatically' : 'Ask when required'} · {a.access.sandboxMode === 'danger-full-access' ? 'Full access — read-only work is an instruction, not a sandbox restriction' : a.access.sandboxMode}. Saved for this execution.</p>}
+      {a.factoryAgents && <p className="mt-2 text-xs text-muted-foreground">Approved agents: {a.factoryAgents.map(agent => `${agent.name} (${agent.backend ?? 'default'} · ${agent.model ?? 'default model'}${agent.access ? ` · ${agent.access.sandboxMode} · ${agent.access.permissionMode}` : ''})`).join(', ')}</p>}
       <dl className="mt-2 space-y-2 text-xs">
+        {a.summary && <div><dt className="font-medium">Full request</dt><dd className="whitespace-pre-wrap text-muted-foreground">{a.objective}</dd></div>}
         {[['Scope', a.scope], ['Success evidence', a.finish], ['Stop conditions', a.stop], ['Allowed work', a.mode === 'edit' ? 'Workspace edits within this scope' : 'Read-only investigation'], ['Budget', `${r.steps} of ${a.maxSteps} steps · until ${new Date(a.deadline).toLocaleString()}`], ['Next step', r.next?.instruction ?? 'Waiting for a result, decision, or scheduled check']].map(([label, value]) => <div key={label}><dt className="font-medium">{label}</dt><dd className="whitespace-pre-wrap text-muted-foreground">{value}</dd></div>)}
         {a.schedule && <div><dt className="font-medium">Schedule</dt><dd>{a.schedule}{r.nextAt ? ` · next ${new Date(r.nextAt).toLocaleString()}` : ''}</dd></div>}
         {a.source && <div><dt className="font-medium">Source trial</dt><dd className="space-y-1"><p>{a.source.description}</p>
@@ -151,9 +154,18 @@ function AgreementCard({ record: r, unresolved, busy, act }: { record: Responsib
 function NoticeCard({ notice: n, busy, answer, openTask }: { notice: ResponsibilityNotice; busy: boolean; openTask: () => Promise<void>; answer: (answer: string, approved?: boolean) => Promise<void> }) {
   const [reply, setReply] = useState('')
   const [answers, setAnswers] = useState<Record<string, string>>({})
+  const question = n.kind === 'question' && !n.questions ? /^Question:\s*([^\n]+)\nWhy:\s*([^\n]+)\nReply:\s*([\s\S]+)$/i.exec(n.body.trim()) : null
   return <article className="rounded-lg border border-border p-3 text-sm">
-    <div className="flex justify-between gap-2"><strong>{n.title}</strong><span className="text-xs text-muted-foreground">{n.state}</span></div>
-    <p className="mt-2 whitespace-pre-wrap break-words">{n.body}</p>
+    <div className="mb-2 flex justify-between gap-2 text-xs text-muted-foreground"><span>{{ question: 'Decision', permission: 'Permission request', recovery: 'Needs attention', result: 'Update' }[n.kind]}</span><span className="capitalize">{n.state}</span></div>
+    <CollapsibleDescription taskId={`notice-title-${n.id}`} description={question?.[1] ?? n.title} collapsedLines={2} className="[&_p]:font-semibold" />
+    {question ? <>
+      <dl className="mt-2 space-y-2">
+        <div><dt className="text-xs font-medium text-muted-foreground">Why</dt><dd>{question[2]}</dd></div>
+        <div><dt className="text-xs font-medium text-muted-foreground">Reply with</dt><dd>{question[3]}</dd></div>
+      </dl>
+      <details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer">Task context</summary><p className="mt-1 whitespace-pre-wrap break-words">{n.title}</p></details>
+    </> : n.kind === 'permission' || n.questions ? <p className="mt-2 whitespace-pre-wrap break-words">{n.body}</p>
+      : <CollapsibleDescription taskId={`notice-body-${n.id}`} description={n.body} collapsedLines={3} className="mt-2" />}
     {n.stepId && <Button className="mt-2" size="sm" variant="outline" disabled={busy} onClick={() => void openTask()}>Open task</Button>}
     {n.answer && <p className="mt-2 whitespace-pre-wrap text-muted-foreground">Your answer: {n.answer}</p>}
     {n.deliveryError && <p role="alert" className="mt-2 text-xs text-destructive">Approval delivery failed or is unconfirmed: {n.deliveryError}</p>}

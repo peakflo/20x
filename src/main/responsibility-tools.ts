@@ -4,6 +4,8 @@ import { taskControlTools } from './task-control'
 import { decisionQuestionGuidance } from '../shared/responsibilities'
 
 const string = { type: 'string' }
+const title = { ...string, description: 'Short, plain-language title, around 6 words. Describe the outcome; keep internal tools, IDs, permissions and execution plans out of the title.' }
+const summary = { ...string, maxLength: 240, description: 'One plain-language sentence for the Work card: what will happen and the intended result. Always provide this display summary; it does not replace the full request or scope. No internal tool names or IDs.' }
 const commandProperties = { command: { ...string, description: 'Finite executable such as git or gh; no shell. Runs only after the engineer approves its trial.' }, args: { type: 'array', items: string }, description: string }
 const sourceSchema: NonNullable<Tool['inputSchema']['properties']>[string] = {
   oneOf: [
@@ -36,7 +38,7 @@ const agreement = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    kind: { type: 'string', enum: ['task', 'goal', 'routine'] }, title: string, objective: string, scope: string,
+    kind: { type: 'string', enum: ['task', 'goal', 'routine'] }, title, summary, objective: string, scope: string,
     finish: { ...string, description: 'Observable success evidence, not merely agent completion.' },
     stop: { ...string, description: 'When to stop and ask the engineer.' },
     mode: { type: 'string', enum: ['read', 'edit'] }, agentId: string,
@@ -85,11 +87,11 @@ const rootTools: Tool[] = [
   },
   {
     name: 'prepare_routine', description: 'Prepare a recurring workflow when project inspection is needed to define source reads. Performs one investigation, then a restricted Mastermind setup step drafts a Routine for human trial and activation. Preserves the exact recurring request. Does not activate monitoring.',
-    inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: string, title: string, basedOn: string }, required: ['humanInputId', 'title'] }
+    inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: string, title, summary, basedOn: string }, required: ['humanInputId', 'title'] }
   },
   {
     name: 'delegate_responsibility', description: 'Delegate one bounded Task from an exact recorded human request. Returns immediately; results arrive in Mastermind. Does not create a Goal or authorize automatic follow-up work.',
-    inputSchema: { type: 'object', properties: { humanInputId: string, title: string, basedOn: string, factoryId: string }, required: ['humanInputId', 'title'] }
+    inputSchema: { type: 'object', properties: { humanInputId: string, title, summary, basedOn: string, factoryId: string }, required: ['humanInputId', 'title'] }
   },
   {
     name: 'propose_responsibility', description: 'Propose a visible Task, Goal or Routine agreement. The engineer must approve it in Mastermind. A source needs a successful human-triggered trial before activation. Omit source for a fixed reminder that uses zero AI turns. Revise only paused or proposed work with no unresolved assignment.',
@@ -136,8 +138,8 @@ export async function callResponsibilityTool(manager: ResponsibilityManager, tok
       case 'delete_responsibility_proposal': result = await manager.controlTasks(scope, args, false, 'proposal'); break
       case 'discover_source_tools': result = await manager.sourceTools(scope, args.serverId as string | undefined, args.agentId as string | undefined); break
       case 'read_responsibility_result': result = manager.readResult(scope, args.taskId as string); break
-      case 'delegate_responsibility': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, args.factoryId as string | undefined); break
-      case 'prepare_routine': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, undefined, true); break
+      case 'delegate_responsibility': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, args.factoryId as string | undefined, false, args.summary as string | undefined); break
+      case 'prepare_routine': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, undefined, true, args.summary as string | undefined); break
       case 'propose_responsibility': result = manager.propose(scope, args.agreement, args.humanInputId as string, args.replaces as string | undefined); break
       case 'report_responsibility': result = await manager.report(scope, args); break
       case 'remember_project_preference': manager.rememberPreference(scope, args.humanInputId as string, args.id as string | undefined); result = { saved: true }; break

@@ -78,6 +78,8 @@ export interface ProjectRecord {
 export interface ResponsibilityAgreement {
   kind: ResponsibilityKind
   title: string
+  /** Display only; the full objective and scope still define the work. */
+  summary?: string
   objective: string
   scope: string
   finish: string

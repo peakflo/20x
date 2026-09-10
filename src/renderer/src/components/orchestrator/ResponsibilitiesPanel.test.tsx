@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { ResponsibilitiesPanel } from './ResponsibilitiesPanel'
 import type { ResponsibilitiesApi, ResponsibilityRecord, ResponsibilitySnapshot } from '@shared/responsibilities'
 
@@ -55,9 +55,11 @@ describe('project responsibility controls', () => {
 
   it('requires a source trial before approval and sends the exact agreement revision', async () => {
     const selectProject = vi.fn()
+    snapshot.responsibilities[0].agreement.summary = 'Watch for release failures.'
     render(<ResponsibilitiesPanel onProjectChange={selectProject} />)
     await waitFor(() => expect(selectProject).toHaveBeenLastCalledWith(snapshot.projects[0]))
     fireEvent.click(screen.getByRole('button', { name: 'Show responsibilities' }))
+    expect(screen.getByText('Watch new failures').closest('details')).toHaveAttribute('open')
     expect(screen.getByRole('button', { name: 'Approve and activate' })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: 'Run source trial' }))
     await waitFor(() => expect(api.act).toHaveBeenCalledWith('work', 3, 'trial'))
@@ -73,6 +75,51 @@ describe('project responsibility controls', () => {
     fireEvent.change(screen.getByLabelText('Answer second'), { target: { value: 'Keep the existing behavior' } })
     fireEvent.submit(screen.getByLabelText('Answer second').closest('form')!)
     await waitFor(() => expect(api.answer).toHaveBeenCalledWith('second', 'Keep the existing behavior', false))
+  })
+
+  it('shows a short Work summary while preserving the complete request in its agreement', async () => {
+    const record = snapshot.responsibilities[0]
+    record.state = 'cancelled'
+    record.agreement.summary = 'Check the release and stored data until the fix is verified.'
+    record.agreement.objective = 'The full original request with its exact scope and constraints. '.repeat(12).trim()
+    render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+    await waitFor(() => expect(screen.getByLabelText('Engineering project')).toHaveValue('project'))
+    fireEvent.click(screen.getByRole('button', { name: 'Show responsibilities' }))
+    expect(screen.getByText(record.agreement.summary)).toBeInTheDocument()
+    const original = screen.getByText(record.agreement.objective)
+    expect(original.closest('details')).not.toHaveAttribute('open')
+    expect(screen.getByText('Full request')).toBeInTheDocument()
+    expect(api.act).not.toHaveBeenCalled()
+  })
+
+  it('formats short decision questions and preserves the exact answer recipient', async () => {
+    snapshot.notices = [{ id: 'question', projectId: 'project', responsibilityId: 'work', stepId: 'step', kind: 'question', title: 'Verify the release', body: 'Question: Which database should I check?\nWhy: Two connections are configured.\nReply: Production or staging.', state: 'pending', answer: null, recipient: null, createdAt: '2026-01-01' }]
+    render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+    fireEvent.click(await screen.findByText('1 decision need you'))
+    expect(screen.getByText('Which database should I check?')).toBeInTheDocument()
+    expect(screen.getByText('Two connections are configured.')).toBeInTheDocument()
+    expect(screen.getByText('Production or staging.')).toBeInTheDocument()
+    expect(screen.getByText('Task context')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Answer Verify the release'), { target: { value: 'Staging' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+    await waitFor(() => expect(api.answer).toHaveBeenCalledWith('question', 'Staging', false))
+  })
+
+  it('collapses older long questions and reveals their original wording on demand', async () => {
+    const height = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(180)
+    try {
+      const body = 'Original request with detailed context and internal identifiers. '.repeat(12).trim()
+      snapshot.notices = [{ id: 'legacy', projectId: 'project', responsibilityId: 'work', stepId: 'step', kind: 'question', title: 'Previous monitoring request', body, state: 'pending', answer: null, recipient: null, createdAt: '2026-01-01' }]
+      render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+      fireEvent.click(await screen.findByText('1 decision need you'))
+      const article = screen.getByLabelText('Answer Previous monitoring request').closest('article')!
+      const content = within(article).getByText(body).closest('div.overflow-hidden') as HTMLElement
+      expect(content.style.maxHeight).toBe('60px')
+      fireEvent.click(within(article).getAllByRole('button', { name: 'Show more' }).at(-1)!)
+      expect(content.style.maxHeight).toBe('')
+      expect(within(article).getByText(body)).toBeInTheDocument()
+      expect(api.answer).not.toHaveBeenCalled()
+    } finally { height.mockRestore() }
   })
 
   it('shows provenance and edits memory without changing permissions', async () => {
@@ -93,9 +140,11 @@ describe('project responsibility controls', () => {
 it('shows captured access and verified-stop behavior, and sends permission approval without requiring text', async () => {
   snapshot.responsibilities[0].agreement.access = { permissionMode: 'allow', sandboxMode: 'danger-full-access' }
   snapshot.responsibilities[0].agreement.stopOnSuccess = true
-  snapshot.notices = [{ id: 'permission', projectId: 'project', responsibilityId: 'work', stepId: 'step', kind: 'permission', title: 'Read source', body: 'Allow source access?', state: 'pending', answer: null, recipient: { sessionId: 'session', requestId: '0', responseType: 'permission' }, createdAt: '2026-01-01' }]
+  const permission = 'Allow this exact source access with its original permission details? '.repeat(12).trim()
+  snapshot.notices = [{ id: 'permission', projectId: 'project', responsibilityId: 'work', stepId: 'step', kind: 'permission', title: 'Read source', body: permission, state: 'pending', answer: null, recipient: { sessionId: 'session', requestId: '0', responseType: 'permission' }, createdAt: '2026-01-01' }]
   render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
   fireEvent.click(await screen.findByText('1 decision need you'))
+  expect(screen.getByText(permission).closest('div.overflow-hidden')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Approve this request' }))
   await waitFor(() => expect(api.answer).toHaveBeenCalledWith('permission', 'Approved', true))
   fireEvent.click(screen.getByRole('tab', { name: 'work' }))

@@ -83,6 +83,16 @@ it('keeps quick decision questions short while retaining the full task findings'
   expect(db.getTask(step.taskId)?.resolution).toBe(summary)
 })
 
+it.each(['delegate_responsibility', 'prepare_routine'])('stores a display summary through %s without rewriting the human request', async tool => {
+  const request = 'Inspect the deployment and database every ten minutes. Read only; stop when both verify the fix.'
+  const humanInputId = input(request)
+  const token = manager.tokenForTask(projectConversationId(project.id))!
+  const result = await callResponsibilityTool(manager, token, tool, { humanInputId, title: 'Verify the release', summary: 'Check the release and saved data until the fix is verified.' })
+  expect(result.isError).not.toBe(true)
+  expect(snapshot().responsibilities[0].agreement).toMatchObject({ summary: 'Check the release and saved data until the fix is verified.', objective: request, scope: request })
+  expect(() => manager.propose(scope(), { ...agreement, summary: 'x'.repeat(241) }, humanInputId)).toThrow('240 characters')
+})
+
 describe('deleting inactive proposals through Mastermind', () => {
   let service: TaskControl
   let confirm: ReturnType<typeof vi.fn<ConstructorParameters<typeof TaskControl>[4]>>

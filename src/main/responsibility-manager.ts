@@ -272,6 +272,7 @@ export class ResponsibilityManager {
     return {
       access: this.agentAccess(agent.id, a.mode), ...(a.stopOnSuccess !== undefined ? { stopOnSuccess: a.stopOnSuccess } : {}),
       kind: a.kind, title: text(a.title, 'Title', 160), objective: text(a.objective, 'Objective'), scope: text(a.scope, 'Scope'),
+      ...(a.summary !== undefined ? { summary: text(a.summary, 'Work card summary', 240) } : {}),
       finish: text(a.finish, 'Success evidence'), stop: text(a.stop, 'Stop conditions'), mode: a.mode, priority: a.priority,
       agentId: agent.id, backend: agent.config.coding_agent, model: agent.config.model, reasoningEffort: agent.config.reasoning_effort,
       maxSteps: a.maxSteps, deadline: new Date(a.deadline).toISOString(), basedOn: a.basedOn, source, schedule,
@@ -309,14 +310,14 @@ export class ResponsibilityManager {
   }
 
   /** Direct Tasks carry the user's exact instruction, not model-rewritten authority. */
-  delegate(scope: ResponsibilityScope, humanInputId: string, title: string, basedOn?: string, factoryId?: string, prepareRoutine = false): ResponsibilityRecord {
+  delegate(scope: ResponsibilityScope, humanInputId: string, title: string, basedOn?: string, factoryId?: string, prepareRoutine = false, summary?: string): ResponsibilityRecord {
     const input = this.get<HumanInput>('inputs', humanInputId)
     if (!input || input.projectId !== scope.projectId || input.taskId !== scope.taskId || scope.stepId) throw new Error('A direct human request from this project conversation is required.')
     const duplicate = this.all<ResponsibilityRecord>('agreements').find(r => r.humanInputId === input.id && r.agreement.kind === 'task')
     if (duplicate) return duplicate
     if (prepareRoutine && !['codex', 'claude-code'].includes(this.db.getAgent(this.project(scope.projectId).agentId)!.config.coding_agent ?? 'opencode')) throw new Error('Routine preparation requires a Codex or Claude Code agent.')
     const record = this.propose(scope, {
-      kind: 'task', title, objective: input.text, scope: input.text, finish: 'Return the requested result with evidence and remaining questions.',
+      kind: 'task', title, summary, objective: input.text, scope: input.text, finish: 'Return the requested result with evidence and remaining questions.',
       stop: 'Stop after this assignment. Ask before actions outside the direct request.', mode: 'read', priority: 'high',
       maxSteps: prepareRoutine ? 2 : 1, deadline: new Date(Date.now() + 24 * 3600000).toISOString(), agentId: this.project(scope.projectId).agentId, basedOn, factoryId
     }, input.id)
@@ -989,6 +990,7 @@ export class ResponsibilityManager {
       'Factories are optional project work guides. Read the catalog with read_factory; an explicit engineer choice wins, otherwise choose only a clearly relevant guide. Weak matches use ordinary work without a Factory question. Pass factoryId at admission. One assignment stays a Task; automatic multi-assignment Factory execution requires an approved Goal or Routine with sufficient steps for coordination, work and independent verification. Use the project agent by default; name other approved choices with allowedAgentIds. Teach a Factory through conversation, draft its complete Mermaid or ASCII diagram and guide using propose_factory and a recorded humanInputId; the exact preview must be confirmed by the engineer in the desktop. delete_factory likewise only proposes deletion. Never claim a pending preview is saved. Factories cannot authorize edits, external communication, merges, deployments or additional scope. At a handoff, explain the saved result and point the engineer to Open task and Take over in Mastermind.\n' +
       'Task administration is your control-plane work: use inspect_tasks and manage_task yourself when the engineer asks to delete, complete, or close a task, or pause/resume a recurring task schedule. Use pause_schedule/resume_schedule with the recurring template ID; this is separate from project Routine agreements. Close means complete. Clarify ambiguous targets. The app owns confirmation, agent cleanup and the actual task change; report its returned outcome, never claim a pending or declined action succeeded. Do not delegate these controls to a project worker.\n' +
       'For inactive Task, Goal or Routine proposals, use inspect_responsibilities and delete_responsibility_proposal yourself. These are separate from ordinary tasks. The app confirms exact-target deletion and retains source-trial history.\n' +
+      'For Work cards, give every Task, Goal and Routine a short plain-language title and a one-sentence summary. Keep the full request and scope intact; the summary is only a readable overview. Keep internal tools, IDs and execution instructions in the details.\n' +
       decisionQuestionGuidance + JSON.stringify(this.context({ projectId: project.id, taskId: config.taskId })))
   }
 
