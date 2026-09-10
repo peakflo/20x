@@ -73,6 +73,9 @@ export interface ProjectRecord {
   name: string
   root: string
   agentId: string
+  /** Default for new work; independent of the Mastermind conversation agent. */
+  workAgentId?: string
+  workAgentInputId?: string
   createdAt: string
 }
 export interface ResponsibilityAgreement {

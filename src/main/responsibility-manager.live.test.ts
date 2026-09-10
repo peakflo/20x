@@ -11,6 +11,55 @@ import { startTaskApiServer, stopTaskApiServer, setResponsibilityManager, setTas
 
 /** Opt-in real provider acceptance. Uses temporary files and an isolated SQLite DB. */
 describe.skipIf(process.env.RUN_RESPONSIBILITY_LIVE !== '1')('Mastermind native execution', () => {
+  it('applies a conversational work-agent default to a real delegated task', async () => {
+    const fixture = mkdtempSync(join(tmpdir(), '20x-work-agent-live-'))
+    const root = join(fixture, 'project'); mkdirSync(root)
+    writeFileSync(join(root, 'value.txt'), 'work-agent-default-ok\n')
+    const { db } = createTestDb()
+    db.getWorkspaceDir = taskId => { const path = join(fixture, 'sessions', taskId); mkdirSync(path, { recursive: true }); return path }
+    const config = { coding_agent: 'codex' as const, model: 'gpt-5.6-luna', reasoning_effort: 'medium' as const }
+    const coordinator = db.createAgent({ name: 'Mastermind acceptance', config })!
+    const worker = db.createAgent({ name: 'Chosen worker', config })!
+    const agents = new AgentManager(db)
+    const manager = new ResponsibilityManager(db, agents)
+    agents.setResponsibilityManager(manager); setResponsibilityManager(manager); setTaskApiAgentController(agents)
+    await startTaskApiServer(db)
+    const until = async (done: () => boolean) => {
+      const deadline = Date.now() + 120000
+      while (!done() && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 500)); await manager.reconcile()
+        const notice = manager.snapshot().notices.find(n => n.state === 'pending' && n.kind !== 'result')
+        if (notice) throw new Error(`Native default-agent journey blocked: ${notice.body}`)
+      }
+      expect(done()).toBe(true)
+    }
+    try {
+      const project = manager.createProject('Default-agent acceptance', root, coordinator.id)
+      const taskId = projectConversationId(project.id)
+      manager.start(); await manager.reconcile()
+      const sessionId = await agents.startSession(coordinator.id, taskId, undefined, true)
+      const preference = 'Set Chosen worker as the default agent for any new task, goal or recurring workflow in this project. Keep this Mastermind conversation on its current agent. Apply the setting now; do not create work yet.'
+      manager.recordHumanInput(taskId, preference)
+      await agents.sendMessage(sessionId, preference, taskId, coordinator.id)
+      await until(() => manager.snapshot().projects[0].workAgentId === worker.id && agents.getSessionStatus(sessionId)?.status === 'idle')
+      expect(agents.getSessionStatus(sessionId)?.agentId).toBe(coordinator.id)
+      expect(manager.snapshot().responsibilities).toHaveLength(0)
+      const request = 'Read value.txt in this temporary project and report its exact content. Use the saved default agent. One read-only task; no changes, external sources, communication or follow-up work.'
+      manager.recordHumanInput(taskId, request)
+      await agents.sendMessage(sessionId, request, taskId, coordinator.id)
+      await until(() => manager.snapshot().responsibilities[0]?.state === 'completed')
+      const snapshot = manager.snapshot()
+      expect(snapshot.steps).toHaveLength(1)
+      expect(snapshot.responsibilities[0].agreement.agentId).toBe(worker.id)
+      expect(db.getTask(snapshot.steps[0].taskId)?.agent_id).toBe(worker.id)
+      expect(snapshot.steps[0].report?.summary).toContain('work-agent-default-ok')
+      expect(readFileSync(join(root, 'value.txt'), 'utf8')).toBe('work-agent-default-ok\n')
+      console.log('WORK_AGENT_DEFAULT_RECEIPT', JSON.stringify({ coordinator: coordinator.id, defaultWorker: worker.id, taskAgent: db.getTask(snapshot.steps[0].taskId)?.agent_id, state: snapshot.responsibilities[0].state }))
+    } finally {
+      await manager.stop(); await agents.stopAllSessions(); stopTaskApiServer(); setResponsibilityManager(undefined); db.db.close(); rmSync(fixture, { recursive: true, force: true })
+    }
+  }, 300000)
+
   it('reads Git and the current GitHub PR through the existing command collector', async () => {
     const signal = new AbortController().signal
     const revision = await collectSource({ command: 'git', args: ['rev-parse', 'HEAD'], description: 'Current checkout revision' }, process.cwd(), signal)

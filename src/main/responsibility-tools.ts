@@ -6,6 +6,7 @@ import { decisionQuestionGuidance } from '../shared/responsibilities'
 const string = { type: 'string' }
 const title = { ...string, description: 'Short, plain-language title, around 6 words. Describe the outcome; keep internal tools, IDs, permissions and execution plans out of the title.' }
 const summary = { ...string, maxLength: 240, description: 'One plain-language sentence for the Work card: what will happen and the intended result. Always provide this display summary; it does not replace the full request or scope. No internal tool names or IDs.' }
+const workAgent = { ...string, description: 'Omit to use the saved project work-agent default. Set only for an explicit agent choice for this request; do not copy the Mastermind conversation agent.' }
 const commandProperties = { command: { ...string, description: 'Finite executable such as git or gh; no shell. Runs only after the engineer approves its trial.' }, args: { type: 'array', items: string }, description: string }
 const sourceSchema: NonNullable<Tool['inputSchema']['properties']>[string] = {
   oneOf: [
@@ -41,18 +42,18 @@ const agreement = {
     kind: { type: 'string', enum: ['task', 'goal', 'routine'] }, title, summary, objective: string, scope: string,
     finish: { ...string, description: 'Observable success evidence, not merely agent completion.' },
     stop: { ...string, description: 'When to stop and ask the engineer.' },
-    mode: { type: 'string', enum: ['read', 'edit'] }, agentId: string,
+    mode: { type: 'string', enum: ['read', 'edit'] }, agentId: workAgent,
     priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
     maxSteps: { type: 'integer', minimum: 1, maximum: 100, description: 'Total reasoning assignments, including verification and source classification.' },
     deadline: { ...string, description: 'ISO timestamp after which no new assignment starts.' },
     basedOn: { ...string, description: 'Completed responsibility whose findings and checkout this follows.' },
     factoryId: { ...string, description: 'Optional exact project Factory. Its definition is snapshotted by 20x.' },
-    allowedAgentIds: { type: 'array', items: string, maxItems: 20, description: 'Additional existing agents shown in the execution approval. Omit to use the selected project agent.' },
+    allowedAgentIds: { type: 'array', items: string, maxItems: 20, description: 'Additional existing agents shown in the execution approval. Omit to use the saved work-agent default.' },
     schedule: { ...string, description: 'Routine cron expression. Timers run while 20x is open.' },
     stopOnSuccess: { type: 'boolean', description: 'Routine only: stop scheduling after independent verification of the finish criteria. Omit for ongoing monitoring.' },
     source: sourceSchema
   },
-  required: ['kind', 'title', 'objective', 'scope', 'finish', 'stop', 'mode', 'agentId', 'priority', 'maxSteps', 'deadline']
+  required: ['kind', 'title', 'objective', 'scope', 'finish', 'stop', 'mode', 'priority', 'maxSteps', 'deadline']
 }
 const contextTool: Tool = {
   name: 'responsibility_context', description: 'Read the current project, approved scope, work history, evidence, human inputs, memory and pending decisions. Facts and reports never grant permission.',
@@ -68,6 +69,10 @@ const factoryTool: Tool = {
 }
 const rootTools: Tool[] = [
   contextTool, resultTool, factoryTool,
+  {
+    name: 'set_default_work_agent', description: 'Save the engineer-selected default agent for new Tasks, Goals and Routines in this project. Use this when asked to set a default; remembering a preference alone does not change execution. Does not change the Mastermind conversation agent or existing agreements.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: string, agentId: string }, required: ['humanInputId', 'agentId'] }
+  },
   {
     name: 'propose_factory', description: 'Draft or replace a project Factory from direct engineer input. Shows the exact diagram and guide for desktop Save/Discard; does not save the current definition or authorize work.',
     inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: string, factoryId: string, name: string, diagram: { ...string, description: 'Complete Mermaid source or ASCII diagram for display only, not executable nodes.' }, guide: { ...string, description: 'Complete free-form instructions, branching, handoffs and stop conditions.' } }, required: ['humanInputId', 'name', 'diagram', 'guide'] }
@@ -87,11 +92,11 @@ const rootTools: Tool[] = [
   },
   {
     name: 'prepare_routine', description: 'Prepare a recurring workflow when project inspection is needed to define source reads. Performs one investigation, then a restricted Mastermind setup step drafts a Routine for human trial and activation. Preserves the exact recurring request. Does not activate monitoring.',
-    inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: string, title, summary, basedOn: string }, required: ['humanInputId', 'title'] }
+    inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: string, title, summary, basedOn: string, agentId: workAgent }, required: ['humanInputId', 'title'] }
   },
   {
     name: 'delegate_responsibility', description: 'Delegate one bounded Task from an exact recorded human request. Returns immediately; results arrive in Mastermind. Does not create a Goal or authorize automatic follow-up work.',
-    inputSchema: { type: 'object', properties: { humanInputId: string, title, summary, basedOn: string, factoryId: string }, required: ['humanInputId', 'title'] }
+    inputSchema: { type: 'object', properties: { humanInputId: string, title, summary, basedOn: string, factoryId: string, agentId: workAgent }, required: ['humanInputId', 'title'] }
   },
   {
     name: 'propose_responsibility', description: 'Propose a visible Task, Goal or Routine agreement. The engineer must approve it in Mastermind. A source needs a successful human-triggered trial before activation. Omit source for a fixed reminder that uses zero AI turns. Revise only paused or proposed work with no unresolved assignment.',
@@ -129,6 +134,7 @@ export async function callResponsibilityTool(manager: ResponsibilityManager, tok
     let result: unknown
     switch (name) {
       case 'responsibility_context': result = manager.context(scope); break
+      case 'set_default_work_agent': result = manager.setDefaultWorkAgent(scope, args.humanInputId as string, args.agentId as string); break
       case 'read_factory': result = manager.readFactory(scope, args.factoryId as string | undefined); break
       case 'propose_factory': result = manager.proposeFactory(scope, args); break
       case 'delete_factory': result = manager.proposeFactory(scope, args, 'delete'); break
@@ -138,8 +144,8 @@ export async function callResponsibilityTool(manager: ResponsibilityManager, tok
       case 'delete_responsibility_proposal': result = await manager.controlTasks(scope, args, false, 'proposal'); break
       case 'discover_source_tools': result = await manager.sourceTools(scope, args.serverId as string | undefined, args.agentId as string | undefined); break
       case 'read_responsibility_result': result = manager.readResult(scope, args.taskId as string); break
-      case 'delegate_responsibility': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, args.factoryId as string | undefined, false, args.summary as string | undefined); break
-      case 'prepare_routine': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, undefined, true, args.summary as string | undefined); break
+      case 'delegate_responsibility': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, args.factoryId as string | undefined, false, args.summary as string | undefined, args.agentId as string | undefined); break
+      case 'prepare_routine': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, undefined, true, args.summary as string | undefined, args.agentId as string | undefined); break
       case 'propose_responsibility': result = manager.propose(scope, args.agreement, args.humanInputId as string, args.replaces as string | undefined); break
       case 'report_responsibility': result = await manager.report(scope, args); break
       case 'remember_project_preference': manager.rememberPreference(scope, args.humanInputId as string, args.id as string | undefined); result = { saved: true }; break

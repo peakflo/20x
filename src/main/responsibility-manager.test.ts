@@ -61,6 +61,97 @@ async function finish(step: ResponsibilityStep, action = 'done', next?: string) 
   await manager.reconcile()
 }
 
+describe('project work-agent default', () => {
+  it.each(['delegate_responsibility', 'prepare_routine', 'goal', 'routine'])(
+    'persists the default for %s and keeps admitted work pinned when it changes', async kind => {
+      const worker = db.createAgent({ name: 'Work agent', config: { coding_agent: 'codex', model: 'worker-model', reasoning_effort: 'medium' } })!
+      const request = input('Use Work agent by default for tasks, goals and recurring workflows.')
+      const saved = await callResponsibilityTool(manager, manager.tokenForTask(scope().taskId)!, 'set_default_work_agent', { humanInputId: request, agentId: worker.id })
+      expect(saved.isError).not.toBe(true)
+      expect(JSON.stringify(saved)).toContain('Work agent')
+      await manager.stop()
+      manager = new ResponsibilityManager(db, runtime, vi.fn(), collect, inspect)
+      manager.start(); await manager.reconcile()
+      expect(snapshot().projects[0]).toMatchObject({ agentId: project.agentId, workAgentId: worker.id, workAgentInputId: request })
+      expect(manager.context(scope())).toMatchObject({ workAgentId: worker.id })
+      const humanInputId = input('Inspect the local fixture and report the findings.')
+      const tool = kind === 'goal' || kind === 'routine' ? 'propose_responsibility' : kind
+      const args = tool === 'propose_responsibility'
+        ? { humanInputId, agreement: { ...agreement, agentId: undefined, kind, ...(kind === 'routine' ? { schedule: '* * * * *', source: { command: 'git', args: ['status'], description: 'Local status' } } : {}) } }
+        : { humanInputId, title: 'Inspect the fixture' }
+      const admitted = await callResponsibilityTool(manager, manager.tokenForTask(scope().taskId)!, tool, JSON.parse(JSON.stringify(args)))
+      expect(admitted.isError).not.toBe(true)
+      const r = snapshot().responsibilities[0]
+      expect(r.agreement).toMatchObject({ agentId: worker.id, model: 'worker-model', reasoningEffort: 'medium' })
+      manager.setDefaultWorkAgent(scope(), input('Use the original project agent for future work.'), project.agentId)
+      if (r.state === 'proposed') {
+        if (kind === 'routine') await manager.act(r.id, r.revision, 'trial')
+        await manager.act(r.id, r.revision, 'approve')
+        await manager.reconcile()
+      }
+      if (kind === 'routine') {
+        collect.mockResolvedValueOnce('{"release":"red"}')
+        db.db.prepare("UPDATE mastermind_agreements SET data=json_set(data, '$.nextAt', ?) WHERE id=?").run(new Date(Date.now() - 1000).toISOString(), r.id)
+      }
+      await manager.reconcile()
+      const step = snapshot().steps[0]
+      expect(db.getTask(step.taskId)?.agent_id).toBe(worker.id)
+      expect(runtime.startSession).toHaveBeenCalledWith(worker.id, step.taskId, expect.any(String))
+      expect(snapshot().responsibilities[0].agreement.agentId).toBe(worker.id)
+    }
+  )
+
+  it('uses an explicit task choice without changing the default and rejects a missing default agent', async () => {
+    const worker = db.createAgent({ name: 'Work agent', config: { coding_agent: 'codex' } })!
+    manager.setDefaultWorkAgent(scope(), input('Use Work agent by default.'), worker.id)
+    const result = await callResponsibilityTool(manager, manager.tokenForTask(scope().taskId)!, 'delegate_responsibility', { humanInputId: input('Use the original agent for this request only.'), title: 'One override', agentId: project.agentId })
+    expect(result.isError).not.toBe(true)
+    expect(snapshot().responsibilities[0].agreement.agentId).toBe(project.agentId)
+    expect(snapshot().projects[0].workAgentId).toBe(worker.id)
+    db.deleteAgent(worker.id)
+    expect(() => manager.delegate(scope(), input(), 'Missing default')).toThrow('available agent')
+  })
+
+  it('accepts defaults only from this project human conversation, never worker content or memory IDs', async () => {
+    await approve()
+    const r = snapshot().responsibilities[0]
+    const step = snapshot().steps[0]
+    const humanInputId = input('Use this agent by default.')
+    const workerScope = manager.scopeForToken(manager.tokenForTask(step.taskId)!)
+    expect(() => manager.setDefaultWorkAgent(workerScope, humanInputId, project.agentId)).toThrow('engineer request')
+    expect((await callResponsibilityTool(manager, manager.tokenForTask(step.taskId)!, 'set_default_work_agent', { humanInputId, agentId: project.agentId })).isError).toBe(true)
+    manager.rememberPreference(scope(), humanInputId)
+    expect(() => manager.setDefaultWorkAgent(scope(), snapshot().memory[0].id, project.agentId)).toThrow('engineer request')
+    mkdirSync(join(dir, 'other-project'))
+    const other = manager.createProject('Other', join(dir, 'other-project'), project.agentId)
+    const foreign = manager.recordHumanInput(projectConversationId(other.id), 'Use this agent.')!
+    expect(() => manager.setDefaultWorkAgent(scope(), foreign.id, project.agentId)).toThrow('engineer request')
+    expect(() => manager.setDefaultWorkAgent(scope(), humanInputId, 'missing')).toThrow('available agent')
+    expect(snapshot().projects[0].workAgentId).toBeUndefined()
+    expect(snapshot().responsibilities[0]).toEqual(r)
+  })
+
+  it('keeps Routine setup and its MCP discovery on the admitted agent after the default changes', async () => {
+    const server = db.createMcpServer({ name: 'Work source', type: 'local', command: 'fixture' })!
+    const worker = db.createAgent({ name: 'Work agent', config: { coding_agent: 'codex', mcp_servers: [server.id] } })!
+    await manager.stop()
+    manager = new ResponsibilityManager(db, runtime, vi.fn(), collect, inspect, new RoutineSources(db, vi.fn()))
+    manager.start(); await manager.reconcile()
+    manager.setDefaultWorkAgent(scope(), input('Use Work agent by default.'), worker.id)
+    expect(await manager.sourceTools(scope())).toMatchObject({ agentId: worker.id, connections: [{ serverId: server.id }] })
+    const request = input('Prepare a recurring check of this source.')
+    manager.delegate(scope(), request, 'Prepare a check', undefined, undefined, true)
+    await manager.reconcile(); await finish(snapshot().steps[0])
+    const setup = snapshot().steps[1]
+    manager.setDefaultWorkAgent(scope(), input('Use the original agent for future work.'), project.agentId)
+    const setupScope = manager.scopeForToken(manager.tokenForTask(setup.taskId)!)
+    expect(await manager.sourceTools(setupScope)).toMatchObject({ agentId: worker.id, connections: [{ serverId: server.id }] })
+    expect(manager.context(setupScope)).toMatchObject({ workAgentId: worker.id, sourceConnections: [{ serverId: server.id }] })
+    const proposal = manager.propose(setupScope, { ...agreement, agentId: undefined, kind: 'routine', schedule: '* * * * *' }, request)
+    expect(proposal.agreement.agentId).toBe(worker.id)
+  })
+})
+
 it('keeps quick decision questions short while retaining the full task findings', async () => {
   await approve()
   const step = snapshot().steps[0]
