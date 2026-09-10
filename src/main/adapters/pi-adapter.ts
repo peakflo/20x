@@ -10,7 +10,7 @@ import type { ChildProcessWithoutNullStreams } from 'child_process'
 import { randomUUID } from 'crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
-import { dirname, join } from 'path'
+import { basename, dirname, join } from 'path'
 import { StringDecoder } from 'string_decoder'
 import { promisify } from 'util'
 import type { DatabaseManager } from '../database'
@@ -44,6 +44,33 @@ const TERMINAL_ERROR_SETTLE_GRACE_MS = 1_000
  */
 export const MAX_PI_NAME_LENGTH = 64
 export const MAX_PI_MCP_SERVER_SLUG_LENGTH = 24
+
+/**
+ * Electron's main macOS executable belongs to the foreground application
+ * bundle. Reusing it as Node makes LaunchServices register every Pi process as
+ * another foreground 20x application, which adds a Dock icon. Electron's
+ * standard Helper.app is an LSUIElement and exposes the same bundled Node
+ * runtime without participating in the Dock.
+ */
+export function findPiNodeRuntime(
+  platform: NodeJS.Platform,
+  electronExecutable: string,
+  pathExists: (path: string) => boolean = existsSync,
+): string | null {
+  if (platform !== 'darwin') return electronExecutable
+
+  const executableName = basename(electronExecutable)
+  const contentsDirectory = dirname(dirname(electronExecutable))
+  const helperExecutable = join(
+    contentsDirectory,
+    'Frameworks',
+    `${executableName} Helper.app`,
+    'Contents',
+    'MacOS',
+    `${executableName} Helper`,
+  )
+  return pathExists(helperExecutable) ? helperExecutable : null
+}
 
 /**
  * Short Pi-side aliases for MCP servers whose display names are too long to
@@ -388,8 +415,10 @@ export class PiAdapter implements CodingAgentAdapter {
    * Pi's npm launcher uses `#!/usr/bin/env node`. Launching it directly would
    * therefore make Pi depend on whichever Node happens to be first on the
    * desktop app's PATH. Recent Pi releases require Node >=22.19 and use zstd
-   * APIs that are absent from older runtimes. On macOS/Linux, run the launcher
-   * with Electron's bundled Node so Pi uses the same known runtime as 20x.
+   * APIs that are absent from older runtimes. On Linux, run the launcher with
+   * Electron's main executable. On macOS, use Electron's LSUIElement helper;
+   * launching the foreground app executable creates another Dock icon for
+   * every Pi session. Both expose the same bundled Node runtime.
    *
    * Windows npm launchers are .cmd files, so they must continue to run through
    * the shell.
@@ -402,8 +431,16 @@ export class PiAdapter implements CodingAgentAdapter {
     if (process.platform === 'win32') {
       return { command: executable, args, env, shell: true }
     }
+
+    const nodeRuntime = findPiNodeRuntime(process.platform, process.execPath)
+    if (!nodeRuntime) {
+      // A valid Electron macOS package always contains Helper.app. If a custom
+      // package does not, prefer Pi's shebang-selected Node over spawning the
+      // foreground Electron app and reintroducing a Dock icon.
+      return { command: executable, args, env, shell: false }
+    }
     return {
-      command: process.execPath,
+      command: nodeRuntime,
       args: [executable, ...args],
       env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
       shell: false,
