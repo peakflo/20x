@@ -1,6 +1,7 @@
 import type { Tool } from '@modelcontextprotocol/server'
 import type { ResponsibilityManager, ResponsibilityScope } from './responsibility-manager'
 import { taskControlTools } from './task-control'
+import { decisionQuestionGuidance } from '../shared/responsibilities'
 
 const string = { type: 'string' }
 const commandProperties = { command: { ...string, description: 'Finite executable such as git or gh; no shell. Runs only after the engineer approves its trial.' }, args: { type: 'array', items: string }, description: string }
@@ -108,7 +109,7 @@ const workerTools: Tool[] = [
       properties: {
         summary: string, evidence: { type: 'array', items: string, minItems: 1, maxItems: 30 }, checkout: string,
         action: { type: 'string', enum: ['done', 'continue', 'ask', 'ignore', 'notify', 'task', 'complete'], description: 'Work: done/ask. Verification: done/continue/ask. Source classification: ignore/notify/ask/task. Factory coordination: task/done/ask. Setup: propose a Routine, then done/ask. Work or classification may use complete only for a Routine with approved stopOnSuccess, requesting independent verification before monitoring stops.' },
-        next: { ...string, description: 'Concrete next assignment or exact question. Required for continue, task and ask.' },
+        next: { ...string, description: 'Required for continue, task and ask. For continue/task, give the concrete next assignment. For ask: ' + decisionQuestionGuidance },
         sourceSnapshot: { ...string, description: 'Collection reasoning only: stable JSON or text extracted from the supplied evidence. Required for done in phase collect. Do not invent facts or add a current timestamp.' },
         agentId: { ...string, description: 'Factory coordination task only: choose an agent already approved for this execution.' },
         predecessorTaskIds: { type: 'array', items: string, maxItems: 20, description: 'Factory coordination only: settled task IDs whose results inform the next assignment.' },

@@ -1,5 +1,12 @@
 import type { ReasoningEffort } from './reasoning-effort'
 
+export const decisionQuestionLimit = 600
+export const decisionQuestionGuidance = `Questions appear in a narrow Mastermind Decisions card. Ask ONE thing the engineer can answer, in plain language, using three short lines:
+Question: the decision or missing information?
+Why: one short sentence explaining what is blocked.
+Reply: Yes / No, two or three short choices, or the specific value needed.
+Keep the entire question under ${decisionQuestionLimit} characters (aim for 60 words). In report_responsibility with action=ask, put only these lines in next; keep detailed findings in summary and evidence, available through Open task. Name the action and any material consequence clearly. Omit internal tool names, argument names, UUIDs and coordination instructions unless the engineer specifically needs an exact identifier to choose. Never ask the engineer to call an internal tool or repair coordinator wiring. Explain an app limitation plainly; ask only for an actual human decision or missing information, and do not ask again for permission already granted.\n`
+
 export type ResponsibilityKind = 'task' | 'goal' | 'routine'
 export type ResponsibilityState = 'proposed' | 'active' | 'paused' | 'blocked' | 'taken_over' | 'completed' | 'cancelled'
 export type WorkPhase = 'work' | 'verify' | 'classify' | 'collect' | 'coordinate' | 'setup'

@@ -61,6 +61,28 @@ async function finish(step: ResponsibilityStep, action = 'done', next?: string) 
   await manager.reconcile()
 }
 
+it('keeps quick decision questions short while retaining the full task findings', async () => {
+  await approve()
+  const step = snapshot().steps[0]
+  const token = manager.tokenForTask(step.taskId)!
+  const summary = 'Detailed investigation findings. '.repeat(40).trim()
+  const report = { action: 'ask', summary, evidence: ['The project has two configured databases.'], checkout: dir }
+  const rejected = await callResponsibilityTool(manager, token, 'report_responsibility', { ...report, next: 'x'.repeat(601) })
+  expect(rejected.isError).toBe(true)
+  expect(JSON.stringify(rejected)).toContain('600 characters')
+  expect(snapshot().steps[0].report).toBeNull()
+  expect(snapshot().notices).toHaveLength(0)
+
+  const question = 'Question: Which database should I check?\nWhy: The project has two database connections.\nReply: Production or staging.'
+  const accepted = await callResponsibilityTool(manager, token, 'report_responsibility', { ...report, next: question })
+  expect(accepted.isError).not.toBe(true)
+  sessions.get(step.taskId)!.session.status = 'idle'
+  await manager.reconcile()
+  expect(snapshot().notices[0]).toMatchObject({ kind: 'question', body: question, stepId: step.id })
+  expect(snapshot().steps[0].report).toMatchObject({ summary, evidence: report.evidence })
+  expect(db.getTask(step.taskId)?.resolution).toBe(summary)
+})
+
 describe('deleting inactive proposals through Mastermind', () => {
   let service: TaskControl
   let confirm: ReturnType<typeof vi.fn<ConstructorParameters<typeof TaskControl>[4]>>
