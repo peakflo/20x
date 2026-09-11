@@ -24,6 +24,17 @@ describe('Markdown', () => {
     })
   })
 
+  it('opens a follow-up task link without submitting its enclosing form', async () => {
+    const open = vi.fn()
+    window.addEventListener('20x:open-task', open)
+    const submit = vi.fn()
+    render(<form onSubmit={submit}><Markdown>{'[Open task](#20x-task=task-1)'}</Markdown></form>)
+    fireEvent.click(screen.getByRole('button', { name: 'Open task' }))
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ detail: 'task-1' }))
+    expect(submit).not.toHaveBeenCalled()
+    window.removeEventListener('20x:open-task', open)
+  })
+
   describe('Basic Rendering', () => {
     it('renders plain text', () => {
       render(<Markdown>Hello, World!</Markdown>)

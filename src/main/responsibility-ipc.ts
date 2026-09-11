@@ -15,6 +15,8 @@ export function recordResponsibilityHumanInput(taskId: string, message: string, 
 /** Human decisions are desktop IPC only. There is intentionally no approval MCP/HTTP route. */
 export function registerResponsibilityIpc(service: ResponsibilityManager, mainWindow: () => WebContents | undefined): void {
   manager = service; desktop = mainWindow
+  ipcMain.handle('responsibilities:setProactive', (event, id: string, enabled: boolean) => { assertDesktop(event); return service.followups.setEnabled(id, enabled) })
+  ipcMain.handle('responsibilities:retryFollowups', (event, id: string) => { assertDesktop(event); return service.followups.retry(id) })
   ipcMain.handle('responsibilities:snapshot', (event, projectId?: string) => { assertDesktop(event); return service.snapshot(projectId) })
   ipcMain.handle('responsibilities:pickProjectFolder', async event => {
     assertDesktop(event)

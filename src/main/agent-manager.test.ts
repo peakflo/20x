@@ -830,6 +830,23 @@ describe('AgentManager OS notifications', () => {
     return { mgr, mockWindow }
   }
 
+  it('publishes a proactive update once and opens the exact project from its notification', async () => {
+    const { mgr, mockWindow } = createManagerWithWindow({ isFocused: false })
+    const parts: any[] = []
+    ;(mgr as any).db.getTranscriptParts = vi.fn(() => parts)
+    ;(mgr as any).db.upsertTranscriptParts = vi.fn((_task, values) => { parts.push(...values.map(p => ({ ...p, partId: p.id }))); return { maxRev: 1, changedPartIds: ['followup:receipt'] } })
+    ;(mgr as any).responsibilities = { projectForTask: () => ({ id: 'project', name: 'Example' }) }
+    const emit = vi.spyOn(mgr as any, 'emitTranscriptChanged').mockImplementation(() => {})
+    mgr.publishMastermindFollowup('mastermind-project-project', 'receipt', 'The work finished.')
+    mgr.publishMastermindFollowup('mastermind-project-project', 'receipt', 'The work finished.')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(parts).toHaveLength(1)
+    expect(emit).toHaveBeenCalledOnce()
+    expect(notificationInstances).toHaveLength(1)
+    notificationInstances[0]._listeners.get('click')!()
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('ui:command', { kind: 'open_mastermind', projectId: 'project' })
+  })
+
   it('shows notification when status transitions from working to idle and window is not focused', () => {
     const { mgr } = createManagerWithWindow({ isFocused: false })
 
@@ -2064,11 +2081,12 @@ describe('AgentManager session ID re-keying redirect', () => {
 
     vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
     vi.spyOn(mgr as any, 'getAdapter').mockReturnValue({ destroySession })
-    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({})
+    const rebuild = vi.spyOn(mgr as any, 'buildSessionConfig').mockRejectedValue(new Error('The old tool authority has expired'))
 
     await mgr.cleanupHeartbeatSession('task-1')
 
-    expect(destroySession).toHaveBeenCalledWith('real-id', {})
+    expect(rebuild).not.toHaveBeenCalled()
+    expect(destroySession).toHaveBeenCalledWith('real-id', { agentId: 'agent-1', taskId: 'heartbeat-task-1', workspaceDir: '/tmp/workspace/task-1' })
     expect(unregisterSecretSession).toHaveBeenCalledWith('secret-token')
     expect((mgr as any).sessionIdRedirects.has('temp-id')).toBe(false)
     expect((mgr as any).sessions.has('real-id')).toBe(false)

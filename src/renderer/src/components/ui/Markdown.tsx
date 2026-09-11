@@ -256,7 +256,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
       )
     },
     // Links
-    a: ({ children, ...props }: React.ComponentPropsWithoutRef<'a'>) => (
+    a: ({ children, ...props }: React.ComponentPropsWithoutRef<'a'>) => props.href?.match(/^#20x-task=([a-zA-Z0-9-]+)$/) ? <button type="button" className="text-primary hover:underline cursor-pointer" onClick={() => window.dispatchEvent(new CustomEvent('20x:open-task', { detail: props.href!.slice('#20x-task='.length) }))}>{children}</button> : (
       <a className="text-primary hover:underline cursor-pointer" target="_blank" rel="noopener noreferrer" {...props}>{highlightReactNode(children, highlightQuery)}</a>
     ),
     // Images

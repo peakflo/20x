@@ -5,6 +5,8 @@ import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRe
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
 
 const responsibilities: ResponsibilitiesApi = {
+  setProactive: (id, enabled) => ipcRenderer.invoke('responsibilities:setProactive', id, enabled),
+  retryFollowups: id => ipcRenderer.invoke('responsibilities:retryFollowups', id),
   snapshot: projectId => ipcRenderer.invoke('responsibilities:snapshot', projectId),
   pickProjectFolder: () => ipcRenderer.invoke('responsibilities:pickProjectFolder'),
   createProject: (name, root, agentId) => ipcRenderer.invoke('responsibilities:createProject', name, root, agentId),

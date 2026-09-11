@@ -111,6 +111,14 @@ const rootTools: Tool[] = [
     inputSchema: { type: 'object', properties: { text: string, source: string }, required: ['text', 'source'] }
   }
 ]
+const finishFollowup: Tool = {
+  name: 'finish_followup', description: 'Publish short updates for this exact background review. Cover every event once. Only quiet or intermediate progress may be silent. Results and blockers must reach the engineer. Then end without repeating the published text.',
+  inputSchema: { type: 'object', additionalProperties: false, properties: {
+    updates: { type: 'array', maxItems: 8, items: { type: 'object', additionalProperties: false, properties: { eventId: string, text: { ...string, maxLength: 600 } }, required: ['eventId', 'text'] } },
+    silentEventIds: { type: 'array', items: string, maxItems: 8 }
+  }, required: ['updates', 'silentEventIds'] }
+}
+rootTools.push({ name: 'answer_project_question', description: 'Route the latest direct human clarification to one exact pending ordinary question. Use the recorded humanInputId; never synthesize an answer or approval. If the intended question is ambiguous, ask. Native questions and permissions retain their desktop controls.', inputSchema: { type: 'object', additionalProperties: false, properties: { noticeId: string, humanInputId: string }, required: ['noticeId', 'humanInputId'] } })
 const workerTools: Tool[] = [
   contextTool, resultTool, factoryTool,
   {
@@ -130,7 +138,7 @@ const workerTools: Tool[] = [
     }
   }
 ]
-export const responsibilityTools = (scope: ResponsibilityScope): Tool[] => !scope.stepId ? rootTools : scope.phase === 'setup' ? [...workerTools, ...rootTools.filter(t => ['propose_responsibility', 'discover_source_tools'].includes(t.name))] : workerTools
+export const responsibilityTools = (scope: ResponsibilityScope): Tool[] => scope.followupId ? [contextTool, resultTool, finishFollowup, ...rootTools.filter(t => t.name === 'send_message')] : !scope.stepId ? rootTools : scope.phase === 'setup' ? [...workerTools, ...rootTools.filter(t => ['propose_responsibility', 'discover_source_tools'].includes(t.name))] : workerTools
 
 export async function callResponsibilityTool(manager: ResponsibilityManager, token: string, name: string, args: Record<string, unknown> = {}) {
   try {
@@ -138,6 +146,8 @@ export async function callResponsibilityTool(manager: ResponsibilityManager, tok
     if (!responsibilityTools(scope).some(tool => tool.name === name)) throw new Error('This tool is not available to this assignment.')
     let result: unknown
     switch (name) {
+      case 'finish_followup': result = manager.followups.finish(scope.followupId!, args.updates as Array<{ eventId: string; text: string }>, args.silentEventIds as string[]); break
+      case 'answer_project_question': result = await manager.answerFromConversation(scope, args.noticeId as string, args.humanInputId as string); break
       case 'send_message': result = await manager.messageTask(scope, args); break
       case 'responsibility_context': result = manager.context(scope); break
       case 'set_default_work_agent': result = manager.setDefaultWorkAgent(scope, args.humanInputId as string, args.agentId as string); break

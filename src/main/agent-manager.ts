@@ -26,6 +26,7 @@ import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { buildTaskMcpUrl } from './task-mcp-endpoint'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { randomUUID } from 'crypto'
+import { UI_COMMAND_CHANNEL } from '../shared/ui-commands'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
@@ -4179,7 +4180,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     if (!adapter && (requireRelease || this.responsibilities?.ownsTask(session.taskId))) throw new Error('The task runtime has no adapter available to confirm its release.')
     if (adapter) {
       try {
-        const sessionConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+        // Teardown needs the owned runtime and its folder, not fresh prompts or tool authority.
+        const sessionConfig = { agentId: session.agentId, taskId: session.taskId, workspaceDir: session.workspaceDir ?? process.cwd() }
         await adapter.destroySession(sessionId, sessionConfig)
       } catch (error) {
         console.error(`[AgentManager] Error destroying adapter session:`, error)
@@ -4263,6 +4265,46 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    * Tries to find a live in-memory session first, then falls back to
    * sendMessage's built-in resume/create logic.
    */
+  async sendMastermindFollowup(taskId: string, agentId: string, message: string, beforeSend: (sessionId: string) => void): Promise<void> {
+    const existing = this.findSessionByTaskId(taskId)
+    const id = await this.startSession(agentId, taskId, undefined, true)
+    beforeSend(id) // Track the opened runtime even if configuration or prompt delivery later fails.
+    const session = this.sessions.get(id)
+    if (!session || (existing && session.status !== 'idle')) throw new Error('The conversation is busy; background delivery was not started.')
+    await this.trackTaskOperation(taskId, () => this.sendTaskMessage(session, id, message, undefined, () => beforeSend(id)))
+  }
+
+  async sendMastermindTaskNudge(taskId: string, message: string, beforeSend: () => void): Promise<void> {
+    const live = this.findSessionByTaskId(taskId)
+    if (!live || live.session.status !== 'working') throw new Error('The task is no longer running; no status nudge was sent.')
+    await this.responsibilities?.prepareTaskMessage(taskId)
+    await this.trackTaskOperation(taskId, () => this.sendTaskMessage(live.session, live.sessionId, message, undefined, beforeSend))
+  }
+
+  publishMastermindFollowup(taskId: string, deliveryId: string, message: string): void {
+    const partId = `followup:${deliveryId}`
+    if (this.db.getTranscriptParts(taskId).some(p => p.partId === partId)) return
+    const result = this.db.upsertTranscriptParts(taskId, [{ id: partId, role: 'assistant', content: message, partType: 'text' }])
+    if (!result) throw new Error('Could not save the Mastermind update.')
+    // The containing transaction commits before any native notification is sent.
+    setImmediate(() => {
+      try {
+        if (!this.db.getTranscriptParts(taskId).some(p => p.partId === partId)) return
+        this.emitTranscriptChanged(taskId, result.maxRev - result.changedPartIds.length, result.maxRev)
+        if (!this.mainWindow || this.mainWindow.isDestroyed() || this.mainWindow.isFocused() || !Notification.isSupported()) return
+        const project = this.responsibilities?.projectForTask(taskId)
+        const notification = new Notification({ title: project ? `Mastermind · ${project.name}` : 'Mastermind', body: message.replace(/[#*]/g, '').slice(0, 180) })
+        notification.on('click', () => {
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.show(); this.mainWindow.focus()
+            if (project) this.mainWindow.webContents.send(UI_COMMAND_CHANNEL, { kind: 'open_mastermind', projectId: project.id })
+          }
+        })
+        notification.show()
+      } catch (error) { console.error('[Mastermind] Could not notify the saved follow-up:', error) }
+    })
+  }
+
   async sendByTaskId(
     taskId: string,
     message: string,
@@ -4387,7 +4429,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     session: AgentSession,
     sessionId: string,
     message: string,
-    attachments?: MessageAttachmentRef[]
+    attachments?: MessageAttachmentRef[],
+    beforeSend?: () => void
   ): Promise<void> {
     this.assertTaskNotControlled(session.taskId)
     session.autoAbortNotified = false
@@ -4463,6 +4506,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     const parts: MessagePart[] = [{ type: MessagePartType.TEXT, text: promptText }]
     this.assertTaskNotControlled(session.taskId)
     if (this.sessions.get(sessionId) !== session) throw new TaskControlBlockedError('The task session was stopped before this message could be sent.')
+    beforeSend?.()
     await session.adapter.sendPrompt(sessionId, parts, sessionConfig)
     analytics()?.record('provider.turn.sent', {
       provider: getAgentProvider(this.db.getAgent(session.agentId)),
@@ -5685,6 +5729,7 @@ Important:
   }
 
   private sendToRenderer(channel: string, data: unknown): void {
+    if (this.responsibilities?.suppressFollowupOutput(channel, data)) return
     if (this.scheduleRuns && !this.scheduleRuns.event(channel, data)) return
     this.responsibilities?.observe(channel, data)
     if (channel === 'task:updated' && data && typeof data === 'object') {
@@ -5733,7 +5778,7 @@ Important:
         const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
         const isNotifiableTransition = prevStatus === SessionStatus.WORKING && (status === SessionStatus.IDLE || status === SessionStatus.WAITING_APPROVAL)
 
-        if (isNotifiableTransition && isWindowInactive) {
+        if (isNotifiableTransition && isWindowInactive && !this.responsibilities?.suppressTaskNotification(taskId)) {
           try {
             if (Notification.isSupported()) {
               // Only hit the database when we actually need the title for a notification

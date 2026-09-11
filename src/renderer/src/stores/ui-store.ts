@@ -52,6 +52,8 @@ interface UIState {
   createTaskPrefill: { title: string; description: string } | null
   /** Whether the Mastermind drawer is open (global) */
   showOrchestrator: boolean
+  mastermindProjectToOpen: string | null
+  openMastermindProject: (projectId: string) => void
   mastermindDraft: { id: string; projectId: string; text: string } | null
   draftInMastermind: (projectId: string, text: string) => void
   clearMastermindDraft: (id: string) => void
@@ -118,6 +120,8 @@ export const useUIStore = create<UIState>((set) => ({
   canvasPendingApp: null,
   createTaskPrefill: null,
   showOrchestrator: false,
+  mastermindProjectToOpen: null,
+  openMastermindProject: projectId => set({ showOrchestrator: true, mastermindProjectToOpen: projectId }),
   mastermindDraft: null,
   draftInMastermind: (projectId, text) => set({ showOrchestrator: true, mastermindDraft: { id: crypto.randomUUID(), projectId, text } }),
   clearMastermindDraft: (id) => set(s => s.mastermindDraft?.id === id ? { mastermindDraft: null } : {}),

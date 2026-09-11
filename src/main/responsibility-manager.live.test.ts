@@ -112,6 +112,51 @@ describe.skipIf(process.env.RUN_RESPONSIBILITY_LIVE !== '1')('Mastermind native 
     }
   }, 300000)
 
+  it('proactively delivers a completed task into Mastermind without a human prompt', async () => {
+    const fixture = mkdtempSync(join(tmpdir(), '20x-proactive-live-')), root = join(fixture, 'project')
+    mkdirSync(root); writeFileSync(join(root, 'value.txt'), 'proactive-followup-ok\n')
+    const { db } = createTestDb()
+    db.getWorkspaceDir = id => { const path = join(fixture, 'sessions', id); mkdirSync(path, { recursive: true }); return path }
+    const agent = db.createAgent({ name: 'Proactive acceptance', config: { coding_agent: 'codex', model: 'gpt-5.6-luna', reasoning_effort: 'medium' } })!
+    const agents = new AgentManager(db), manager = new ResponsibilityManager(db, agents)
+    agents.setResponsibilityManager(manager); setResponsibilityManager(manager); setTaskApiAgentController(agents)
+    await startTaskApiServer(db)
+    try {
+      const project = manager.createProject('Proactive project', root, agent.id), conversationId = projectConversationId(project.id)
+      manager.start(); await manager.reconcile()
+      const input = manager.recordHumanInput(conversationId, 'Read value.txt and report its exact content. One read-only task, no changes or external access.')!
+      manager.delegate(manager.scopeForToken(manager.tokenForTask(conversationId)!), input.id, 'Read the fixture')
+      const deadline = Date.now() + 180000
+      while (Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 500)); await manager.reconcile()
+        const state = manager.snapshot(project.id)
+        if (state.followups?.[project.id].error) throw new Error(state.followups[project.id].error)
+        if (db.getTranscriptParts(conversationId).some(p => p.partId.startsWith('followup:')) && !state.followups?.[project.id].reviewing) break
+      }
+      const updates = db.getTranscriptParts(conversationId).filter(p => p.partId.startsWith('followup:'))
+      expect(updates).toHaveLength(1)
+      expect(manager.snapshot(project.id).followups![project.id]).toMatchObject({ reviewing: false, error: undefined })
+      expect(agents.findSessionByTaskId(conversationId)).toBeUndefined()
+      expect(updates[0].content).toContain('proactive-followup-ok')
+      expect(updates[0].content).toContain(`#20x-task=${manager.snapshot().steps[0].taskId}`)
+      expect(manager.snapshot().responsibilities[0].state).toBe('completed')
+      expect(db.getTranscriptParts(conversationId).some(p => p.content.includes('[20x proactive review]'))).toBe(false)
+      for (let i = 0; i < 10; i++) await manager.reconcile()
+      expect(db.getTranscriptParts(conversationId).filter(p => p.partId.startsWith('followup:'))).toHaveLength(1)
+      // Both participants can still speak to the saved task after the automatic update.
+      const taskId = manager.snapshot().steps[0].taskId
+      manager.recordHumanInput(taskId, 'Reply exactly direct-reply-ok. No tools needed.')
+      await agents.sendByTaskId(taskId, 'Reply exactly direct-reply-ok. No tools needed.')
+      const replyDeadline = Date.now() + 90000
+      while (Date.now() < replyDeadline && !db.getTranscriptParts(taskId).some(p => p.role === 'assistant' && p.content.includes('direct-reply-ok'))) await new Promise(resolve => setTimeout(resolve, 500))
+      expect(db.getTranscriptParts(taskId).some(p => p.role === 'assistant' && p.content.includes('direct-reply-ok'))).toBe(true)
+      expect(manager.snapshot().steps).toHaveLength(1)
+      console.log('PROACTIVE_NATIVE_RECEIPT', JSON.stringify({ projectId: project.id, taskId, updates: updates.length, completed: true, directReply: true }))
+    } finally {
+      await manager.stop(); await agents.stopAllSessions(); stopTaskApiServer(); setResponsibilityManager(undefined); db.db.close(); rmSync(fixture, { recursive: true, force: true })
+    }
+  }, 300000)
+
   it('reads Git and the current GitHub PR through the existing command collector', async () => {
     const signal = new AbortController().signal
     const revision = await collectSource({ command: 'git', args: ['rev-parse', 'HEAD'], description: 'Current checkout revision' }, process.cwd(), signal)

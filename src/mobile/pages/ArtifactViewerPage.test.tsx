@@ -66,6 +66,8 @@ describe('ArtifactViewerPage', () => {
     )
 
     await waitFor(() => expect(api.artifacts.content).toHaveBeenCalledWith('task-1', 'reports/review.md'))
+    // The request being called does not mean its content has rendered yet.
+    await waitFor(() => expect(getByRole('button', { name: 'Copy content' }).hasAttribute('disabled')).toBe(false))
     fireEvent.click(getByRole('button', { name: 'Copy content' }))
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('# Review notes'))

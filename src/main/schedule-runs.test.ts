@@ -169,7 +169,7 @@ describe('Reusable scheduled checks', () => {
     finish('provider-real-id')
     await vi.waitFor(() => expect(runs.active(taskId)).toBeUndefined())
     expect((runs.history(taskId) as ScheduleRun[])[0]).toMatchObject({ sessionId: 'provider-real-id', state: 'finished', summary: 'Rekeyed result' })
-    expect(destroy).toHaveBeenCalledWith('provider-real-id', {})
+    expect(destroy).toHaveBeenCalledWith('provider-real-id', { agentId, taskId, workspaceDir: process.cwd() })
     const next = await agents.startSession(agentId, taskId)
     const session = agents.getSession(next)!
     Object.assign(session.adapter!, { getAllMessages: async () => [{ role: 'assistant', parts: [{ id: 'finalized-part', type: 'text', content: 'Rekeyed result' }] }] })

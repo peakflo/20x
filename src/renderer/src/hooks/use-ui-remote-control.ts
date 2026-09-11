@@ -21,6 +21,16 @@ export const UI_PUBLISH_THROTTLE_MS = 250
  */
 export function useUiRemoteControl(): void {
   useEffect(() => {
+    const openTask = (event: Event): void => {
+      const taskId: unknown = (event as CustomEvent).detail
+      if (typeof taskId !== 'string' || !/^[a-zA-Z0-9-]+$/.test(taskId)) return
+      void useTaskStore.getState().fetchTasks().then(() => applyUiCommand({ kind: 'open_task', taskId, where: 'modal' })).catch(error => console.error('Could not open task:', error))
+    }
+    window.addEventListener('20x:open-task', openTask)
+    return () => window.removeEventListener('20x:open-task', openTask)
+  }, [])
+
+  useEffect(() => {
     if (typeof window === 'undefined' || !window.electronAPI?.ui) return undefined
 
     let timer: ReturnType<typeof setTimeout> | null = null

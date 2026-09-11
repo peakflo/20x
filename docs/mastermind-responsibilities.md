@@ -24,6 +24,20 @@ The engineer and Mastermind can both message an existing Mastermind task at any 
 
 Independent tasks can run in the same project folder. Interrupted assignments no longer reserve the whole workspace. Session creation is still coalesced per task so simultaneous messages do not create duplicate workers; normal permission checks and destructive-action confirmations remain.
 
+## Proactive follow-up
+
+Each project's **Proactive follow-up** toggle is on by default. The existing five-second tick notices saved results, questions, failures, meaningful workflow progress and expired deadlines. Mastermind reviews these in its existing project conversation, using the selected conversation agent. Closing the drawer does not stop follow-up.
+
+Updates are short and include task links. A desktop notification opens the right project when the app is unfocused. Work and Decisions retain the underlying evidence and exact approval controls; publishing a summary does not mark a decision answered or its result read. Ordinary clarification replies in Mastermind can be routed to the exact pending question using the latest recorded human message. Native questions and permission approvals continue through their original controls.
+
+A review handles up to eight events, normally at most once per minute per project. New questions, failures and deadlines can bypass the cooldown. Unchanged source reads use no model turn; fixed reminders publish their existing text directly. After ten minutes with no visible activity, a running task may receive one status question. Silence does not establish failure, and no background loop restarts work or repeatedly chases the same task. A new human instruction can begin a new observation period.
+
+The review can read project context/results, send that bounded status question, and publish its update. It cannot approve requests, create assignments, expand scope, or alter schedules. Review turns have a two-minute limit. The scheduler keeps running while the model responds. Human messages supersede a background review before the human turn is sent; worker task conversations remain directly accessible. Reviewed events and published responses are saved separately, so failure and restart do not silently replay uncertain deliveries. The project control shows an error and explicit Retry when needed.
+
+Turning follow-up off leaves work and schedules under their own controls. Fully quitting stops both work and reviews. On reopening, pending events are reconsidered against current state; already delivered events are not repeated. A review interrupted before delivery stays visible for inspection and explicit retry.
+
+Acceptance: delegate a finite task, leave Mastermind alone, and see a concise result with **Open task**; receive a blocker; answer an ordinary question in the conversation; interrupt a pending review with your own message; pause/resume follow-up without pausing work; quit/reopen without replay; verify quiet tasks receive only one nudge and unchanged routines do not wake a model. `RUN_RESPONSIBILITY_LIVE=1 pnpm test:run src/main/responsibility-manager.live.test.ts -t 'proactively delivers'` exercises real worker completion, automatic delivery, task links, duplicate suppression and direct task reply in an isolated project.
+
 ## Product boundaries
 
 The left sidebar's **Automation** page is a read-only overview across all projects. It lists recurring task templates once (including existing separate-task schedules), plus project Goals and Routines, with their saved status, timing, and next step. Paused and completed records remain visible. It refreshes from existing task and responsibility events, independently of task filters or the selected Mastermind project. It adds no schedule controls or execution behavior; changes still happen through Mastermind or existing task controls.

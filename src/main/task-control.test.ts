@@ -48,7 +48,7 @@ describe('Mastermind task administration', () => {
     const remote = { id: 'remote-task', title: t.title, status: 'not_started', version: 1, agentId: 'remote-agent', skillIds: [],
       executionMode: 'human', assignees: [], isRecurring: false, taskData: null } as unknown as WorkfloTask
     const api = { getDomain: () => 'api.test', createTask: vi.fn(async () => {
-      expect(destroySession).toHaveBeenCalledWith('saved-session', {})
+      expect(destroySession).toHaveBeenCalledWith('saved-session', { agentId: agent.id, taskId: t.id, workspaceDir: process.cwd() })
       expect(agents.isTaskStoppedForControl(t.id)).toBe(true)
       expect(agents.findSessionByTaskId(t.id)).toBeUndefined()
       expect(db.getTask(t.id)).toMatchObject({ session_id: 'saved-session', status: TaskStatus.AgentWorking })

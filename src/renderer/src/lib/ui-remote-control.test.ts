@@ -209,3 +209,11 @@ describe('collectUiState', () => {
     expect(state).toMatchObject({ view: 'tasks', selectedTaskId: 't1', selectedTaskTitle: 'Fix login' })
   })
 })
+
+
+it('opens the requested Mastermind project without replacing an unsent draft', () => {
+  const draft = { id: 'draft', projectId: 'other', text: 'Keep this unsent text' }
+  useUIStore.setState({ mastermindDraft: draft })
+  expect(applyUiCommand({ kind: 'open_mastermind', projectId: 'project' })).toEqual({ applied: true })
+  expect(useUIStore.getState()).toMatchObject({ showOrchestrator: true, mastermindProjectToOpen: 'project', mastermindDraft: draft })
+})

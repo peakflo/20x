@@ -23,7 +23,7 @@ beforeEach(() => {
   cleanup()
   snapshot = { projects: [{ id: 'project', name: 'Example project', root: '/example', agentId: 'agent', createdAt: '2026-01-01' }], responsibilities: [structuredClone(agreement)], notices: [], memory: [], steps: [] }
   api = {
-    snapshot: vi.fn(async () => structuredClone(snapshot)), pickProjectFolder: vi.fn(async () => null), createProject: vi.fn(), act: vi.fn(async () => {}), answer: vi.fn(async () => {}), decideFactory: vi.fn(async () => {}), remember: vi.fn(async () => {}), forget: vi.fn(async () => {}), onChanged: vi.fn(() => () => {})
+    setProactive: vi.fn(async () => {}), retryFollowups: vi.fn(async () => {}), snapshot: vi.fn(async () => structuredClone(snapshot)), pickProjectFolder: vi.fn(async () => null), createProject: vi.fn(), act: vi.fn(async () => {}), answer: vi.fn(async () => {}), decideFactory: vi.fn(async () => {}), remember: vi.fn(async () => {}), forget: vi.fn(async () => {}), onChanged: vi.fn(() => () => {})
   }
   window.electronAPI.responsibilities = api
 })
@@ -64,6 +64,18 @@ describe('project responsibility controls', () => {
     expect(screen.queryByRole('button', { name: /take ?over|hand back/i })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Open work · running' }))
     await waitFor(() => expect(applyUiCommand).toHaveBeenCalledWith({ kind: 'open_task', taskId: 'saved-task', where: 'modal' }))
+    expect(api.act).not.toHaveBeenCalled()
+  })
+
+  it('pauses proactive conversation without acting on the workflow', async () => {
+    snapshot.followups = { project: { enabled: true, reviewing: false, pending: 1, error: 'Delivery needs review.' } }
+    render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+    const control = await screen.findByLabelText('Proactive follow-up')
+    expect(control).toBeChecked()
+    fireEvent.click(control)
+    await waitFor(() => expect(api.setProactive).toHaveBeenCalledWith('project', false))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry follow-up' }))
+    await waitFor(() => expect(api.retryFollowups).toHaveBeenCalledWith('project'))
     expect(api.act).not.toHaveBeenCalled()
   })
 

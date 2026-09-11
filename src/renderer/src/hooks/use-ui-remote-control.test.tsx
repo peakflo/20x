@@ -53,6 +53,16 @@ afterEach(() => {
 })
 
 describe('useUiRemoteControl', () => {
+  it('opens a task linked from shared Markdown in the desktop task view', async () => {
+    const fetch = vi.spyOn(useTaskStore.getState(), 'fetchTasks').mockResolvedValue()
+    render(<Harness />)
+    await act(async () => { window.dispatchEvent(new CustomEvent('20x:open-task', { detail: 't1' })) })
+    expect(fetch).toHaveBeenCalled()
+    expect(useTaskStore.getState().selectedTaskId).toBe('t1')
+    expect(useUIStore.getState().dashboardPreviewTaskId).toBe('t1')
+    fetch.mockRestore()
+  })
+
   it('publishes the screen as soon as it is mounted', () => {
     render(<Harness />)
     expect(published).toHaveLength(1)

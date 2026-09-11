@@ -45,6 +45,15 @@ export function App() {
     }
   }, [])
 
+  useEffect(() => {
+    const openTask = (event: Event): void => {
+      const taskId: unknown = (event as CustomEvent).detail
+      if (typeof taskId === 'string' && /^[a-zA-Z0-9-]+$/.test(taskId)) navigate({ page: 'detail', taskId })
+    }
+    window.addEventListener('20x:open-task', openTask)
+    return () => window.removeEventListener('20x:open-task', openTask)
+  }, [navigate])
+
   // Handle browser/system back button
   useEffect(() => {
     const onPopState = (e: PopStateEvent) => {

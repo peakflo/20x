@@ -17,7 +17,7 @@ beforeEach(() => {
   useUIStore.setState({ mastermindDraft: null, showOrchestrator: false, canvasResponsibilityId: null })
   useCanvasStore.setState({ panels: [], edges: [], nextZIndex: 1 })
   snapshot = { projects: [{ id: 'project', name: 'Example', root: '/example', agentId: 'agent', createdAt: '2026-01-01' }, { id: 'other', name: 'Other', root: '/other', agentId: 'agent', createdAt: '2026-01-01' }], responsibilities: [], steps: [], memory: [], notices: [], factories: [factory], factoryProposals: [] }
-  window.electronAPI.responsibilities = { snapshot: vi.fn(async () => structuredClone(snapshot)), onChanged: vi.fn(callback => { changed = callback; return vi.fn() }), decideFactory: vi.fn(async (id) => { snapshot.factoryProposals = snapshot.factoryProposals?.filter(p => p.id !== id); changed() }), act: vi.fn(), answer: vi.fn(), remember: vi.fn(), forget: vi.fn(), createProject: vi.fn(), pickProjectFolder: vi.fn() }
+  window.electronAPI.responsibilities = { setProactive: vi.fn(async () => {}), retryFollowups: vi.fn(async () => {}), snapshot: vi.fn(async () => structuredClone(snapshot)), onChanged: vi.fn(callback => { changed = callback; return vi.fn() }), decideFactory: vi.fn(async (id) => { snapshot.factoryProposals = snapshot.factoryProposals?.filter(p => p.id !== id); changed() }), act: vi.fn(), answer: vi.fn(), remember: vi.fn(), forget: vi.fn(), createProject: vi.fn(), pickProjectFolder: vi.fn() }
 })
 
 it('shows diagrams/instructions, filters by project, and drafts Use/Edit/Create in the correct Mastermind without sending', async () => {

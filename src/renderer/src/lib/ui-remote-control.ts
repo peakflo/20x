@@ -50,6 +50,9 @@ export function applyUiCommand(command: UiCommand): UiCommandResult {
   const ui = useUIStore.getState()
 
   switch (command.kind) {
+    case 'open_mastermind':
+      useUIStore.getState().openMastermindProject(command.projectId)
+      return { applied: true }
     case 'navigate': {
       if (command.view === 'settings') {
         const tab = toSettingsTab(command.settingsTab)

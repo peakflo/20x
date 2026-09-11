@@ -24,6 +24,8 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
   const [busy, setBusy] = useState(false)
   const projectChosen = useRef(false)
   const draft = useUIStore(s => s.mastermindDraft)
+  const openProject = useUIStore(s => s.mastermindProjectToOpen)
+  useEffect(() => { if (openProject) { projectChosen.current = true; setProjectId(openProject); setExpanded(true); useUIStore.setState({ mastermindProjectToOpen: null }) } }, [openProject])
   useEffect(() => {
     if (!draft) return
     projectChosen.current = true
@@ -66,6 +68,11 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
       </select>
       <Button size="sm" variant="ghost" aria-label="Add engineering project" onClick={() => { setCreating(!creating); setExpanded(true) }}><FolderPlus size={16} /></Button>
     </div>
+    {projectId && <div className="mx-3 mb-2 text-xs text-muted-foreground">
+      <label className="flex items-center gap-2"><input type="checkbox" checked={snapshot.followups?.[projectId]?.enabled !== false} onChange={event => void run(() => api.setProactive(projectId, event.target.checked))} />Proactive follow-up</label>
+      {snapshot.followups?.[projectId]?.reviewing && <p className="mt-1" role="status">Mastermind is reviewing updates.</p>}
+      {snapshot.followups?.[projectId]?.error && <p className="mt-1" role="alert">{snapshot.followups[projectId].error} <button className="underline" onClick={() => void run(() => api.retryFollowups(projectId))}>Retry follow-up</button></p>}
+    </div>}
     {(pending.length > 0 || proposals.length > 0 || unread.length > 0 || factoryProposals.length > 0) && <button onClick={() => { setExpanded(true); setTab(pending.length || unread.length ? 'decisions' : 'work') }} className="mx-3 mb-2 text-left text-xs font-medium text-primary" aria-live="polite">
       {factoryProposals.length ? `${factoryProposals.length} Factory preview(s) to review` : pending.length > 0 ? `${pending.length} decision${pending.length === 1 ? '' : 's'} need you` : proposals.length ? `${proposals.length} agreement${proposals.length === 1 ? '' : 's'} to review` : `${unread.length} result${unread.length === 1 ? '' : 's'} ready`}
     </button>}

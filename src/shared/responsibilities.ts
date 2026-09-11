@@ -201,10 +201,13 @@ export interface ResponsibilitySnapshot {
   notices: ResponsibilityNotice[]
   memory: ProjectMemory[]
   steps: ResponsibilityStep[]
+  followups?: Record<string, { enabled: boolean; reviewing: boolean; pending: number; error?: string }>
   factories?: FactoryDefinition[]
   factoryProposals?: FactoryProposal[]
 }
 export interface ResponsibilitiesApi {
+  setProactive(projectId: string, enabled: boolean): Promise<void>
+  retryFollowups(projectId: string): Promise<void>
   snapshot(projectId?: string): Promise<ResponsibilitySnapshot>
   pickProjectFolder(): Promise<string | null>
   createProject(name: string, root: string, agentId: string): Promise<ProjectRecord>

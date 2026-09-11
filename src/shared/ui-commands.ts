@@ -30,6 +30,7 @@ export const UI_CANVAS_MIN_ZOOM = 0.1
 export const UI_CANVAS_MAX_ZOOM = 3
 
 export type UiCommand =
+  | { kind: 'open_mastermind'; projectId: string }
   | { kind: 'navigate'; view: UiViewName; settingsTab?: string }
   | { kind: 'open_task'; taskId: string; where: Exclude<UiOpenTaskTarget, 'auto'> }
   | { kind: 'move_task_panel'; taskId: string; x: number; y: number }

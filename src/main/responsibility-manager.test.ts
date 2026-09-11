@@ -551,7 +551,7 @@ describe('durable engineering responsibilities', () => {
     expect(manager.recordHumanInput(step.taskId, 'Please explain the finding')).toBeTruthy()
     await manager.prepareTaskMessage(step.taskId)
     expect(manager.taskMessageContext(step.taskId)).toContain('inputRevision is 1')
-    await expect(manager.report(worker, { summary: 'Old answer', evidence: ['check'], checkout: dir, action: 'done' })).rejects.toThrow('newer message')
+    await expect(manager.report(worker, { summary: 'Old answer', evidence: ['check'], checkout: dir, action: 'done' })).rejects.toThrow('Current inputRevision is 1')
     await expect(manager.report(worker, { summary: 'Updated answer', evidence: ['check'], checkout: dir, action: 'done', inputRevision: 1 })).resolves.toBeDefined()
     const sent = await callResponsibilityTool(manager, manager.tokenForTask(scope().taskId)!, 'send_message', { task_id: step.taskId, text: 'Explain this to me too' })
     expect(sent.isError).not.toBe(true)
@@ -560,6 +560,19 @@ describe('durable engineering responsibilities', () => {
     await expect(manager.messageTask(worker, { task_id: step.taskId, text: 'Other task' })).rejects.toThrow('Only the active Mastermind')
     expect(() => manager.guardLegacyRoute('/send_message', { task_id: step.taskId })).not.toThrow()
     expect(snapshot().steps).toHaveLength(1)
+  })
+  it('preserves a human message revision received while the worker is launching', async () => {
+    vi.mocked(runtime.startSession).mockImplementationOnce(async (_agent, taskId) => {
+      manager.recordHumanInput(taskId, 'Include the new requirement')
+      await manager.prepareTaskMessage(taskId)
+      const live = { sessionId: `session-${taskId}`, session: { workspaceDir: dir, status: 'working' } }
+      sessions.set(taskId, live)
+      return live.sessionId
+    })
+    await approve()
+    const step = snapshot().steps[0]
+    expect(step).toMatchObject({ state: 'running', inputRevision: 1 })
+    await expect(manager.report(manager.scopeForToken(manager.tokenForTask(step.taskId)!), { summary: 'Stale answer', evidence: ['check'], checkout: dir, action: 'done', inputRevision: 0 })).rejects.toThrow('Current inputRevision is 1')
   })
 
   it.each([false, true])('invalidates an in-flight settlement when a new message arrives (files changed: %s)', async changed => {
