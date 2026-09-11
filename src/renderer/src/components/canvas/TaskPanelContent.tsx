@@ -31,7 +31,7 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
   // every canvas task panel's entire TaskWorkspace tree.
   const openEditModal = useUIStore((s) => s.openEditModal)
   const openDeleteModal = useUIStore((s) => s.openDeleteModal)
-  // Source-backed tasks ask whether to close the task in the source system.
+  // Completion shares Mastermind's task administration and global confirmation.
   const { requestComplete, completionDialog } = useTaskCompletion()
 
   const handleEdit = useCallback(() => {

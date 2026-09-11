@@ -218,7 +218,7 @@ interface ElectronAPI {
   responsibilities: import('@shared/responsibilities').ResponsibilitiesApi
   db: {
     getScheduleRuns: (id: string, runId?: string, before?: string) => Promise<unknown>
-    manageScheduleTask: (id: string, action: string) => Promise<{ success: boolean; error?: string }>
+    manageScheduleTask: (id: string, action: string) => Promise<{ success: boolean; cancelled?: boolean; error?: string }>
     getTasks: () => Promise<WorkfloTask[]>
     getTask: (id: string) => Promise<WorkfloTask | undefined>
     createTask: (data: CreateTaskDTO) => Promise<WorkfloTask>

@@ -161,8 +161,7 @@ export function AppLayout() {
 
   useEffect(() => onShortcutFeedback(({ message, isError }) => showToast(message, isError)), [showToast])
 
-  // Source-backed tasks ask the user whether to close the task in the source
-  // system or only in 20x. `completionDialog` renders that question.
+  // Completion shares Mastermind's task administration and global confirmation.
   const { requestComplete, completionDialog } = useTaskCompletion({ onToast: showToast })
 
   // A completion that the main process could not push to the source sends the

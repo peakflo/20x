@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react'
 import { useTaskCompletion } from './use-task-completion'
-import { TaskStatus, PluginActionId } from '@/types'
+import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
+import { onShortcutFeedback } from '@/lib/keyboard-shortcuts'
 
 const { updateTaskMock, executeActionMock, storeState } = vi.hoisted(() => ({
   updateTaskMock: vi.fn(async () => undefined),
@@ -86,26 +87,58 @@ function Harness({ taskId = 'task-1' }: { taskId?: string }) {
 }
 
 describe('server completion', () => {
-  beforeEach(() => { vi.clearAllMocks(); executeActionMock.mockResolvedValue({success:true}); storeState.tasks=[] })
+  beforeEach(() => {
+    vi.clearAllMocks()
+    window.electronAPI.db.manageScheduleTask = vi.fn(async () => ({ success: true }))
+    window.electronAPI.taskSources.upload = vi.fn()
+    storeState.tasks = []
+  })
   afterEach(cleanup)
-  it('always calls the source and never writes local completion', async () => {
-    storeState.tasks=[makeTask({source_id:'src-1',complete_at_source:false})]
+
+  it.each([
+    { source_id: null, status: TaskStatus.AgentWorking, session_id: 'live-session' },
+    { source_id: null, status: TaskStatus.ReadyForReview, session_id: 'saved-session' },
+    { source_id: 'src-1', status: TaskStatus.ReadyForReview, session_id: null }
+  ])('uses task administration for $status with source $source_id', async state => {
+    storeState.tasks = [makeTask({ ...state, complete_at_source: false })]
     render(<Harness />); fireEvent.click(screen.getByText('Complete'))
-    await waitFor(()=>expect(onCompleted).toHaveBeenCalled())
-    expect(executeActionMock).toHaveBeenCalledWith(PluginActionId.Complete,'task-1','src-1')
+    await waitFor(() => expect(onCompleted).toHaveBeenCalled())
+    expect(window.electronAPI.db.manageScheduleTask).toHaveBeenCalledExactlyOnceWith('task-1', 'complete')
+    expect(window.electronAPI.taskSources.upload).not.toHaveBeenCalled()
+    expect(executeActionMock).not.toHaveBeenCalled()
     expect(updateTaskMock).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog')).toBeNull()
   })
-  it('requires a server task before completion',async()=>{
-    window.electronAPI.taskSources.upload = vi.fn().mockResolvedValue({queued:true})
-    storeState.tasks=[makeTask()];render(<Harness />);fireEvent.click(screen.getByText('Complete'))
-    await waitFor(()=>expect(onToast).toHaveBeenCalledWith(expect.stringContaining('Task creation is pending'),true))
-    expect(updateTaskMock).not.toHaveBeenCalled();expect(executeActionMock).not.toHaveBeenCalled();expect(onCompleted).not.toHaveBeenCalled()
+
+  it.each(['Task creation is pending in Workflo.', 'Review required', 'Runtime release failed'])('keeps an unconfirmed completion open: %s', async error => {
+    vi.mocked(window.electronAPI.db.manageScheduleTask).mockResolvedValue({ success: false, error })
+    storeState.tasks = [makeTask()]
+    render(<Harness />); fireEvent.click(screen.getByText('Complete'))
+    await waitFor(() => expect(onToast).toHaveBeenCalledWith(error, true))
+    expect(updateTaskMock).not.toHaveBeenCalled()
+    expect(onCompleted).not.toHaveBeenCalled()
   })
-  it('keeps a refused completion open',async()=>{
-    executeActionMock.mockResolvedValue({success:false,error:'Review required'})
-    storeState.tasks=[makeTask({source_id:'src-1'})];render(<Harness />);fireEvent.click(screen.getByText('Complete'))
-    await waitFor(()=>expect(onToast).toHaveBeenCalledWith('Review required',true))
-    expect(updateTaskMock).not.toHaveBeenCalled();expect(onCompleted).not.toHaveBeenCalled()
+
+  it('leaves a declined confirmation untouched without showing an error', async () => {
+    vi.mocked(window.electronAPI.db.manageScheduleTask).mockResolvedValue({ success: false, cancelled: true })
+    storeState.tasks = [makeTask()]
+    render(<Harness />); fireEvent.click(screen.getByText('Complete'))
+    await waitFor(() => expect(window.electronAPI.db.manageScheduleTask).toHaveBeenCalled())
+    expect(onToast).not.toHaveBeenCalled()
+    expect(onCompleted).not.toHaveBeenCalled()
+    expect(updateTaskMock).not.toHaveBeenCalled()
+  })
+
+  it('reports failures to the shared app feedback when a canvas caller has no toast callback', async () => {
+    const feedback = vi.fn(), off = onShortcutFeedback(feedback)
+    function CanvasHarness() {
+      const { requestComplete } = useTaskCompletion()
+      return <button onClick={() => void requestComplete('task-1')}>Complete</button>
+    }
+    try {
+      vi.mocked(window.electronAPI.db.manageScheduleTask).mockRejectedValue(new Error('Could not stop the local session'))
+      storeState.tasks = [makeTask()]
+      render(<CanvasHarness />); fireEvent.click(screen.getByText('Complete'))
+      await waitFor(() => expect(feedback).toHaveBeenCalledWith({ message: 'Could not stop the local session', isError: true }))
+    } finally { off() }
   })
 })

@@ -1,4 +1,3 @@
-import { taskCompletionCommand } from '../../../../shared/task-write-contract'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { TaskPanelContent } from './TaskPanelContent'
@@ -185,26 +184,15 @@ describe('TaskPanelContent', () => {
     expect(addEdgeMock).not.toHaveBeenCalled()
   })
 
-  it.each([null, 'src-1'])('issues server completion for source %s without writing local completion', async (sourceId) => {
+  it.each([null, 'src-1'])('completes source %s through shared task administration', async sourceId => {
     taskList[0].source_id = sourceId
-    const apiRequest = vi.fn()
-    const upload = vi.fn(async () => { taskList[0].source_id = 'src-1'; return { queued: false } })
-    window.electronAPI.taskSources.upload = upload
-    // Bridge the renderer command to the real API encoder. Credentials stay in main.
-    executeActionMock.mockImplementation(async () => {
-      const command = taskCompletionCommand('remote-1', { action: 'complete' }, 7)
-      apiRequest(command.method, command.path, command.body, command.headers)
-      return { success: true }
-    })
+    window.electronAPI.db.manageScheduleTask = vi.fn(async () => ({ success: true }))
+    window.electronAPI.taskSources.upload = vi.fn()
     render(<TaskPanelContent panelId="panel-1" taskId="task-1" panelLayout="both" />)
     fireEvent.click(screen.getByText('Complete task'))
-    await waitFor(() => expect(apiRequest).toHaveBeenCalledWith('POST', '/api/tasks/remote-1/action',
-      { outputs: { action: 'complete' }, expectedVersion: 7 },
-      { 'x-task-contract-version': '2', 'x-task-actor': 'human' }))
-    expect(executeActionMock).toHaveBeenCalledExactlyOnceWith('complete', 'task-1', 'src-1')
+    await waitFor(() => expect(window.electronAPI.db.manageScheduleTask).toHaveBeenCalledExactlyOnceWith('task-1', 'complete'))
+    expect(window.electronAPI.taskSources.upload).not.toHaveBeenCalled()
+    expect(executeActionMock).not.toHaveBeenCalled()
     expect(updateTaskMock).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('complete-at-source-dialog')).toBeNull()
-    if (sourceId === null) expect(upload).toHaveBeenCalledExactlyOnceWith('task-1')
-    else expect(upload).not.toHaveBeenCalled()
   })
 })

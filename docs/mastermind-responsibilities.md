@@ -88,6 +88,8 @@ Live Slack and Notion acceptance still requires working configured connections a
 
 ## Task administration
 
+Manual **Complete** actions from the Tasks page, canvas, and keyboard shortcuts use the same task administration as Mastermind. The existing desktop confirmation stops local agents and owning automation before handing completion to the source. Saved session history stays available. Declining the confirmation leaves the task alone; failed release or unconfirmed source completion stays visible and does not mark the task completed.
+
 Start a fresh Mastermind conversation/session to load the new tools. Ask “Find the task named X”, then “Mark task <ID> completed” or “Delete task <ID>”. Mastermind uses `inspect_tasks` and `manage_task` itself; workers do not receive these controls. Ambiguous names require clarification. A project conversation cannot manage a task owned by a different project's responsibility; use that project or All tasks.
 
 You can change the Mastermind agent in either All tasks or a project conversation, including after messages have been exchanged. Switching waits for the old conversation session to stop, keeps its transcript, and gives the new agent recent conversation context. The choice is remembered separately for each conversation. Worker assignments and existing routines keep their own configured agents. If the old agent cannot be stopped, the selector keeps the old choice and shows the error.
