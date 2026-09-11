@@ -5,13 +5,14 @@ import { Button } from '@/components/ui/Button'
 import { Textarea } from '@/components/ui/Textarea'
 
 interface FeedbackDialogProps {
+  completionDescription?: string
   open: boolean
   onSubmit: (rating: number, comment: string) => void
   onSkip: () => void
   onCancel: () => void
 }
 
-export function FeedbackDialog({ open, onSubmit, onSkip, onCancel }: FeedbackDialogProps) {
+export function FeedbackDialog({ open, onSubmit, onSkip, onCancel, completionDescription }: FeedbackDialogProps) {
   const [rating, setRating] = useState(0)
   const [hoveredStar, setHoveredStar] = useState(0)
   const [comment, setComment] = useState('')
@@ -39,6 +40,12 @@ export function FeedbackDialog({ open, onSubmit, onSkip, onCancel }: FeedbackDia
           </DialogDescription>
         </DialogHeader>
         <DialogBody className="flex flex-col gap-4">
+          {completionDescription && (
+            <div className="rounded-md border p-3 text-sm space-y-2">
+              <p>{completionDescription}</p>
+              <p>Skip omits only the session rating and comment.</p>
+            </div>
+          )}
           <div className="flex gap-1 justify-center">
             {[1, 2, 3, 4, 5].map((star) => (
               <button

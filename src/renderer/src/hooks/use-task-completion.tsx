@@ -1,7 +1,8 @@
+import { getTaskCompletionAction } from '@shared/task-completion'
 import { useCallback } from 'react'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useTaskStore } from '@/stores/task-store'
-import { PluginActionId, TaskStatus } from '@/types'
+import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 
 export interface UseTaskCompletionOptions {
@@ -25,8 +26,8 @@ export function useTaskCompletion({ onToast }: UseTaskCompletionOptions = {}) {
         onToast?.(`"${task.title}" completed`)
         return
       }
-      const action = task.output_fields.find(f => f.id === 'action')?.value
-      const result = await executeAction(action ? String(action) : PluginActionId.Complete, task.id, task.source_id)
+      const action = getTaskCompletionAction(task.output_fields)
+      const result = await executeAction(action, task.id, task.source_id)
       if (!result.success) throw new Error(result.error || 'The server did not confirm completion.')
       await useTaskStore.getState().fetchTasks()
       options?.onCompleted?.(task)

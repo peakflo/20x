@@ -1,3 +1,4 @@
+import { getSourceCompletionDescription } from '@shared/task-completion'
 import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
 import { TaskStatus } from '@shared/constants'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
@@ -84,9 +85,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const initSession = useAgentStore((s) => s.initSession)
   const endSession = useAgentStore((s) => s.endSession)
 
-  // Single modal is reused for both a feedback completion (agent session) and a
-  // plain source completion (no agent): the shared FeedbackModal shows the
-  // 5-star rating/comment only when withFeedback is true.
+  // Session feedback is collected before the completion request.
   const [completeModal, setCompleteModal] = useState<{ withFeedback: boolean } | null>(null)
   const [activeSection, setActiveSection] = useState<'details' | 'artifacts'>('details')
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
@@ -809,11 +808,10 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         )}
       </div>
 
-      {/* Shared feedback / completion modal. Shows the 5-star rating and comment
-        only for a feedback completion (withFeedback), otherwise the plain
-        completion choice — one modal, no separate dialog. */}
+      {/* Show the source action before submitting or skipping session feedback. */}
       {completeModal && (
         <FeedbackModal
+          completionDescription={getSourceCompletionDescription(task)}
           onSubmit={handleFeedbackSubmit}
           onSkip={handleFeedbackSkip}
           onCancel={() => setCompleteModal(null)}
@@ -939,7 +937,8 @@ function SubtasksSection({ subtasks, onNavigateToTask, onReorderSubtasks }: { su
   )
 }
 
-function FeedbackModal({ onSubmit, onSkip, onCancel }: {
+function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription }: {
+  completionDescription?: string
   onSubmit: (rating: number, comment: string) => void
   onSkip: () => void
   onCancel: () => void
@@ -950,6 +949,12 @@ function FeedbackModal({ onSubmit, onSkip, onCancel }: {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div role="dialog" aria-label="Session feedback" className="mx-4 w-full max-w-md rounded-xl border bg-card p-5 space-y-4">
         <h2>Session feedback</h2>
+        {completionDescription && (
+          <div className="rounded-md border p-3 text-sm space-y-2">
+            <p>{completionDescription}</p>
+            <p>Skip omits only the session rating and comment.</p>
+          </div>
+        )}
         <div className="flex gap-2">
           {[1, 2, 3, 4, 5].map(value => <button key={value} aria-label={`Rate ${value}`} aria-pressed={rating === value} onClick={() => setRating(value)}>{value}</button>)}
         </div>
