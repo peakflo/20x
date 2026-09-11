@@ -388,7 +388,7 @@ export class SyncManager {
 
     // Apply local task updates if action succeeded
     if (result.success && result.taskUpdate && Object.keys(result.taskUpdate).length > 0) {
-      this.db.updateTask(task.id, result.taskUpdate)
+      this.db.updateTask(task.id, result.taskUpdate, 'task-source')
     }
 
     return result

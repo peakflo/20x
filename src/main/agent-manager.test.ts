@@ -1396,6 +1396,29 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     return { mgr, session }
   }
 
+  it.each([true, false])('completes only after learning and honors the user source choice %s', async completeAtSource => {
+    const mockDb = createEnterpriseTaskDb({complete_at_source: completeAtSource})
+    const {mgr, session} = setupManager(mockDb)
+    const task = mockDb.getTask('task-1')!
+    vi.mocked(mockDb.getSetting).mockImplementation(key => key === 'session-feedback-completion:task-1' ? JSON.stringify({completeAtSource}) : undefined)
+    mockDb.deleteSetting = vi.fn()
+    vi.mocked(mockDb.updateTask).mockImplementation((_id, updates) => Object.assign(task, updates))
+    let finishSkills!: () => void
+    const syncSkills = vi.spyOn(mgr as any, 'syncSkillsFromWorkspace').mockImplementation(() => new Promise(resolve => {
+      finishSkills = () => resolve({created: [], updated: [], unchanged: []})
+    }))
+    const executeAction = vi.fn().mockResolvedValue({success: true})
+    mgr.setSyncManager({executeAction} as never)
+    const idle = (mgr as any).transitionToIdle('session-1', session)
+    await vi.waitFor(() => expect(syncSkills).toHaveBeenCalled())
+    expect(task.status).toBe(TaskStatus.AgentLearning)
+    expect(executeAction).not.toHaveBeenCalled()
+    finishSkills()
+    await idle
+    expect(task.status).toBe(TaskStatus.Completed)
+    expect(executeAction).toHaveBeenCalledTimes(completeAtSource ? 1 : 0)
+  })
+
   it('learning never completes with the human credential',async()=>{
     const mockDb=createEnterpriseTaskDb();const {mgr,session}=setupManager(mockDb)
     const executeAction=vi.fn();mgr.setSyncManager({executeAction} as never)

@@ -86,8 +86,16 @@ function Harness({ taskId = 'task-1' }: { taskId?: string }) {
 }
 
 describe('server completion', () => {
-  beforeEach(() => { vi.clearAllMocks(); executeActionMock.mockResolvedValue({success:true}); storeState.tasks=[] })
+  beforeEach(() => { vi.clearAllMocks(); executeActionMock.mockResolvedValue({success:true}); storeState.tasks=[]; storeState.sources=[] })
   afterEach(cleanup)
+  it('names Notion instead of the custom connection in the completion dialog', () => {
+    storeState.tasks = [makeTask({source_id: 'src-1', source: 'Notion'})]
+    storeState.sources = [{id: 'src-1', name: 'dmitry ai tasks'}]
+    render(<Harness />)
+    fireEvent.click(screen.getByText('Complete'))
+    expect(screen.getByText('Complete in Notion?')).toBeInTheDocument()
+    expect(screen.queryByText(/dmitry ai tasks/)).toBeNull()
+  })
   it('waits for the source choice before sending completion', async () => {
     storeState.tasks=[makeTask({source_id:'src-1',complete_at_source:false})]
     render(<Harness />); fireEvent.click(screen.getByText('Complete'))

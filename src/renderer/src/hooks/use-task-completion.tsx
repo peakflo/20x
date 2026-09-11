@@ -1,5 +1,5 @@
 import { CompleteAtSourceDialog } from '@/components/tasks/CompleteAtSourceDialog'
-import { getTaskCompletionAction } from '@shared/task-completion'
+import { getTaskCompletionAction, getTaskSourceName } from '@shared/task-completion'
 import { useCallback, useState } from 'react'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useTaskStore } from '@/stores/task-store'
@@ -56,7 +56,7 @@ export function useTaskCompletion({ onToast }: UseTaskCompletionOptions = {}) {
   const completionDialog = pendingTask && pending ? <CompleteAtSourceDialog
     isOpen={true}
     taskTitle={pendingTask.title}
-    sourceName={sources.find(source => source.id === pendingTask.source_id)?.name || pendingTask.source || 'the task source'}
+    sourceName={getTaskSourceName(pendingTask, sources.find(source => source.id === pendingTask.source_id)?.name)}
     isBusy={isBusy}
     onCompleteAtSource={() => void requestComplete(pending.taskId, { ...pending.options, completeAtSource: true })}
     onCompleteManually={() => void requestComplete(pending.taskId, { ...pending.options, completeAtSource: false })}

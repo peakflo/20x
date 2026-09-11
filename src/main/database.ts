@@ -2367,17 +2367,21 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return this.getTask(id)
   }
 
-  updateTask(id: string, data: UpdateTaskData, origin?: 'workflo-server'): TaskRecord | undefined {
+  updateTask(id: string, data: UpdateTaskData, origin?: 'workflo-server' | 'session-feedback' | 'task-source'): TaskRecord | undefined {
     if (origin !== 'workflo-server' && ('external_id' in data || 'source_id' in data || 'source' in data)) {
       throw new Error('Only the sync service can change a task source link.')
     }
     const currentTask = this.getTask(id)
+    const approvedStatusWrite = origin === 'session-feedback' || origin === 'task-source'
+    if (!approvedStatusWrite && currentTask?.status === TaskStatus.AgentLearning && this.getSetting(`session-feedback-completion:${id}`) && !(data.status === TaskStatus.Completed && data.complete_at_source === false)) {
+      data = { ...data, status: TaskStatus.AgentLearning }
+    }
     const manualCompletion = data.status === TaskStatus.Completed && data.complete_at_source === false
     // A source refresh must not reopen a task the user closed only in 20x.
     if (currentTask?.source_id && currentTask.status === TaskStatus.Completed && currentTask.complete_at_source === false && data.complete_at_source !== true) {
       data = { ...data, status: TaskStatus.Completed }
     }
-    if (data.status && origin !== 'workflo-server' && !manualCompletion) {
+    if (data.status && origin !== 'workflo-server' && !manualCompletion && !approvedStatusWrite) {
       const task = this.getTask(id)
       const snapshot = this.getSetting(`workflo-task:${id}`)
       const remote = snapshot ? JSON.parse(snapshot) : undefined
@@ -2388,7 +2392,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         throw new Error('This task is completed in Workflo.')
       }
     }
-    if (data.status === TaskStatus.Completed && origin !== 'workflo-server' && !manualCompletion) {
+    if (data.status === TaskStatus.Completed && origin !== 'workflo-server' && !manualCompletion && !approvedStatusWrite) {
       const task = this.getTask(id)
       if (task?.source_id && task.status !== TaskStatus.Completed) {
         throw new Error('Workflo must confirm completion before this task can close in 20x.')

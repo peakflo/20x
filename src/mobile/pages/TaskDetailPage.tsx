@@ -1,4 +1,4 @@
-import { getSourceCompletionDescription } from '@shared/task-completion'
+import { getSourceCompletionDescription, getTaskSourceName } from '@shared/task-completion'
 import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
 import { TaskStatus } from '@shared/constants'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
@@ -184,11 +184,26 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   }, [task, completeTaskNow])
 
   const handleFeedbackSubmit = useCallback(async (rating: number, comment: string, completeAtSource: boolean) => {
-    if (!task) return
+    if (!task?.agent_id) return
+    const saved = await updateTask(task.id, {status: TaskStatus.AgentLearning, feedback_rating: rating,
+      feedback_comment: comment || null, complete_at_source: completeAtSource})
+    if (!saved) return
     setCompleteModal(null)
-    await updateTask(task.id, { feedback_rating: rating, feedback_comment: comment || null })
-    await completeTaskNow(task, completeAtSource)
-  }, [task, updateTask, completeTaskNow])
+    try {
+      let sessionId = session?.sessionId
+      if (!sessionId && task.session_id) {
+        sessionId = (await api.sessions.resume(task.session_id, task.agent_id, task.id)).sessionId
+      }
+      if (!sessionId) sessionId = (await api.sessions.start(task.agent_id, task.id, true)).sessionId
+      initSession(task.id, sessionId, task.agent_id)
+      await api.sessions.send(sessionId,
+        `User rated this session ${rating}/5. Comment: "${comment}". Review the session and update skills in .agents/skills/. Update confidence, uses, lastUsed, and tags for useful skills. Create skills for new reusable patterns.`,
+        task.id, task.agent_id)
+    } catch (error) {
+      await updateTask(task.id, {status: TaskStatus.ReadyForReview})
+      window.alert(error instanceof Error ? error.message : 'Could not start the learning session.')
+    }
+  }, [task, session, updateTask, initSession])
 
   const handleFeedbackSkip = useCallback(async (completeAtSource: boolean) => {
     if (!task) return
@@ -812,7 +827,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       {completeModal && (
         <FeedbackModal
           completionDescription={getSourceCompletionDescription(task)}
-          sourceName={task.source_id ? task.source || 'the task source' : undefined}
+          sourceName={task.source_id ? getTaskSourceName(task) : undefined}
           withFeedback={completeModal.withFeedback}
           onSubmit={handleFeedbackSubmit}
           onSkip={handleFeedbackSkip}

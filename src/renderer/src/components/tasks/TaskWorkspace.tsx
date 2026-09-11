@@ -1,4 +1,4 @@
-import { getSourceCompletionDescription } from '@shared/task-completion'
+import { getSourceCompletionDescription, getTaskSourceName } from '@shared/task-completion'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { LayoutList, Send, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -658,18 +658,13 @@ function TaskWorkspaceComponent({
     if (!task?.agent_id || !task?.id) return
     setShowFeedback(false)
 
-    if (task.source_id || task.server_managed) {
-      await taskApi.update(task.id, {feedback_rating:rating,feedback_comment:comment || null})
-      await onCompleteTask(completeAtSource)
-      return
-    }
-
     // Persist feedback + set task to Learning status - prevents auto-stop useEffect.
     console.log('[TaskWorkspace] Setting task status to AgentLearning:', task.id)
     let updatedTask: WorkfloTask | null | undefined
     try {
       updatedTask = await taskApi.update(task.id, {
         status: TaskStatus.AgentLearning,
+        complete_at_source: completeAtSource,
         feedback_rating: rating,
         feedback_comment: comment || null,
       })
@@ -724,7 +719,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
     try {
       if (!session.sessionId) {
         const readySessionId = await ensureChatSession()
-        if (!readySessionId) return
+        if (!readySessionId) throw new Error('Could not start the learning session.')
 
         // Wait for messages to load (poll for session to be ready)
         await new Promise<void>((resolve) => {
@@ -1237,7 +1232,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
       <FeedbackDialog
         open={showFeedback}
-        sourceName={task?.source_id ? taskSources.find(source => source.id === task.source_id)?.name || task.source || 'the task source' : undefined}
+        sourceName={task?.source_id ? getTaskSourceName(task, taskSources.find(source => source.id === task.source_id)?.name) : undefined}
         completionDescription={task ? getSourceCompletionDescription(task, taskSources.find(source => source.id === task.source_id)?.name) : undefined}
         onSubmit={handleFeedbackSubmit}
         onSkip={handleFeedbackSkip}

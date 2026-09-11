@@ -1,3 +1,4 @@
+import { useTaskSourceStore } from '@/stores/task-source-store'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, fireEvent, screen, waitFor, cleanup } from '@testing-library/react'
 import { clampTranscriptWidth, TaskWorkspace } from './TaskWorkspace'
@@ -109,6 +110,7 @@ afterEach(() => {
 })
 
 beforeEach(() => {
+  useTaskSourceStore.setState({sources: []})
   useAgentStore.setState({
     agents: [],
     isLoading: false,
@@ -138,16 +140,43 @@ describe('clampTranscriptWidth', () => {
 })
 
 describe('TaskWorkspace keyboard actions', () => {
-  it.each([true, false])('passes source choice %s after submitting feedback', async (completeAtSource) => {
-    const task = makeRendererTask({status: TaskStatus.ReadyForReview, session_id: 'persisted', source_id: 'feedback', source: 'Session Feedback'})
+  it('uses Notion for both the feedback button and action description', () => {
+    useTaskSourceStore.setState({sources: [{id: 'src-notion', name: 'dmitry ai tasks', plugin_id: 'notion',
+      mcp_server_id: '', config: {}, list_tool: '', list_tool_args: {}, update_tool: '', update_tool_args: {},
+      enabled: true, last_synced_at: null, created_at: '', updated_at: ''}]})
+    const task = makeRendererTask({source_id: 'src-notion', source: 'Notion', session_id: 'persisted', status: TaskStatus.ReadyForReview})
+    renderWorkspace(task)
+    act(() => dispatchTaskShortcut({action: TaskShortcutAction.COMPLETE, taskId: task.id}))
+    expect(screen.getByRole('radio', {name: 'Close it in Notion'})).toBeInTheDocument()
+    expect(screen.getByText('Action at Notion: complete. Completion sends this action and the task outputs to the source.')).toBeInTheDocument()
+    expect(screen.queryByRole('radio', {name: 'Close it in dmitry ai tasks'})).toBeNull()
+  })
+
+  it.each([
+    ['Submit Feedback', true], ['Submit Feedback', false], ['Skip', true], ['Skip', false]
+  ] as const)('%s with source completion %s', async (button, completeAtSource) => {
+    const task = makeRendererTask({status: TaskStatus.ReadyForReview, session_id: 'persisted', source_id: 'feedback', source: 'Notion'})
+    useAgentStore.getState().initSession(task.id, 'persisted', 'agent-1')
+    useAgentStore.setState(state => ({sessions: new Map(state.sessions).set(task.id, {
+      ...state.sessions.get(task.id)!, status: SessionStatus.IDLE,
+      messages: [{id: 'previous', role: 'assistant', content: 'Task done', timestamp: new Date()}]
+    })}))
     renderWorkspace(task)
     act(() => dispatchTaskShortcut({ action: TaskShortcutAction.COMPLETE, taskId: task.id }))
     if (!completeAtSource) fireEvent.click(screen.getByRole('radio', {name: "I'll do it manually"}))
     const stars = screen.getAllByRole('button').filter(button => button.querySelector('svg.lucide-star'))
     fireEvent.click(stars[3])
-    fireEvent.click(screen.getByRole('button', {name: 'Submit Feedback'}))
-    await waitFor(() => expect(noopFn).toHaveBeenCalledWith(completeAtSource))
-    expect(window.electronAPI.db.updateTask).toHaveBeenCalledWith(task.id, {feedback_rating: 4, feedback_comment: null})
+    fireEvent.click(screen.getByRole('button', {name: button}))
+    if (button === 'Submit Feedback') {
+      await waitFor(() => expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith('persisted', expect.stringContaining('Review the session and update skills'), task.id, 'agent-1', undefined))
+      expect(window.electronAPI.db.updateTask).toHaveBeenCalledWith(task.id, {
+        status: TaskStatus.AgentLearning, feedback_rating: 4, feedback_comment: null, complete_at_source: completeAtSource
+      })
+      expect(noopFn).not.toHaveBeenCalled()
+    } else {
+      await waitFor(() => expect(noopFn).toHaveBeenCalledWith(completeAtSource))
+      expect(window.electronAPI.agentSession.send).not.toHaveBeenCalled()
+    }
   })
 
   it.each(['approve', undefined])('shows the Session Feedback source action %s before completion', async (action) => {

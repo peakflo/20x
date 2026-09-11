@@ -243,7 +243,7 @@ describe('SyncManager', () => {
       const result = await syncManager.executeAction('approve', task, undefined, 'src-1')
 
       expect(result.success).toBe(true)
-      expect(db.updateTask).toHaveBeenCalledWith('t1', { status: TaskStatus.Completed })
+      expect(db.updateTask).toHaveBeenCalledWith('t1', { status: TaskStatus.Completed }, 'task-source')
     })
   })
 })

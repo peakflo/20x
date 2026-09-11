@@ -1,3 +1,4 @@
+import { api } from '../api/client'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { ArtifactType } from '@shared/artifacts'
@@ -84,22 +85,34 @@ afterEach(() => {
 })
 
 describe('TaskDetailPage', () => {
-  it.each(['Skip', 'Submit Feedback'])('sends the manual choice through %s', async (button) => {
-    const task = makeTask({agent_id: 'agent-1', source_id: 'feedback', source: 'Session Feedback'})
+  it.each([
+    ['Submit Feedback', true], ['Submit Feedback', false], ['Skip', true], ['Skip', false]
+  ] as const)('%s with source completion %s', async (button, completeAtSource) => {
+    const task = makeTask({agent_id: 'agent-1', source_id: 'feedback', source: 'Notion', session_id: 'persisted'})
     const originalUpdate = useTaskStore.getState().updateTask
-    const updateTask = vi.fn().mockResolvedValue(undefined)
+    const updateTask = vi.fn().mockResolvedValue(true)
+    const resume = vi.spyOn(api.sessions, 'resume').mockResolvedValue({sessionId: 'persisted'})
+    const send = vi.spyOn(api.sessions, 'send').mockResolvedValue({success: true})
     useTaskStore.setState({tasks: [task], isLoading: false, updateTask})
     try {
       const view = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
       fireEvent.click(view.getByTestId('main-cta-complete'))
-      fireEvent.click(view.getByRole('radio', {name: "I'll do it manually"}))
+      if (!completeAtSource) fireEvent.click(view.getByRole('radio', {name: "I'll do it manually"}))
       fireEvent.click(view.getByRole('button', {name: 'Rate 4'}))
-      expect(completeMock).not.toHaveBeenCalled()
       fireEvent.click(view.getByRole('button', {name: button}))
-      await waitFor(() => expect(completeMock).toHaveBeenCalledWith(task.id, false))
+      if (button === 'Submit Feedback') {
+        await waitFor(() => expect(send).toHaveBeenCalledWith('persisted', expect.stringContaining('Review the session and update skills'), task.id, task.agent_id))
+        expect(updateTask).toHaveBeenCalledWith(task.id, {status: 'agent_learning', feedback_rating: 4, feedback_comment: null, complete_at_source: completeAtSource})
+        expect(completeMock).not.toHaveBeenCalled()
+      } else {
+        await waitFor(() => expect(completeMock).toHaveBeenCalledWith(task.id, completeAtSource))
+        expect(send).not.toHaveBeenCalled()
+      }
     } finally {
       cleanup()
       useTaskStore.setState({updateTask: originalUpdate})
+      resume.mockRestore()
+      send.mockRestore()
     }
   })
 

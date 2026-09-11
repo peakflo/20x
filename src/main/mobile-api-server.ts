@@ -1,3 +1,4 @@
+import { updateTaskFromUser } from './session-feedback'
 import { getTaskCompletionAction } from '../shared/task-completion'
 /**
  * Mobile API server — HTTP + WebSocket for controlling 20x from a mobile device.
@@ -750,7 +751,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
       }
       return { completed: true, status: fresh?.status }
     }
-    if (!syncManagerRef || db.getTaskSource(task.source_id)?.plugin_id !== 'peakflo') {
+    if (!syncManagerRef) {
       throw Object.assign(new Error('Sync this task with Workflo before completing it.'), { status: 409 })
     }
     db.updateTask(taskId, { complete_at_source: true })
@@ -770,7 +771,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     const taskId = taskUpdateMatch[1]
     const existing = db.getTask(taskId)
     if (!existing) throw Object.assign(new Error('Task not found'), { status: 404 })
-    const updated = db.updateTask(taskId, params as Parameters<DatabaseManager['updateTask']>[1])
+    const updated = updateTaskFromUser(db, taskId, params as Parameters<DatabaseManager['updateTask']>[1])
     if (updated) {
       broadcastToMobileClients('task:updated', { taskId, updates: updated })
       if (notifyDesktop) notifyDesktop('task:updated', { taskId, updates: updated })

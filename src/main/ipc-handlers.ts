@@ -1,3 +1,4 @@
+import { updateTaskFromUser } from './session-feedback'
 import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
 import * as childProcess from 'child_process'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
@@ -146,7 +147,7 @@ export function registerIpcHandlers(
       }
     }
 
-    const updated = db.updateTask(id, data)
+    const updated = updateTaskFromUser(db, id, data)
 
     // Initialize recurring task schedule when recurrence is added or changed
     if (recurrenceScheduler && updated && updated.is_recurring && updated.recurrence_pattern) {
