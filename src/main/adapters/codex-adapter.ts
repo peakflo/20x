@@ -1,3 +1,4 @@
+import { normalizeCodexModel } from './coding-agent-adapter'
 /**
  * Codex Adapter
  *
@@ -178,7 +179,7 @@ export class CodexAdapter implements CodingAgentAdapter {
   private buildCodexArgs(config: SessionConfig): string[] {
     const args = [
       '--model',
-      config.model || DEFAULT_CODEX_MODEL,
+      normalizeCodexModel(config.model) || DEFAULT_CODEX_MODEL,
     ]
 
     if (config.reasoningEffort && config.reasoningEffort !== 'max') {
@@ -253,7 +254,7 @@ export class CodexAdapter implements CodingAgentAdapter {
       const apiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY
       await this.sendRpcRequest(session, 'initialize', {
         api_key: apiKey,
-        model: config.model || DEFAULT_CODEX_MODEL,
+        model: normalizeCodexModel(config.model) || DEFAULT_CODEX_MODEL,
       })
 
       // Create thread (Codex's session concept)
@@ -347,7 +348,7 @@ export class CodexAdapter implements CodingAgentAdapter {
       const apiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY
       await this.sendRpcRequest(session, 'initialize', {
         api_key: apiKey,
-        model: config.model || DEFAULT_CODEX_MODEL,
+        model: normalizeCodexModel(config.model) || DEFAULT_CODEX_MODEL,
       })
 
       // Fetch thread history

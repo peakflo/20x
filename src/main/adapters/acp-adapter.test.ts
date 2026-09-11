@@ -2393,10 +2393,11 @@ describe('AcpAdapter process spawning for packaged Electron apps', () => {
   })
 
   it.each([
-    ['composer-2.5', 'composer-2.5[fast=true]'],
-    ['grok-4.5', 'grok-4.5[effort=high,fast=true]']
-  ])('maps %s to Cursor ACP model configuration', async (model, value) => {
-    const adapter = new AcpAdapter('cursor')
+    ['cursor', 'composer-2.5', 'composer-2.5[fast=true]'],
+    ['cursor', 'grok-4.5', 'grok-4.5[effort=high,fast=true]'],
+    ['codex', 'openai-codex/gpt-6-astra', 'gpt-6-astra']
+  ] as const)('maps %s %s to native ACP model configuration', async (backend, model, value) => {
+    const adapter = new AcpAdapter(backend)
     const priv = adapterPrivate(adapter)
     const sendRpcRequestSpy = vi.spyOn(priv, 'sendRpcRequest')
       .mockResolvedValueOnce({ authMethods: [] })

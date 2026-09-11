@@ -553,11 +553,32 @@ describe('durable engineering responsibilities', () => {
     expect(() => manager.assertLaunch(step.taskId, dir)).not.toThrow()
   })
 
+  it('shows the interrupted blocker and starts the saved queued assignment once after cancellation', async () => {
+    const first = await approve()
+    const oldStep = snapshot().steps[0]
+    sessions.clear() // Simulate a provider that stopped before reporting a result.
+    await manager.reconcile()
+    const request = input('Investigate why tickets keep appearing')
+    const queued = manager.delegate(scope(), request, 'Find the recurring ticket cause')
+    await manager.reconcile()
+    expect(queued.waitingFor).toMatchObject({ responsibilityId: first.id, taskId: oldStep.taskId, needsAttention: true })
+    expect(snapshot().steps).toHaveLength(1)
+    expect(manager.context(scope())).toMatchObject({ responsibilities: expect.arrayContaining([expect.objectContaining({ id: queued.id, steps: 0, waitingFor: queued.waitingFor })]) })
+    expect(manager.delegate(scope(), request, 'Find the recurring ticket cause').id).toBe(queued.id)
+    await manager.act(first.id, first.revision, 'cancel')
+    await manager.reconcile(); await manager.reconcile()
+    expect(snapshot().steps.filter(s => s.responsibilityId === queued.id)).toHaveLength(1)
+    expect(snapshot().responsibilities.find(r => r.id === queued.id)?.waitingFor).toBeUndefined()
+    expect(db.getTask(oldStep.taskId)).toBeDefined()
+    expect(runtime.startSession).toHaveBeenCalledTimes(2)
+  })
+
   it('serializes conflicting work and never shares another project permission', async () => {
     const first = await approve()
     const other = manager.propose(scope(), { ...agreement, title: 'Other goal' }, input('Do another change'))
     await manager.act(other.id, other.revision, 'approve'); await manager.reconcile()
     expect(runtime.startSession).toHaveBeenCalledTimes(1)
+    expect(snapshot().responsibilities.find(r => r.id === other.id)?.waitingFor).toMatchObject({ responsibilityId: first.id, needsAttention: false })
     const elsewhere = join(dir, 'other'); mkdirSync(elsewhere)
     const p = manager.createProject('Other project', elsewhere, project.agentId)
     const otherScope = manager.scopeForToken(manager.tokenForTask(projectConversationId(p.id))!)

@@ -1,3 +1,4 @@
+import { normalizeCodexModel } from './coding-agent-adapter'
 /**
  * Unified ACP (Agent Client Protocol) adapter for all ACP-compatible coding agents.
  * Supports: codex-acp and other ACP-compliant agent processes.
@@ -538,7 +539,7 @@ export class AcpAdapter implements CodingAgentAdapter {
       try {
         const modelValue = this.agentType === 'cursor'
           ? CURSOR_ACP_MODEL_VALUES[config.model] ?? config.model
-          : config.model
+          : this.agentType === 'codex' ? normalizeCodexModel(config.model) : config.model
         await this.sendRpcRequest(session, 'session/set_config_option', {
           sessionId: acpSessionId,
           configId: 'model',

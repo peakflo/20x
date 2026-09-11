@@ -108,6 +108,9 @@ export interface ResponsibilityAgreement {
   access?: ExecutionAccess
 }
 export interface ResponsibilityRecord {
+  /** Derived for display; does not change the agreement or grant launch authority. */
+  waitingFor?: { responsibilityId: string; title: string; taskId?: string; needsAttention: boolean }
+
   id: string
   projectId: string
   agreement: ResponsibilityAgreement

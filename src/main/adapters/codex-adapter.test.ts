@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { normalizeCodexModel } from './coding-agent-adapter'
 import { CodexAdapter, DEFAULT_CODEX_MODEL } from './codex-adapter'
 
 type CodexAdapterWithArgs = {
@@ -63,4 +64,11 @@ describe('CodexAdapter findCodexExecutable fallback paths', () => {
       '--json-rpc',
     ])
   })
+})
+
+it('only removes the known imported Codex provider prefix', () => {
+  const build = (new CodexAdapter() as unknown as CodexAdapterWithArgs).buildCodexArgs.bind(new CodexAdapter())
+  expect(build({ model: 'openai-codex/gpt-6-astra' })[1]).toBe('gpt-6-astra')
+  expect(normalizeCodexModel('custom/model')).toBe('custom/model')
+  expect(normalizeCodexModel('gpt-6-astra')).toBe('gpt-6-astra')
 })

@@ -94,7 +94,7 @@ export class TaskControl {
     const snapshot = this.responsibilities.snapshot(projectId)
     const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : ''
     return snapshot.responsibilities.filter(r => (!args.responsibility_id || r.id === args.responsibility_id) && (!query || r.agreement.title.toLowerCase().includes(query) || r.id === query))
-      .map(r => ({ id: r.id, title: r.agreement.title, kind: r.agreement.kind, state: r.state, revision: r.revision, project: snapshot.projects.find(p => p.id === r.projectId)?.name ?? r.projectId }))
+      .map(r => ({ id: r.id, title: r.agreement.title, kind: r.agreement.kind, state: r.state, revision: r.revision, steps: r.steps, waitingFor: r.waitingFor, project: snapshot.projects.find(p => p.id === r.projectId)?.name ?? r.projectId }))
   }
 
   async deleteProposal(args: Record<string, unknown>, projectId?: string): Promise<unknown> {

@@ -1,3 +1,4 @@
+import { normalizeCodexModel } from './coding-agent-adapter'
 /**
  * Codex App Server adapter.
  *
@@ -382,7 +383,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
       const result = await this.sendRpcRequest(session, 'thread/start', {
         cwd: config.workspaceDir,
-        model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
+        model: normalizeCodexModel(config.model) || DEFAULT_CODEX_APP_SERVER_MODEL,
         approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
         approvalsReviewer: 'user',
         sandbox: this.resolveSandboxMode(config),
@@ -418,7 +419,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     await this.sendRpcRequest(session, 'thread/resume', {
       threadId: sessionId,
       cwd: config.workspaceDir,
-      model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
+      model: normalizeCodexModel(config.model) || DEFAULT_CODEX_APP_SERVER_MODEL,
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',
       sandbox: this.resolveSandboxMode(config),
@@ -478,7 +479,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       threadId: session.threadId,
       input: [{ type: 'text', text: promptText }],
       cwd: config.workspaceDir,
-      model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
+      model: normalizeCodexModel(config.model) || DEFAULT_CODEX_APP_SERVER_MODEL,
       effort: config.reasoningEffort && config.reasoningEffort !== 'max' ? config.reasoningEffort : null,
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',

@@ -887,6 +887,22 @@ describe('CodexAppServerAdapter', () => {
     )
   })
 
+  it('normalizes imported Codex model IDs for new threads, resumed threads and turns', async () => {
+    const instance = new CodexAppServerAdapter(); const adapter = adapterPrivate(instance)
+    const send = vi.fn().mockResolvedValue({ threadId: 'thread-1', turnId: 'turn-1' })
+    adapter.sendRpcRequest = send
+    adapter.startAppServerProcess = vi.fn().mockImplementation(async () => createSession())
+    adapter.initializeAppServer = vi.fn().mockResolvedValue(undefined)
+    adapter.logMcpServerInventory = vi.fn()
+    adapter.bufferAllThreadItems = vi.fn().mockResolvedValue(undefined)
+    const config: SessionConfig = { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp', model: 'openai-codex/gpt-6-astra', reasoningEffort: 'medium' }
+    await instance.createSession(config)
+    await instance.resumeSession('thread-1', config)
+    await instance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'Hello' }], config)
+    for (const method of ['thread/start', 'thread/resume', 'turn/start']) expect(send).toHaveBeenCalledWith(expect.anything(), method, expect.objectContaining({ model: 'gpt-6-astra' }))
+    expect(send).toHaveBeenCalledWith(expect.anything(), 'turn/start', expect.objectContaining({ effort: 'medium' }))
+  })
+
   it('passes configured sandbox mode to app-server turn start', async () => {
     const adapterInstance = new CodexAppServerAdapter()
     const adapter = adapterPrivate(adapterInstance)

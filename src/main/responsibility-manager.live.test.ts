@@ -59,7 +59,7 @@ describe.skipIf(process.env.RUN_RESPONSIBILITY_LIVE !== '1')('Mastermind native 
     db.getWorkspaceDir = taskId => { const path = join(fixture, 'sessions', taskId); mkdirSync(path, { recursive: true }); return path }
     const config = { coding_agent: 'codex' as const, model: 'gpt-5.6-luna', reasoning_effort: 'medium' as const }
     const coordinator = db.createAgent({ name: 'Mastermind acceptance', config })!
-    const worker = db.createAgent({ name: 'Chosen worker', config })!
+    const worker = db.createAgent({ name: 'Chosen worker', config: { ...config, model: `openai-codex/${config.model}` } })!
     const agents = new AgentManager(db)
     const manager = new ResponsibilityManager(db, agents)
     agents.setResponsibilityManager(manager); setResponsibilityManager(manager); setTaskApiAgentController(agents)

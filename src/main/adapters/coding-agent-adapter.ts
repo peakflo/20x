@@ -306,3 +306,6 @@ export interface CodingAgentAdapter {
    */
   onDataAvailable?: (sessionId: string) => void
 }
+
+/** Imported provider labels are not part of a native Codex model ID. */
+export const normalizeCodexModel = (model?: string): string | undefined => model?.replace(/^openai-codex\//, '')

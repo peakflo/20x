@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { applyUiCommand } from '@/lib/ui-remote-control'
 import { ResponsibilitiesPanel } from './ResponsibilitiesPanel'
 import type { ResponsibilitiesApi, ResponsibilityRecord, ResponsibilitySnapshot } from '@shared/responsibilities'
 
@@ -51,6 +52,20 @@ describe('project responsibility controls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create project' }))
     await waitFor(() => expect(api.createProject).toHaveBeenCalledWith('Peakflo', '/Users/example/Project with spaces', 'agent'))
     await waitFor(() => expect(screen.getByLabelText('Engineering project')).toHaveValue('new-project'))
+  })
+
+  it('labels queued work and opens the earlier blocking task', async () => {
+    snapshot.responsibilities[0].state = 'active'
+    snapshot.responsibilities[0].waitingFor = { responsibilityId: 'old', title: 'Interrupted investigation', taskId: 'old-task', needsAttention: true }
+    vi.mocked(applyUiCommand).mockReturnValue({ applied: true } as ReturnType<typeof applyUiCommand>)
+    render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+    await waitFor(() => expect(screen.getByLabelText('Engineering project')).toHaveValue('project'))
+    fireEvent.click(screen.getByRole('button', { name: 'Show responsibilities' }))
+    expect(screen.getByText('Queued')).toBeInTheDocument()
+    expect(screen.getByText(/Waiting for “Interrupted investigation”/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Review blocking task' }))
+    await waitFor(() => expect(applyUiCommand).toHaveBeenCalledWith({ kind: 'open_task', taskId: 'old-task', where: 'modal' }))
+    expect(api.act).not.toHaveBeenCalled()
   })
 
   it('requires a source trial before approval and sends the exact agreement revision', async () => {
