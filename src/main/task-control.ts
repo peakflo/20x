@@ -23,8 +23,12 @@ export const taskControlTools: Tool[] = [
     inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string' }, task_id: { type: 'string' }, runs: { type: 'boolean', description: 'With task_id, list recent checks for that schedule.' }, run_id: { type: 'string', description: 'Read this run including its transcript and archived artifact paths.' }, before: { type: 'string', description: 'List runs due before this ISO timestamp.' } } }
   },
   {
-    name: 'manage_task', description: 'Ask the engineer to confirm completing, deleting, or pausing/resuming the schedule of an exact 20x task. Close means complete, not close its panel. pause_schedule and resume_schedule target a local recurring template: pause stops future instances, preserves existing runs and settings; resume starts at the next future occurrence without replaying the paused period. reuse_schedule/separate_schedule change execution mode only on a paused schedule with no unresolved check. recover_schedule releases an inspected interrupted check, retaining its history and leaving scheduling paused. Use inspect_tasks with runs or run_id to read history. This does not control project Routine agreements or global auto-run. This is task administration performed by Mastermind itself, not delegated project work or computer use. Completion follows the existing task-source confirmation flow. Deletion removes the local task and its subtasks, stops their agents and cancels their responsibilities. Never treat a declined, pending or failed action as completed. There is no model-supplied approval flag.',
-    inputSchema: { type: 'object', additionalProperties: false, properties: { task_id: { type: 'string' }, action: { type: 'string', enum: ['complete', 'close', 'delete', 'pause_schedule', 'resume_schedule', 'reuse_schedule', 'separate_schedule', 'recover_schedule'] } }, required: ['task_id', 'action'] }
+    name: 'manage_task', description: 'Ask the engineer to confirm completing, deleting, or pausing/resuming the schedule of an exact 20x task. For a requested batch deletion, use task_ids in ONE call for one approval of the full list. Close means complete, not close its panel. pause_schedule and resume_schedule target a local recurring template: pause stops future instances, preserves existing runs and settings; resume starts at the next future occurrence without replaying the paused period. reuse_schedule/separate_schedule change execution mode only on a paused schedule with no unresolved check. recover_schedule releases an inspected interrupted check, retaining its history and leaving scheduling paused. Use inspect_tasks with runs or run_id to read history. This does not control project Routine agreements or global auto-run. This is task administration performed by Mastermind itself, not delegated project work or computer use. Completion follows the existing task-source confirmation flow. Deletion removes the local task and its subtasks, stops their agents and cancels their responsibilities. Never treat a declined, pending or failed action as completed. There is no model-supplied approval flag.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {
+      task_id: { type: 'string', description: 'Single-task action. Omit when supplying task_ids for a batch deletion.' },
+      task_ids: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'string' }, description: 'Delete only: exact task IDs from inspect_tasks. Use ONE call for a requested batch so the engineer approves the full list once; do not loop over individual deletions. Includes dependent tasks. Do not also pass task_id.' },
+      action: { type: 'string', enum: ['complete', 'close', 'delete', 'pause_schedule', 'resume_schedule', 'reuse_schedule', 'separate_schedule', 'recover_schedule'] }
+    }, required: ['action'] }
   }
 ]
 
@@ -115,14 +119,19 @@ export class TaskControl {
 
   async run(args: Record<string, unknown>, projectId?: string): Promise<unknown> {
     this.shutdown.signal.throwIfAborted()
-    const task = this.task(args.task_id, projectId)
     const action = args.action === 'close' ? 'complete' : args.action
     if (action !== 'complete' && action !== 'delete' && action !== 'pause_schedule' && action !== 'resume_schedule' && action !== 'reuse_schedule' && action !== 'separate_schedule' && action !== 'recover_schedule') throw new Error('Choose complete, close, delete, pause_schedule, or resume_schedule.')
+    if (args.task_ids !== undefined) {
+      if (args.task_id !== undefined || action !== 'delete' || !Array.isArray(args.task_ids) || !args.task_ids.length || args.task_ids.length > 100) throw new Error('For bulk deletion, supply 1–100 exact task_ids and action delete, without task_id.')
+      const tasks = [...new Set(args.task_ids)].map(id => this.task(id, projectId))
+      return this.runExclusive(() => this.perform(tasks, 'delete', projectId))
+    }
+    const task = this.task(args.task_id, projectId)
     return this.runExclusive(() => action === 'reuse_schedule' || action === 'separate_schedule' || action === 'recover_schedule'
       ? this.configureSchedule(task, action, projectId)
       : action === 'pause_schedule' || action === 'resume_schedule'
       ? this.changeSchedule(task, action === 'pause_schedule', projectId)
-      : this.perform(task, action, projectId))
+      : this.perform([task], action, projectId))
   }
 
   private async configureSchedule(task: TaskRecord, action: string, projectId?: string): Promise<unknown> {
@@ -158,9 +167,12 @@ export class TaskControl {
     return { success: true, taskId: task.id, schedulePaused: !!updated.recurrence_paused, nextOccurrenceAt: updated.next_occurrence_at, existingRunsUnchanged: true }
   }
 
-  private async perform(task: TaskRecord, action: 'complete' | 'delete', projectId?: string): Promise<unknown> {
+  private async perform(tasks: TaskRecord[], action: 'complete' | 'delete', projectId?: string): Promise<unknown> {
+    const task = tasks[0]
+    const target = tasks.length === 1 ? { taskId: task.id } : { taskIds: tasks.map(t => t.id) }
     if (action === 'complete' && task.status === TaskStatus.Completed) return { success: true, taskId: task.id, status: 'completed', alreadyCompleted: true }
-    const affected = action === 'delete' ? this.tree(task) : [task]
+    const collect = () => [...new Map(tasks.flatMap(t => action === 'delete' ? this.tree(this.task(t.id, projectId)) : [this.task(t.id, projectId)]).map(t => [t.id, t])).values()]
+    const affected = collect()
     for (const item of affected) {
       this.task(item.id, projectId)
       if (this.db.getSetting(`workflo-completion:${item.id}`) || this.db.getSetting(`workflo-upload:${item.id}`)) throw new Error('This task has a pending Workflo command. Sync and resolve that command before completing or deleting it.')
@@ -171,23 +183,24 @@ export class TaskControl {
     }))]
     const agreements = this.responsibilities.snapshot().responsibilities.filter(r => owners.includes(r.id))
     let snapshot = fingerprint(affected)
-    const sourceSnapshot = JSON.stringify(task.source_id ? this.db.getTaskSource(task.source_id) : null)
+    const sources = (items: TaskRecord[]) => JSON.stringify(items.map(t => t.source_id ? this.db.getTaskSource(t.source_id) : null))
+    const sourceSnapshot = sources(affected)
     const account = this.db.getSetting('workflo-sync-scope')
     const unchanged = () => {
-      const current = this.task(task.id, projectId)
-      if (fingerprint(action === 'delete' ? this.tree(current) : [current]) !== snapshot ||
-        JSON.stringify(current.source_id ? this.db.getTaskSource(current.source_id) : null) !== sourceSnapshot ||
+      const current = collect()
+      if (fingerprint(current) !== snapshot || sources(current) !== sourceSnapshot ||
         this.db.getSetting('workflo-sync-scope') !== account || affected.some(t => this.db.getSetting(`workflo-completion:${t.id}`) || this.db.getSetting(`workflo-upload:${t.id}`))) throw new Error('The task or source changed. Nothing was deleted or completed; inspect it and confirm again. Agents and responsibilities may already have been stopped.')
     }
     const label = action === 'delete' ? 'Delete' : 'Complete'
     const source = task.source_id ? this.db.getTaskSource(task.source_id)?.name ?? task.source : 'Local task'
-    const approved = await this.confirm({ title: `${label} “${task.title}”?`, confirmLabel: `${label} task`, signal: this.shutdown.signal,
-      detail: `Task: ${task.id}\nSource: ${source}\n` +
-        (action === 'delete' ? `Delete this local task, its ${affected.length - 1} dependent tasks (subtasks and recurring instances), attachments and transcripts. Working checkouts are retained. A linked source is not deleted and may restore the task on sync.\n` : `Run source action: ${task.output_fields.find(f => f.id === 'action')?.value || PluginActionId.Complete}. Submitted output fields: ${JSON.stringify(task.output_fields)}. ${task.source_id ? 'Completion requires confirmation from this source.' : 'This local task must first be sent to Workflo; a Workflo connection, eligible agent and skills are required. Completion requires Workflo confirmation.'}\n`) +
+    const approved = await this.confirm({ title: tasks.length > 1 ? `Delete ${affected.length} tasks?` : `${label} “${task.title}”?`, confirmLabel: tasks.length > 1 ? `Delete ${affected.length} tasks` : `${label} task`, signal: this.shutdown.signal,
+      detail: (action === 'delete'
+        ? `Delete these ${affected.length} local tasks, including subtasks and recurring instances:\n${affected.map(t => `• ${t.title} [${t.id}]`).join('\n')}\n\nTheir attachments and transcripts are deleted. Working checkouts are retained. Linked sources are not deleted and may restore tasks on sync.\n`
+        : `Task: ${task.id}\nSource: ${source}\nRun source action: ${task.output_fields.find(f => f.id === 'action')?.value || PluginActionId.Complete}. Submitted output fields: ${JSON.stringify(task.output_fields)}. ${task.source_id ? 'Completion requires confirmation from this source.' : 'This local task must first be sent to Workflo; a Workflo connection, eligible agent and skills are required. Completion requires Workflo confirmation.'}\n`) +
         (agreements.length ? `Stop and cancel these responsibilities so they cannot schedule replacement work: ${agreements.map(r => r.agreement.title).join(', ')}. Their saved agreements and reports remain.\n` : '') +
         (affected.some(t => t.is_recurring && !t.recurrence_parent_id) ? 'Pause future checks for the affected schedules, including if completion cannot be confirmed.\n' : '') +
         'Active agents for the affected tasks will be stopped before changing the tasks.' })
-    if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, taskId: task.id }
+    if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, ...target }
     unchanged()
     const latest = this.responsibilities.snapshot().responsibilities.filter(r => owners.includes(r.id))
     if (JSON.stringify(latest) !== JSON.stringify(agreements)) throw new Error('The responsibility changed while confirmation was open. Review it again.')
@@ -199,12 +212,19 @@ export class TaskControl {
       unchanged()
       if (action === 'delete') {
         // Delete children explicitly so their owned attachments and transcripts are cleaned too.
-        for (const item of [...affected].reverse()) {
-          this.db.deleteTask(item.id)
-          this.notify('task:deleted', { taskId: item.id })
+        try {
+          for (const item of [...affected].reverse()) {
+            this.db.deleteTask(item.id)
+            this.notify('task:deleted', { taskId: item.id })
+          }
+        } catch (error) {
+          this.notify('tasks:refresh', {})
+          return { success: false, ...target, error: (error as Error).message,
+            deletedTaskIds: affected.filter(t => !this.db.getTask(t.id)).map(t => t.id),
+            remainingTaskIds: affected.filter(t => this.db.getTask(t.id)).map(t => t.id) }
         }
         this.notify('tasks:refresh', {})
-        return { success: true, taskId: task.id, deletedTaskIds: affected.map(t => t.id) }
+        return { success: true, ...target, deletedTaskIds: affected.map(t => t.id) }
       }
       const result = await this.sync.completeTask(task.id)
       this.notify('tasks:refresh', {})

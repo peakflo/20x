@@ -130,6 +130,7 @@ describe('MCP endpoint over HTTP', () => {
 
   it('runs Mastermind task inspection and confirmed deletion through the real MCP endpoint', async () => {
     const task = db.createTask(makeTask({ title: 'Disposable test task' }))!
+    const second = db.createTask(makeTask({ title: 'Second disposable task' }))!
     vi.spyOn(db, 'deleteTaskAttachments').mockImplementation(() => {})
     const responsibilities = { projectForTask: () => undefined, stepForTask: () => undefined, snapshot: () => ({ responsibilities: [] }) } as unknown as ResponsibilityManager
     const confirm = vi.fn(async () => true)
@@ -140,10 +141,11 @@ describe('MCP endpoint over HTTP', () => {
     try {
       expect((await client.listTools()).tools.map(t => t.name)).toContain('manage_task')
       expect(textOf(await client.callTool({ name: 'inspect_tasks', arguments: { query: task.title } }))).toContain(task.id)
-      const result = await client.callTool({ name: 'manage_task', arguments: { task_id: task.id, action: 'delete' } })
-      expect(JSON.parse(textOf(result))).toMatchObject({ success: true, deletedTaskIds: [task.id] })
+      const result = await client.callTool({ name: 'manage_task', arguments: { task_ids: [task.id, second.id], action: 'delete' } })
+      expect(JSON.parse(textOf(result))).toMatchObject({ success: true, deletedTaskIds: [task.id, second.id] })
       expect(confirm).toHaveBeenCalledOnce()
       expect(db.getTask(task.id)).toBeUndefined()
+      expect(db.getTask(second.id)).toBeUndefined()
     } finally { await client.close(); await service.stop() }
   })
 

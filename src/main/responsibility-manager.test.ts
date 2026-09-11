@@ -292,22 +292,25 @@ describe('durable engineering responsibilities', () => {
     expect(() => manager.createProject('File', file, project.agentId)).toThrow('Choose a project folder')
   })
 
-  it('lets the project root delete a task without delegation or replacement work', async () => {
+  it('lets the project root delete a batch with one approval and no replacement work', async () => {
     await approve()
     const step = snapshot().steps[0]
+    const second = db.createTask({ title: 'Another disposable task' })!
     const token = manager.tokenForTask(step.taskId)!
     const confirm = vi.fn(async () => true)
     const service = new TaskControl(db, { withStoppedTasks: async (_ids, action, beforeStop) => { await beforeStop?.(); return action() } }, { completeTask: vi.fn() }, manager, confirm, vi.fn())
     manager.setTaskControl(service)
     vi.spyOn(db, 'deleteTaskAttachments').mockImplementation(() => {})
-    expect((await callResponsibilityTool(manager, token, 'manage_task', { task_id: step.taskId, action: 'delete' })).isError).toBe(true)
+    expect((await callResponsibilityTool(manager, token, 'manage_task', { task_ids: [step.taskId, second.id], action: 'delete' })).isError).toBe(true)
     expect(confirm).not.toHaveBeenCalled()
     const root = manager.tokenForTask(projectConversationId(project.id))!
     const inspected = await callResponsibilityTool(manager, root, 'inspect_tasks', { task_id: step.taskId })
     expect(JSON.stringify(inspected)).toContain(step.taskId)
-    const result = await callResponsibilityTool(manager, root, 'manage_task', { task_id: step.taskId, action: 'delete' })
+    const result = await callResponsibilityTool(manager, root, 'manage_task', { task_ids: [step.taskId, second.id], action: 'delete' })
     expect(result.isError).not.toBe(true)
     expect(db.getTask(step.taskId)).toBeUndefined()
+    expect(db.getTask(second.id)).toBeUndefined()
+    expect(confirm).toHaveBeenCalledOnce()
     expect(snapshot().responsibilities[0].state).toBe('cancelled')
     await manager.reconcile()
     expect(snapshot().steps).toHaveLength(1)

@@ -7,10 +7,50 @@ import { AgentManager } from './agent-manager'
 import { ResponsibilityManager, collectSource } from './responsibility-manager'
 import { projectConversationId } from '../shared/responsibilities'
 import { RoutineSources } from './routine-sources'
+import { TaskControl } from './task-control'
 import { startTaskApiServer, stopTaskApiServer, setResponsibilityManager, setTaskApiAgentController } from './task-api-server'
 
 /** Opt-in real provider acceptance. Uses temporary files and an isolated SQLite DB. */
 describe.skipIf(process.env.RUN_RESPONSIBILITY_LIVE !== '1')('Mastermind native execution', () => {
+  it('requests one batch deletion approval from a natural cleanup request', async () => {
+    const fixture = mkdtempSync(join(tmpdir(), '20x-bulk-delete-live-'))
+    const { db } = createTestDb()
+    db.getWorkspaceDir = taskId => { const path = join(fixture, 'sessions', taskId); mkdirSync(path, { recursive: true }); return path }
+    const agent = db.createAgent({ name: 'Bulk approval acceptance', config: { coding_agent: 'codex', model: 'gpt-5.6-luna', reasoning_effort: 'medium' } })!
+    const agents = new AgentManager(db)
+    const manager = new ResponsibilityManager(db, agents)
+    const confirmations: Array<{ title: string; detail: string }> = []
+    const control = new TaskControl(db, agents, { completeTask: async () => { throw new Error('Completion is outside this fixture') } }, manager, async request => {
+      confirmations.push(request)
+      return false // The engineer declines the single preview; no fixture task is deleted.
+    }, () => {})
+    manager.setTaskControl(control)
+    agents.setResponsibilityManager(manager); setResponsibilityManager(manager); setTaskApiAgentController(agents)
+    await startTaskApiServer(db)
+    try {
+      const tasks = ['Obsolete draft', 'Obsolete experiment', 'Obsolete check'].map(title => db.createTask({ title })!)
+      const keep = db.createTask({ title: 'Current work' })!
+      const project = manager.createProject('Bulk approval acceptance', fixture, agent.id)
+      const taskId = projectConversationId(project.id)
+      manager.start(); await manager.reconcile()
+      const sessionId = await agents.startSession(agent.id, taskId, undefined, true)
+      const request = 'Delete all three tasks whose titles start with Obsolete. Keep Current work. This is task cleanup only, no project inspection or other work.'
+      manager.recordHumanInput(taskId, request)
+      await agents.sendMessage(sessionId, request, taskId, agent.id)
+      const deadline = Date.now() + 120000
+      while (Date.now() < deadline && !(confirmations.length && agents.getSessionStatus(sessionId)?.status === 'idle')) await new Promise(resolve => setTimeout(resolve, 500))
+      expect(confirmations).toHaveLength(1)
+      expect(confirmations[0].title).toBe('Delete 3 tasks?')
+      for (const task of tasks) expect(confirmations[0].detail).toContain(`[${task.id}]`)
+      expect(confirmations[0].detail).not.toContain(keep.id)
+      expect(db.getTasks()).toHaveLength(4)
+      expect(manager.snapshot().responsibilities).toHaveLength(0)
+      console.log('BULK_DELETE_NATIVE_RECEIPT', JSON.stringify({ approvals: confirmations.length, selectedTasks: tasks.length, cancelled: true, remainingTasks: db.getTasks().length }))
+    } finally {
+      await control.stop(); await manager.stop(); await agents.stopAllSessions(); stopTaskApiServer(); setResponsibilityManager(undefined); db.db.close(); rmSync(fixture, { recursive: true, force: true })
+    }
+  }, 180000)
+
   it('applies a conversational work-agent default to a real delegated task', async () => {
     const fixture = mkdtempSync(join(tmpdir(), '20x-work-agent-live-'))
     const root = join(fixture, 'project'); mkdirSync(root)

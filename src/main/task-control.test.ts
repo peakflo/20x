@@ -126,6 +126,94 @@ describe('Mastermind task administration', () => {
     expect(notify).toHaveBeenCalledWith('task:deleted', { taskId: grandchild.id })
   })
 
+  it('approves the full batch once, deduplicating selected descendants and cleaning every task', async () => {
+    const parent = task('First task')
+    const child = db.createTask({ title: 'Selected child', parent_task_id: parent.id })!
+    const second = task('Second task')
+    const occurrence = db.createTask({ title: 'Saved check', recurrence_parent_id: second.id })!
+    const unrelated = task('Keep this task')
+    for (const t of [parent, child, second, occurrence]) db.upsertTranscriptParts(t.id, [{ id: 'part', role: 'assistant', content: 'Saved result' }])
+    const result = await control.run({ action: 'delete', task_ids: [child.id, second.id, parent.id, child.id] })
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(confirm.mock.calls[0][0]).toMatchObject({ title: 'Delete 4 tasks?', confirmLabel: 'Delete 4 tasks' })
+    for (const t of [parent, child, second, occurrence]) {
+      expect(confirm.mock.calls[0][0].detail.split(`[${t.id}]`)).toHaveLength(2)
+      expect(confirm.mock.calls[0][0].detail).toContain(t.title)
+      expect(db.getTranscriptParts(t.id)).toEqual([])
+    }
+    expect(stop).toHaveBeenCalledOnce()
+    expect(new Set(stop.mock.calls[0][0])).toEqual(new Set([parent.id, child.id, second.id, occurrence.id]))
+    expect(result).toMatchObject({ success: true, deletedTaskIds: expect.arrayContaining([parent.id, child.id, second.id, occurrence.id]) })
+    expect(db.getTasks().map(t => t.id)).toEqual([unrelated.id])
+    expect(db.deleteTaskAttachments).toHaveBeenCalledTimes(4)
+  })
+
+  it('leaves the entire batch intact when declined or stopped during confirmation', async () => {
+    const tasks = [task('First'), task('Second')]
+    const args = { action: 'delete', task_ids: tasks.map(t => t.id) }
+    confirm.mockResolvedValueOnce(false)
+    expect(await control.run(args)).toMatchObject({ success: false, cancelled: true, taskIds: args.task_ids })
+    confirm.mockImplementationOnce(({ signal }) => new Promise(resolve => signal.addEventListener('abort', () => resolve(false), { once: true })))
+    const pending = control.run(args)
+    await expect(control.run(args)).rejects.toThrow('already waiting')
+    await control.stop()
+    expect(await pending).toMatchObject({ cancelled: true })
+    expect(db.getTasks()).toHaveLength(2)
+    expect(stop).not.toHaveBeenCalled()
+  })
+
+  it('rejects invalid or mixed batch targets before requesting approval', async () => {
+    const t = task()
+    for (const args of [
+      { action: 'delete', task_ids: [] }, { action: 'delete', task_ids: 'all' },
+      { action: 'delete', task_ids: [t.id], task_id: t.id }, { action: 'complete', task_ids: [t.id] },
+      { action: 'delete', task_ids: Array(101).fill(t.id) }, { action: 'delete', task_ids: [t.id, null] },
+      { action: 'delete', task_ids: [t.id, 'missing'] }, { action: 'delete', task_ids: [t.id, 'mastermind-session'] }
+    ]) await expect(control.run(args)).rejects.toThrow()
+    expect(confirm).not.toHaveBeenCalled()
+    expect(db.getTask(t.id)).toBeDefined()
+  })
+
+  it('checks every target for project ownership and pending source commands', async () => {
+    const first = task('This project')
+    const second = task('Other project')
+    const responsibilities = { projectForTask: (id: string) => ({ id: id === second.id ? 'other' : 'project' }), stepForTask: () => undefined, snapshot: () => ({ responsibilities: [] }) } as unknown as ResponsibilityManager
+    control = new TaskControl(db, { withStoppedTasks: (ids, action, beforeStop) => stop(ids, action, beforeStop) as ReturnType<typeof action> }, { completeTask: complete }, responsibilities, confirm, notify)
+    await expect(control.run({ action: 'delete', task_ids: [first.id, second.id] }, 'project')).rejects.toThrow('another project')
+    db.setSetting(`workflo-upload:${second.id}`, 'pending')
+    await expect(control.run({ action: 'delete', task_ids: [first.id, second.id] })).rejects.toThrow('pending Workflo command')
+    expect(confirm).not.toHaveBeenCalled()
+    expect(stop).not.toHaveBeenCalled()
+    expect(db.getTasks()).toHaveLength(2)
+  })
+
+  it.each(['confirmation', 'cleanup'])('rechecks the entire batch after %s', async when => {
+    const first = task('First')
+    const second = task('Second')
+    const change = () => db.createTask({ title: 'Unapproved child', parent_task_id: second.id })
+    if (when === 'confirmation') confirm.mockImplementationOnce(async () => { change(); return true })
+    else stop.mockImplementationOnce(async (_ids, action) => { change(); return action() })
+    await expect(control.run({ action: 'delete', task_ids: [first.id, second.id] })).rejects.toThrow('task or source changed')
+    expect(db.getTasks()).toHaveLength(3)
+    expect(db.deleteTaskAttachments).not.toHaveBeenCalled()
+  })
+
+  it('returns an accurate partial result if deletion fails instead of claiming the whole batch succeeded', async () => {
+    const first = task('First')
+    const second = task('Second')
+    const deleteTask = db.deleteTask.bind(db)
+    vi.spyOn(db, 'deleteTask').mockImplementation(id => {
+      if (id === first.id) throw new Error('Deletion failed')
+      return deleteTask(id)
+    })
+    expect(await control.run({ action: 'delete', task_ids: [first.id, second.id] })).toMatchObject({
+      success: false, deletedTaskIds: [second.id], remainingTaskIds: [first.id], error: 'Deletion failed'
+    })
+    expect(confirm).toHaveBeenCalledOnce()
+    expect(db.getTask(first.id)).toBeDefined()
+    expect(db.getTask(second.id)).toBeUndefined()
+  })
+
   it('rejects stale consent both while the dialog is open and during asynchronous cleanup', async () => {
     const t = task()
     confirm.mockImplementationOnce(async () => { db.updateTask(t.id, { title: 'Different work' }); return true })
