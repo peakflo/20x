@@ -1,3 +1,4 @@
+import type { TaskConfirmationApi, TaskConfirmation } from '../shared/task-confirmation'
 import type { ResponsibilitiesApi } from '../shared/responsibilities'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
@@ -18,7 +19,17 @@ const responsibilities: ResponsibilitiesApi = {
     return () => { ipcRenderer.removeListener('responsibilities:changed', handler) }
   }
 }
+const taskConfirmation: TaskConfirmationApi = {
+  current: () => ipcRenderer.invoke('task-confirmation:current'),
+  answer: (id, approved) => ipcRenderer.invoke('task-confirmation:answer', id, approved),
+  onChanged: callback => {
+    const handler = (_event: unknown, request: TaskConfirmation | null) => callback(request)
+    ipcRenderer.on('task-confirmation:changed', handler)
+    return () => { ipcRenderer.removeListener('task-confirmation:changed', handler) }
+  }
+}
 contextBridge.exposeInMainWorld('electronAPI', {
+  taskConfirmation,
   responsibilities,
   db: {
     getScheduleRuns: (id: string, runId?: string, before?: string) => ipcRenderer.invoke('db:getScheduleRuns', id, runId, before),

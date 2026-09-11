@@ -1,3 +1,4 @@
+import { TaskActionConfirmation } from '@/components/tasks/TaskActionConfirmation'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { useEffect } from 'react'
 import { identifyAnalyticsUser, resetAnalyticsUser, setAnalyticsEnterpriseEmail } from '@/lib/analytics'
@@ -27,5 +28,5 @@ export default function App() {
     }
   }, [isAuthenticated, userId, userEmail, currentUserEmail, currentTenant?.id, currentTenant?.name])
 
-  return <AppLayout />
+  return <><AppLayout /><TaskActionConfirmation /></>
 }

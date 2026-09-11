@@ -16,6 +16,7 @@ import { WorktreeManager } from './worktree-manager'
 import { McpToolCaller } from './mcp-tool-caller'
 import { RoutineSources } from './routine-sources'
 import { TaskControl } from './task-control'
+import { registerTaskConfirmation } from './task-confirmation'
 import { SyncManager } from './sync-manager'
 import { OAuthManager } from './oauth/oauth-manager'
 import { PluginRegistry } from './plugins/registry'
@@ -1031,12 +1032,7 @@ app.whenReady().then(async () => {
   })
   agentManager.setScheduleRuns(scheduleRuns)
   recurrenceScheduler = new RecurrenceScheduler(db, undefined, scheduleRuns)
-  taskControl = new TaskControl(db, agentManager, syncManager, responsibilityManager, async request => {
-    if (!mainWindow || mainWindow.isDestroyed() || request.signal.aborted) return false
-    const result = await dialog.showMessageBox(mainWindow, { type: 'question', title: 'Mastermind task action', message: request.title, detail: request.detail,
-      buttons: [request.confirmLabel, 'Cancel'], defaultId: 1, cancelId: 1, noLink: true, signal: request.signal })
-    return result.response === 0 && !request.signal.aborted
-  }, (channel, data) => {
+  taskControl = new TaskControl(db, agentManager, syncManager, responsibilityManager, registerTaskConfirmation(() => mainWindow), (channel, data) => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, data)
     broadcastToMobileClients(channel, data)
   }, recurrenceScheduler)

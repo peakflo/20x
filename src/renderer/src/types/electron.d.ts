@@ -214,6 +214,7 @@ export interface GlabCliStatus {
 }
 
 interface ElectronAPI {
+  taskConfirmation: import('@shared/task-confirmation').TaskConfirmationApi
   responsibilities: import('@shared/responsibilities').ResponsibilitiesApi
   db: {
     getScheduleRuns: (id: string, runId?: string, before?: string) => Promise<unknown>
