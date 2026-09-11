@@ -26,7 +26,7 @@ Independent tasks can run in the same project folder. Interrupted assignments no
 
 ## Proactive follow-up
 
-Each project's **Proactive follow-up** toggle is on by default. The existing five-second tick notices saved results, questions, failures, meaningful workflow progress and expired deadlines. Mastermind reviews these in its existing project conversation, using the selected conversation agent. Closing the drawer does not stop follow-up.
+Each project's **Proactive follow-up** is on by default. Use **Pause** or **Continue** below the Mastermind project selector; the button and On / Reviewing / Paused status remain visible when the project details are collapsed. The existing five-second tick notices saved results, questions, failures, meaningful workflow progress and expired deadlines. Mastermind reviews these in its existing project conversation, using the selected conversation agent. Closing the drawer does not stop follow-up.
 
 Updates are short and include task links. A desktop notification opens the right project when the app is unfocused. Work and Decisions retain the underlying evidence and exact approval controls; publishing a summary does not mark a decision answered or its result read. Ordinary clarification replies in Mastermind can be routed to the exact pending question using the latest recorded human message. Native questions and permission approvals continue through their original controls.
 

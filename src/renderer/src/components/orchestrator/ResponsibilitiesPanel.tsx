@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, FolderPlus } from 'lucide-react'
+import { ChevronDown, ChevronRight, FolderPlus, Pause, Play } from 'lucide-react'
 import { agentApi, settingsApi } from '@/lib/ipc-client'
 import { useTaskStore } from '@/stores/task-store'
 import { applyUiCommand } from '@/lib/ui-remote-control'
@@ -54,6 +54,8 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
   const unread = notices.filter(n => n.state === 'pending' && n.kind === 'result')
   const proposals = records.filter(r => r.state === 'proposed')
   const factoryProposals = (snapshot.factoryProposals ?? []).filter(p => p.definition.projectId === projectId)
+  const followup = snapshot.followups?.[projectId]
+  const proactiveEnabled = followup?.enabled !== false
   return <section aria-label="Project responsibilities" className="shrink-0 rounded-2xl border border-border bg-card shadow-card">
     <div className="flex items-center gap-2 p-2">
       <button aria-label={expanded ? 'Collapse responsibilities' : 'Show responsibilities'} onClick={() => setExpanded(!expanded)} className="rounded p-1 hover:bg-accent">
@@ -69,9 +71,14 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
       <Button size="sm" variant="ghost" aria-label="Add engineering project" onClick={() => { setCreating(!creating); setExpanded(true) }}><FolderPlus size={16} /></Button>
     </div>
     {projectId && <div className="mx-3 mb-2 text-xs text-muted-foreground">
-      <label className="flex items-center gap-2"><input type="checkbox" checked={snapshot.followups?.[projectId]?.enabled !== false} onChange={event => void run(() => api.setProactive(projectId, event.target.checked))} />Proactive follow-up</label>
-      {snapshot.followups?.[projectId]?.reviewing && <p className="mt-1" role="status">Mastermind is reviewing updates.</p>}
-      {snapshot.followups?.[projectId]?.error && <p className="mt-1" role="alert">{snapshot.followups[projectId].error} <button className="underline" onClick={() => void run(() => api.retryFollowups(projectId))}>Retry follow-up</button></p>}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p role="status">Proactive follow-up · {proactiveEnabled ? followup?.reviewing ? 'Reviewing' : 'On' : 'Paused'}</p>
+        <Button type="button" size="sm" variant="outline" disabled={busy} aria-label={proactiveEnabled ? 'Pause proactive follow-up' : 'Continue proactive follow-up'} title="Controls automatic reviews and follow-ups for this project. Tasks and schedules keep their own controls." onClick={() => void run(() => api.setProactive(projectId, !proactiveEnabled))}>
+          {proactiveEnabled ? <Pause size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
+          {proactiveEnabled ? 'Pause' : 'Continue'}
+        </Button>
+      </div>
+      {followup?.error && <p className="mt-1" role="alert">{followup.error} <button type="button" className="underline" onClick={() => void run(() => api.retryFollowups(projectId))}>Retry follow-up</button></p>}
     </div>}
     {(pending.length > 0 || proposals.length > 0 || unread.length > 0 || factoryProposals.length > 0) && <button onClick={() => { setExpanded(true); setTab(pending.length || unread.length ? 'decisions' : 'work') }} className="mx-3 mb-2 text-left text-xs font-medium text-primary" aria-live="polite">
       {factoryProposals.length ? `${factoryProposals.length} Factory preview(s) to review` : pending.length > 0 ? `${pending.length} decision${pending.length === 1 ? '' : 's'} need you` : proposals.length ? `${proposals.length} agreement${proposals.length === 1 ? '' : 's'} to review` : `${unread.length} result${unread.length === 1 ? '' : 's'} ready`}

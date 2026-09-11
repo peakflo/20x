@@ -67,13 +67,22 @@ describe('project responsibility controls', () => {
     expect(api.act).not.toHaveBeenCalled()
   })
 
-  it('pauses proactive conversation without acting on the workflow', async () => {
+  it('pauses and continues proactive follow-up while the project details are collapsed', async () => {
     snapshot.followups = { project: { enabled: true, reviewing: false, pending: 1, error: 'Delivery needs review.' } }
+    vi.mocked(api.setProactive).mockImplementation(async (id, enabled) => { snapshot.followups![id].enabled = enabled })
     render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
-    const control = await screen.findByLabelText('Proactive follow-up')
-    expect(control).toBeChecked()
+    const control = await screen.findByRole('button', { name: 'Pause proactive follow-up' })
+    expect(screen.getByRole('button', { name: 'Show responsibilities' })).toBeInTheDocument()
     fireEvent.click(control)
+    expect(control).toBeDisabled()
     await waitFor(() => expect(api.setProactive).toHaveBeenCalledWith('project', false))
+    const resume = await screen.findByRole('button', { name: 'Continue proactive follow-up' })
+    await waitFor(() => expect(resume).not.toBeDisabled())
+    expect(screen.getByRole('status')).toHaveTextContent('Proactive follow-up · Paused')
+    fireEvent.click(resume)
+    await waitFor(() => expect(api.setProactive).toHaveBeenLastCalledWith('project', true))
+    await screen.findByRole('button', { name: 'Pause proactive follow-up' })
+    expect(screen.getByRole('status')).toHaveTextContent('Proactive follow-up · On')
     fireEvent.click(screen.getByRole('button', { name: 'Retry follow-up' }))
     await waitFor(() => expect(api.retryFollowups).toHaveBeenCalledWith('project'))
     expect(api.act).not.toHaveBeenCalled()
