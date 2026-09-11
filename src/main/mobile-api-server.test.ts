@@ -213,3 +213,29 @@ describe('mobile-api-server: POST /api/tasks/:id coordinator wake-up', () => {
     expect(notifyParent).not.toHaveBeenCalled()
   })
 })
+
+describe('mobile-api-server: source completion action', () => {
+  afterEach(() => {
+    stopMobileApiServer()
+    vi.restoreAllMocks()
+  })
+
+  it.each(['approve', undefined])('sends the selected action %s to the source', async (action) => {
+    const { db } = createTestDb()
+    const source = db.createTaskSource({ name: 'Session Feedback', plugin_id: 'peakflo', mcp_server_id: null })!
+    const task = db.createTask(makeTask({ source_id: source.id, source: 'Session Feedback',
+      output_fields: action ? [{ id: 'action', name: 'Action', type: 'text', value: action }] : [] }))!
+    const executeAction = vi.fn().mockResolvedValue({ success: true })
+    const token = 'test-completion-token'
+    db.createMobileSession('completion-session', createHash('sha256').update(token).digest('hex'), 'test-device')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const port = await startMobileApiServer(db, {} as never, {} as never,
+      21000 + Math.floor(Math.random() * 40000), { executeAction } as never)
+    const response = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/complete`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` }
+    })
+    expect(response.status).toBe(200)
+    expect(executeAction).toHaveBeenCalledWith(action || 'complete', expect.objectContaining({ id: task.id }), undefined, source.id)
+    db.close()
+  })
+})

@@ -56,8 +56,10 @@ describe('FeedbackDialog', () => {
   })
 
   it('calls onSubmit with rating and comment when submitted', () => {
-    render(<FeedbackDialog open={true} onSubmit={onSubmit} onSkip={onSkip} onCancel={onCancel} />)
+    render(<FeedbackDialog open={true} completionDescription="Action at Session Feedback: approve." onSubmit={onSubmit} onSkip={onSkip} onCancel={onCancel} />)
     const dialog = getDialog()
+    expect(within(dialog).getByText('Action at Session Feedback: approve.')).toBeInTheDocument()
+    expect(onSubmit).not.toHaveBeenCalled()
 
     // Click the 4th star
     const starButtons = within(dialog).getAllByRole('button').filter(btn =>

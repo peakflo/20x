@@ -1,3 +1,4 @@
+import { getTaskCompletionAction } from '../shared/task-completion'
 /**
  * Mobile API server — HTTP + WebSocket for controlling 20x from a mobile device.
  * Runs inside the Electron main process, shares DatabaseManager and AgentManager.
@@ -745,7 +746,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     if (!syncManagerRef || db.getTaskSource(task.source_id)?.plugin_id !== 'peakflo') {
       throw Object.assign(new Error('Sync this task with Workflo before completing it.'), { status: 409 })
     }
-    const result = await syncManagerRef.executeAction('complete', task, undefined, task.source_id)
+    const result = await syncManagerRef.executeAction(getTaskCompletionAction(task.output_fields), task, undefined, task.source_id)
     if (!result.success) throw Object.assign(new Error(result.error || 'Completion is pending.'), { status: 409 })
     const completed = true
     const fresh = db.getTask(taskId)

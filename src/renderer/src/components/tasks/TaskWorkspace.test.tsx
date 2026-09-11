@@ -138,6 +138,23 @@ describe('clampTranscriptWidth', () => {
 })
 
 describe('TaskWorkspace keyboard actions', () => {
+  it.each(['approve', undefined])('shows the Session Feedback source action %s before completion', async (action) => {
+    const task = makeRendererTask({
+      status: TaskStatus.ReadyForReview,
+      session_id: 'persisted-session-1',
+      source_id: 'session-feedback',
+      source: 'Session Feedback',
+      output_fields: action ? [{ id: 'action', name: 'Action', type: 'text', value: action }] : []
+    })
+    renderWorkspace(task)
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.COMPLETE, taskId: task.id }))
+    expect(screen.getByText(`Action at Session Feedback: ${action || 'complete'}. Completion sends this action and the task outputs to the source.`)).toBeInTheDocument()
+    expect(screen.getByText('Skip omits only the session rating and comment.')).toBeInTheDocument()
+    expect(noopFn).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
+    await waitFor(() => expect(noopFn).toHaveBeenCalledTimes(1))
+  })
+
   it('opens session feedback instead of completing immediately', () => {
     const task = makeRendererTask({
       status: TaskStatus.ReadyForReview,

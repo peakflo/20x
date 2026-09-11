@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, fireEvent } from '@testing-library/react'
+import { render, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { ArtifactType } from '@shared/artifacts'
 import { TaskDetailPage } from './TaskDetailPage'
 import { useTaskStore, type Task } from '../stores/task-store'
@@ -84,6 +84,28 @@ afterEach(() => {
 })
 
 describe('TaskDetailPage', () => {
+  it.each(['approve', undefined])('shows the Session Feedback action %s before Skip completes', async (action) => {
+    const task = makeTask({ agent_id: 'agent-1', source_id: 'session-feedback', source: 'Session Feedback',
+      output_fields: action ? [{ id: 'action', value: action }] : [] })
+    useTaskStore.setState({ tasks: [task], isLoading: false })
+    const view = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
+    fireEvent.click(view.getByTestId('main-cta-complete'))
+    const dialog = within(view.getByRole('dialog'))
+    expect(dialog.getByText(`Action at Session Feedback: ${action || 'complete'}. Completion sends this action and the task outputs to the source.`)).toBeTruthy()
+    expect(completeMock).not.toHaveBeenCalled()
+    fireEvent.click(dialog.getByRole('button', { name: 'Skip' }))
+    await waitFor(() => expect(completeMock).toHaveBeenCalledWith(task.id))
+  })
+
+  it('cancels source feedback without completing', () => {
+    useTaskStore.setState({ tasks: [makeTask({ agent_id: 'agent-1', source_id: 'session-feedback', source: 'Session Feedback' })], isLoading: false })
+    const view = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
+    fireEvent.click(view.getByTestId('main-cta-complete'))
+    fireEvent.click(view.getByRole('button', { name: 'Cancel' }))
+    expect(completeMock).not.toHaveBeenCalled()
+    expect(view.queryByRole('dialog')).toBeNull()
+  })
+
   it('switches to the artifacts segment and opens an artifact viewer', () => {
     const task = makeTask({ id: 'task-1' })
     useTaskStore.setState({ tasks: [task], isLoading: false })

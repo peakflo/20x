@@ -1,3 +1,5 @@
+import { getSourceCompletionDescription } from '@shared/task-completion'
+import { useTaskSourceStore } from '@/stores/task-source-store'
 import { LayoutList, Send, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -124,6 +126,7 @@ function TaskWorkspaceComponent({
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null)
   const [orgProvider, setOrgProvider] = useState<GitProvider>('github')
   const [isSettingUpWorktree, setIsSettingUpWorktree] = useState(false)
+  const taskSources = useTaskSourceStore(state => state.sources)
   const [showFeedback, setShowFeedback] = useState(false)
   const [showSnooze, setShowSnooze] = useState(false)
   const [showIncompatibleSession, setShowIncompatibleSession] = useState(false)
@@ -1234,6 +1237,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
       <FeedbackDialog
         open={showFeedback}
+        completionDescription={task ? getSourceCompletionDescription(task, taskSources.find(source => source.id === task.source_id)?.name) : undefined}
         onSubmit={handleFeedbackSubmit}
         onSkip={handleFeedbackSkip}
         onCancel={() => setShowFeedback(false)}
