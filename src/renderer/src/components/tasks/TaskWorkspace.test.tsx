@@ -138,6 +138,18 @@ describe('clampTranscriptWidth', () => {
 })
 
 describe('TaskWorkspace keyboard actions', () => {
+  it.each([true, false])('passes source choice %s after submitting feedback', async (completeAtSource) => {
+    const task = makeRendererTask({status: TaskStatus.ReadyForReview, session_id: 'persisted', source_id: 'feedback', source: 'Session Feedback'})
+    renderWorkspace(task)
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.COMPLETE, taskId: task.id }))
+    if (!completeAtSource) fireEvent.click(screen.getByRole('radio', {name: "I'll do it manually"}))
+    const stars = screen.getAllByRole('button').filter(button => button.querySelector('svg.lucide-star'))
+    fireEvent.click(stars[3])
+    fireEvent.click(screen.getByRole('button', {name: 'Submit Feedback'}))
+    await waitFor(() => expect(noopFn).toHaveBeenCalledWith(completeAtSource))
+    expect(window.electronAPI.db.updateTask).toHaveBeenCalledWith(task.id, {feedback_rating: 4, feedback_comment: null})
+  })
+
   it.each(['approve', undefined])('shows the Session Feedback source action %s before completion', async (action) => {
     const task = makeRendererTask({
       status: TaskStatus.ReadyForReview,
@@ -149,10 +161,11 @@ describe('TaskWorkspace keyboard actions', () => {
     renderWorkspace(task)
     act(() => dispatchTaskShortcut({ action: TaskShortcutAction.COMPLETE, taskId: task.id }))
     expect(screen.getByText(`Action at Session Feedback: ${action || 'complete'}. Completion sends this action and the task outputs to the source.`)).toBeInTheDocument()
-    expect(screen.getByText('Skip omits only the session rating and comment.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: "I'll do it manually" }))
+    expect(screen.getByText('Complete in 20x only. The source record will not change.')).toBeInTheDocument()
     expect(noopFn).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Skip' }))
-    await waitFor(() => expect(noopFn).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(noopFn).toHaveBeenCalledWith(false))
   })
 
   it('opens session feedback instead of completing immediately', () => {

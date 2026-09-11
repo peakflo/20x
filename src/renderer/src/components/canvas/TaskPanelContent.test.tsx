@@ -212,12 +212,14 @@ describe('TaskPanelContent', () => {
     })
     render(<TaskPanelContent panelId="panel-1" taskId="task-1" panelLayout="both" />)
     fireEvent.click(screen.getByText('Complete task'))
+    expect(executeActionMock).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('complete-at-source'))
     await waitFor(() => expect(apiRequest).toHaveBeenCalledWith('POST', '/api/tasks/remote-1/action',
       { outputs: { action: 'complete' }, expectedVersion: 7 },
       { 'x-task-contract-version': '2', 'x-task-actor': 'human' }))
     expect(executeActionMock).toHaveBeenCalledExactlyOnceWith('complete', 'task-1', 'src-1')
-    expect(updateTaskMock).not.toHaveBeenCalled()
-    // A single shared confirmation exists for every source — no source dialog.
+    expect(updateTaskMock).toHaveBeenCalledWith('task-1', {complete_at_source: true})
+    // The dialog closes after the source confirms completion.
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 })

@@ -735,17 +735,25 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     const taskId = taskCompleteMatch[1]
     const task = db.getTask(taskId)
     if (!task) throw Object.assign(new Error('Task not found'), { status: 404 })
-    if (!task.source_id) {
-      const fresh = db.updateTask(taskId, { status: TaskStatus.Completed })
+    const completeAtSource = (params as { completeAtSource?: boolean }).completeAtSource !== false
+    if (!task.source_id || !completeAtSource) {
+      const fresh = db.updateTask(taskId, { status: TaskStatus.Completed, ...(task.source_id ? { complete_at_source: false } : {}) })
       if (fresh) {
         broadcastToMobileClients('task:updated', { taskId, updates: fresh })
         if (notifyDesktop) notifyDesktop('task:updated', { taskId, updates: fresh })
+        triggerTaskAutomation()
+        if (fresh.parent_task_id && task.status !== TaskStatus.Completed) {
+          agent.notifyParentOfSubtaskCompletion(fresh.parent_task_id, taskId).catch(err => {
+            console.error('[MobileAPI] Failed to wake parent after local completion:', err)
+          })
+        }
       }
       return { completed: true, status: fresh?.status }
     }
     if (!syncManagerRef || db.getTaskSource(task.source_id)?.plugin_id !== 'peakflo') {
       throw Object.assign(new Error('Sync this task with Workflo before completing it.'), { status: 409 })
     }
+    db.updateTask(taskId, { complete_at_source: true })
     const result = await syncManagerRef.executeAction(getTaskCompletionAction(task.output_fields), task, undefined, task.source_id)
     if (!result.success) throw Object.assign(new Error(result.error || 'Completion is pending.'), { status: 409 })
     const completed = true

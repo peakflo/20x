@@ -158,7 +158,7 @@ export function AppLayout() {
   useEffect(() => onShortcutFeedback(({ message, isError }) => showToast(message, isError)), [showToast])
 
   // Completion is server-confirmed through the shared hook (same for every source).
-  const { requestComplete } = useTaskCompletion({ onToast: showToast })
+  const { requestComplete, completionDialog } = useTaskCompletion({ onToast: showToast })
 
   // A completion that the main process could not push to the source sends the
   // task back to review. Without this the user sees the task reappear with no
@@ -180,8 +180,9 @@ export function AppLayout() {
   )
 
   const completeTask = useCallback(
-    async (taskId: string, options?: { selectNextTask?: boolean }) => {
+    async (taskId: string, options?: { selectNextTask?: boolean; completeAtSource?: boolean }) => {
       await requestComplete(taskId, {
+        completeAtSource: options?.completeAtSource,
         onCompleted: options?.selectNextTask
           ? (task) => selectNextActiveTask(task.id)
           : undefined
@@ -209,8 +210,8 @@ export function AppLayout() {
     },
     [selectedTaskId, updateTask]
   )
-  const handleCompleteSelectedTask = useCallback(async () => {
-    if (selectedTaskId) await completeTask(selectedTaskId, { selectNextTask: true })
+  const handleCompleteSelectedTask = useCallback(async (completeAtSource?: boolean) => {
+    if (selectedTaskId) await completeTask(selectedTaskId, { selectNextTask: true, completeAtSource })
   }, [completeTask, selectedTaskId])
 
   const handleAssignAgent = useCallback(async (taskId: string, agentId: string | null) => {
@@ -239,8 +240,8 @@ export function AppLayout() {
     },
     [dashboardPreviewTaskId, updateTask]
   )
-  const handleCompleteDashboardPreviewTask = useCallback(async () => {
-    if (dashboardPreviewTaskId) await completeTask(dashboardPreviewTaskId)
+  const handleCompleteDashboardPreviewTask = useCallback(async (completeAtSource?: boolean) => {
+    if (dashboardPreviewTaskId) await completeTask(dashboardPreviewTaskId, { completeAtSource })
   }, [completeTask, dashboardPreviewTaskId])
 
   const activeTaskId = dashboardPreviewTaskId || selectedTaskId || null
@@ -643,6 +644,7 @@ export function AppLayout() {
 
   return (
     <>
+      {completionDialog}
       {/* ── Top bar: drag region with logo (left) + nav switcher (center) + actions (right) ── */}
       <div className="app-chrome drag-region bg-background h-8 flex-shrink-0 flex items-center justify-center px-3 pt-2.5 windows-titlebar-pad">
         {/* Logo + wordmark + update indicator — pinned left. The white logo mark

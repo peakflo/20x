@@ -220,6 +220,28 @@ describe('mobile-api-server: source completion action', () => {
     vi.restoreAllMocks()
   })
 
+  it('completes manually without calling the source and preserves the choice after a refresh', async () => {
+    const { db } = createTestDb()
+    const source = db.createTaskSource({ name: 'Session Feedback', plugin_id: 'peakflo', mcp_server_id: null })!
+    const task = db.createTask(makeTask({ source_id: source.id, external_id: 'remote-feedback', source: 'Session Feedback' }))!
+    const executeAction = vi.fn()
+    const token = 'test-manual-token'
+    db.createMobileSession('manual-session', createHash('sha256').update(token).digest('hex'), 'test-device')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const port = await startMobileApiServer(db, {} as never, {} as never,
+      21000 + Math.floor(Math.random() * 40000), { executeAction } as never)
+    const response = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/complete`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ completeAtSource: false })
+    })
+    expect(response.status).toBe(200)
+    expect(db.getTask(task.id)).toMatchObject({status: 'completed', complete_at_source: false})
+    expect(executeAction).not.toHaveBeenCalled()
+    db.updateTask(task.id, {status: 'not_started', title: 'Refreshed title'}, 'workflo-server')
+    expect(db.getTask(task.id)).toMatchObject({status: 'completed', title: 'Refreshed title', complete_at_source: false})
+    db.close()
+  })
+
   it.each(['approve', undefined])('sends the selected action %s to the source', async (action) => {
     const { db } = createTestDb()
     const source = db.createTaskSource({ name: 'Session Feedback', plugin_id: 'peakflo', mcp_server_id: null })!

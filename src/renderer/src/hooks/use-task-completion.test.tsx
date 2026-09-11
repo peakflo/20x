@@ -74,9 +74,10 @@ const onToast = vi.fn()
 const onCompleted = vi.fn()
 
 function Harness({ taskId = 'task-1' }: { taskId?: string }) {
-  const { requestComplete } = useTaskCompletion({ onToast })
+  const { requestComplete, completionDialog } = useTaskCompletion({ onToast })
   return (
     <>
+      {completionDialog}
       <button type="button" onClick={() => void requestComplete(taskId, { onCompleted })}>
         Complete
       </button>
@@ -87,12 +88,14 @@ function Harness({ taskId = 'task-1' }: { taskId?: string }) {
 describe('server completion', () => {
   beforeEach(() => { vi.clearAllMocks(); executeActionMock.mockResolvedValue({success:true}); storeState.tasks=[] })
   afterEach(cleanup)
-  it('always calls the source and never writes local completion', async () => {
+  it('waits for the source choice before sending completion', async () => {
     storeState.tasks=[makeTask({source_id:'src-1',complete_at_source:false})]
     render(<Harness />); fireEvent.click(screen.getByText('Complete'))
+    expect(executeActionMock).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('complete-at-source'))
     await waitFor(()=>expect(onCompleted).toHaveBeenCalled())
     expect(executeActionMock).toHaveBeenCalledWith(PluginActionId.Complete,'task-1','src-1')
-    expect(updateTaskMock).not.toHaveBeenCalled()
+    expect(updateTaskMock).toHaveBeenCalledWith('task-1', { complete_at_source: true })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
   it('completes a source-less 20x task locally without uploading it',async()=>{
@@ -106,7 +109,28 @@ describe('server completion', () => {
   it('keeps a refused completion open',async()=>{
     executeActionMock.mockResolvedValue({success:false,error:'Review required'})
     storeState.tasks=[makeTask({source_id:'src-1'})];render(<Harness />);fireEvent.click(screen.getByText('Complete'))
+    fireEvent.click(screen.getByTestId('complete-at-source'))
     await waitFor(()=>expect(onToast).toHaveBeenCalledWith('Review required',true))
-    expect(updateTaskMock).not.toHaveBeenCalled();expect(onCompleted).not.toHaveBeenCalled()
+    expect(updateTaskMock).not.toHaveBeenCalledWith('task-1', expect.objectContaining({status: TaskStatus.Completed}));expect(onCompleted).not.toHaveBeenCalled()
+  })
+
+  it('cancels without a local write or a source request', () => {
+    storeState.tasks = [makeTask({source_id: 'src-1'})]
+    render(<Harness />)
+    fireEvent.click(screen.getByText('Complete'))
+    fireEvent.click(screen.getByRole('button', {name: 'Cancel'}))
+    expect(updateTaskMock).not.toHaveBeenCalled()
+    expect(executeActionMock).not.toHaveBeenCalled()
+  })
+
+  it('completes manually without a source request' , async () => {
+    vi.clearAllMocks()
+    storeState.tasks = [makeTask({ source_id: 'src-1', source: 'Session Feedback' })]
+    render(<Harness />)
+    fireEvent.click(screen.getByText('Complete'))
+    fireEvent.click(screen.getByTestId('complete-manually'))
+    await waitFor(() => expect(updateTaskMock).toHaveBeenCalledWith('task-1', {status: TaskStatus.Completed, complete_at_source: false}))
+    expect(executeActionMock).not.toHaveBeenCalled()
+    expect(onCompleted).toHaveBeenCalled()
   })
 })

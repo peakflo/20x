@@ -2371,7 +2371,13 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (origin !== 'workflo-server' && ('external_id' in data || 'source_id' in data || 'source' in data)) {
       throw new Error('Only the sync service can change a task source link.')
     }
-    if (data.status && origin !== 'workflo-server') {
+    const currentTask = this.getTask(id)
+    const manualCompletion = data.status === TaskStatus.Completed && data.complete_at_source === false
+    // A source refresh must not reopen a task the user closed only in 20x.
+    if (currentTask?.source_id && currentTask.status === TaskStatus.Completed && currentTask.complete_at_source === false && data.complete_at_source !== true) {
+      data = { ...data, status: TaskStatus.Completed }
+    }
+    if (data.status && origin !== 'workflo-server' && !manualCompletion) {
       const task = this.getTask(id)
       const snapshot = this.getSetting(`workflo-task:${id}`)
       const remote = snapshot ? JSON.parse(snapshot) : undefined
@@ -2382,7 +2388,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         throw new Error('This task is completed in Workflo.')
       }
     }
-    if (data.status === TaskStatus.Completed && origin !== 'workflo-server') {
+    if (data.status === TaskStatus.Completed && origin !== 'workflo-server' && !manualCompletion) {
       const task = this.getTask(id)
       if (task?.source_id && task.status !== TaskStatus.Completed) {
         throw new Error('Workflo must confirm completion before this task can close in 20x.')

@@ -265,6 +265,7 @@ export class SyncManager {
     const fields = { ...changedFields }
     // Internal completion control — never a source field.
     delete fields.complete_at_source
+    if (task.complete_at_source === false) delete fields.status
     if (Object.keys(fields).length === 0) return
 
     const ctx = this.buildContext(source.mcp_server_id || undefined, task.source_id || undefined)
@@ -329,6 +330,11 @@ export class SyncManager {
         if (!key.startsWith('workflo-completion:') || key.endsWith(':error')) continue
         const command = JSON.parse(value)
         if (command.scope !== scope) continue
+        if (this.db.getTask(command.taskId)?.complete_at_source === false) {
+          this.db.deleteSetting(key)
+          this.db.deleteSetting(`${key}:error`)
+          continue
+        }
         try {
           await this.workfloApiClient.executeAction(command.externalId, command.outputs, command.expectedVersion)
           const current = await this.workfloApiClient.getTask(command.externalId)

@@ -32,7 +32,7 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
   const openEditModal = useUIStore((s) => s.openEditModal)
   const openDeleteModal = useUIStore((s) => s.openDeleteModal)
   // Completion is server-confirmed through the shared hook (same for every source).
-  const { requestComplete } = useTaskCompletion()
+  const { requestComplete, completionDialog } = useTaskCompletion()
 
   const handleEdit = useCallback(() => {
     if (task) openEditModal(task.id)
@@ -56,8 +56,8 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
     [task, updateTask]
   )
 
-  const handleCompleteTask = useCallback(async () => {
-    if (task) await requestComplete(task.id)
+  const handleCompleteTask = useCallback(async (completeAtSource?: boolean) => {
+    if (task) await requestComplete(task.id, { completeAtSource })
   }, [task, requestComplete])
 
   const handleAssignAgent = useCallback(
@@ -135,6 +135,7 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
 
   return (
     <div className="h-full select-text">
+      {completionDialog}
       <TaskWorkspace
         task={task}
         agents={agents}
