@@ -903,6 +903,22 @@ describe('CodexAppServerAdapter', () => {
     expect(send).toHaveBeenCalledWith(expect.anything(), 'turn/start', expect.objectContaining({ effort: 'medium' }))
   })
 
+  it('starts one turn and steers simultaneous follow-ups into that same turn', async () => {
+    const instance = new CodexAppServerAdapter(); const adapter = adapterPrivate(instance)
+    const session = createSession(); adapter.sessions.set('thread-1', session)
+    const send = vi.fn().mockResolvedValue({ turn: { id: 'active-turn' } })
+    adapter.sendRpcRequest = send
+    const config = { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp' }
+    await Promise.all(['First message', 'Second message'].map(text => instance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text }], config)))
+    expect(send.mock.calls.map(call => call[1])).toEqual(['turn/start', 'turn/steer'])
+    expect(send).toHaveBeenLastCalledWith(session, 'turn/steer', {
+      threadId: 'thread-1', expectedTurnId: 'active-turn', input: [{ type: 'text', text: 'Second message' }]
+    })
+    send.mockRejectedValueOnce(new Error('Transport disconnected'))
+    await expect(instance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'Third message' }], config)).rejects.toThrow('Transport disconnected')
+    expect(send.mock.calls.filter(call => call[1] === 'turn/start')).toHaveLength(1)
+  })
+
   it('passes configured sandbox mode to app-server turn start', async () => {
     const adapterInstance = new CodexAppServerAdapter()
     const adapter = adapterPrivate(adapterInstance)

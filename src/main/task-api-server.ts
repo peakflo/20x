@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { buildSystemMessage, SystemMessageOrigin } from '../shared/system-authority'
 import { recurrenceMode, isReusableSchedule } from '../shared/schedule-runs'
 import type { ResponsibilityManager } from './responsibility-manager'
 import type { TaskControl } from './task-control'
@@ -979,9 +981,9 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         }
       }
 
-      // The message is attributed to the user, because that is who spoke it.
-      // A transcript that credited the agent would misreport who asked.
-      const result = await agentController.sendByTaskId(taskId, String(params.text))
+      // MCP follow-ups must not acquire the authority of desktop human input.
+      const message = buildSystemMessage({ origin: SystemMessageOrigin.Coordinator, taskId, deliveryId: randomUUID(), generatedAt: new Date().toISOString() }, 'Task follow-up from the 20x control plane.', String(params.text))
+      const result = await agentController.sendByTaskId(taskId, message)
       return { success: true, task_id: taskId, session_id: result.sessionId ?? result.newSessionId ?? null }
     }
 

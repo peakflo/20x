@@ -18,7 +18,7 @@ let manager: ResponsibilityManager
 let db: ReturnType<typeof createTestDb>['db']
 let project: ReturnType<ResponsibilityManager['createProject']>
 let sessions: Map<string, { sessionId: string; session: { workspaceDir: string; status: string } }>
-let runtime: Pick<AgentManager, 'startSession' | 'stopSession' | 'findSessionByTaskId' | 'getSessionStatus' | 'respondToPermission'>
+let runtime: Pick<AgentManager, 'startSession' | 'stopSession' | 'findSessionByTaskId' | 'getSessionStatus' | 'respondToPermission' | 'sendByTaskId'>
 let collect: ReturnType<typeof vi.fn<typeof collectSource>>
 let inspect: ReturnType<typeof vi.fn<typeof captureWork>>
 let agreement: ResponsibilityAgreement
@@ -38,7 +38,8 @@ beforeEach(async () => {
     stopSession: vi.fn(async id => { for (const [task, live] of sessions) if (live.sessionId === id) sessions.delete(task) }),
     findSessionByTaskId: vi.fn(taskId => sessions.get(taskId)) as unknown as AgentManager['findSessionByTaskId'],
     getSessionStatus: vi.fn(id => { for (const [taskId, live] of sessions) if (live.sessionId === id) return { status: live.session.status, taskId, agentId: agent.id }; return null }),
-    respondToPermission: vi.fn(async () => {})
+    respondToPermission: vi.fn(async () => {}),
+    sendByTaskId: vi.fn(async () => ({ sessionId: 'shared-session' }))
   }
   collect = vi.fn(async () => '{"release":"green"}')
   inspect = vi.fn(async () => evidence())
@@ -508,7 +509,7 @@ describe('durable engineering responsibilities', () => {
     expect(await pending).toBe(false)
     await expect(manager.answer(old.id, 'Approved', true)).rejects.toThrow('expired')
     manager.configureSession(config, 1234)
-    expect(config.systemPrompt).toContain('direct control')
+    expect(config.systemPrompt).toContain('follow-up conversation')
     expect(await config.authorizeTool!('Read', { file_path: join(dir, 'file') }, 'human-read', new AbortController().signal)).toBe(true)
     const questions = [{ question: 'Which behavior?', header: 'Behavior' }, { question: 'Which test?', header: 'Test' }]
     const waiting = config.authorizeTool!('AskUserQuestion', { questions }, 'human-question', new AbortController().signal)
@@ -544,45 +545,79 @@ describe('durable engineering responsibilities', () => {
     expect(snapshot().notices.filter(n => n.kind === 'result')).toHaveLength(0)
   })
 
-  it('fences ordinary resume and direct input until takeover and preserves the selected provider', async () => {
-    const r = await approve(); const step = snapshot().steps[0]
-    expect(() => manager.assertHumanAccess(step.taskId)).toThrow('Take over')
-    expect(() => manager.assertLaunch(step.taskId, dir)).toThrow('not authorized')
-    await manager.act(r.id, r.revision, 'takeover')
-    expect(() => manager.assertHumanAccess(step.taskId)).not.toThrow()
-    expect(() => manager.assertLaunch(step.taskId, dir)).not.toThrow()
+  it('shares a running task with the engineer and Mastermind, fencing stale reports', async () => {
+    await approve(); const step = snapshot().steps[0]
+    const worker = manager.scopeForToken(manager.tokenForTask(step.taskId)!)
+    expect(manager.recordHumanInput(step.taskId, 'Please explain the finding')).toBeTruthy()
+    await manager.prepareTaskMessage(step.taskId)
+    expect(manager.taskMessageContext(step.taskId)).toContain('inputRevision is 1')
+    await expect(manager.report(worker, { summary: 'Old answer', evidence: ['check'], checkout: dir, action: 'done' })).rejects.toThrow('newer message')
+    await expect(manager.report(worker, { summary: 'Updated answer', evidence: ['check'], checkout: dir, action: 'done', inputRevision: 1 })).resolves.toBeDefined()
+    const sent = await callResponsibilityTool(manager, manager.tokenForTask(scope().taskId)!, 'send_message', { task_id: step.taskId, text: 'Explain this to me too' })
+    expect(sent.isError).not.toBe(true)
+    expect(runtime.sendByTaskId).toHaveBeenCalledWith(step.taskId, expect.stringContaining('human_authored=false'))
+    expect(runtime.sendByTaskId).toHaveBeenCalledWith(step.taskId, expect.stringContaining('Explain this to me too'))
+    await expect(manager.messageTask(worker, { task_id: step.taskId, text: 'Other task' })).rejects.toThrow('Only the active Mastermind')
+    expect(() => manager.guardLegacyRoute('/send_message', { task_id: step.taskId })).not.toThrow()
+    expect(snapshot().steps).toHaveLength(1)
   })
 
-  it('shows the interrupted blocker and starts the saved queued assignment once after cancellation', async () => {
-    const first = await approve()
-    const oldStep = snapshot().steps[0]
-    sessions.clear() // Simulate a provider that stopped before reporting a result.
+  it.each([false, true])('invalidates an in-flight settlement when a new message arrives (files changed: %s)', async changed => {
+    await approve(); const step = snapshot().steps[0]
+    await manager.report(manager.scopeForToken(manager.tokenForTask(step.taskId)!), { summary: 'Finished', evidence: ['check'], checkout: dir, action: 'done' })
+    sessions.get(step.taskId)!.session.status = 'idle'
+    let release!: (value: WorkEvidence) => void
+    inspect.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const tick = manager.reconcile()
+    await manager.prepareTaskMessage(step.taskId)
+    release({ ...evidence(), ...(changed ? { fingerprint: 'new-input-files' } : {}) }); await tick
+    expect(snapshot().steps[0]).toMatchObject({ state: 'running', report: null, inputRevision: 1 })
+    expect(runtime.stopSession).not.toHaveBeenCalled()
+    expect(snapshot().notices.filter(n => n.kind === 'result')).toHaveLength(0)
+  })
+
+  it.each(['settled', 'unknown'])('allows direct conversation after a %s assignment without restarting automation', async state => {
+    const r = manager.delegate(scope(), input(), 'Inspect the fixture'); await manager.reconcile()
+    const step = snapshot().steps[0]
+    if (state === 'settled') await finish(step)
+    else { sessions.clear(); await manager.reconcile() }
+    const before = snapshot().responsibilities[0].state
+    const config = { taskId: step.taskId, agentId: project.agentId, workspaceDir: '/default', systemPrompt: '', mcpServers: { existing: { type: 'http' as const, url: 'http://localhost/tools' } }, model: 'chosen-model' }
+    manager.configureSession(config, 1234)
+    expect(realpathSync(config.workspaceDir)).toBe(realpathSync(dir))
+    expect(config.mcpServers).toHaveProperty('existing')
+    expect(config.systemPrompt).toContain('follow-up conversation')
+    expect(config).not.toHaveProperty('responsibilityRole')
+    expect(manager.recordHumanInput(step.taskId, 'What happened?')).toBeTruthy()
+    await manager.prepareTaskMessage(step.taskId)
     await manager.reconcile()
+    expect(snapshot().responsibilities.find(record => record.id === r.id)?.state).toBe(before)
+    expect(runtime.startSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts the saved assignment once even with an interrupted task in the same project', async () => {
+    const first = await approve(); const oldStep = snapshot().steps[0]
+    sessions.clear(); await manager.reconcile()
     const request = input('Investigate why tickets keep appearing')
-    const queued = manager.delegate(scope(), request, 'Find the recurring ticket cause')
-    await manager.reconcile()
-    expect(queued.waitingFor).toMatchObject({ responsibilityId: first.id, taskId: oldStep.taskId, needsAttention: true })
-    expect(snapshot().steps).toHaveLength(1)
-    expect(manager.context(scope())).toMatchObject({ responsibilities: expect.arrayContaining([expect.objectContaining({ id: queued.id, steps: 0, waitingFor: queued.waitingFor })]) })
-    expect(manager.delegate(scope(), request, 'Find the recurring ticket cause').id).toBe(queued.id)
-    await manager.act(first.id, first.revision, 'cancel')
+    const next = manager.delegate(scope(), request, 'Find the recurring ticket cause')
     await manager.reconcile(); await manager.reconcile()
-    expect(snapshot().steps.filter(s => s.responsibilityId === queued.id)).toHaveLength(1)
-    expect(snapshot().responsibilities.find(r => r.id === queued.id)?.waitingFor).toBeUndefined()
+    expect(manager.delegate(scope(), request, 'Find the recurring ticket cause').id).toBe(next.id)
+    expect(snapshot().steps.filter(s => s.responsibilityId === next.id)).toHaveLength(1)
+    expect(snapshot().responsibilities.find(r => r.id === first.id)?.state).toBe('blocked')
     expect(db.getTask(oldStep.taskId)).toBeDefined()
     expect(runtime.startSession).toHaveBeenCalledTimes(2)
   })
 
-  it('serializes conflicting work and never shares another project permission', async () => {
+  it('runs independent tasks in the same project without sharing another project permission', async () => {
     const first = await approve()
     const other = manager.propose(scope(), { ...agreement, title: 'Other goal' }, input('Do another change'))
     await manager.act(other.id, other.revision, 'approve'); await manager.reconcile()
-    expect(runtime.startSession).toHaveBeenCalledTimes(1)
-    expect(snapshot().responsibilities.find(r => r.id === other.id)?.waitingFor).toMatchObject({ responsibilityId: first.id, needsAttention: false })
+    expect(runtime.startSession).toHaveBeenCalledTimes(2)
     const elsewhere = join(dir, 'other'); mkdirSync(elsewhere)
     const p = manager.createProject('Other project', elsewhere, project.agentId)
     const otherScope = manager.scopeForToken(manager.tokenForTask(projectConversationId(p.id))!)
     expect(() => manager.propose(otherScope, { ...agreement, basedOn: first.id }, input())).toThrow('recorded human')
+    await expect(manager.messageTask(otherScope, { task_id: snapshot().steps[0].taskId, text: 'Cross-project message' })).rejects.toThrow('another project')
     expect(() => manager.guardLegacyRoute('/start_task', { task_id: snapshot().steps[0].taskId })).toThrow('scoped responsibility')
   })
 })
@@ -892,7 +927,7 @@ describe('Factories through the existing responsibility lifecycle', () => {
     expect(manager.recordHumanInput(reviewed.taskId, 'I will inspect this task now')).toBeDefined()
     const config = { taskId: reviewed.taskId, agentId: project.agentId, workspaceDir: dir }
     manager.configureSession(config, 1234)
-    expect(config).toMatchObject({ systemPrompt: expect.stringContaining('engineer has taken direct control') })
+    expect(config).toMatchObject({ systemPrompt: expect.stringContaining('follow-up conversation') })
     expect(sessions.size).toBe(0)
     inspect.mockResolvedValue({ ...evidence(), fingerprint: 'engineer-edited-files' })
     await manager.act(r.id, r.revision, 'handback'); await manager.reconcile()

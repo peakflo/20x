@@ -1608,8 +1608,6 @@ export class AgentManager extends EventEmitter {
 
     const agent = this.db.getAgent(agentId)!
 
-    this.responsibilities?.assertLaunch(taskId, workspaceDir || this.db.getWorkspaceDir(taskId))
-
     // Always use a dedicated workspace directory
     if (!workspaceDir) {
       workspaceDir = this.db.getWorkspaceDir(taskId)
@@ -1698,7 +1696,6 @@ export class AgentManager extends EventEmitter {
     }
 
     this.responsibilities?.configureSession(sessionConfig, getTaskApiPort())
-    this.responsibilities?.assertLaunch(taskId, sessionConfig.workspaceDir)
     workspaceDir = sessionConfig.workspaceDir
 
     // Initialize adapter
@@ -2906,7 +2903,6 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     adapterSessionId: string
   ): Promise<string> {
     this.assertLocalHelpAllowed(taskId)
-    this.responsibilities?.assertHumanAccess(taskId)
     // Helper: yield event loop between bursts of sync DB/FS calls
     const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
 
@@ -3161,7 +3157,19 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       if (!this.scheduleRuns) throw new Error('Schedule execution is unavailable.')
       return this.scheduleRuns.start(taskId, agentId)
     }
-    return this.trackTaskOperation(taskId, () => this.startTaskSession(agentId, taskId, workspaceDir, skipInitialPrompt))
+    return this.trackTaskOperation(taskId, () => this.openTaskSession(taskId, () => this.startTaskSession(agentId, taskId, workspaceDir, skipInitialPrompt)))
+  }
+
+  private readonly openingTaskSessions = new Map<string, Promise<string>>()
+  private async openTaskSession(taskId: string, open: () => Promise<string>): Promise<string> {
+    this.assertLocalHelpAllowed(taskId)
+    const live = this.findSessionByTaskId(taskId)
+    if (live) return live.sessionId
+    const opening = this.openingTaskSessions.get(taskId)
+    if (opening) return opening
+    const job = open()
+    this.openingTaskSessions.set(taskId, job)
+    try { return await job } finally { if (this.openingTaskSessions.get(taskId) === job) this.openingTaskSessions.delete(taskId) }
   }
 
   private async trackTaskOperation<T>(taskId: string, start: () => Promise<T>): Promise<T> {
@@ -3733,7 +3741,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
    */
   async resumeSession(agentId: string, taskId: string, sessionId: string): Promise<string> {
     if (isReusableSchedule(this.db.getTask(taskId))) throw new Error('Start a new check instead of resuming a historical scheduled session.')
-    return this.trackTaskOperation(taskId, () => this.resumeTaskSession(agentId, taskId, sessionId))
+    return this.trackTaskOperation(taskId, () => this.openTaskSession(taskId, () => this.resumeTaskSession(agentId, taskId, sessionId)))
   }
 
   private async resumeTaskSession(agentId: string, taskId: string, sessionId: string): Promise<string> {
@@ -4293,7 +4301,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     }
 
-    this.responsibilities?.assertHumanAccess(session?.taskId ?? taskId ?? '')
+    await this.responsibilities?.prepareTaskMessage(session?.taskId ?? taskId ?? '')
+    session = this.sessions.get(sessionId) // Settlement may have released it while the message waited.
     this.scheduleRuns?.assertMessage(session?.taskId ?? taskId ?? '', sessionId)
 
     // Session was destroyed — try to RESUME first (preserves conversation history),
@@ -4435,7 +4444,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       taskId: session.taskId,
       type: 'message',
       data: {
-        id: `user-message-${Date.now()}`,
+        id: `user-message-${randomUUID()}`,
         role: 'user',
         content: userFacingMessage,
         partType: 'text'
@@ -4450,7 +4459,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     )
 
     // Send prompt via adapter
-    const promptText = this.buildMessageWithAttachmentContext(session, message, attachments)
+    const promptText = this.buildMessageWithAttachmentContext(session, message, attachments) + (this.responsibilities?.taskMessageContext(session.taskId) ?? '')
     const parts: MessagePart[] = [{ type: MessagePartType.TEXT, text: promptText }]
     this.assertTaskNotControlled(session.taskId)
     if (this.sessions.get(sessionId) !== session) throw new TaskControlBlockedError('The task session was stopped before this message could be sent.')

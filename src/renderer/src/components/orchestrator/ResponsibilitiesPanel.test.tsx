@@ -54,17 +54,16 @@ describe('project responsibility controls', () => {
     await waitFor(() => expect(screen.getByLabelText('Engineering project')).toHaveValue('new-project'))
   })
 
-  it('labels queued work and opens the earlier blocking task', async () => {
+  it('opens the saved task without takeover controls', async () => {
     snapshot.responsibilities[0].state = 'active'
-    snapshot.responsibilities[0].waitingFor = { responsibilityId: 'old', title: 'Interrupted investigation', taskId: 'old-task', needsAttention: true }
+    snapshot.steps = [{ id: 'step', responsibilityId: 'work', taskId: 'saved-task', phase: 'work', state: 'running' } as ResponsibilitySnapshot['steps'][number]]
     vi.mocked(applyUiCommand).mockReturnValue({ applied: true } as ReturnType<typeof applyUiCommand>)
     render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
     await waitFor(() => expect(screen.getByLabelText('Engineering project')).toHaveValue('project'))
     fireEvent.click(screen.getByRole('button', { name: 'Show responsibilities' }))
-    expect(screen.getByText('Queued')).toBeInTheDocument()
-    expect(screen.getByText(/Waiting for “Interrupted investigation”/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Review blocking task' }))
-    await waitFor(() => expect(applyUiCommand).toHaveBeenCalledWith({ kind: 'open_task', taskId: 'old-task', where: 'modal' }))
+    expect(screen.queryByRole('button', { name: /take ?over|hand back/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open work · running' }))
+    await waitFor(() => expect(applyUiCommand).toHaveBeenCalledWith({ kind: 'open_task', taskId: 'saved-task', where: 'modal' }))
     expect(api.act).not.toHaveBeenCalled()
   })
 

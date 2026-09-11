@@ -45,11 +45,6 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
     setBusy(true); setError('')
     try { await action(); await refresh() } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
   }
-  const openTask = (taskId: string) => run(async () => {
-    await useTaskStore.getState().fetchTasks()
-    const opened = applyUiCommand({ kind: 'open_task', taskId, where: 'modal' })
-    if (!opened.applied) throw new Error(opened.detail)
-  })
   if (!api) return null
   const records = snapshot.responsibilities.filter(r => r.projectId === projectId)
   const notices = snapshot.notices.filter(n => n.projectId === projectId)
@@ -86,7 +81,7 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
         </div>
         {tab === 'work' && <div className="space-y-3">
           {records.length === 0 && <p className="text-sm text-muted-foreground">Ask for a Task, describe a Goal, or teach a Routine in the conversation below. Mastermind will propose the agreement here.</p>}
-          {records.map(r => <div key={r.id}><AgreementCard record={r} openTask={openTask} unresolved={snapshot.steps.some(s => s.responsibilityId === r.id && !['held', 'settled'].includes(s.state))} busy={busy} act={action => run(() => api.act(r.id, r.revision, action))} />
+          {records.map(r => <div key={r.id}><AgreementCard record={r} unresolved={snapshot.steps.some(s => s.responsibilityId === r.id && !['held', 'settled'].includes(s.state))} busy={busy} act={action => run(() => api.act(r.id, r.revision, action))} />
             {snapshot.steps.filter(s => s.responsibilityId === r.id).map(s => <div key={s.id} className="ml-2 mt-1 rounded border border-border p-2 text-xs">
               <button className="font-medium text-primary underline" onClick={() => void run(async () => { await useTaskStore.getState().fetchTasks(); const opened = applyUiCommand({ kind: 'open_task', taskId: s.taskId, where: 'modal' }); if (!opened.applied) throw new Error(opened.detail) })}>Open {s.phase} · {s.state.replace('_', ' ')}</button>
               {s.report && <details className="mt-1"><summary className="cursor-pointer">Result and evidence</summary><p className="mt-2 whitespace-pre-wrap">{s.report.summary}</p><p className="mt-1 break-all">{s.report.work.checkout} · {s.report.work.revision}</p><ul className="mt-1 list-inside list-disc">{s.report.evidence.map((e, i) => <li className="break-words" key={i}>{e}</li>)}</ul></details>}
@@ -104,16 +99,12 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
   </section>
 }
 
-function AgreementCard({ record: r, unresolved, busy, act, openTask }: { record: ResponsibilityRecord; openTask: (taskId: string) => Promise<void>; unresolved: boolean; busy: boolean; act: (action: Parameters<NonNullable<typeof window.electronAPI.responsibilities>['act']>[2]) => Promise<void> }) {
+function AgreementCard({ record: r, unresolved, busy, act }: { record: ResponsibilityRecord; unresolved: boolean; busy: boolean; act: (action: Parameters<NonNullable<typeof window.electronAPI.responsibilities>['act']>[2]) => Promise<void> }) {
   const a = r.agreement
   return <article className="rounded-lg border border-border p-3 text-sm">
-    <div className="mb-2 flex justify-between gap-2 text-xs capitalize text-muted-foreground"><span>{a.kind}</span><span>{r.waitingFor ? 'Queued' : r.state.replace('_', ' ')}</span></div>
+    <div className="mb-2 flex justify-between gap-2 text-xs capitalize text-muted-foreground"><span>{a.kind}</span><span>{r.state === 'taken_over' ? 'paused' : r.state.replace('_', ' ')}</span></div>
     <CollapsibleDescription taskId={`work-title-${r.id}`} description={a.title} collapsedLines={2} className="[&_p]:font-semibold" />
     <CollapsibleDescription taskId={`work-summary-${r.id}`} description={a.summary ?? a.objective} collapsedLines={3} className="mt-2 text-muted-foreground" />
-    {r.waitingFor && <div className="mt-2 rounded border border-border p-2 text-xs">
-      <p>Waiting for “{r.waitingFor.title}”. {r.waitingFor.needsAttention ? 'Inspect that earlier assignment, then cancel or recover it to free the workspace.' : 'This assignment will start automatically when the workspace is free.'}</p>
-      {r.waitingFor.taskId && <Button size="sm" variant="outline" className="mt-2" disabled={busy} onClick={() => void openTask(r.waitingFor!.taskId!)}>Review blocking task</Button>}
-    </div>}
     {r.routineSetup && <p className="mt-2 text-xs text-muted-foreground">{r.routineSetup.proposalId ? 'Routine proposal saved.' : 'Preparing a routine. Monitoring has not started.'}</p>}
     {a.stopOnSuccess && <p className="mt-2 text-xs text-muted-foreground">Stop scheduling once the success evidence is independently verified.</p>}
     {a.factory && <details className="mt-2"><summary className="cursor-pointer">Factory: {a.factory.name}</summary><FactoryGuide definition={a.factory} /></details>}
@@ -149,12 +140,9 @@ function AgreementCard({ record: r, unresolved, busy, act, openTask }: { record:
         <Button size="sm" disabled={busy || unresolved || (!!a.source && r.trial?.revision !== r.revision)} onClick={() => void act('approve')}>{a.kind === 'routine' ? 'Approve and activate' : 'Approve and start'}</Button>
       </>}
       {r.state === 'active' && <Button size="sm" variant="outline" disabled={busy} onClick={() => void act('pause')}>Pause new work</Button>}
-      {r.state === 'paused' && <Button size="sm" disabled={busy} onClick={() => void act('resume')}>Resume</Button>}
+      {['paused', 'taken_over'].includes(r.state) && <Button size="sm" disabled={busy} onClick={() => void act('resume')}>Resume</Button>}
       {r.state === 'blocked' && <Button size="sm" variant="outline" disabled={busy} onClick={() => void act('recover')}>Recover after inspection</Button>}
-      {['active', 'paused', 'blocked'].includes(r.state) && <Button size="sm" variant="outline" disabled={busy} onClick={() => void act('takeover')}>Take over</Button>}
       {r.state === 'cancelled' && unresolved && <Button size="sm" variant="outline" disabled={busy} onClick={() => void act('recover')}>Release cancelled work after inspection</Button>}
-      {r.state === 'taken_over' && unresolved && <Button size="sm" variant="outline" disabled={busy} onClick={() => void act('takeover')}>Finish takeover</Button>}
-      {r.state === 'taken_over' && !unresolved && <Button size="sm" disabled={busy} onClick={() => void act('handback')}>Hand back</Button>}
       {!['completed', 'cancelled'].includes(r.state) && <Button size="sm" variant="ghost" disabled={busy} onClick={() => void act('cancel')}>Cancel responsibility</Button>}
     </div>
   </article>
@@ -179,7 +167,7 @@ function NoticeCard({ notice: n, busy, answer, openTask }: { notice: Responsibil
     {n.answer && <p className="mt-2 whitespace-pre-wrap text-muted-foreground">Your answer: {n.answer}</p>}
     {n.deliveryError && <p role="alert" className="mt-2 text-xs text-destructive">Approval delivery failed or is unconfirmed: {n.deliveryError}</p>}
     {n.state === 'expired' && <p className="mt-2 text-xs text-muted-foreground">The original request is no longer live. Inspect and recover its responsibility.</p>}
-    {n.state === 'pending' && n.kind === 'recovery' && <p className="mt-2 text-xs text-muted-foreground">Open Work to inspect the agreement, then recover or take over.</p>}
+    {n.state === 'pending' && n.kind === 'recovery' && <p className="mt-2 text-xs text-muted-foreground">Open Work to inspect the agreement, then recover it if you want its automated workflow to continue. You can message its task directly at any time.</p>}
     {n.state === 'pending' && n.kind === 'result' && <Button size="sm" variant="ghost" onClick={() => void answer('Read')} disabled={busy}>Mark read</Button>}
     {n.state === 'pending' && ['question', 'permission'].includes(n.kind) && <form className="mt-3 space-y-2" onSubmit={e => { e.preventDefault(); void answer(n.questions ? JSON.stringify(answers) : reply || 'Approved', n.kind === 'permission') }}>
       {n.questions ? n.questions.map(q => <label key={q.question} className="block text-xs">{q.question}<textarea aria-label={`${n.title}: ${q.header}`} className={inputClass} value={answers[q.question] ?? ''} onChange={e => setAnswers({ ...answers, [q.question]: e.target.value })} required /></label>) : <textarea aria-label={`Answer ${n.title}`} className={inputClass} value={reply} onChange={e => setReply(e.target.value)} placeholder="Your decision or clarification" required={n.kind === 'question'} />}

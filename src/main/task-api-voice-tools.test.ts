@@ -251,7 +251,8 @@ describe('send_message', () => {
       makeDb()
     )) as { success: boolean }
     expect(result.success).toBe(true)
-    expect(agents.sendByTaskId).toHaveBeenCalledWith('t1', 'why did the test fail')
+    expect(agents.sendByTaskId).toHaveBeenCalledWith('t1', expect.stringContaining('why did the test fail'))
+    expect(agents.sendByTaskId).toHaveBeenCalledWith('t1', expect.stringContaining('human_authored=false'))
   })
 
   /**

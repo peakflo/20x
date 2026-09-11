@@ -978,7 +978,7 @@ describe('AgentManager implicit resume behavior', () => {
     vi.clearAllMocks()
   })
 
-  it('does NOT push a transcript replay to the renderer when sendMessage implicitly resumes a session', async () => {
+  it('shares one implicit resume for concurrent messages without replaying the transcript', async () => {
     const mockDb = {
       getTask: vi.fn(() => ({
         id: 'task-1',
@@ -1015,10 +1015,11 @@ describe('AgentManager implicit resume behavior', () => {
     const sendToRendererSpy = vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
     const doSendAdapterMessageSpy = vi.spyOn(manager as any, 'doSendAdapterMessage').mockResolvedValue(undefined)
 
-    await manager.sendMessage('missing-live-session', 'root cause ?', 'task-1', 'agent-1')
+    await Promise.all(['root cause ?', 'Mastermind follow-up'].map(message => manager.sendMessage('missing-live-session', message, 'task-1', 'agent-1')))
 
     expect(adapter.resumeSession).toHaveBeenCalledOnce()
-    expect(doSendAdapterMessageSpy).toHaveBeenCalledOnce()
+    expect(doSendAdapterMessageSpy).toHaveBeenCalledTimes(2)
+    expect(new Set(doSendAdapterMessageSpy.mock.calls.map(call => call[1])).size).toBe(1)
 
     // Resume no longer replays the transcript to clients. Clients render the
     // durable projection (snapshot + `transcript:changed` deltas), so a resume

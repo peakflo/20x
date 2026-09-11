@@ -7,6 +7,7 @@ import { AgentManager } from './agent-manager'
 import { ResponsibilityManager, collectSource } from './responsibility-manager'
 import { projectConversationId } from '../shared/responsibilities'
 import { RoutineSources } from './routine-sources'
+import { callResponsibilityTool } from './responsibility-tools'
 import { TaskControl } from './task-control'
 import { startTaskApiServer, stopTaskApiServer, setResponsibilityManager, setTaskApiAgentController } from './task-api-server'
 
@@ -94,6 +95,17 @@ describe.skipIf(process.env.RUN_RESPONSIBILITY_LIVE !== '1')('Mastermind native 
       expect(db.getTask(snapshot.steps[0].taskId)?.agent_id).toBe(worker.id)
       expect(snapshot.steps[0].report?.summary).toContain('work-agent-default-ok')
       expect(readFileSync(join(root, 'value.txt'), 'utf8')).toBe('work-agent-default-ok\n')
+      const workTaskId = snapshot.steps[0].taskId
+      const followup = 'Reply with exactly human-followup-ok. No tools or new work are needed.'
+      manager.recordHumanInput(workTaskId, followup)
+      await agents.sendByTaskId(workTaskId, followup)
+      await until(() => db.getTranscriptParts(workTaskId).some(p => p.role === 'assistant' && p.content.includes('human-followup-ok')) && agents.findSessionByTaskId(workTaskId)?.session.status === 'idle')
+      const sent = await callResponsibilityTool(manager, manager.tokenForTask(taskId)!, 'send_message', { task_id: workTaskId, text: 'Reply with exactly mastermind-followup-ok. No tools or new work are needed.' })
+      expect(sent.isError).not.toBe(true)
+      await until(() => db.getTranscriptParts(workTaskId).some(p => p.role === 'assistant' && p.content.includes('mastermind-followup-ok')) && agents.findSessionByTaskId(workTaskId)?.session.status === 'idle')
+      expect(manager.snapshot().steps).toHaveLength(1)
+      expect(manager.snapshot().responsibilities[0].state).toBe('completed')
+      console.log('SHARED_TASK_NATIVE_RECEIPT', JSON.stringify({ taskId: workTaskId, engineerReply: true, mastermindReply: true, steps: 1, state: 'completed' }))
       console.log('WORK_AGENT_DEFAULT_RECEIPT', JSON.stringify({ coordinator: coordinator.id, defaultWorker: worker.id, taskAgent: db.getTask(snapshot.steps[0].taskId)?.agent_id, state: snapshot.responsibilities[0].state }))
     } finally {
       await manager.stop(); await agents.stopAllSessions(); stopTaskApiServer(); setResponsibilityManager(undefined); db.db.close(); rmSync(fixture, { recursive: true, force: true })

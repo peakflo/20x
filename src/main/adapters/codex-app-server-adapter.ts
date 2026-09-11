@@ -441,7 +441,16 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     return messages
   }
 
+  private readonly sendingPrompts = new Map<string, Promise<void>>()
   async sendPrompt(sessionId: string, parts: MessagePart[], config: SessionConfig): Promise<void> {
+    // Serialize RPC acceptance only; follow-ups steer the running turn immediately.
+    const prior = this.sendingPrompts.get(sessionId)
+    const job = prior ? prior.catch(() => {}).then(() => this.sendTaskPrompt(sessionId, parts, config)) : this.sendTaskPrompt(sessionId, parts, config)
+    this.sendingPrompts.set(sessionId, job)
+    try { await job } finally { if (this.sendingPrompts.get(sessionId) === job) this.sendingPrompts.delete(sessionId) }
+  }
+
+  private async sendTaskPrompt(sessionId: string, parts: MessagePart[], config: SessionConfig): Promise<void> {
     const session = this.requireSession(sessionId)
     if (!session.threadId) {
       throw new Error(`Codex app-server session has no thread id: ${sessionId}`)
@@ -456,7 +465,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       throw new Error('No text content in message parts')
     }
 
-    session.messageBuffer = []
+    if (!session.activeTurnId) session.messageBuffer = []
 
     const userItem = {
       method: 'item/completed',
@@ -475,6 +484,15 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     session.status = SessionStatusType.BUSY
     session.lastError = null
 
+    if (session.activeTurnId) {
+      await this.sendRpcRequest(session, 'turn/steer', {
+        threadId: session.threadId,
+        expectedTurnId: session.activeTurnId,
+        input: [{ type: 'text', text: promptText }]
+      })
+      return
+    }
+
     const result = await this.sendRpcRequest(session, 'turn/start', {
       threadId: session.threadId,
       input: [{ type: 'text', text: promptText }],
@@ -490,7 +508,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     })
 
     if (isObject(result)) {
-      session.activeTurnId = asString(result.turnId) || asString(result.turn_id) || session.activeTurnId
+      session.activeTurnId = (isObject(result.turn) ? asString(result.turn.id) : null) || asString(result.turnId) || asString(result.turn_id) || session.activeTurnId
     }
   }
 
