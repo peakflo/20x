@@ -107,6 +107,32 @@ describe('durable upload', () => {
     expect(db.getSetting(`workflo-upload:${task.id}`)).toBeDefined()
   })
 
+  it('keeps future-work upload requirements but can queue completion with local resources', async () => {
+    const { api, sync } = setup()
+    const agent = db.createAgent({ name: 'Local agent', config: {} })!
+    const skill = db.createSkill({ name: 'Local skill', description: '', content: '' })!
+    const task = db.createTask(makeTask())!
+    db.updateTask(task.id, { agent_id: agent.id, skill_ids: [skill.id] })
+    await expect(sync.uploadTask(task.id)).rejects.toThrow('Select an agent from Workflo')
+    await expect(sync.uploadTask(task.id, true)).rejects.toThrow('Select an agent from Workflo for autonomous work')
+    db.updateTask(task.id, { agent_id: null })
+    await expect(sync.uploadTask(task.id)).rejects.toThrow('Sync the selected skills')
+    db.updateTask(task.id, { agent_id: agent.id })
+    expect(api.createTask).not.toHaveBeenCalled()
+
+    expect(await sync.completeTask(task.id)).toMatchObject({ success: false, error: expect.stringContaining('creation is pending') })
+    const first = api.createTask.mock.calls[0][0]
+    expect(first).toMatchObject({ skillIds: [], assignees: [{ assigneeType: 'user', assigneeValue: 'user-1' }], autoCompleteWithoutReview: false })
+    expect(first.agentId).toBeUndefined()
+    expect(first.cron).toBeUndefined()
+    expect(db.getTask(task.id)?.status).not.toBe('completed')
+    api.createTask.mockResolvedValue({ ...remote(), cron: null, isRecurring: false } as never)
+    await sync.flushTaskUploads()
+    expect(api.createTask.mock.calls[1][0]).toEqual(first)
+    expect(db.getTask(task.id)).toMatchObject({ external_id: 'remote-1', status: 'not_started' })
+    expect(db.getSetting(`workflo-upload:${task.id}`)).toBeUndefined()
+  })
+
   it('keeps upload conservative without confirmed cleanup, including completed local tasks', async () => {
     const { api, sync } = setup()
     const task = db.createTask(makeTask())!

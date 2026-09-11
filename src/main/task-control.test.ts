@@ -30,11 +30,16 @@ beforeEach(() => {
 afterEach(async () => { await control.stop(); db.db.close() })
 
 describe('Mastermind task administration', () => {
-  it.each([false, true])('stops a working local task, retains its history, and waits for Workflo to confirm completion (reuse: %s)', async reusable => {
+  it.each(['none', 'reuse', 'separate'] as const)('stops local work with local-only resources and waits for Workflo completion (schedule: %s)', async schedule => {
     db.db.exec('ALTER TABLE tasks ADD COLUMN heartbeat_enabled INTEGER NOT NULL DEFAULT 0')
-    const agent = db.createAgent({ name: 'Agent', config: { enterprise_agent_id: 'remote-agent' } as never })!
-    const t = db.createTask({ title: 'Working task', status: TaskStatus.AgentWorking, is_recurring: reusable, recurrence_pattern: reusable ? '*/5 * * * *' : null })!
-    db.updateTask(t.id, { agent_id: agent.id, session_id: 'saved-session' })
+    const agent = db.createAgent({ name: 'Local agent', config: { coding_agent: 'codex' } })!
+    const skill = db.createSkill({ name: 'Local skill', description: '', content: 'Local instructions' })!
+    const t = db.createTask({ title: 'Working task', status: TaskStatus.AgentWorking, is_recurring: schedule !== 'none',
+      recurrence_mode: schedule === 'reuse' ? 'reuse' : 'separate', recurrence_pattern: schedule === 'none' ? null : '*/5 * * * *' })!
+    const outputs = [{ id: 'result', name: 'Result', type: 'text' as const, value: 'Verified fix' }]
+    db.updateTask(t.id, { agent_id: agent.id, skill_ids: [skill.id], session_id: 'saved-session', output_fields: outputs })
+    // Legacy local schedules need no conversion when their only requested action is completion.
+    if (schedule === 'separate') db.updateTask(t.id, { recurrence_pattern: { frequency: 'daily', interval: 1 } as never })
     db.upsertTranscriptParts(t.id, [{ id: 'answer', role: 'assistant', content: 'Work so far' }])
     const history = db.getTranscriptParts(t.id)
     db.setSetting('enterprise_tenant_id', 'tenant-1')
@@ -45,7 +50,7 @@ describe('Mastermind task administration', () => {
       seenMessageIds: new Set(), seenPartIds: new Set(), partContentLengths: new Map(), adapter: { destroySession } as unknown as Session['adapter'] }
     Object.assign(agents, { sessions: new Map([[session.id, session]]) })
     vi.spyOn(agents as unknown as { buildSessionConfig(): Promise<object> }, 'buildSessionConfig').mockResolvedValue({})
-    const remote = { id: 'remote-task', title: t.title, status: 'not_started', version: 1, agentId: 'remote-agent', skillIds: [],
+    const remote = { id: 'remote-task', title: t.title, status: 'not_started', version: 1, agentId: null, skillIds: [],
       executionMode: 'human', assignees: [], isRecurring: false, taskData: null } as unknown as WorkfloTask
     const api = { getDomain: () => 'api.test', createTask: vi.fn(async () => {
       expect(destroySession).toHaveBeenCalledWith('saved-session', { agentId: agent.id, taskId: t.id, workspaceDir: process.cwd() })
@@ -71,16 +76,16 @@ describe('Mastermind task administration', () => {
       expect(await control.run({ task_id: t.id, action: 'complete' })).toMatchObject({ success: false })
       expect(agents.isTaskStoppedForControl(t.id)).toBe(false)
       expect(db.getTask(t.id)?.status).not.toBe(TaskStatus.Completed)
-      expect(api.createTask).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'remote-agent' }))
-      if (reusable) {
-        expect(api.createTask).toHaveBeenCalledWith(expect.objectContaining({ autoCompleteWithoutReview: false }))
-        expect(api.createTask).not.toHaveBeenCalledWith(expect.objectContaining({ cron: expect.anything() }))
-        expect(db.getTask(t.id)?.recurrence_paused).toBe(true)
-      }
-      expect(api.executeAction).toHaveBeenCalledWith('remote-task', { action: 'complete' }, 1)
+      expect(api.createTask).toHaveBeenCalledWith(expect.objectContaining({
+        assignees: [{ assigneeType: 'user', assigneeValue: 'user-1' }], skillIds: [], autoCompleteWithoutReview: false
+      }))
+      expect(api.createTask).not.toHaveBeenCalledWith(expect.objectContaining({ agentId: expect.anything() }))
+      expect(api.createTask).not.toHaveBeenCalledWith(expect.objectContaining({ cron: expect.anything() }))
+      if (schedule !== 'none') expect(db.getTask(t.id)?.recurrence_paused).toBe(true)
+      expect(api.executeAction).toHaveBeenCalledWith('remote-task', { action: 'complete', result: 'Verified fix' }, 1)
       api.getTask.mockResolvedValue({ ...remote, status: 'completed', version: 2 })
       await sync.flushTaskCompletions()
-      expect(db.getTask(t.id)).toMatchObject({ status: TaskStatus.Completed, session_id: 'saved-session' })
+      expect(db.getTask(t.id)).toMatchObject({ status: TaskStatus.Completed, session_id: 'saved-session', output_fields: outputs })
       expect(db.getTranscriptParts(t.id)).toEqual(history)
     } finally { await agents.stopAllSessions() }
   })

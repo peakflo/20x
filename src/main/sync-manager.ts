@@ -154,6 +154,12 @@ export class SyncManager {
 
   /** A durable command, retried on reconnect and on each task sync. */
   async uploadTask(taskId: string, autonomous = false): Promise<{ queued: boolean }> {
+    return this.uploadLocalTask(taskId, autonomous ? 'autonomous' : 'human')
+  }
+
+  private async uploadLocalTask(taskId: string, mode: 'human' | 'autonomous' | 'completion'): Promise<{ queued: boolean }> {
+    const autonomous = mode === 'autonomous'
+    const completing = mode === 'completion'
     const task = this.db.getTask(taskId)
     if (!task || task.source_id || task.external_id || task.status === TaskStatus.Completed) throw new Error('Only an unfinished local task can be sent to Workflo.')
     // session_id is a resume/history cursor and status survives confirmed cleanup.
@@ -165,13 +171,14 @@ export class SyncManager {
     if (!scope) throw new Error('Connect to Workflo and select an organization first.')
     const key = `workflo-upload:${taskId}`
     if (!this.db.getSetting(key)) {
-      const agent = task.agent_id ? this.db.getAgent(task.agent_id) : undefined
+      // Finishing local work creates a human-owned record, not another execution.
+      const agent = !completing && task.agent_id ? this.db.getAgent(task.agent_id) : undefined
       const agentId = (agent?.config as Record<string, unknown> | undefined)?.enterprise_agent_id as string | undefined
       if (autonomous && !agentId) throw new Error('Select an agent from Workflo for autonomous work.')
-      if (task.agent_id && !agentId) throw new Error('Select an agent from Workflo before sending this task.')
-      const skills = (task.skill_ids ?? []).map(id => this.db.getSkill(id)?.enterprise_skill_id)
+      if (!completing && task.agent_id && !agentId) throw new Error('Select an agent from Workflo before sending this task.')
+      const skills = completing ? [] : (task.skill_ids ?? []).map(id => this.db.getSkill(id)?.enterprise_skill_id)
       if (skills.some(id => !id)) throw new Error('Sync the selected skills to Workflo first.')
-      if (task.recurrence_pattern && typeof task.recurrence_pattern !== 'string') {
+      if (!completing && task.recurrence_pattern && typeof task.recurrence_pattern !== 'string') {
         throw new Error('Use a cron expression before sending this recurring task to Workflo.')
       }
       this.db.setSetting(key, JSON.stringify({ scope, taskId, data: {
@@ -180,7 +187,7 @@ export class SyncManager {
         agentId, skillIds: skills,
         // Selecting an agent for help does not transfer human ownership.
         assignees: autonomous ? [{ assigneeType: 'agent', assigneeValue: agentId }] : [{ assigneeType: 'user', assigneeValue: this.enterpriseUserId }],
-        cron: task.is_recurring && !isReusableSchedule(task) ? task.recurrence_pattern ?? undefined : undefined,
+        cron: !completing && task.is_recurring && !isReusableSchedule(task) ? task.recurrence_pattern ?? undefined : undefined,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         autoCompleteWithoutReview: autonomous && task.auto_complete_without_review
       } }))
@@ -336,7 +343,7 @@ export class SyncManager {
       if (!this.isLocalTaskStopped?.(taskId)) return { success: false, error: 'Complete reusable schedules through Mastermind so their running check is stopped first.' }
     }
     if (!task.source_id) {
-      const upload = await this.uploadTask(task.id)
+      const upload = await this.uploadLocalTask(task.id, 'completion')
       if (upload.queued) return { success: false, error: 'Task creation is pending in Workflo. Completion has not been accepted.' }
       task = this.db.getTask(taskId)
     }
