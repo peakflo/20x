@@ -104,6 +104,8 @@ export class EnterpriseStateSync {
     task: TaskRecord,
     opts?: { action?: string; outputs?: Record<string, unknown> }
   ): void {
+    // A manual completion must not reach the source through the event queue.
+    if (task.complete_at_source === false) return
     this.pendingEvents.push({
       eventType: 'task_completed',
       entityType: 'task',

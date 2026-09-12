@@ -1,5 +1,6 @@
+import { api } from '../api/client'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, fireEvent } from '@testing-library/react'
+import { render, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { ArtifactType } from '@shared/artifacts'
 import { TaskDetailPage } from './TaskDetailPage'
 import { useTaskStore, type Task } from '../stores/task-store'
@@ -84,6 +85,59 @@ afterEach(() => {
 })
 
 describe('TaskDetailPage', () => {
+  it.each([
+    ['Submit Feedback', true], ['Submit Feedback', false], ['Skip', true], ['Skip', false]
+  ] as const)('%s with source completion %s', async (button, completeAtSource) => {
+    const task = makeTask({agent_id: 'agent-1', source_id: 'feedback', source: 'Notion', session_id: 'persisted'})
+    const originalUpdate = useTaskStore.getState().updateTask
+    const updateTask = vi.fn().mockResolvedValue(true)
+    const resume = vi.spyOn(api.sessions, 'resume').mockResolvedValue({sessionId: 'persisted'})
+    const send = vi.spyOn(api.sessions, 'send').mockResolvedValue({success: true})
+    useTaskStore.setState({tasks: [task], isLoading: false, updateTask})
+    try {
+      const view = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
+      fireEvent.click(view.getByTestId('main-cta-complete'))
+      if (!completeAtSource) fireEvent.click(view.getByRole('radio', {name: "I'll do it manually"}))
+      fireEvent.click(view.getByRole('button', {name: 'Rate 4'}))
+      fireEvent.click(view.getByRole('button', {name: button}))
+      if (button === 'Submit Feedback') {
+        await waitFor(() => expect(send).toHaveBeenCalledWith('persisted', expect.stringContaining('Review the session and update skills'), task.id, task.agent_id))
+        expect(updateTask).toHaveBeenCalledWith(task.id, {status: 'agent_learning', feedback_rating: 4, feedback_comment: null, complete_at_source: completeAtSource})
+        expect(completeMock).not.toHaveBeenCalled()
+      } else {
+        await waitFor(() => expect(completeMock).toHaveBeenCalledWith(task.id, completeAtSource))
+        expect(send).not.toHaveBeenCalled()
+      }
+    } finally {
+      cleanup()
+      useTaskStore.setState({updateTask: originalUpdate})
+      resume.mockRestore()
+      send.mockRestore()
+    }
+  })
+
+  it.each(['approve', undefined])('shows the Session Feedback action %s before Skip completes', async (action) => {
+    const task = makeTask({ agent_id: 'agent-1', source_id: 'session-feedback', source: 'Session Feedback',
+      output_fields: action ? [{ id: 'action', value: action }] : [] })
+    useTaskStore.setState({ tasks: [task], isLoading: false })
+    const view = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
+    fireEvent.click(view.getByTestId('main-cta-complete'))
+    const dialog = within(view.getByRole('dialog'))
+    expect(dialog.getByText(`Action at Session Feedback: ${action || 'complete'}. Completion sends this action and the task outputs to the source.`)).toBeTruthy()
+    expect(completeMock).not.toHaveBeenCalled()
+    fireEvent.click(dialog.getByRole('button', { name: 'Skip' }))
+    await waitFor(() => expect(completeMock).toHaveBeenCalledWith(task.id, true))
+  })
+
+  it('cancels source feedback without completing', () => {
+    useTaskStore.setState({ tasks: [makeTask({ agent_id: 'agent-1', source_id: 'session-feedback', source: 'Session Feedback' })], isLoading: false })
+    const view = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
+    fireEvent.click(view.getByTestId('main-cta-complete'))
+    fireEvent.click(view.getByRole('button', { name: 'Cancel' }))
+    expect(completeMock).not.toHaveBeenCalled()
+    expect(view.queryByRole('dialog')).toBeNull()
+  })
+
   it('switches to the artifacts segment and opens an artifact viewer', () => {
     const task = makeTask({ id: 'task-1' })
     useTaskStore.setState({ tasks: [task], isLoading: false })
@@ -349,13 +403,20 @@ describe('TaskDetailPage', () => {
     unmount()
   })
 
-  it.each([null, 'src-1'])('requests server completion for source %s without a local choice', (sourceId) => {
+  it.each([null, 'src-1'])('asks before completing source %s', (sourceId) => {
     completeMock.mockClear()
     const task = makeTask({ source_id: sourceId, complete_at_source: false })
     useTaskStore.setState({ tasks: [task], isLoading: false })
-    const { getByTestId, queryByText } = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
+    const { getByTestId, getByRole, queryByText } = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
     fireEvent.click(getByTestId('main-cta-complete'))
-    expect(completeMock).toHaveBeenCalledWith('task-1')
-    expect(queryByText("I'll do it manually")).toBeNull()
+    if (sourceId) {
+      expect(completeMock).not.toHaveBeenCalled()
+      fireEvent.click(getByRole('radio', { name: "I'll do it manually" }))
+      fireEvent.click(getByRole('button', { name: 'Complete' }))
+      expect(completeMock).toHaveBeenCalledWith('task-1', false)
+    } else {
+      expect(completeMock).toHaveBeenCalledWith('task-1', true)
+      expect(queryByText("I'll do it manually")).toBeNull()
+    }
   })
 })
