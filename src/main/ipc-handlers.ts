@@ -1,3 +1,4 @@
+import { guardedIpcSend } from './guarded-ipc-send'
 import { updateTaskFromUser } from './session-feedback'
 import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
 import * as childProcess from 'child_process'
@@ -119,7 +120,7 @@ export function registerIpcHandlers(
     }
     // Notify renderer so auto-start hook can trigger triage for UI-created tasks
     if (task) {
-      event.sender.send('task:created', { task })
+      guardedIpcSend(event.sender, 'task:created', { task })
       analytics()?.record('task.created', {
         taskType: task.type,
         priority: task.priority,
@@ -226,7 +227,7 @@ export function registerIpcHandlers(
     const existing = db.getTask(id)
     const success = db.deleteTask(id)
     if (success) {
-      event.sender.send('task:deleted', { taskId: id })
+      guardedIpcSend(event.sender, 'task:deleted', { taskId: id })
       analytics()?.record('task.deleted', {
         taskType: existing?.type,
         status: existing?.status,
@@ -576,7 +577,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle('github:startAuth', async (event) => {
     await githubManager.startWebAuth((code) => {
-      event.sender.send('github:deviceCode', code)
+      guardedIpcSend(event.sender, 'github:deviceCode', code)
     })
   })
 
@@ -609,7 +610,7 @@ export function registerIpcHandlers(
   ipcMain.handle('gitlab:startAuth', async (event) => {
     if (!gitlabManager) throw new Error('GitLab manager not initialized')
     await gitlabManager.startWebAuth((code) => {
-      event.sender.send('gitlab:deviceCode', code)
+      guardedIpcSend(event.sender, 'gitlab:deviceCode', code)
     })
   })
 
@@ -694,7 +695,7 @@ export function registerIpcHandlers(
   ipcMain.handle('taskSource:exportUpdate', async (event, taskId: string, fields: Record<string, unknown>) => {
     await syncManager.exportTaskUpdate(taskId, fields)
     const updated = db.getTask(taskId)
-    if (updated) event.sender.send('task:updated', { taskId, updates: updated })
+    if (updated) guardedIpcSend(event.sender, 'task:updated', { taskId, updates: updated })
   })
 
   ipcMain.handle('taskSource:getUsers', (_, sourceId: string) => {
@@ -1314,7 +1315,7 @@ export function registerIpcHandlers(
 
         // Notify renderer that background sync is complete (include sync stats)
         if (!sender.isDestroyed()) {
-          sender.send('enterprise:syncComplete', {
+          guardedIpcSend(sender, 'enterprise:syncComplete', {
             success: true,
             syncMs,
             syncStats: {
@@ -1329,7 +1330,7 @@ export function registerIpcHandlers(
       } catch (err) {
         console.error('[enterprise] Post-connect setup error (non-fatal):', err)
         if (!sender.isDestroyed()) {
-          sender.send('enterprise:syncComplete', {
+          guardedIpcSend(sender, 'enterprise:syncComplete', {
             success: false,
             error: err instanceof Error ? err.message : String(err)
           })
@@ -1729,7 +1730,7 @@ export function registerIpcHandlers(
   ipcMain.handle('agent-installer:install', async (event, { agentName }: { agentName: string }) => {
     const { installAgent } = await import('./agent-installer/install.js')
     return installAgent(agentName, (progress: { stage: string; output: string; percent: number }) => {
-      event.sender.send('agent-installer:progress', { agentName, ...progress })
+      guardedIpcSend(event.sender, 'agent-installer:progress', { agentName, ...progress })
     })
   })
 
@@ -1802,7 +1803,7 @@ export function registerIpcHandlers(
     ptyProcess.onData((data: string) => {
       appendToBuffer(data)
       if (!sender.isDestroyed()) {
-        sender.send('terminal:data', { id, data })
+        guardedIpcSend(sender, 'terminal:data', { id, data })
       }
     })
 
@@ -1812,7 +1813,7 @@ export function registerIpcHandlers(
       if (current && current.pid === ptyProcess.pid) {
         terminals.delete(id)
         if (!sender.isDestroyed()) {
-          sender.send('terminal:exit', { id })
+          guardedIpcSend(sender, 'terminal:exit', { id })
         }
       }
     })
@@ -1960,7 +1961,7 @@ else:
       const str = data.toString()
       appendToBuffer(str)
       if (!sender.isDestroyed()) {
-        sender.send('terminal:data', { id, data: str })
+        guardedIpcSend(sender, 'terminal:data', { id, data: str })
       }
     })
 
@@ -1969,7 +1970,7 @@ else:
       appendToBuffer(str)
       // Forward stderr too (e.g. shell startup errors)
       if (!sender.isDestroyed()) {
-        sender.send('terminal:data', { id, data: str })
+        guardedIpcSend(sender, 'terminal:data', { id, data: str })
       }
     })
 
@@ -1982,7 +1983,7 @@ else:
       if (current && current.pid === (child.pid || 0)) {
         terminals.delete(id)
         if (!sender.isDestroyed()) {
-          sender.send('terminal:exit', { id })
+          guardedIpcSend(sender, 'terminal:exit', { id })
         }
       }
     })

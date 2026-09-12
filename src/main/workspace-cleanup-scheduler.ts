@@ -1,3 +1,4 @@
+import { guardedIpcSend } from './guarded-ipc-send'
 import { BrowserWindow } from 'electron'
 import { existsSync, readdirSync, statSync, rmSync } from 'fs'
 import { join } from 'path'
@@ -427,7 +428,7 @@ export class WorkspaceCleanupScheduler {
 
   private sendToRenderer(channel: string, data: unknown): void {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send(channel, data)
+      guardedIpcSend(this.mainWindow.webContents, channel, data)
     }
   }
 }

@@ -1,3 +1,4 @@
+import { guardedIpcSend } from './guarded-ipc-send'
 import { BrowserWindow, Notification } from 'electron'
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
@@ -1041,7 +1042,7 @@ export class HeartbeatScheduler {
 
   private sendToRenderer(channel: string, data: unknown): void {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send(channel, data)
+      guardedIpcSend(this.mainWindow.webContents, channel, data)
     }
   }
 }
