@@ -261,6 +261,12 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
   const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db // Access the underlying better-sqlite3 instance
 
   switch (route) {
+    case '/inspect_groups':
+      if (!taskControl) throw new Error('Group controls are unavailable.')
+      return taskControl.inspectGroups()
+    case '/manage_group':
+      if (!taskControl) throw new Error('Group controls are unavailable.')
+      return taskControl.manageGroup(params)
     case '/inspect_tasks':
       if (!taskControl) throw new Error('Task controls are unavailable.')
       return taskControl.inspect(params)
@@ -369,6 +375,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     case '/create_task': {
+      if (params.group_id !== undefined && params.group_id !== null) db.groups.get(params.group_id)
       if (params.status === 'completed') return { error: 'Create the task in Workflo before completing it.' }
       if (!params.title) return { error: 'Title is required' }
 
@@ -404,6 +411,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         } catch { /* ignore — scheduler will pick it up */ }
       }
 
+      rawDb.transaction(() => {
       rawDb.prepare(`
         INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, recurrence_mode, next_occurrence_at, parent_task_id, auto_start_agent, auto_complete_without_review, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -430,6 +438,8 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         now
       )
 
+      if (params.group_id !== undefined) db.groups.assign([id], params.group_id as string | null)
+      })()
       const task = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown>
       const parsed = parseTask(task)
 

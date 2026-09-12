@@ -58,9 +58,10 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
     const snoozed: WorkfloTask[] = []
     const recurring: WorkfloTask[] = []
     const completed: WorkfloTask[] = []
+    const taskIds = new Set(tasks.map(task => task.id))
     for (const task of tasks) {
       // Skip subtasks from top-level grouping — they render under their parent
-      if (task.parent_task_id) continue
+      if (task.parent_task_id && taskIds.has(task.parent_task_id)) continue
 
       // Template tasks only (not instances)
       if (task.is_recurring && !task.recurrence_parent_id) {

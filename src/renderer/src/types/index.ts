@@ -342,6 +342,7 @@ export interface WorkfloTask {
 }
 
 export interface CreateTaskDTO {
+  group_id?: string | null
   title: string
   description?: string
   type?: TaskType

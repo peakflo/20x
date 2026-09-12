@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { useCanvasStore } from '@/stores/canvas-store'
+import { useTaskGroupStore } from '@/stores/task-group-store'
 import { useDrawingStore } from '@/stores/drawing-store'
 import { DEFAULT_TOOL_OPTIONS } from './drawing/types'
 import { TaskStatus } from '@/types'
@@ -89,6 +90,8 @@ vi.mock('@/stores/ui-store', () => ({
 
 describe('InfiniteCanvas', () => {
   beforeEach(() => {
+    useTaskGroupStore.setState({ groups: [], membership: {}, executions: {}, canvasGroupId: null, isLoaded: true })
+    useCanvasStore.setState({ shownGroupIds: [], closedGroupMemberIds: {}, pendingViewCommand: null })
     const api = window.electronAPI as typeof window.electronAPI & {
       onHeartbeatAlert?: typeof window.electronAPI.onHeartbeatAlert
       onHeartbeatDisabled?: typeof window.electronAPI.onHeartbeatDisabled
@@ -131,6 +134,22 @@ describe('InfiniteCanvas', () => {
     render(<InfiniteCanvas />)
     expect(screen.getByText('Infinite Canvas')).toBeTruthy()
     expect(screen.getByText(/Scroll to pan/)).toBeTruthy()
+  })
+
+  it('brings an empty Group into view after panning away', async () => {
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 1000, height: 800, left: 0, top: 0, right: 1000, bottom: 800, x: 0, y: 0, toJSON: () => ({}) })
+    try {
+      useCanvasStore.setState({ viewport: { x: -5000, y: -3000, zoom: 0.2 } })
+      useTaskGroupStore.setState({ groups: [{ id: 'g1', name: 'Empty group', description: '', projectId: null, createdAt: '' }] })
+      render(<InfiniteCanvas />)
+      act(() => useCanvasStore.getState().showGroup('g1', []))
+      await waitFor(() => {
+        const frame = document.querySelector<HTMLElement>('[data-canvas-group-frame="g1"]')!
+        const viewport = useCanvasStore.getState().viewport
+        expect(viewport.x + (parseFloat(frame.style.left) + parseFloat(frame.style.width) / 2) * viewport.zoom).toBeCloseTo(500)
+        expect(viewport.y + (parseFloat(frame.style.top) + parseFloat(frame.style.height) / 2) * viewport.zoom).toBeCloseTo(400)
+      })
+    } finally { bounds.mockRestore() }
   })
 
   it('should show zoom controls', () => {

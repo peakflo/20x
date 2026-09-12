@@ -8,6 +8,7 @@ import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
 import type { ReasoningEffort } from '../shared/reasoning-effort'
 import { startTaskApiServer } from './task-api-server'
+import { TaskGroups } from './task-groups'
 
 export interface AgentRow {
   id: string
@@ -401,6 +402,7 @@ export interface FileAttachmentRecord {
 }
 
 export interface CreateTaskData {
+  group_id?: string | null
   title: string
   description?: string
   type?: string
@@ -975,6 +977,8 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
 const SCHEMA_VERSION = 11
 
 export class DatabaseManager {
+  private taskGroups?: TaskGroups
+  get groups(): TaskGroups { return this.taskGroups ??= new TaskGroups(this) }
   public db!: Database.Database
 
   private ensureDbOpen(): boolean {
@@ -2326,6 +2330,11 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   }
 
   createTask(data: CreateTaskData): TaskRecord | undefined {
+    return this.db.transaction(() => this.insertTask(data))()
+  }
+
+  private insertTask(data: CreateTaskData): TaskRecord | undefined {
+    if (data.group_id !== undefined && data.group_id !== null) this.groups.get(data.group_id)
     const id = createId()
     const now = new Date().toISOString()
 
@@ -2385,6 +2394,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       now
     )
 
+    if (data.group_id !== undefined) this.groups.assign([id], data.group_id)
     return this.getTask(id)
   }
 

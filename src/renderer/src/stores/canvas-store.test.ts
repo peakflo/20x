@@ -34,6 +34,8 @@ describe('canvas-store', () => {
       connectingFromId: null,
       proximityEdge: null,
       liveDrag: null,
+      shownGroupIds: [],
+      closedGroupMemberIds: {},
     })
   })
 
@@ -174,6 +176,26 @@ describe('canvas-store', () => {
       expect(useCanvasStore.getState().panels).toHaveLength(1)
       useCanvasStore.getState().removePanel(id)
       expect(useCanvasStore.getState().panels).toHaveLength(0)
+    })
+
+    it('records an explicitly closed grouped panel at the removal boundary', () => {
+      const id = useCanvasStore.getState().addPanel({ type: 'task', refId: 't1', canvasGroupId: 'g1', title: 'Task', x: 0, y: 0, width: 400, height: 300 })
+      useCanvasStore.getState().removePanel(id)
+      expect(useCanvasStore.getState().closedGroupMemberIds).toEqual({ g1: ['t1'] })
+    })
+
+    it('does not mark deleted task panels as explicitly closed', () => {
+      useCanvasStore.getState().addPanel({ type: 'task', refId: 't1', canvasGroupId: 'g1', title: 'Task', x: 0, y: 0, width: 400, height: 300 })
+      useCanvasStore.getState().removePanelsByRefId('t1')
+      expect(useCanvasStore.getState().closedGroupMemberIds).toEqual({})
+    })
+
+    it('reopens a closed member on an explicit repeated show', () => {
+      const id = useCanvasStore.getState().addPanel({ type: 'task', refId: 't1', canvasGroupId: 'g1', title: 'Task', x: 0, y: 0, width: 400, height: 300 })
+      useCanvasStore.getState().removePanel(id)
+      useCanvasStore.getState().showGroup('g1', ['t1'])
+      expect(useCanvasStore.getState().closedGroupMemberIds).toEqual({ g1: [] })
+      expect(useCanvasStore.getState().pendingViewCommand).toEqual({ kind: 'focus_group', groupId: 'g1' })
     })
 
     it('should remove panels by refId', () => {

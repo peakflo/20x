@@ -96,6 +96,7 @@ export interface ResponsibilityAgreement {
   maxSteps: number
   deadline: string
   basedOn?: string
+  groupId?: string | null
   factoryId?: string
   /** Server-owned snapshots, never model-supplied authority. */
   factory?: FactoryDefinition

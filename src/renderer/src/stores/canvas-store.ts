@@ -38,6 +38,7 @@ export interface CanvasPanelData {
   type: CanvasPanelType
   /** Reference ID (task ID, session ID, app ID, etc.) */
   refId?: string
+  canvasGroupId?: string
   /** URL for webpage panels */
   url?: string
   /** Browser session name (for browser panels) */
@@ -83,6 +84,7 @@ export type CanvasViewCommand =
   | { kind: 'reset' }
   | { kind: 'zoom'; zoom: number }
   | { kind: 'focus_task'; taskId: string }
+  | { kind: 'focus_group'; groupId: string }
 
 export interface SnapGuide {
   axis: 'x' | 'y'
@@ -164,6 +166,8 @@ interface CanvasPersistedState {
   panels: CanvasPanelData[]
   edges: CanvasEdge[]
   nextZIndex: number
+  shownGroupIds?: string[]
+  closedGroupMemberIds?: Record<string, string[]>
 }
 
 interface CanvasState {
@@ -171,6 +175,8 @@ interface CanvasState {
   panels: CanvasPanelData[]
   edges: CanvasEdge[]
   nextZIndex: number
+  shownGroupIds: string[]
+  closedGroupMemberIds: Record<string, string[]>
 
   // Drag state (transient, not persisted)
   draggingPanelId: string | null
@@ -235,6 +241,10 @@ interface CanvasState {
   updatePanel: (id: string, updates: Partial<Omit<CanvasPanelData, 'id'>>) => void
   bringToFront: (id: string) => void
   clearPanels: () => void
+  showGroup: (groupId: string, memberIds: string[]) => void
+  hideGroup: (groupId: string) => void
+  markGroupMemberClosed: (groupId: string, taskId: string) => void
+  isGroupShown: (groupId: string) => boolean
 
   // Drag actions
   setDraggingPanelId: (id: string | null) => void
@@ -256,8 +266,8 @@ let edgeCounter = 0
 function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
-    const { viewport, panels, edges, nextZIndex } = useCanvasStore.getState()
-    const data: CanvasPersistedState = { viewport, panels, edges, nextZIndex }
+    const { viewport, panels, edges, nextZIndex, shownGroupIds, closedGroupMemberIds } = useCanvasStore.getState()
+    const data: CanvasPersistedState = { viewport, panels, edges, nextZIndex, shownGroupIds, closedGroupMemberIds }
     settingsApi.set(CANVAS_STORAGE_KEY, JSON.stringify(data)).catch((err) => {
       console.error('[Canvas] Failed to persist state:', err)
     })
@@ -269,6 +279,8 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
   panels: [],
   edges: [],
   nextZIndex: 1,
+  shownGroupIds: [],
+  closedGroupMemberIds: {},
   draggingPanelId: null,
   snapGuides: [],
   connectingFromId: null,
@@ -299,6 +311,8 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
         panels: data.panels,
         edges: data.edges,
         nextZIndex: data.nextZIndex,
+        shownGroupIds: data.shownGroupIds ?? [],
+        closedGroupMemberIds: data.closedGroupMemberIds ?? {},
         isLoaded: true,
       })
     } catch (err) {
@@ -423,6 +437,8 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
   },
 
   removePanel: (id) => {
+    const panel = get().panels.find((candidate) => candidate.id === id)
+    if (panel?.canvasGroupId && panel.refId) get().markGroupMemberClosed(panel.canvasGroupId, panel.refId)
     releaseBrokerPanel(id)
     get().removeEdgesForPanel(id)
     set((s) => ({ panels: s.panels.filter((p) => p.id !== id) }))
@@ -467,6 +483,27 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
     set({ panels: [], edges: [], nextZIndex: 1 })
     scheduleSave()
   },
+
+  showGroup: (groupId, memberIds) => {
+    set((s) => ({
+      shownGroupIds: s.shownGroupIds.includes(groupId) ? s.shownGroupIds : [...s.shownGroupIds, groupId],
+      closedGroupMemberIds: { ...s.closedGroupMemberIds, [groupId]: (s.closedGroupMemberIds[groupId] ?? []).filter((id) => !memberIds.includes(id)) },
+      pendingViewCommand: { kind: 'focus_group', groupId },
+    }))
+    scheduleSave()
+  },
+  hideGroup: (groupId) => {
+    set((s) => ({ shownGroupIds: s.shownGroupIds.filter((id) => id !== groupId) }))
+    scheduleSave()
+  },
+  markGroupMemberClosed: (groupId, taskId) => {
+    set((s) => {
+      const closed = s.closedGroupMemberIds[groupId] ?? []
+      return closed.includes(taskId) ? s : { closedGroupMemberIds: { ...s.closedGroupMemberIds, [groupId]: [...closed, taskId] } }
+    })
+    scheduleSave()
+  },
+  isGroupShown: (groupId) => get().shownGroupIds.includes(groupId),
 
   // Drag
   setDraggingPanelId: (id) => set({ draggingPanelId: id }),

@@ -206,6 +206,7 @@ const mastermindTools: Tool[] = [
       type: 'object',
       properties: {
         title: { type: 'string', description: 'Task title (required)' },
+        group_id: { type: ['string', 'null'], description: 'Optional existing Group from inspect_groups. Groups only organize tasks.' },
         description: { type: 'string', description: 'Task description' },
         type: { type: 'string', enum: ['coding', 'manual', 'review', 'approval', 'general'], description: 'Task type' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'], description: 'Priority level' },
@@ -962,9 +963,11 @@ async function handleScopedCall(
 
 /** The tools a session may see. This is the whole answer to "which tools to serve". */
 export function listToolsForScope(scope: TaskMcpScope) {
-  return isScopedSession(scope)
+  const administrator = !scope.artifactTaskId || isMastermindTask(scope.artifactTaskId)
+  const tools = isScopedSession(scope)
     ? [...subtaskTools, ...browserTools, ...sharedTools]
-    : [...mastermindTools, ...browserTools, ...sharedTools, ...(!scope.artifactTaskId || isMastermindTask(scope.artifactTaskId) ? taskControlTools : [])]
+    : [...mastermindTools, ...browserTools, ...sharedTools, ...(administrator ? taskControlTools : [])]
+  return administrator ? tools : tools.map(tool => tool.name !== 'create_task' ? tool : { ...tool, inputSchema: { ...tool.inputSchema, properties: Object.fromEntries(Object.entries(tool.inputSchema.properties ?? {}).filter(([key]) => key !== 'group_id')) } })
 }
 
 /**
@@ -990,6 +993,10 @@ export async function callToolForScope(
         content: [{ type: 'text', text: JSON.stringify({ error: `Unknown tool: ${name}` }) }],
         isError: true
       }
+    }
+
+    if (args?.group_id !== undefined && scope.artifactTaskId && !isMastermindTask(scope.artifactTaskId)) {
+      return { content: [{ type: 'text', text: JSON.stringify({ error: 'Only Mastermind can manage Group membership.' }) }], isError: true }
     }
 
     // Normalize legacy 'in_progress' status to 'agent_working' for any task update

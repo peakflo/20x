@@ -215,6 +215,13 @@ describe('deleting inactive proposals through Mastermind', () => {
     }
     try {
       expect((await client.listTools()).tools.map(t => t.name)).toContain('delete_responsibility_proposal')
+      expect((await client.listTools()).tools.map(t => t.name)).toEqual(expect.arrayContaining(['inspect_groups', 'manage_group']))
+      const grouped = await call('manage_group', { action: 'create', name: 'Release work', project_id: project.id })
+      expect(grouped.success).toBe(true)
+      expect((await call('inspect_groups', {})).groups).toEqual(expect.arrayContaining([expect.objectContaining({ id: grouped.groupId })]))
+      const scopedGroups = await rootCall('inspect_groups', {})
+      expect(scopedGroups.isError).not.toBe(true)
+
       expect(await call('inspect_responsibilities', { query: 'Recurring project' })).toMatchObject([{ id: routine.id, kind: 'routine', state: 'proposed' }])
       confirm.mockResolvedValueOnce(false)
       expect(await call('delete_responsibility_proposal', { responsibility_id: goal.id, approved: true })).toMatchObject({ success: false, cancelled: true })
@@ -892,6 +899,73 @@ describe('Factories through the existing responsibility lifecycle', () => {
     } finally { await client.close(); stopTaskApiServer(); setResponsibilityManager(undefined) }
   })
 
+  it('keeps Factory stages together, respects manual moves, and leaves later stages Ungrouped after deleting only the Group', async () => {
+    const f = saveFactory()
+    const r = await approve({ ...agreement, factoryId: f.id })
+    const groupId = db.groups.snapshot().executions[r.id]!
+    expect(db.groups.get(groupId).name).toBe(agreement.title)
+    const first = snapshot().steps[0]
+    await advance('task', 'Review code')
+    const review = snapshot().steps.at(-1)!
+    expect(db.groups.snapshot().membership[review.taskId]).toBe(groupId)
+    const moved = db.groups.create('Another effort', '', project.id)
+    db.groups.assign([first.taskId], moved.id)
+    db.groups.assign([review.taskId], null)
+    new ResponsibilityManager(db, runtime)
+    expect(db.groups.snapshot().membership[first.taskId]).toBe(moved.id)
+    expect(db.groups.snapshot().membership[review.taskId]).toBeUndefined()
+    db.groups.remove(groupId)
+    await advance('done')
+    expect(db.groups.snapshot().membership[snapshot().steps.at(-1)!.taskId]).toBeUndefined()
+    expect(db.groups.snapshot().executions[r.id]).toBeNull()
+    expect(snapshot().responsibilities[0].state).toBe('active')
+    new ResponsibilityManager(db, runtime)
+    expect(db.groups.snapshot().groups.map(g => g.id)).toEqual([moved.id])
+  })
+
+  it('supports a selected Group at admission and cancels its Factory once before bulk deletion', async () => {
+    const selected = db.groups.create('Shipping', '', project.id)
+    const f = saveFactory()
+    const r = await approve({ ...agreement, factoryId: f.id, groupId: selected.id })
+    const step = snapshot().steps[0]
+    expect(db.groups.snapshot().membership[step.taskId]).toBe(selected.id)
+    const confirmation = vi.fn<ConstructorParameters<typeof TaskControl>[4]>(async () => true)
+    vi.spyOn(db, 'deleteTaskAttachments').mockImplementation(() => {})
+    const service = new TaskControl(db, { withStoppedTasks: async (_ids, action, beforeStop) => { await beforeStop?.(); return action() } }, { completeTask: vi.fn() }, manager, confirmation, vi.fn())
+    manager.setTaskControl(service)
+    const token = manager.tokenForTask(step.taskId)!
+    expect((await callResponsibilityTool(manager, token, 'manage_group', { action: 'delete_with_tasks', group_id: selected.id })).isError).toBe(true)
+    const result = await manager.controlTasks(scope(), { action: 'delete_with_tasks', group_id: selected.id }, false, 'group')
+    expect(result).toMatchObject({ success: true })
+    expect(confirmation).toHaveBeenCalledTimes(1)
+    expect(confirmation.mock.calls[0][0].detail).toContain(r.agreement.title)
+    expect(snapshot().responsibilities[0].state).toBe('cancelled')
+    await manager.reconcile()
+    expect(db.getTask(step.taskId)).toBeUndefined()
+    expect(snapshot().steps).toHaveLength(1)
+    expect(db.groups.snapshot().groups).toEqual([])
+    await service.stop()
+  })
+
+  it('retains a Routine Group across checks and handles Group deletion before its first task', async () => {
+    const f = saveFactory()
+    const selected = db.groups.create('Recurring release checks', '', project.id)
+    const r = manager.propose(scope(), { ...agreement, kind: 'routine', schedule: '* * * * *', factoryId: f.id, groupId: selected.id }, input())
+    db.groups.remove(selected.id)
+    await manager.act(r.id, r.revision, 'approve')
+    db.db.prepare("UPDATE mastermind_agreements SET data=json_set(data, '$.nextAt', ?) WHERE id=?").run(new Date(Date.now() - 60000).toISOString(), r.id)
+    await manager.reconcile(); await manager.reconcile()
+    expect(snapshot().steps).toHaveLength(1)
+    expect(db.groups.snapshot().groups).toEqual([])
+    const replacement = db.groups.create('Future checks', '', project.id)
+    db.groups.assignExecution(r.id, replacement.id)
+    await advance('task', 'Inspect this check'); await advance('done'); await advance('done'); await advance('done')
+    db.db.prepare("UPDATE mastermind_agreements SET data=json_set(data, '$.nextAt', ?) WHERE id=?").run(new Date(Date.now() - 60000).toISOString(), r.id)
+    await manager.reconcile(); await manager.reconcile()
+    expect(db.groups.snapshot().membership[snapshot().steps.at(-1)!.taskId]).toBe(replacement.id)
+    expect(db.groups.snapshot().groups).toHaveLength(1)
+  })
+
   it('runs review, conditional fix and independent verification with approved agents, snapshots and task links', async () => {
     const f = saveFactory()
     const developer = db.createAgent({ name: 'Developer', config: { coding_agent: 'codex', model: 'developer-model', reasoning_effort: 'medium' } })!
@@ -1077,7 +1151,8 @@ describe('configured worker access and recurring setup', () => {
   it('retains recurring intent through preparation and a restricted setup step to an inactive proposal', async () => {
     const human = input('Inspect the workspace and monitor every ten minutes until the evidence proves success')
     const root = manager.tokenForTask(projectConversationId(project.id))!
-    expect((await callResponsibilityTool(manager, root, 'prepare_routine', { humanInputId: human, title: 'Prepare recurring verification' })).isError).not.toBe(true)
+    const group = db.groups.create('Verification effort', '', project.id)
+    expect((await callResponsibilityTool(manager, root, 'prepare_routine', { humanInputId: human, title: 'Prepare recurring verification', groupId: group.id })).isError).not.toBe(true)
     await manager.reconcile()
     const prep = snapshot().responsibilities[0]
     const work = snapshot().steps[0]
@@ -1096,6 +1171,8 @@ describe('configured worker access and recurring setup', () => {
     await finish(setup)
     const routine = snapshot().responsibilities.find(r => r.agreement.kind === 'routine')!
     expect(snapshot().responsibilities.find(r => r.id === prep.id)).toMatchObject({ state: 'completed', routineSetup: { proposalId: routine.id } })
+    expect(db.groups.snapshot().executions[routine.id]).toBe(group.id)
+    expect(db.groups.snapshot().membership[work.taskId]).toBe(group.id)
     expect(routine).toMatchObject({ preparedFrom: prep.id, state: 'proposed', nextAt: null, agreement: { schedule: '*/10 * * * *', stopOnSuccess: true } })
     expect(collect).not.toHaveBeenCalled()
     await expect(manager.act(routine.id, routine.revision, 'approve')).rejects.toThrow('trial')

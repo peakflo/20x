@@ -1,9 +1,19 @@
+import type { TaskGroupsApi } from '../shared/task-groups'
 import type { TaskConfirmationApi, TaskConfirmation } from '../shared/task-confirmation'
 import type { ResponsibilitiesApi } from '../shared/responsibilities'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
 
+const taskGroups: TaskGroupsApi = {
+  snapshot: () => ipcRenderer.invoke('task-groups:snapshot'),
+  manage: action => ipcRenderer.invoke('task-groups:manage', action),
+  onChanged: callback => {
+    const handler = (): void => callback()
+    ipcRenderer.on('task-groups:changed', handler)
+    return () => { ipcRenderer.removeListener('task-groups:changed', handler) }
+  }
+}
 const responsibilities: ResponsibilitiesApi = {
   setProactive: (id, enabled) => ipcRenderer.invoke('responsibilities:setProactive', id, enabled),
   retryFollowups: id => ipcRenderer.invoke('responsibilities:retryFollowups', id),
@@ -31,6 +41,7 @@ const taskConfirmation: TaskConfirmationApi = {
   }
 }
 contextBridge.exposeInMainWorld('electronAPI', {
+  taskGroups,
   taskConfirmation,
   responsibilities,
   db: {

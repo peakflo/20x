@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/Button'
 import { TaskStatus } from '@/types'
 import { FactoryCanvas } from '@/components/factories/FactoryCanvas'
 import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
+import { CanvasGroups, CanvasGroupsMenu } from './CanvasGroups'
 
 /**
  * Check if a panel is visible in the current viewport (with generous margin).
@@ -416,6 +417,19 @@ export function InfiniteCanvas() {
       case 'zoom':
         zoomTo(pendingViewCommand.zoom, rect.width / 2, rect.height / 2)
         return
+      case 'focus_group': {
+        const groupId = pendingViewCommand.groupId
+        // Group admission may add panels in this commit; measure the finished layout next frame.
+        requestAnimationFrame(() => {
+          const frame = containerRef.current?.querySelector<HTMLElement>(`[data-canvas-group-frame="${CSS.escape(groupId)}"]`)
+          if (!frame || rect.width < 10 || rect.height < 10) return
+          const left = parseFloat(frame.style.left), top = parseFloat(frame.style.top)
+          const width = parseFloat(frame.style.width), height = parseFloat(frame.style.height)
+          const zoom = Math.max(0.1, Math.min(1, rect.width / (width + 80), rect.height / (height + 80)))
+          useCanvasStore.getState().setViewport({ zoom, x: rect.width / 2 - (left + width / 2) * zoom, y: rect.height / 2 - (top + height / 2) * zoom })
+        })
+        return
+      }
       case 'focus_task': {
         const target = useCanvasStore
           .getState()
@@ -959,6 +973,7 @@ export function InfiniteCanvas() {
   return (
     <div data-canvas-root="true" className="overflow-hidden bg-[var(--canvas-bg)]" style={{ position: 'relative', width: '100%', height: '100%' }}>
       <FactoryCanvas />
+      <CanvasGroupsMenu />
       {/* Canvas container */}
       <div
         ref={containerRef}
@@ -994,6 +1009,7 @@ export function InfiniteCanvas() {
             height: 0,
           }}
         >
+          <CanvasGroups />
           {/* Snap guides */}
           <SnapGuides />
 

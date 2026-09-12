@@ -4,6 +4,7 @@ import { FactoriesWorkspace } from './FactoriesWorkspace'
 import { syncFactoryCanvas } from './FactoryCanvas'
 import { useUIStore } from '@/stores/ui-store'
 import { useCanvasStore } from '@/stores/canvas-store'
+import { useTaskGroupStore } from '@/stores/task-group-store'
 import type { FactoryDefinition, ResponsibilitySnapshot, ResponsibilityStep } from '@shared/responsibilities'
 
 vi.mock('@/stores/task-store', () => ({ useTaskStore: vi.fn() }))
@@ -15,7 +16,8 @@ let changed: () => void
 beforeEach(() => {
   cleanup(); vi.clearAllMocks()
   useUIStore.setState({ mastermindDraft: null, showOrchestrator: false, canvasResponsibilityId: null })
-  useCanvasStore.setState({ panels: [], edges: [], nextZIndex: 1 })
+  useCanvasStore.setState({ panels: [], edges: [], nextZIndex: 1, shownGroupIds: [], closedGroupMemberIds: {} })
+  useTaskGroupStore.setState({ groups: [], membership: {}, executions: {}, canvasGroupId: null })
   snapshot = { projects: [{ id: 'project', name: 'Example', root: '/example', agentId: 'agent', createdAt: '2026-01-01' }, { id: 'other', name: 'Other', root: '/other', agentId: 'agent', createdAt: '2026-01-01' }], responsibilities: [], steps: [], memory: [], notices: [], factories: [factory], factoryProposals: [] }
   window.electronAPI.responsibilities = { setProactive: vi.fn(async () => {}), retryFollowups: vi.fn(async () => {}), snapshot: vi.fn(async () => structuredClone(snapshot)), onChanged: vi.fn(callback => { changed = callback; return vi.fn() }), decideFactory: vi.fn(async (id) => { snapshot.factoryProposals = snapshot.factoryProposals?.filter(p => p.id !== id); changed() }), act: vi.fn(), answer: vi.fn(), remember: vi.fn(), forget: vi.fn(), createProject: vi.fn(), pickProjectFolder: vi.fn() }
 })
@@ -57,4 +59,12 @@ it('adds only actual tasks to the canvas, connects their handoffs, and preserves
   expect(useCanvasStore.getState().panels).toHaveLength(2)
   expect(useCanvasStore.getState().edges).toHaveLength(1)
   expect(useCanvasStore.getState().panels[0]).toMatchObject({ x: 777, y: 222 })
+})
+
+it('does not reopen a Factory task moved out of its execution group', () => {
+  const steps = [{ id: 's1', responsibilityId: 'r1', taskId: 'review', predecessorTaskIds: [] }] as unknown as ResponsibilityStep[]
+  useTaskGroupStore.setState({ executions: { r1: 'g1' }, membership: {} })
+  useCanvasStore.setState({ shownGroupIds: ['g1'], closedGroupMemberIds: {} })
+  syncFactoryCanvas(steps, [{ id: 'review', title: 'Review' }])
+  expect(useCanvasStore.getState().panels).toHaveLength(0)
 })

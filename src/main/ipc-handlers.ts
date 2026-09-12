@@ -99,6 +99,11 @@ export function registerIpcHandlers(
   // Mutable references — created on selectTenant, cleared on logout
   let enterpriseHeartbeat = initialEnterpriseHeartbeat
   let enterpriseStateSync = initialEnterpriseStateSync
+  ipcMain.handle('task-groups:snapshot', () => db.groups.snapshot())
+  ipcMain.handle('task-groups:manage', (_, args) => {
+    if (!taskControl) throw new Error('Task controls unavailable.')
+    return taskControl.manageGroup(args)
+  })
   ipcMain.handle('db:getTasks', () => {
     return db.getTasks()
   })

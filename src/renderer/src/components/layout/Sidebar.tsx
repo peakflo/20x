@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Plus, Search, ChevronDown, X, FileText, RefreshCw, Loader2, Play, Pause } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
-import { TaskList } from '@/components/tasks/TaskList'
+import { TaskGroups } from '@/components/tasks/TaskGroups'
 import { SkillList } from '@/components/skills/SkillList'
 import { useUIStore, type SortField } from '@/stores/ui-store'
 import { useTaskSourceStore } from '@/stores/task-source-store'
@@ -9,12 +9,14 @@ import { useTaskStore } from '@/stores/task-store'
 import { useUserStore } from '@/stores/user-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { useAgentSchedulerStore } from '@/stores/agent-scheduler-store'
+import { useTaskGroupStore } from '@/stores/task-group-store'
 import { isSnoozed } from '@/lib/utils'
 import { TaskStatus, TASK_STATUSES, TASK_PRIORITIES } from '@/types'
 import type { WorkfloTask, TaskPriority } from '@/types'
 
 interface SidebarProps {
   tasks: WorkfloTask[]
+  allTasks: WorkfloTask[]
   selectedTaskId: string | null
   overdueCount: number
   onSelectTask: (id: string) => void
@@ -32,7 +34,7 @@ const sortOptions: { value: SortField; label: string }[] = [
   { value: 'title', label: 'Title' }
 ]
 
-export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onCreateTask }: SidebarProps) {
+export function Sidebar({ tasks, allTasks, selectedTaskId, overdueCount, onSelectTask, onCreateTask }: SidebarProps) {
   const [filtersOpen, setFiltersOpen] = useState(false)
   // Use individual selectors to prevent re-renders from unrelated store changes
   const sidebarView = useUIStore((s) => s.sidebarView)
@@ -109,6 +111,9 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   }, [skills, skillSearchQuery])
 
   const hasActiveFilters = statusFilter !== 'all' || priorityFilter !== 'all' || sourceFilter !== 'all'
+  useEffect(() => {
+    if ((searchQuery || hasActiveFilters) && useTaskGroupStore.getState().view === 'groups') useTaskGroupStore.getState().setView('all')
+  }, [searchQuery, statusFilter, priorityFilter, sourceFilter])
 
   // Memoize sidebar footer stats to avoid 4x redundant .filter() calls inline in JSX
   const { activeCount, hiddenCount, totalCount } = useMemo(() => {
@@ -186,7 +191,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
               >
                 {isAutoStartEnabled ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
               </Button>
-              <Button size="sm" onClick={onCreateTask}>
+              <Button size="sm" onClick={() => { useTaskGroupStore.getState().setCreationGroup(null); onCreateTask() }}>
                 <Plus className="h-3.5 w-3.5" />
                 New
               </Button>
@@ -298,7 +303,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           <div className="mx-3 border-t" />
 
           <div className="flex-1 overflow-y-auto pt-1">
-            <TaskList tasks={tasks} selectedTaskId={selectedTaskId} onSelectTask={handleSelectTask} />
+            <TaskGroups tasks={tasks} allTasks={allTasks} selectedTaskId={selectedTaskId} onSelectTask={handleSelectTask} onCreateTask={onCreateTask} />
           </div>
 
           <div className="px-4 py-2.5 border-t text-xs text-muted-foreground tabular-nums">

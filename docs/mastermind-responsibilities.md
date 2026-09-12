@@ -18,6 +18,18 @@ The engineer explicitly chose 20x's lifecycle: fully quitting stops agents and m
 10. Run multiple responsibilities over a working day. Settled workers are released while their output remains available. Independent tasks can progress in the same project.
 11. Ask Mastermind to complete, close, or delete an exact task. Both All tasks and project conversations can inspect task metadata and request the action directly. Close means mark completed. The desktop confirmation shows the target, source action/outputs, dependent deletions and responsibility cancellation before anything changes.
 
+## Groups
+
+Groups sit above tasks inside **Tasks** and **Canvas**, with no additional sidebar menu. Create an empty Group or select existing tasks, then manage its name, description and membership from the Group. Tasks retain their own agents, conversations, permissions and dependency links. **All tasks** and **Ungrouped** remain available.
+
+Use **Show on Canvas** to open a Group together. Its frame follows the member panels; dragging or closing a panel only changes layout. New members appear in a shown Group, and explicitly closed panels stay closed until the Group is shown again.
+
+Each Factory execution receives a Group unless an existing project Group is selected. Later stages and recurring checks keep that Group. Manual task moves and removals remain in effect, while Factory history retains the original execution relationship. Mastermind can inspect and manage Groups directly, including assigning future stages of a saved execution to an existing Group.
+
+**Delete Group only** keeps tasks and active work; later stages stay Ungrouped. **Delete Group and all tasks** uses one scrollable confirmation showing exact tasks, cascading subtasks/recurring instances and affected automations. Work stops before deletion. A partial failure retains the Group and remaining tasks. Linked remote records follow the existing local task-deletion behavior.
+
+Acceptance: create a Group with existing tasks; create a task inside it; move/remove members; check the same membership in Tasks and Canvas; close a panel and refresh/reopen; add a member while the Group is shown; run multiple Factory stages and recurring checks; delete only the Group while work continues; decline and then confirm a Group-plus-tasks deletion. Verify unrelated tasks and agent defaults remain unchanged.
+
 ## Shared task conversations
 
 The engineer and Mastermind can both message an existing Mastermind task at any time, using the same conversation. No ownership transfer is required. Messages to a running assignment invalidate its previous completion report until the agent responds to the new input. Follow-up conversation after a saved result does not restart a completed Goal or Routine.
@@ -106,7 +118,7 @@ Task-control validation covers real HTTP MCP discovery/calls against an isolated
 
 ## Pausing a recurring task schedule
 
-Ask Mastermind to “pause the Slack monitor schedule.” It uses `inspect_tasks` to find the recurring template, then `manage_task` with `pause_schedule`. Confirm the named schedule in the desktop dialog. The template remains in Recurring tasks and shows Paused; its task view also offers Pause schedule / Resume schedule. Schedule controls are available to Mastermind, not worker sessions.
+Ask Mastermind to “pause the recurring workflow schedule.” It uses `inspect_tasks` to find the recurring template, then `manage_task` with `pause_schedule`. Confirm the named schedule in the desktop dialog. The template remains in Recurring tasks and shows Paused; its task view also offers Pause schedule / Resume schedule. Schedule controls are available to Mastermind, not worker sessions.
 
 Pause persists across quit/reopen and prevents new instances, including schedule repair. Existing runs continue; the cron, agent, automation settings and history remain. Ask to resume and confirm: the next future occurrence runs, without replaying the paused period. This controls local recurring task templates; project Routine agreements and global auto-run retain their existing separate controls. Workflo schedules must be managed at their source.
 

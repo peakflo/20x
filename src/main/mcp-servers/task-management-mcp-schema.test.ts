@@ -81,11 +81,16 @@ describe('tool sets per scope', () => {
   it('gives task administration to Mastermind, never to project workers', async () => {
     const invoke = async () => ({ ok: true })
     const mastermind = { parentTaskId: null, taskId: null, artifactTaskId: 'mastermind-session' }
+    expect(listToolsForScope(mastermind).map(t => t.name)).toEqual(expect.arrayContaining(['inspect_groups', 'manage_group']))
+    expect(propertiesOf(mastermind, 'create_task')).toHaveProperty('group_id')
     expect(listToolsForScope(mastermind).map(t => t.name)).toContain('manage_task')
     expect(listToolsForScope(mastermind).map(t => t.name)).toContain('delete_responsibility_proposal')
     expect((await callToolForScope('delete_responsibility_proposal', { responsibility_id: 'proposal' }, mastermind, invoke)).isError).not.toBe(true)
     expect((await callToolForScope('manage_task', { task_id: 't1', action: 'close' }, mastermind, invoke)).isError).not.toBe(true)
     for (const worker of [SCOPED, { parentTaskId: null, taskId: null, artifactTaskId: 'ordinary-task' }]) {
+      expect(listToolsForScope(worker).map(t => t.name)).not.toContain('manage_group')
+      expect((await callToolForScope('create_task', { title: 'Cross project', group_id: 'another-project-group' }, worker, invoke)).isError).toBe(true)
+      if (!worker.parentTaskId) expect(propertiesOf(worker, 'create_task')).not.toHaveProperty('group_id')
       expect(listToolsForScope(worker).map(t => t.name)).not.toContain('manage_task')
       expect(listToolsForScope(worker).map(t => t.name)).not.toContain('delete_responsibility_proposal')
       expect((await callToolForScope('delete_responsibility_proposal', { responsibility_id: 'proposal' }, worker, invoke)).isError).toBe(true)

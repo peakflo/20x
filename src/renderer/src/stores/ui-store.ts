@@ -58,6 +58,7 @@ interface UIState {
   draftInMastermind: (projectId: string, text: string) => void
   clearMastermindDraft: (id: string) => void
   canvasResponsibilityId: string | null
+  canvasResponsibilityRequest: number
   showResponsibilityOnCanvas: (id: string) => void
   /** Whether the contextual (tasks/skills) sidebar is collapsed (persisted) */
   sidebarCollapsed: boolean
@@ -126,7 +127,8 @@ export const useUIStore = create<UIState>((set) => ({
   draftInMastermind: (projectId, text) => set({ showOrchestrator: true, mastermindDraft: { id: crypto.randomUUID(), projectId, text } }),
   clearMastermindDraft: (id) => set(s => s.mastermindDraft?.id === id ? { mastermindDraft: null } : {}),
   canvasResponsibilityId: null,
-  showResponsibilityOnCanvas: (id) => set({ canvasResponsibilityId: id, sidebarView: 'canvas', dashboardPreviewTaskId: null }),
+  canvasResponsibilityRequest: 0,
+  showResponsibilityOnCanvas: (id) => set(s => ({ canvasResponsibilityId: id, canvasResponsibilityRequest: s.canvasResponsibilityRequest + 1, sidebarView: 'canvas', dashboardPreviewTaskId: null })),
   sidebarCollapsed: readStoredCollapsed(),
   sidebarWidth: readStoredWidth(),
 

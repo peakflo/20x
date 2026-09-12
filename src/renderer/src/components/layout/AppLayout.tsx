@@ -45,6 +45,7 @@ import logo20x from '@/assets/logos/20x.svg'
 import { dispatchTaskShortcut, findComposerElement, focusComposerInput, getNextNudgeMessage, insertIntoComposer, isGlobalShortcutBlocked, onShortcutFeedback, shouldAutoFocusComposer, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import { composerCanSubmit, MASTERMIND_COMPOSER_KEY, sendComposerMessage, setActiveComposer } from '@/lib/voice-dictation-target'
+import { useTaskGroupStore } from '@/stores/task-group-store'
 
 const isWindows = navigator.platform.toLowerCase().startsWith('win') || navigator.userAgent.includes('Windows')
 const isMac = navigator.platform.toLowerCase().includes('mac')
@@ -90,6 +91,8 @@ export function AppLayout() {
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed)
   const toggleSidebarCollapsed = useUIStore((s) => s.toggleSidebarCollapsed)
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
+  const fetchTaskGroups = useTaskGroupStore((s) => s.fetch)
+  const clearCreationGroup = useTaskGroupStore((s) => s.setCreationGroup)
 
   // ── Command palette ──
   const [cmdOpen, setCmdOpen] = useState(false)
@@ -123,6 +126,28 @@ export function AppLayout() {
       cleanupMenu()
     }
   }, [])
+
+  useEffect(() => {
+    void fetchTaskGroups()
+    const api = window.electronAPI?.taskGroups
+    if (!api) return
+    return api.onChanged(() => { void fetchTaskGroups() })
+  }, [fetchTaskGroups])
+
+  useEffect(() => { void fetchTaskGroups() }, [allTasks, fetchTaskGroups])
+
+  useEffect(() => {
+    if (!selectedTask || sidebarView !== 'tasks') return
+    const groups = useTaskGroupStore.getState()
+    if (groups.view === 'all' || !groups.isLoaded) return
+    const target = groups.membership[selectedTask.id] ?? 'ungrouped'
+    if (groups.view !== target) groups.setView(target)
+  }, [selectedTask?.id, sidebarView])
+
+  const openGlobalCreateTask = useCallback(() => {
+    clearCreationGroup(undefined)
+    openCreateModal()
+  }, [clearCreationGroup, openCreateModal])
 
   useEffect(() => {
     capturePageView(activeModal === 'settings' ? 'settings' : sidebarView, {
@@ -337,7 +362,9 @@ export function AppLayout() {
       .filter((element) => element.offsetParent !== null)
       .map((element) => element.dataset.keyboardTaskId)
       .filter((id): id is string => !!id)
+    const groupState = useTaskGroupStore.getState()
     const fallbackIds = tasks
+      .filter(task => sidebarView !== 'tasks' || groupState.view === 'all' || (groupState.view === 'ungrouped' ? !groupState.membership[task.id] : groupState.membership[task.id] === groupState.view))
       .filter((task) => !task.parent_task_id && task.status !== TaskStatus.Completed && !isSnoozed(task.snoozed_until))
       .map((task) => task.id)
     const ids = renderedIds.length > 0 ? renderedIds : fallbackIds
@@ -349,7 +376,7 @@ export function AppLayout() {
     if (activeModal === 'settings') closeModal()
     setSidebarView('tasks')
     selectTask(ids[nextIndex])
-  }, [activeModal, closeModal, selectTask, selectedTaskId, setSidebarView, tasks])
+  }, [activeModal, closeModal, selectTask, selectedTaskId, setSidebarView, sidebarView, tasks])
 
   const openSelectedTask = useCallback(() => {
     if (activeTaskId) handleGoToFullView(activeTaskId)
@@ -628,7 +655,7 @@ export function AppLayout() {
       else if (key === 'k') { e.preventDefault(); navigateVisibleTask(-1) }
       else if (e.key === 'Enter' && !(e.target as HTMLElement | null)?.closest('button, a')) { e.preventDefault(); openSelectedTask() }
       else if (e.key === 'Escape') { e.preventDefault(); if (showOrchestrator) setShowOrchestrator(false); else clearTaskSelection() }
-      else if (key === 'c') { e.preventDefault(); openCreateModal() }
+      else if (key === 'c') { e.preventDefault(); openGlobalCreateTask() }
       else if (key === 'e') { e.preventDefault(); completeActiveTask() }
       else if (key === 'h' && e.shiftKey) { e.preventDefault(); void runActiveHeartbeat() }
       else if (key === 'h') { e.preventDefault(); runTaskShortcut(TaskShortcutAction.SNOOZE) }
@@ -643,7 +670,7 @@ export function AppLayout() {
       window.removeEventListener('keydown', onKey)
       if (chordRef.current) window.clearTimeout(chordRef.current.timer)
     }
-  }, [activeModal, activeTaskId, clearTaskSelection, closeModal, completeActiveTask, deleteActiveTask, focusComposer, focusSearch, navigateVisibleTask, nudgeActiveTask, openActiveTaskOnCanvas, openCreateModal, openParentTask, openSelectedTask, openSubtasks, runActiveHeartbeat, runTaskShortcut, setShowOrchestrator, setSidebarView, showOrchestrator, sidebarView, toggleMastermindAudio, toggleTaskAudio])
+  }, [activeModal, activeTaskId, clearTaskSelection, closeModal, completeActiveTask, deleteActiveTask, focusComposer, focusSearch, navigateVisibleTask, nudgeActiveTask, openActiveTaskOnCanvas, openGlobalCreateTask, openParentTask, openSelectedTask, openSubtasks, runActiveHeartbeat, runTaskShortcut, setShowOrchestrator, setSidebarView, showOrchestrator, sidebarView, toggleMastermindAudio, toggleTaskAudio])
 
   return (
     <>
@@ -784,10 +811,11 @@ export function AppLayout() {
         {(sidebarView === 'tasks' || sidebarView === 'skills') && !sidebarCollapsed && (
           <Sidebar
             tasks={tasks}
+            allTasks={allTasks}
             selectedTaskId={selectedTask?.id || null}
             overdueCount={overdueCount}
             onSelectTask={selectTask}
-            onCreateTask={openCreateModal}
+            onCreateTask={openGlobalCreateTask}
           />
         )}
 
@@ -857,7 +885,7 @@ export function AppLayout() {
       <StatusBar />
 
       {/* Create Task Dialog — dismiss on outside click */}
-      <Dialog open={activeModal === 'create'} onOpenChange={(open) => { if (!open) { closeModal(); clearCreateTaskPrefill() } }}>
+      <Dialog open={activeModal === 'create'} onOpenChange={(open) => { if (!open) { clearCreationGroup(undefined); closeModal(); clearCreateTaskPrefill() } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create Task</DialogTitle>
@@ -879,9 +907,10 @@ export function AppLayout() {
                   }
                   await updateTask(newTask.id, { attachments })
                 }
-                closeModal()
-                clearCreateTaskPrefill()
                 if (newTask) {
+                  clearCreationGroup(undefined)
+                  closeModal()
+                  clearCreateTaskPrefill()
                   if (sidebarView === 'canvas') {
                     setCanvasPendingTaskId(newTask.id)
                   } else {
@@ -891,7 +920,7 @@ export function AppLayout() {
                   }
                 }
               }}
-              onCancel={() => { closeModal(); clearCreateTaskPrefill() }}
+              onCancel={() => { clearCreationGroup(undefined); closeModal(); clearCreateTaskPrefill() }}
             />
           </DialogBody>
         </DialogContent>

@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { useTaskGroupStore } from './task-group-store'
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, OutputField, OutputFieldType } from '@/types'
 import { taskApi, taskSourceApi, onTaskUpdated, onTaskCreated, onTaskDeleted, onTasksRefresh } from '@/lib/ipc-client'
 import { captureAnalyticsEvent, getTaskAnalyticsProperties, getTaskMutationProperties } from '@/lib/analytics'
@@ -82,7 +83,9 @@ export const useTaskStore = create<TaskState>((set) => ({
 
   createTask: async (data) => {
     try {
-      const task = normalizeTask(await taskApi.create(data))
+      const groupId = data.group_id !== undefined ? data.group_id : useTaskGroupStore.getState().creationGroupId
+      const task = normalizeTask(await taskApi.create({ ...data, ...(groupId !== undefined ? { group_id: groupId } : {}) }))
+      useTaskGroupStore.getState().setCreationGroup(undefined)
       captureAnalyticsEvent('task_created', {
         ...getTaskAnalyticsProperties(task),
         ...getTaskMutationProperties(data as unknown as Record<string, unknown>)
