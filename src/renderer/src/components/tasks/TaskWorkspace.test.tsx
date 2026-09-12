@@ -1,3 +1,4 @@
+import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, fireEvent, screen, waitFor, cleanup } from '@testing-library/react'
@@ -177,6 +178,42 @@ describe('TaskWorkspace keyboard actions', () => {
       await waitFor(() => expect(noopFn).toHaveBeenCalledWith(completeAtSource))
       expect(window.electronAPI.agentSession.send).not.toHaveBeenCalled()
     }
+  })
+
+  it.each([true, false])('starts learning after an ended session with source completion %s', async (completeAtSource) => {
+    vi.mocked(window.electronAPI.agentSession.resume).mockResolvedValueOnce({ sessionId: '', ended: true })
+    vi.mocked(window.electronAPI.agentSession.start).mockResolvedValueOnce({ sessionId: 'learning-session' })
+    const task = makeRendererTask({ status: TaskStatus.ReadyForReview, session_id: 'ended-session', source: 'Notion', source_id: 'notion' })
+    renderWorkspace(task)
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.COMPLETE, taskId: task.id }))
+    if (!completeAtSource) fireEvent.click(screen.getByRole('radio', { name: "I'll do it manually" }))
+    fireEvent.click(screen.getAllByRole('button').filter(button => button.querySelector('svg.lucide-star'))[4])
+    fireEvent.click(screen.getByRole('button', { name: 'Submit Feedback' }))
+    await waitFor(() => expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith(
+      'learning-session', expect.stringContaining('User rated this session 5/5'), task.id, 'agent-1', undefined
+    ))
+    expect(window.electronAPI.agentSession.start).toHaveBeenCalledWith('agent-1', task.id, undefined, true)
+    expect(window.electronAPI.db.updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({
+      status: TaskStatus.AgentLearning, complete_at_source: completeAtSource, feedback_rating: 5
+    }))
+    expect(window.electronAPI.db.updateTask).not.toHaveBeenCalledWith(task.id, { status: TaskStatus.ReadyForReview })
+    expect(noopFn).not.toHaveBeenCalled()
+  })
+
+  it('shows a retryable error when the learning session cannot start', async () => {
+    vi.mocked(window.electronAPI.agentSession.resume).mockRejectedValueOnce(new Error('Agent is unavailable'))
+    const task = makeRendererTask({status: TaskStatus.ReadyForReview, session_id: 'saved', source: 'Notion', source_id: 'notion'})
+    renderWorkspace(task)
+    act(() => dispatchTaskShortcut({action: TaskShortcutAction.COMPLETE, taskId: task.id}))
+    fireEvent.click(screen.getAllByRole('button').filter(button => button.querySelector('svg.lucide-star'))[4])
+    fireEvent.click(screen.getByRole('button', {name: 'Submit Feedback'}))
+    await waitFor(() => expect(useProgressToastStore.getState().toasts.get('feedback-task-1')).toMatchObject({
+      status: 'error', message: 'Agent is unavailable'
+    }))
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument())
+    expect(window.electronAPI.db.updateTask).toHaveBeenCalledWith(task.id, {status: TaskStatus.ReadyForReview})
+    expect(window.electronAPI.agentSession.send).not.toHaveBeenCalled()
+    expect(noopFn).not.toHaveBeenCalled()
   })
 
   it.each(['approve', undefined])('shows the Session Feedback source action %s before completion', async (action) => {
