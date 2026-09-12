@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ArtifactClipboardMode, ArtifactContentKind, ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS, ArtifactsPanel } from './ArtifactsPanel'
@@ -22,6 +22,29 @@ afterEach(() => {
 })
 
 describe('ArtifactsPanel', () => {
+  it('opens supporting file links, selects files, and copies the selected file', async () => {
+    const files = ['artifacts/demo/docs/start.md', 'artifacts/demo/data.csv', 'artifacts/demo/index.html']
+    const artifact: Artifact = { id: 'demo', taskId: 'task-1', title: 'Report', type: ArtifactType.MARKDOWN, path: files[0], files, updatedAt: 1, reloadTrigger: 0 }
+    const read = vi.fn().mockImplementation(async (_task, path) => ({ kind: ArtifactContentKind.TEXT, content: path === files[0] ? '[Data](../data.csv) [Missing](missing.md) [Web](https://example.com)' : path === files[1] ? 'name,value\nA,10' : '<a href="docs/start.md">Start</a>' }))
+    const copyFile = vi.fn().mockResolvedValue({ mode: ArtifactClipboardMode.FILE })
+    render(<ArtifactsPanel taskId="task-1" artifacts={[artifact]} ui={{ ...baseUi, activeTabId: 'demo' }} artifactApi={{ scan: vi.fn(), read, copyFile }} hasChanges={false} hasOutput={false} onSelectTab={vi.fn()} onCloseTab={vi.fn()} onToggleOpen={vi.fn()} onToggleRail={vi.fn()} details={null} changes={null} output={null} />)
+    fireEvent.click(await screen.findByRole('link', { name: 'Missing' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('This file is not available')
+    expect(read).not.toHaveBeenCalledWith('task-1', expect.stringContaining('missing.md'))
+    expect(screen.getByRole('link', { name: 'Web' })).toHaveAttribute('href', 'https://example.com')
+    fireEvent.click(screen.getByRole('link', { name: 'Data' }))
+    await screen.findByText(/name,value/)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Artifact file' })).toHaveValue(files[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Copy file' }))
+    await waitFor(() => expect(copyFile).toHaveBeenCalledWith('task-1', files[1]))
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: files[2] } })
+    const frame = await screen.findByTitle('Report') as HTMLIFrameElement
+    act(() => window.dispatchEvent(new MessageEvent('message', { origin: 'null', source: frame.contentWindow, data: { type: 'artifact:open-file', href: 'docs/start.md' } })))
+    await screen.findByRole('link', { name: 'Data' })
+    expect(screen.getByRole('combobox')).toHaveValue(files[0])
+  })
+
   it('mounts Changes only while the Changes tab is selected', () => {
     const props = {
       taskId: 'task-1',

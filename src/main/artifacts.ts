@@ -45,6 +45,10 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
 }
 const HTML_EXTENSIONS = new Set(['.htm', '.html'])
 const TEXT_MIME_TYPES: Record<string, string> = {
+  '.py': 'text/plain',
+  '.sh': 'text/plain',
+  '.sql': 'text/plain',
+  '.ini': 'text/plain',
   '.css': 'text/css',
   '.csv': 'text/csv',
   '.js': 'text/javascript',
@@ -184,6 +188,7 @@ export function registeredArtifactToArtifact(record: RegisteredArtifact): Artifa
     type: record.type,
     title: record.title,
     path,
+    files: record.files.map((file) => `${ARTIFACT_FILES_DIRECTORY}/${record.artifactId}/${file}`),
     workpieceKey: record.artifactId,
     updatedAt: record.updatedAt,
     reloadTrigger: Math.floor(record.updatedAt)
@@ -199,7 +204,8 @@ function registeredArtifactToEntry(record: RegisteredArtifact): ArtifactFileEntr
     type: record.type,
     updatedAt: record.updatedAt,
     size: 0,
-    workpieceKey: record.artifactId
+    workpieceKey: record.artifactId,
+    files: record.files.map((file) => `${ARTIFACT_FILES_DIRECTORY}/${record.artifactId}/${file}`)
   }
 }
 
@@ -473,15 +479,17 @@ export async function scanTaskArtifacts(workspaceDir: string): Promise<ArtifactF
           workpieceKey: workpiece.key
         }
         const previous = artifacts.get(workpiece.key)
+        const files = [...(previous?.files || []), relativePath].sort()
         if (!previous || previewPriority(candidate) > previewPriority(previous)) {
           artifacts.set(workpiece.key, {
             ...candidate,
+            files,
             updatedAt: Math.max(candidate.updatedAt, previous?.updatedAt || 0)
           })
-        } else if (fileStat.mtimeMs > previous.updatedAt) {
+        } else {
           // Supporting-file edits reload the selected preview without replacing
           // its entry point or creating another top-level tab.
-          artifacts.set(workpiece.key, { ...previous, updatedAt: fileStat.mtimeMs })
+          artifacts.set(workpiece.key, { ...previous, files, updatedAt: Math.max(previous.updatedAt, fileStat.mtimeMs) })
         }
       } catch {
         // A file can disappear while an agent is replacing it. Ignore it and
@@ -494,12 +502,23 @@ export async function scanTaskArtifacts(workspaceDir: string): Promise<ArtifactF
   return [...artifacts.values()].sort((a, b) => b.updatedAt - a.updatedAt || a.path.localeCompare(b.path))
 }
 
+/** Unknown file formats are available only when explicitly owned by a
+ * registered artifact. The scanner still excludes arbitrary binary files. */
+async function isRegisteredFile(workspaceDir: string, filePath: string): Promise<boolean> {
+  const workspaceRoot = await realpath(workspaceDir)
+  const path = relative(workspaceRoot, filePath).split(sep).join('/')
+  const registry = await readArtifactRegistryFromRoot(workspaceRoot)
+  return registry.artifacts.some((artifact) => artifact.files.some((file) =>
+    path === `${ARTIFACT_FILES_DIRECTORY}/${artifact.artifactId}/${file}`
+  ))
+}
+
 /** Resolve a previewable artifact to its absolute path while enforcing
  * task-workspace containment. Used by the "copy the file" clipboard action. */
 export async function resolveTaskArtifactFilePath(workspaceDir: string, artifactPath: string): Promise<string | null> {
   const filePath = await resolveArtifactPath(workspaceDir, artifactPath)
   if (!filePath) return null
-  if (!artifactTypeForPath(filePath)) return null
+  if (!artifactTypeForPath(filePath) && !await isRegisteredFile(workspaceDir, filePath)) return null
   try {
     return (await stat(filePath)).isFile() ? filePath : null
   } catch {
@@ -513,7 +532,7 @@ export async function readTaskArtifact(workspaceDir: string, artifactPath: strin
   if (!filePath) return null
 
   const type = artifactTypeForPath(filePath)
-  if (!type) return null
+  if (!type && !await isRegisteredFile(workspaceDir, filePath)) return null
 
   let fileStat
   try {
@@ -525,6 +544,12 @@ export async function readTaskArtifact(workspaceDir: string, artifactPath: strin
 
   const extension = extname(filePath).toLowerCase()
   try {
+    if (!type) {
+      if (fileStat.size > MAX_IMAGE_BYTES) return null
+      const data = await readFile(filePath)
+      const mimeType = 'application/octet-stream'
+      return { kind: ArtifactContentKind.DATA_URL, content: `data:${mimeType};base64,${data.toString('base64')}`, mimeType }
+    }
     if (type === ArtifactType.IMAGE) {
       if (fileStat.size > MAX_IMAGE_BYTES) return null
       const data = await readFile(filePath)

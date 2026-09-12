@@ -39,10 +39,11 @@ describe('HtmlArtifactView', () => {
       read: vi.fn().mockResolvedValue({ kind: ArtifactContentKind.TEXT, content: '<p>Preview</p>' })
     }
     render(<HtmlArtifactView artifact={artifact} artifactApi={artifactApi} onMessage={onMessage} />)
-    await screen.findByTitle('preview.html')
+    const frame = await screen.findByTitle('preview.html') as HTMLIFrameElement
 
     window.dispatchEvent(new MessageEvent('message', { data: 'blocked', origin: 'https://example.com' }))
-    window.dispatchEvent(new MessageEvent('message', { data: 'accepted', origin: 'null' }))
+    window.dispatchEvent(new MessageEvent('message', { data: 'accepted', origin: 'null', source: frame.contentWindow }))
+    window.dispatchEvent(new MessageEvent('message', { data: 'other frame', origin: 'null' }))
     expect(onMessage).toHaveBeenCalledTimes(1)
     expect(onMessage).toHaveBeenCalledWith('accepted')
   })

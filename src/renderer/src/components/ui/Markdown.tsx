@@ -35,6 +35,7 @@ interface MarkdownProps {
   size?: MarkdownSize
   className?: string
   highlightQuery?: string
+  onLinkClick?: (href: string) => boolean
 }
 
 // Hoisted to module scope to prevent recreation on every render
@@ -195,7 +196,7 @@ const SIZE_CLASSES = {
  * (e.g., the agent transcript) where parent scrolling would otherwise trigger
  * recreation of the components config object on every frame.
  */
-export const Markdown = memo(function Markdown({ children, size = 'sm', className, highlightQuery }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ children, size = 'sm', className, highlightQuery, onLinkClick }: MarkdownProps) {
   const classes = SIZE_CLASSES[size]
 
   // Memoize the components config object per `size` to avoid creating a new
@@ -267,7 +268,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
     },
     // Links
     a: ({ children, ...props }: React.ComponentPropsWithoutRef<'a'>) => (
-      <a className="text-primary hover:underline cursor-pointer" target="_blank" rel="noopener noreferrer" {...props}>{highlightReactNode(children, highlightQuery)}</a>
+      <a className="text-primary hover:underline cursor-pointer" target={props.href?.startsWith('#') ? undefined : '_blank'} rel="noopener noreferrer" {...props} onClick={(event) => { if (props.href && onLinkClick?.(props.href)) event.preventDefault() }}>{highlightReactNode(children, highlightQuery)}</a>
     ),
     // Images
     img: ({ alt, src, ...props }: React.ComponentPropsWithoutRef<'img'>) => (
@@ -300,7 +301,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
     tr: ({ children, ...props }: React.ComponentPropsWithoutRef<'tr'>) => (
       <tr className="hover:bg-muted/50 transition-colors" {...props}>{children}</tr>
     ),
-  }), [classes, highlightQuery]) // Only recreate when rendered styling or highlight changes
+  }), [classes, highlightQuery, onLinkClick]) // Only recreate when rendered styling or highlight changes
 
   // Pure string transform. `memo` above already gates re-renders of this
   // component on `children` changing, so an unrelated parent re-render never
