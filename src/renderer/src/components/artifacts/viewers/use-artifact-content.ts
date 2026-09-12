@@ -33,7 +33,7 @@ export function useArtifactContent(artifact: Artifact, artifactApi: ArtifactApi,
     }).finally(() => {
       if (!cancelled) {
         settledIdentityRef.current = identity
-        if (initialLoad) setLoading(false)
+        setLoading(false)
       }
     })
     return () => { cancelled = true }

@@ -71,6 +71,8 @@ export interface ArtifactFileEntry {
   /** Stable logical output identity. Multiple supporting files can belong to
    * one workpiece while `path` points at its selected preview entry file. */
   workpieceKey?: string
+  /** All owned files, addressed relative to the task workspace. */
+  files?: string[]
 }
 
 /** Metadata returned by the explicit artifact/workpiece tools. Files are
@@ -125,6 +127,8 @@ export interface Artifact {
   path?: string
   url?: string
   workpieceKey?: string
+  /** All owned files, addressed relative to the task workspace. */
+  files?: string[]
   updatedAt: number
   reloadTrigger: number
 }
