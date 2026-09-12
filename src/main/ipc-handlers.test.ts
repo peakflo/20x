@@ -191,6 +191,7 @@ describe('db:updateTask coordinator wake-up', () => {
     const agentManager = { notifyParentOfSubtaskCompletion: notifyParent } as unknown as Parameters<typeof registerIpcHandlers>[1]
     const db = {
       getTask: vi.fn(() => existing),
+      getSetting: vi.fn(() => undefined),
       updateTask: vi.fn(() => updated)
     } as unknown as Parameters<typeof registerIpcHandlers>[0]
 

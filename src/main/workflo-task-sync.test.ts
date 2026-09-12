@@ -228,3 +228,30 @@ it('a source-less local task completes without server acceptance',()=>{
   const draft=db.createTask(makeTask())!
   expect(db.updateTask(draft.id,{status:'completed'})?.status).toBe('completed')
 })
+
+ it('allows explicit manual completion but keeps source status in the server snapshot', () => {
+  const local = db.createTask(makeTask({ external_id: 'remote-1', source_id: sourceId }))!
+  db.setSetting(`workflo-task:${local.id}`, JSON.stringify(remote()))
+  expect(() => db.updateTask(local.id, {status: 'completed'})).toThrow()
+  expect(db.updateTask(local.id, {status: 'completed', complete_at_source: false})).toMatchObject({status: 'completed', complete_at_source: false})
+  db.updateTask(local.id, {status: 'ready_for_review'}, 'workflo-server')
+  expect(db.getTask(local.id)?.status).toBe('completed')
+  expect(JSON.parse(db.getSetting(`workflo-task:${local.id}`)!).status).toBe('not_started')
+ })
+
+ it('does not retry a queued source completion after the user chooses manual completion', async () => {
+  db.setSetting('enterprise_tenant_id', 'tenant-1')
+  const local = db.createTask(makeTask({external_id: 'remote-1', source_id: sourceId}))!
+  db.setSetting(`workflo-task:${local.id}`, JSON.stringify(remote()))
+  const api = {getDomain: () => 'api.test', executeAction: vi.fn().mockRejectedValue(new Error('offline')), getTask: vi.fn()}
+  const sync = new SyncManager(db, {} as never, {get: () => new PeakfloPlugin()} as never)
+  Object.assign(sync, {workfloApiClient: api, enterpriseUserId: 'user-1'})
+  await sync.executeAction('complete', local, undefined, sourceId)
+  expect(api.executeAction).toHaveBeenCalledTimes(1)
+  expect(db.getSetting(`workflo-completion:${local.id}`)).toBeTruthy()
+  db.updateTask(local.id, {status: 'completed', complete_at_source: false})
+  api.executeAction.mockClear()
+  await sync.flushTaskCompletions()
+  expect(api.executeAction).not.toHaveBeenCalled()
+  expect(db.getSetting(`workflo-completion:${local.id}`)).toBeUndefined()
+ })

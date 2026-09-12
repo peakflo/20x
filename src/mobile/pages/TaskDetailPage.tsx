@@ -1,4 +1,4 @@
-import { getSourceCompletionDescription } from '@shared/task-completion'
+import { getSourceCompletionDescription, getTaskSourceName } from '@shared/task-completion'
 import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
 import { TaskStatus } from '@shared/constants'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
@@ -169,9 +169,9 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     if (session?.sessionId) _stopSession(session.sessionId)
   }, [session?.sessionId, _stopSession])
 
-  const completeTaskNow = useCallback(async (t: Task) => {
+  const completeTaskNow = useCallback(async (t: Task, completeAtSource = true) => {
     try {
-      await api.tasks.complete(t.id)
+      await api.tasks.complete(t.id, completeAtSource)
     } catch (error) {
       window.alert(error instanceof Error ? error.message : 'Workflo has not confirmed completion.')
     }
@@ -179,21 +179,36 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
 
   const handleCompleteTask = useCallback(async () => {
     if (!task) return
-    if (task.agent_id) setCompleteModal({ withFeedback: true })
+    if (task.agent_id || task.source_id) setCompleteModal({ withFeedback: !!task.agent_id })
     else await completeTaskNow(task)
   }, [task, completeTaskNow])
 
-  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
-    if (!task) return
+  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string, completeAtSource: boolean) => {
+    if (!task?.agent_id) return
+    const saved = await updateTask(task.id, {status: TaskStatus.AgentLearning, feedback_rating: rating,
+      feedback_comment: comment || null, complete_at_source: completeAtSource})
+    if (!saved) return
     setCompleteModal(null)
-    await updateTask(task.id, { feedback_rating: rating, feedback_comment: comment || null })
-    await completeTaskNow(task)
-  }, [task, updateTask, completeTaskNow])
+    try {
+      let sessionId = session?.sessionId
+      if (!sessionId && task.session_id) {
+        sessionId = (await api.sessions.resume(task.session_id, task.agent_id, task.id)).sessionId
+      }
+      if (!sessionId) sessionId = (await api.sessions.start(task.agent_id, task.id, true)).sessionId
+      initSession(task.id, sessionId, task.agent_id)
+      await api.sessions.send(sessionId,
+        `User rated this session ${rating}/5. Comment: "${comment}". Review the session and update skills in .agents/skills/. Update confidence, uses, lastUsed, and tags for useful skills. Create skills for new reusable patterns.`,
+        task.id, task.agent_id)
+    } catch (error) {
+      await updateTask(task.id, {status: TaskStatus.ReadyForReview})
+      window.alert(error instanceof Error ? error.message : 'Could not start the learning session.')
+    }
+  }, [task, session, updateTask, initSession])
 
-  const handleFeedbackSkip = useCallback(async () => {
+  const handleFeedbackSkip = useCallback(async (completeAtSource: boolean) => {
     if (!task) return
     setCompleteModal(null)
-    await completeTaskNow(task)
+    await completeTaskNow(task, completeAtSource)
   }, [task, completeTaskNow])
 
   // Skills available for this agent — must be before conditional return (Rules of Hooks)
@@ -812,6 +827,8 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       {completeModal && (
         <FeedbackModal
           completionDescription={getSourceCompletionDescription(task)}
+          sourceName={task.source_id ? getTaskSourceName(task) : undefined}
+          withFeedback={completeModal.withFeedback}
           onSubmit={handleFeedbackSubmit}
           onSkip={handleFeedbackSkip}
           onCancel={() => setCompleteModal(null)}
@@ -937,32 +954,40 @@ function SubtasksSection({ subtasks, onNavigateToTask, onReorderSubtasks }: { su
   )
 }
 
-function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription }: {
+function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sourceName, withFeedback }: {
   completionDescription?: string
-  onSubmit: (rating: number, comment: string) => void
-  onSkip: () => void
+  sourceName?: string
+  withFeedback: boolean
+  onSubmit: (rating: number, comment: string, completeAtSource: boolean) => void
+  onSkip: (completeAtSource: boolean) => void
   onCancel: () => void
 }) {
   const [rating, setRating] = useState(0)
   const [comment, setComment] = useState('')
+  const [completeAtSource, setCompleteAtSource] = useState(true)
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div role="dialog" aria-label="Session feedback" className="mx-4 w-full max-w-md rounded-xl border bg-card p-5 space-y-4">
-        <h2>Session feedback</h2>
-        {completionDescription && (
+      <div role="dialog" aria-label={withFeedback ? 'Session feedback' : 'Complete task'} className="mx-4 w-full max-w-md rounded-xl border bg-card p-5 space-y-4">
+        <h2>{withFeedback ? 'Session feedback' : 'Complete task'}</h2>
+        {sourceName && (
           <div className="rounded-md border p-3 text-sm space-y-2">
-            <p>{completionDescription}</p>
-            <p>Skip omits only the session rating and comment.</p>
+            <p>{completeAtSource ? completionDescription : 'Complete in 20x only. The source record will not change.'}</p>
+            <div className="flex gap-2">
+              <button className={`flex-1 rounded-md border px-2 py-2 ${completeAtSource ? 'border-ring bg-accent' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={completeAtSource} onClick={() => setCompleteAtSource(true)}>Close it in {sourceName}</button>
+              <button className={`flex-1 rounded-md border px-2 py-2 ${!completeAtSource ? 'border-ring bg-accent' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={!completeAtSource} onClick={() => setCompleteAtSource(false)}>I'll do it manually</button>
+            </div>
           </div>
         )}
-        <div className="flex gap-2">
-          {[1, 2, 3, 4, 5].map(value => <button key={value} aria-label={`Rate ${value}`} aria-pressed={rating === value} onClick={() => setRating(value)}>{value}</button>)}
-        </div>
-        <textarea aria-label="Feedback" placeholder="Optional feedback..." value={comment} onChange={event => setComment(event.target.value)} />
+        {withFeedback && <>
+          <div className="flex gap-2">
+            {[1, 2, 3, 4, 5].map(value => <button key={value} aria-label={`Rate ${value}`} aria-pressed={rating === value} onClick={() => setRating(value)}>{value}</button>)}
+          </div>
+          <textarea aria-label="Feedback" placeholder="Optional feedback..." value={comment} onChange={event => setComment(event.target.value)} />
+        </>}
         <div className="flex gap-3">
           <button onClick={onCancel}>Cancel</button>
-          <button onClick={onSkip}>Skip</button>
-          <button disabled={!rating} onClick={() => onSubmit(rating, comment)}>Submit Feedback</button>
+          <button onClick={() => onSkip(completeAtSource)}>{withFeedback ? 'Skip' : 'Complete'}</button>
+          {withFeedback && <button disabled={!rating} onClick={() => onSubmit(rating, comment, completeAtSource)}>Submit Feedback</button>}
         </div>
       </div>
     </div>

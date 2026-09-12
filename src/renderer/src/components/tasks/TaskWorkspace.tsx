@@ -1,4 +1,4 @@
-import { getSourceCompletionDescription } from '@shared/task-completion'
+import { getSourceCompletionDescription, getTaskSourceName } from '@shared/task-completion'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { LayoutList, Send, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -76,7 +76,7 @@ interface TaskWorkspaceProps {
   onDelete: () => void
   onUpdateAttachments: (attachments: FileAttachment[]) => void
   onUpdateOutputFields: (fields: OutputField[]) => void
-  onCompleteTask: () => void
+  onCompleteTask: (completeAtSource?: boolean) => void
   onAssignAgent: (taskId: string, agentId: string | null) => void
   onUpdateTask?: (taskId: string, data: Record<string, unknown>) => Promise<void>
   onNavigateToTask?: (taskId: string) => void
@@ -654,15 +654,9 @@ function TaskWorkspaceComponent({
     }
   }, [session.sessionId, session.messages.length, task?.session_id, onCompleteTask])
 
-  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string) => {
+  const handleFeedbackSubmit = useCallback(async (rating: number, comment: string, completeAtSource: boolean) => {
     if (!task?.agent_id || !task?.id) return
     setShowFeedback(false)
-
-    if (task.server_managed) {
-      await taskApi.update(task.id, {feedback_rating:rating,feedback_comment:comment || null})
-      await onCompleteTask()
-      return
-    }
 
     // Persist feedback + set task to Learning status - prevents auto-stop useEffect.
     console.log('[TaskWorkspace] Setting task status to AgentLearning:', task.id)
@@ -670,6 +664,7 @@ function TaskWorkspaceComponent({
     try {
       updatedTask = await taskApi.update(task.id, {
         status: TaskStatus.AgentLearning,
+        complete_at_source: completeAtSource,
         feedback_rating: rating,
         feedback_comment: comment || null,
       })
@@ -724,7 +719,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
     try {
       if (!session.sessionId) {
         const readySessionId = await ensureChatSession()
-        if (!readySessionId) return
+        if (!readySessionId) throw new Error('Could not start the learning session.')
 
         // Wait for messages to load (poll for session to be ready)
         await new Promise<void>((resolve) => {
@@ -752,13 +747,13 @@ Update existing skills that were helpful or create new ones for patterns worth r
       console.error('Failed to send feedback:', error)
       await taskApi.update(task.id, { status: TaskStatus.ReadyForReview })
     }
-  }, [ensureChatSession, sendMessage, session.sessionId, task?.id])
+  }, [ensureChatSession, sendMessage, session.sessionId, task, onCompleteTask])
 
-  const handleFeedbackSkip = useCallback(async () => {
+  const handleFeedbackSkip = useCallback(async (completeAtSource: boolean) => {
     if (!task?.id) return
     setShowFeedback(false)
-    // Completion is server-confirmed through the shared path for every source.
-    await onCompleteTask()
+    // Preserve the source choice when feedback is skipped.
+    await onCompleteTask(completeAtSource)
   }, [task?.id, onCompleteTask])
 
   const handleSnooze = useCallback(async (isoString: string) => {
@@ -1237,6 +1232,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
       <FeedbackDialog
         open={showFeedback}
+        sourceName={task?.source_id ? getTaskSourceName(task, taskSources.find(source => source.id === task.source_id)?.name) : undefined}
         completionDescription={task ? getSourceCompletionDescription(task, taskSources.find(source => source.id === task.source_id)?.name) : undefined}
         onSubmit={handleFeedbackSubmit}
         onSkip={handleFeedbackSkip}

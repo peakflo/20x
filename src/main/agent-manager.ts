@@ -1,3 +1,4 @@
+import { finishSessionFeedback, updateTaskFromUser } from './session-feedback'
 import { serverTaskSnapshot } from './workflo-task-sync'
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
@@ -567,8 +568,10 @@ export class AgentManager extends EventEmitter {
    * Set the sync manager for executing enterprise actions (e.g. completing tasks on Workflo).
    * Called after both AgentManager and SyncManager are created.
    */
+  private syncManager?: import('./sync-manager').SyncManager
+
   setSyncManager(syncManager: import('./sync-manager').SyncManager): void {
-    void syncManager
+    this.syncManager = syncManager
   }
 
   setMainWindow(window: BrowserWindow): void {
@@ -3100,7 +3103,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
   /** Local help can save its session and results, but cannot set canonical status. */
   private updateTaskFromLocalAgent(taskId: string, updates: Parameters<DatabaseManager['updateTask']>[1]): TaskRecord | undefined {
     const fields = { ...updates }
-    if (serverTaskSnapshot(this.db, taskId)) delete fields.status
+    if (serverTaskSnapshot(this.db, taskId) || (fields.status === TaskStatus.AgentWorking && this.db.getTask(taskId)?.status === TaskStatus.AgentLearning)) delete fields.status
     if (Object.keys(fields).length === 0) return this.db.getTask(taskId)
     return this.db.updateTask(taskId, fields)
   }
@@ -3892,10 +3895,23 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         await this.syncSkillsFromWorkspace(sessionId)
       } catch (err) {
         console.error(`[AgentManager] Skill sync error:`, err)
+        updateTaskFromUser(this.db, session.taskId, {status: TaskStatus.ReadyForReview})
+        this.sendToRenderer('task:updated', {taskId: session.taskId, updates: this.db.getTask(session.taskId)})
+        this.sendToRenderer('agent:status', {sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'})
+        return
       }
       await yieldEventLoop()
 
-      if (this.db.getTask(session.taskId)?.status !== TaskStatus.Completed) this.updateTaskFromLocalAgent(session.taskId, { status: TaskStatus.ReadyForReview })
+      try {
+        const completed = await finishSessionFeedback(this.db, this.syncManager, session.taskId)
+        if (completed?.parent_task_id) {
+          await this.notifyParentOfSubtaskCompletion(completed.parent_task_id, session.taskId)
+        }
+        if (!completed && this.db.getTask(session.taskId)?.status !== TaskStatus.Completed) this.updateTaskFromLocalAgent(session.taskId, {status: TaskStatus.ReadyForReview})
+      } catch (error) {
+        this.sendToRenderer('task:source-action-failed', {taskId: session.taskId, taskTitle: task.title, error: error instanceof Error ? error.message : String(error)})
+      }
+      this.sendToRenderer('task:updated', {taskId: session.taskId, updates: this.db.getTask(session.taskId)})
       this.sendToRenderer('agent:status', {
         sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
       })

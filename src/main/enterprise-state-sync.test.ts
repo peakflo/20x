@@ -34,6 +34,13 @@ describe('EnterpriseStateSync', () => {
   })
 
   describe('event recording', () => {
+    it('does not send a manual completion through the event queue', async () => {
+      stateSync.recordTaskCompleted(makeTask({complete_at_source: false}), {action: 'approve'})
+      await stateSync.flush()
+      expect(mockApiClient.sendSyncEvents).not.toHaveBeenCalled()
+      expect(stateSync.pendingCount).toBe(0)
+    })
+
     it('records task status change events', () => {
       const task = makeTask()
       stateSync.recordTaskStatusChange(task, 'not_started', 'agent_working')

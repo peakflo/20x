@@ -4,11 +4,14 @@ import { getSourceCompletionDescription, getTaskCompletionAction } from './task-
 const task = { source_id: 'feedback', source: 'Session Feedback', output_fields: [] }
 
 describe('source completion description', () => {
-  it('uses the loaded source name before the task label', () => {
-    expect(getSourceCompletionDescription(task, 'Feedback Inbox')).toContain('Action at Feedback Inbox: complete.')
+  it('uses the source system instead of the connection name', () => {
+    expect(getSourceCompletionDescription({...task, source: 'Notion'}, 'dmitry ai tasks')).toContain('Action at Notion: complete.')
   })
-  it('falls back to the task source label', () => {
+  it('uses the task source label without a loaded connection', () => {
     expect(getSourceCompletionDescription(task)).toContain('Action at Session Feedback: complete.')
+  })
+  it('uses the connection name when the source label is missing', () => {
+    expect(getSourceCompletionDescription({...task, source: ' '}, 'Feedback Inbox')).toContain('Action at Feedback Inbox: complete.')
   })
   it('uses a readable fallback for an empty source label', () => {
     expect(getSourceCompletionDescription({ ...task, source: '' })).toContain('Action at the task source: complete.')

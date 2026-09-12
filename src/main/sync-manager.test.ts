@@ -161,7 +161,7 @@ describe('SyncManager', () => {
       ;(db.getMcpServer as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ id: 'srv-1' })
 
       await syncManager.exportTaskUpdate('t1', { status: 'completed', complete_at_source: false })
-      expect(plugin.exportUpdate).toHaveBeenCalledWith(expect.anything(), {status:'completed'}, {}, expect.anything())
+      expect(plugin.exportUpdate).not.toHaveBeenCalled()
     })
 
     it('still syncs non-status edits when the user chose "I\'ll do it manually"', async () => {
@@ -178,7 +178,7 @@ describe('SyncManager', () => {
       await syncManager.exportTaskUpdate('t1', { title: 'New', status: 'in_progress' })
       expect(plugin.exportUpdate).toHaveBeenCalledWith(
         expect.objectContaining({ id: 't1' }),
-        { title: 'New', status: 'in_progress' },
+        { title: 'New' },
         {},
         expect.anything()
       )
@@ -243,7 +243,7 @@ describe('SyncManager', () => {
       const result = await syncManager.executeAction('approve', task, undefined, 'src-1')
 
       expect(result.success).toBe(true)
-      expect(db.updateTask).toHaveBeenCalledWith('t1', { status: TaskStatus.Completed })
+      expect(db.updateTask).toHaveBeenCalledWith('t1', { status: TaskStatus.Completed }, 'task-source')
     })
   })
 })
