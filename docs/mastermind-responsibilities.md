@@ -17,6 +17,7 @@ The engineer explicitly chose 20x's lifecycle: fully quitting stops agents and m
 9. Quit and reopen. Existing workers are stopped, unresolved launches stay blocked for review, and no uncertain operation is blindly repeated.
 10. Run multiple responsibilities over a working day. Settled workers are released while their output remains available. Independent tasks can progress in the same project.
 11. Ask Mastermind to complete, close, or delete an exact task. Both All tasks and project conversations can inspect task metadata and request the action directly. Close means mark completed. The desktop confirmation shows the target, source action/outputs, dependent deletions and responsibility cancellation before anything changes.
+12. Resolve a recovery notice. **Review work** opens and focuses its exact agreement and evidence, even when no worker was started. **Open task** links to saved worker context when available. **Ask Mastermind** prepares an editable follow-up in the correct project; it also remains available for expired requests. Reviewing or drafting does not restart automation, revise limits, or mark a notice answered.
 
 ## Groups
 

@@ -22,6 +22,8 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [reviewId, setReviewId] = useState<string | null>(null)
+  const reviewRef = useRef<HTMLDivElement>(null)
   const projectChosen = useRef(false)
   const draft = useUIStore(s => s.mastermindDraft)
   const openProject = useUIStore(s => s.mastermindProjectToOpen)
@@ -42,6 +44,12 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
     return api.onChanged(() => { void refresh().catch(e => setError(String(e))) })
   }, [api, refresh])
   useEffect(() => { onProjectChange(snapshot.projects.find(p => p.id === projectId) ?? null) }, [projectId, snapshot.projects, onProjectChange])
+  useEffect(() => { setReviewId(null) }, [projectId])
+  useEffect(() => {
+    if (tab !== 'work' || !reviewId) return
+    reviewRef.current?.scrollIntoView({ block: 'nearest' })
+    reviewRef.current?.focus({ preventScroll: true })
+  }, [tab, reviewId])
 
   const run = async (action: () => Promise<unknown>): Promise<void> => {
     setBusy(true); setError('')
@@ -95,7 +103,7 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
         </div>
         {tab === 'work' && <div className="space-y-3">
           {records.length === 0 && <p className="text-sm text-muted-foreground">Ask for a Task, describe a Goal, or teach a Routine in the conversation below. Mastermind will propose the agreement here.</p>}
-          {records.map(r => <div key={r.id}><AgreementCard record={r} unresolved={snapshot.steps.some(s => s.responsibilityId === r.id && !['held', 'settled'].includes(s.state))} busy={busy} act={action => run(() => api.act(r.id, r.revision, action))} />
+          {records.map(r => <div key={r.id} ref={r.id === reviewId ? reviewRef : undefined} tabIndex={r.id === reviewId ? -1 : undefined}><AgreementCard record={r} reviewing={r.id === reviewId} unresolved={snapshot.steps.some(s => s.responsibilityId === r.id && !['held', 'settled'].includes(s.state))} busy={busy} act={action => run(() => api.act(r.id, r.revision, action))} />
             {snapshot.steps.filter(s => s.responsibilityId === r.id).map(s => <div key={s.id} className="ml-2 mt-1 rounded border border-border p-2 text-xs">
               <button className="font-medium text-primary underline" onClick={() => void run(async () => { await useTaskStore.getState().fetchTasks(); const opened = applyUiCommand({ kind: 'open_task', taskId: s.taskId, where: 'modal' }); if (!opened.applied) throw new Error(opened.detail) })}>Open {s.phase} · {s.state.replace('_', ' ')}</button>
               {s.report && <details className="mt-1"><summary className="cursor-pointer">Result and evidence</summary><p className="mt-2 whitespace-pre-wrap">{s.report.summary}</p><p className="mt-1 break-all">{s.report.work.checkout} · {s.report.work.revision}</p><ul className="mt-1 list-inside list-disc">{s.report.evidence.map((e, i) => <li className="break-words" key={i}>{e}</li>)}</ul></details>}
@@ -104,7 +112,15 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
         </div>}
         {tab === 'decisions' && <div className="space-y-3">
           {notices.length === 0 && <p className="text-sm text-muted-foreground">Results and questions arrive here, even when the conversation is busy.</p>}
-          {[...notices].sort((a, b) => Number(b.state === 'pending') - Number(a.state === 'pending') || b.createdAt.localeCompare(a.createdAt)).map(n => <NoticeCard key={n.id} notice={n} busy={busy} openTask={() => run(async () => { const step = snapshot.steps.find(s => s.id === n.stepId); const target = step?.phase === 'coordinate' ? [...snapshot.steps].reverse().find(s => s.responsibilityId === n.responsibilityId && s.phase === 'work' && s.createdAt <= step.createdAt) ?? step : step; if (!target) throw new Error('No task is linked to this notice.'); await useTaskStore.getState().fetchTasks(); const result = applyUiCommand({ kind: 'open_task', taskId: target.taskId, where: 'modal' }); if (!result.applied) throw new Error(result.detail) })} answer={(answer, approved) => run(() => api.answer(n.id, answer, approved))} />)}
+          {[...notices].sort((a, b) => Number(b.state === 'pending') - Number(a.state === 'pending') || b.createdAt.localeCompare(a.createdAt)).map(n => {
+            const step = snapshot.steps.find(s => s.id === n.stepId && s.responsibilityId === n.responsibilityId)
+            const prior = snapshot.steps.filter(s => s.responsibilityId === n.responsibilityId && s.createdAt <= (step?.createdAt ?? n.createdAt)).reverse()
+            const target = step && step.phase !== 'coordinate' ? step : prior.find(s => s.phase === 'work') ?? step ?? prior[0]
+            return <NoticeCard key={n.id} notice={n} busy={busy}
+              reviewWork={records.some(r => r.id === n.responsibilityId) ? () => { setReviewId(n.responsibilityId); setTab('work') } : undefined}
+              openTask={target ? () => run(async () => { await useTaskStore.getState().fetchTasks(); const result = applyUiCommand({ kind: 'open_task', taskId: target.taskId, where: 'modal' }); if (!result.applied) throw new Error(result.detail) }) : undefined}
+              answer={(answer, approved) => run(() => api.answer(n.id, answer, approved))} />
+          })}
         </div>}
         {tab === 'memory' && <MemoryEditor key={projectId} memory={snapshot.memory.filter(m => m.projectId === projectId)} busy={busy} save={(kind, value, id) => run(() => api.remember(projectId, kind, value, id))} forget={id => run(() => api.forget(id))} />}
         <p className="mt-3 text-[11px] text-muted-foreground">Fully quitting 20x stops agents and monitoring. Saved work and decisions remain available when you reopen.</p>
@@ -113,7 +129,7 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
   </section>
 }
 
-function AgreementCard({ record: r, unresolved, busy, act }: { record: ResponsibilityRecord; unresolved: boolean; busy: boolean; act: (action: Parameters<NonNullable<typeof window.electronAPI.responsibilities>['act']>[2]) => Promise<void> }) {
+function AgreementCard({ record: r, reviewing, unresolved, busy, act }: { record: ResponsibilityRecord; reviewing: boolean; unresolved: boolean; busy: boolean; act: (action: Parameters<NonNullable<typeof window.electronAPI.responsibilities>['act']>[2]) => Promise<void> }) {
   const a = r.agreement
   return <article className="rounded-lg border border-border p-3 text-sm">
     <div className="mb-2 flex justify-between gap-2 text-xs capitalize text-muted-foreground"><span>{a.kind}</span><span>{r.state === 'taken_over' ? 'paused' : r.state.replace('_', ' ')}</span></div>
@@ -122,7 +138,7 @@ function AgreementCard({ record: r, unresolved, busy, act }: { record: Responsib
     {r.routineSetup && <p className="mt-2 text-xs text-muted-foreground">{r.routineSetup.proposalId ? 'Routine proposal saved.' : 'Preparing a routine. Monitoring has not started.'}</p>}
     {a.stopOnSuccess && <p className="mt-2 text-xs text-muted-foreground">Stop scheduling once the success evidence is independently verified.</p>}
     {a.factory && <details className="mt-2"><summary className="cursor-pointer">Factory: {a.factory.name}</summary><FactoryGuide definition={a.factory} /></details>}
-    <details className="mt-2" open={r.state === 'proposed'}>
+    <details className="mt-2" open={reviewing || r.state === 'proposed'}>
       <summary className="cursor-pointer text-xs text-muted-foreground">Agreement and evidence</summary>
       {a.access && <p className="mt-2 text-xs text-muted-foreground">Worker access: {a.access.permissionMode === 'allow' ? 'Use configured permissions automatically' : 'Ask when required'} · {a.access.sandboxMode === 'danger-full-access' ? 'Full access — read-only work is an instruction, not a sandbox restriction' : a.access.sandboxMode}. Saved for this execution.</p>}
       {a.factoryAgents && <p className="mt-2 text-xs text-muted-foreground">Approved agents: {a.factoryAgents.map(agent => `${agent.name} (${agent.backend ?? 'default'} · ${agent.model ?? 'default model'}${agent.access ? ` · ${agent.access.sandboxMode} · ${agent.access.permissionMode}` : ''})`).join(', ')}</p>}
@@ -162,7 +178,7 @@ function AgreementCard({ record: r, unresolved, busy, act }: { record: Responsib
   </article>
 }
 
-function NoticeCard({ notice: n, busy, answer, openTask }: { notice: ResponsibilityNotice; busy: boolean; openTask: () => Promise<void>; answer: (answer: string, approved?: boolean) => Promise<void> }) {
+function NoticeCard({ notice: n, busy, answer, openTask, reviewWork }: { notice: ResponsibilityNotice; busy: boolean; openTask?: () => Promise<void>; reviewWork?: () => void; answer: (answer: string, approved?: boolean) => Promise<void> }) {
   const [reply, setReply] = useState('')
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const question = n.kind === 'question' && !n.questions ? /^Question:\s*([^\n]+)\nWhy:\s*([^\n]+)\nReply:\s*([\s\S]+)$/i.exec(n.body.trim()) : null
@@ -177,11 +193,15 @@ function NoticeCard({ notice: n, busy, answer, openTask }: { notice: Responsibil
       <details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer">Task context</summary><p className="mt-1 whitespace-pre-wrap break-words">{n.title}</p></details>
     </> : n.kind === 'permission' || n.questions ? <p className="mt-2 whitespace-pre-wrap break-words">{n.body}</p>
       : <CollapsibleDescription taskId={`notice-body-${n.id}`} description={n.body} collapsedLines={3} className="mt-2" />}
-    {n.stepId && <Button className="mt-2" size="sm" variant="outline" disabled={busy} onClick={() => void openTask()}>Open task</Button>}
+    <div className="mt-2 flex flex-wrap gap-2">
+      {reviewWork && <Button size="sm" variant="outline" disabled={busy} onClick={reviewWork}>Review work</Button>}
+      {openTask && <Button size="sm" variant="outline" disabled={busy} onClick={() => void openTask()}>Open task</Button>}
+      {((n.state === 'pending' && n.kind === 'recovery') || n.state === 'expired') && <Button size="sm" disabled={busy} onClick={() => useUIStore.getState().draftInMastermind(n.projectId, `Help me resolve the follow-up "${n.title}". Review the saved progress, explain what needs my decision, and propose any changes for my approval before restarting.\n\nFollow-up: ${n.id}${n.responsibilityId ? `; work: ${n.responsibilityId}` : ''}`)}>Ask Mastermind</Button>}
+    </div>
     {n.answer && <p className="mt-2 whitespace-pre-wrap text-muted-foreground">Your answer: {n.answer}</p>}
     {n.deliveryError && <p role="alert" className="mt-2 text-xs text-destructive">Approval delivery failed or is unconfirmed: {n.deliveryError}</p>}
-    {n.state === 'expired' && <p className="mt-2 text-xs text-muted-foreground">The original request is no longer live. Inspect and recover its responsibility.</p>}
-    {n.state === 'pending' && n.kind === 'recovery' && <p className="mt-2 text-xs text-muted-foreground">Open Work to inspect the agreement, then recover it if you want its automated workflow to continue. You can message its task directly at any time.</p>}
+    {n.state === 'expired' && <p className="mt-2 text-xs text-muted-foreground">This request expired. Review the work or ask Mastermind what to do next.</p>}
+    {n.state === 'pending' && n.kind === 'recovery' && <p className="mt-2 text-xs text-muted-foreground">Review progress and limits, or ask Mastermind to help decide what happens next.</p>}
     {n.state === 'pending' && n.kind === 'result' && <Button size="sm" variant="ghost" onClick={() => void answer('Read')} disabled={busy}>Mark read</Button>}
     {n.state === 'pending' && ['question', 'permission'].includes(n.kind) && <form className="mt-3 space-y-2" onSubmit={e => { e.preventDefault(); void answer(n.questions ? JSON.stringify(answers) : reply || 'Approved', n.kind === 'permission') }}>
       {n.questions ? n.questions.map(q => <label key={q.question} className="block text-xs">{q.question}<textarea aria-label={`${n.title}: ${q.header}`} className={inputClass} value={answers[q.question] ?? ''} onChange={e => setAnswers({ ...answers, [q.question]: e.target.value })} required /></label>) : <textarea aria-label={`Answer ${n.title}`} className={inputClass} value={reply} onChange={e => setReply(e.target.value)} placeholder="Your decision or clarification" required={n.kind === 'question'} />}

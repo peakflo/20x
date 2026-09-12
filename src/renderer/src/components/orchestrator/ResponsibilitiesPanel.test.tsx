@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { applyUiCommand } from '@/lib/ui-remote-control'
 import { ResponsibilitiesPanel } from './ResponsibilitiesPanel'
+import { useUIStore } from '@/stores/ui-store'
 import type { ResponsibilitiesApi, ResponsibilityRecord, ResponsibilitySnapshot } from '@shared/responsibilities'
 
 vi.mock('@/stores/task-store', () => ({ useTaskStore: { getState: () => ({ fetchTasks: vi.fn(async () => {}) }) } }))
@@ -21,6 +22,8 @@ const agreement: ResponsibilityRecord = {
 }
 beforeEach(() => {
   cleanup()
+  vi.clearAllMocks()
+  useUIStore.setState({ mastermindDraft: null, mastermindProjectToOpen: null })
   snapshot = { projects: [{ id: 'project', name: 'Example project', root: '/example', agentId: 'agent', createdAt: '2026-01-01' }], responsibilities: [structuredClone(agreement)], notices: [], memory: [], steps: [] }
   api = {
     setProactive: vi.fn(async () => {}), retryFollowups: vi.fn(async () => {}), snapshot: vi.fn(async () => structuredClone(snapshot)), pickProjectFolder: vi.fn(async () => null), createProject: vi.fn(), act: vi.fn(async () => {}), answer: vi.fn(async () => {}), decideFactory: vi.fn(async () => {}), remember: vi.fn(async () => {}), forget: vi.fn(async () => {}), onChanged: vi.fn(() => () => {})
@@ -29,6 +32,64 @@ beforeEach(() => {
 })
 
 describe('project responsibility controls', () => {
+  it('opens and focuses the exact blocked agreement from a notice without a step', async () => {
+    const originalScroll = HTMLElement.prototype.scrollIntoView
+    const scroll = vi.fn()
+    HTMLElement.prototype.scrollIntoView = scroll
+    try {
+      snapshot.responsibilities[0].state = 'blocked'
+      snapshot.responsibilities.unshift({ ...structuredClone(agreement), id: 'other', state: 'blocked', agreement: { ...agreement.agreement, title: 'Other work' } })
+      snapshot.notices = [{ id: 'limits', projectId: 'project', responsibilityId: 'work', stepId: null, kind: 'recovery', title: 'Release watch', body: 'The agreed time, step, or no-progress limit was reached.', state: 'pending', answer: null, recipient: null, createdAt: '2026-01-02' }]
+      render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+      fireEvent.click(await screen.findByText('1 decision need you'))
+      expect(screen.queryByRole('button', { name: 'Open task' })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Ask Mastermind' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Review work' }))
+      expect(screen.getByRole('tab', { name: 'work' })).toHaveAttribute('aria-selected', 'true')
+      const target = screen.getByText('Release watch').closest('article')!
+      expect(within(target).getByText('Agreement and evidence').closest('details')).toHaveAttribute('open')
+      expect(screen.getByText('Other work').closest('article')!.querySelector('details')).not.toHaveAttribute('open')
+      expect(document.activeElement).toBe(target.parentElement)
+      expect(scroll).toHaveBeenCalledWith({ block: 'nearest' })
+      expect(api.act).not.toHaveBeenCalled()
+      expect(api.answer).not.toHaveBeenCalled()
+    } finally { HTMLElement.prototype.scrollIntoView = originalScroll }
+  })
+
+  it.each([null, 'coordinate'])('opens saved worker context for a recovery notice linked to %s', async stepId => {
+    snapshot.responsibilities[0].state = 'blocked'
+    snapshot.steps = [
+      { id: 'old', responsibilityId: 'work', taskId: 'old-task', phase: 'work', createdAt: '2026-01-01' },
+      { id: 'worker', responsibilityId: 'work', taskId: 'correct-task', phase: 'work', createdAt: '2026-01-02' },
+      { id: 'coordinate', responsibilityId: 'work', taskId: 'coordinator-task', phase: 'coordinate', createdAt: '2026-01-03' },
+      { id: 'unrelated', responsibilityId: 'other', taskId: 'unrelated-task', phase: 'work', createdAt: '2026-01-03' },
+      { id: 'future', responsibilityId: 'work', taskId: 'later-task', phase: 'work', createdAt: '2026-01-05' }
+    ] as ResponsibilitySnapshot['steps']
+    snapshot.notices = [{ id: 'limits', projectId: 'project', responsibilityId: 'work', stepId, kind: 'recovery', title: 'Release watch', body: 'Review saved work.', state: 'pending', answer: null, recipient: null, createdAt: '2026-01-04' }]
+    vi.mocked(applyUiCommand).mockReturnValue({ applied: true } as ReturnType<typeof applyUiCommand>)
+    render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+    fireEvent.click(await screen.findByText('1 decision need you'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open task' }))
+    await waitFor(() => expect(applyUiCommand).toHaveBeenCalledWith({ kind: 'open_task', taskId: 'correct-task', where: 'modal' }))
+    expect(api.act).not.toHaveBeenCalled()
+  })
+
+  it.each(['pending', 'expired'] as const)('offers a scoped editable Mastermind follow-up for %s recovery even without saved work', async state => {
+    snapshot.responsibilities = []
+    snapshot.notices = [{ id: 'orphan-notice', projectId: 'project', responsibilityId: null, stepId: null, kind: 'recovery', title: 'Score results', body: 'Review progress.', state, answer: null, recipient: null, createdAt: '2026-01-04' }]
+    render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+    await waitFor(() => expect(screen.getByLabelText('Engineering project')).toHaveValue('project'))
+    fireEvent.click(screen.getByRole('button', { name: 'Show responsibilities' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'decisions' }))
+    expect(screen.queryByRole('button', { name: 'Review work' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Open task' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Ask Mastermind' }))
+    expect(useUIStore.getState().mastermindDraft).toMatchObject({ projectId: 'project', text: expect.stringContaining('Follow-up: orphan-notice') })
+    expect(useUIStore.getState().mastermindDraft?.text).toContain('for my approval before restarting')
+    expect(api.act).not.toHaveBeenCalled()
+    expect(api.answer).not.toHaveBeenCalled()
+  })
+
   it('fills the selected folder, preserves it on cancellation, and creates only on explicit submit', async () => {
     render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Add engineering project' }))
