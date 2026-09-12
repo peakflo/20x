@@ -152,7 +152,7 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
   // Send message - the session is usually warm already, so this just sends.
   const handleSendMessage = useCallback(
     async (message: string) => {
-      if (!(await ensureSession())) return
+      if (!(await ensureSession())) throw new Error('The Mastermind agent session did not start. Please try again.')
 
       // Question answers should use approve() instead of sendMessage()
       const live = useAgentStore.getState().sessions.get(conversationId)
@@ -190,7 +190,9 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
       if (detail?.message && typeof detail.message === 'string') {
         // Small delay to ensure the panel is mounted and agent is selected
         setTimeout(() => {
-          handleSendMessage(detail.message)
+          void handleSendMessage(detail.message).catch(e => {
+            if (mountedRef.current) setError(e instanceof Error ? e.message : String(e))
+          })
         }, 200)
       }
     }
@@ -237,6 +239,7 @@ function MastermindConversation({ onClose, project }: OrchestratorPanelProps & {
           systemStatus={currentSession?.systemStatus}
           onStop={stop}
           onSend={handleSendMessage}
+          fileReferences
           draft={draft?.projectId === project?.id ? draft ?? undefined : undefined}
           onDraftApplied={clearDraft}
           className="flex-1 min-h-0"

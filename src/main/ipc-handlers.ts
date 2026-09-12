@@ -43,6 +43,7 @@ import type { EnterpriseStateSync } from './enterprise-state-sync'
 import { analytics } from './analytics-service'
 import { listTaskArtifactEntries, readTaskArtifact, resolveTaskArtifactFilePath } from './artifacts'
 import { writeArtifactFileToClipboard } from './artifact-clipboard'
+import { readClipboardFilePaths, saveComposerImage } from './composer-files'
 import { ArtifactClipboardMode, type ArtifactCopyFileResult } from '../shared/artifacts'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 
@@ -283,6 +284,8 @@ export function registerIpcHandlers(
   })
 
   // Attachment handlers
+  ipcMain.handle('composer:clipboardFilePaths', () => readClipboardFilePaths())
+  ipcMain.handle('composer:saveImage', (_, data: unknown) => saveComposerImage(data))
   ipcMain.handle('attachments:pick', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openFile', 'multiSelections']

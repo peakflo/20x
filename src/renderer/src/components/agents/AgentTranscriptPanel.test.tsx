@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { AgentTranscriptPanel } from './AgentTranscriptPanel'
 import { SessionStatus } from '@/stores/agent-store'
 import { onShortcutFeedback } from '@/lib/keyboard-shortcuts'
@@ -88,6 +88,122 @@ describe('AgentTranscriptPanel drag and drop attachments', () => {
   })
 })
 
+
+describe('Mastermind file references', () => {
+  const api = {
+    getPathForFile: vi.fn<(file: File) => string>(),
+    readClipboardFilePaths: vi.fn<() => Promise<string[]>>(),
+    saveImage: vi.fn<() => Promise<string>>()
+  }
+  const onSend = vi.fn()
+  const props = { messages: [], status: SessionStatus.IDLE, onStop: vi.fn(), onSend, fileReferences: true }
+  const paste = (files: File[] = [], text = '') => fireEvent.paste(screen.getByRole('textbox'), {
+    clipboardData: { files, getData: () => text }
+  })
+  beforeEach(() => {
+    vi.resetAllMocks()
+    api.getPathForFile.mockReturnValue('')
+    api.readClipboardFilePaths.mockResolvedValue([])
+    api.saveImage.mockResolvedValue('/tmp/20x-clipboard-image.png')
+    window.electronAPI.webUtils = api
+  })
+  afterEach(cleanup)
+
+  it('inserts original paths at the cursor and sends only ordinary text', async () => {
+    api.getPathForFile.mockImplementation(file => `/tmp/${file.name}`)
+    render(<AgentTranscriptPanel {...props} />)
+    const field = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.change(field, { target: { value: 'Read these please' } })
+    field.setSelectionRange(10, 10)
+    fireEvent.drop(screen.getByTestId('transcript-composer'), {
+      dataTransfer: { files: [new File(['a'], 'product brief.pdf'), new File(['b'], '文.txt')], types: ['Files'] }
+    })
+    await waitFor(() => expect(field).toHaveValue('Read these\n/tmp/product brief.pdf\n/tmp/文.txt\n please'))
+    expect(onSend).not.toHaveBeenCalled()
+    expect(api.saveImage).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByLabelText('Send message'))
+    expect(onSend).toHaveBeenCalledWith('Read these\n/tmp/product brief.pdf\n/tmp/文.txt\n please', undefined)
+  })
+
+  it('prefers Finder paths over thumbnails and pasted filenames', async () => {
+    api.readClipboardFilePaths.mockResolvedValue(['/tmp/original image.jpg', '/tmp/other.pdf'])
+    render(<AgentTranscriptPanel {...props} />)
+    paste([new File(['thumbnail'], 'image.png', { type: 'image/png' })], 'original image.jpg')
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue('/tmp/original image.jpg\n/tmp/other.pdf'))
+    expect(api.saveImage).not.toHaveBeenCalled()
+  })
+
+  it('saves a pathless image and blocks sends until its path is inserted', async () => {
+    let finish!: (path: string) => void
+    api.saveImage.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    render(<AgentTranscriptPanel {...props} />)
+    const field = screen.getByRole('textbox')
+    fireEvent.change(field, { target: { value: 'Review this' } })
+    ;(field as HTMLTextAreaElement).setSelectionRange(11, 11)
+    paste([new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' })])
+    await waitFor(() => expect(api.saveImage).toHaveBeenCalledWith(new Uint8Array([1, 2, 3])))
+    expect(screen.getByLabelText('Send message')).toBeDisabled()
+    fireEvent.keyDown(field, { key: 'Enter' })
+    expect(onSend).not.toHaveBeenCalled()
+    await act(async () => finish('/tmp/screenshot.png'))
+    expect(field).toHaveValue('Review this\n/tmp/screenshot.png')
+    expect(screen.getByLabelText('Send message')).toBeEnabled()
+  })
+
+  it('keeps plain text exactly and does not intercept regular task pastes', async () => {
+    const view = render(<AgentTranscriptPanel {...props} />)
+    expect(fireEvent.drop(screen.getByTestId('transcript-composer'), {
+      dataTransfer: { files: [], types: ['text/plain'] }
+    })).toBe(true)
+    paste([], 'hello\n  world')
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue('hello\n  world'))
+    expect(api.saveImage).not.toHaveBeenCalled()
+    view.rerender(<AgentTranscriptPanel {...props} fileReferences={false} />)
+    expect(paste([], 'normal paste')).toBe(true)
+    expect(api.readClipboardFilePaths).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses native insertion for a focused paste so Chromium retains Undo history', async () => {
+    const insert = vi.fn(() => true)
+    Object.defineProperty(document, 'execCommand', { value: insert, configurable: true })
+    try {
+      render(<AgentTranscriptPanel {...props} />)
+      screen.getByRole('textbox').focus()
+      paste([], 'ordinary text')
+      await waitFor(() => expect(insert).toHaveBeenCalledWith('insertText', false, 'ordinary text'))
+      expect(screen.getByRole('textbox')).not.toHaveAttribute('readonly')
+    } finally { Reflect.deleteProperty(document, 'execCommand') }
+  })
+
+  it('preserves the draft and explains invalid files and failed conversion', async () => {
+    const feedback = vi.fn()
+    const unsubscribe = onShortcutFeedback(feedback)
+    try {
+      render(<AgentTranscriptPanel {...props} />)
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Keep this draft' } })
+      paste([new File(['data'], 'remote.pdf', { type: 'application/pdf' })])
+      await waitFor(() => expect(feedback).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('no local path'), isError: true })))
+      api.saveImage.mockRejectedValue(new Error('Disk full'))
+      paste([new File(['data'], 'image.png', { type: 'image/png' })])
+      await waitFor(() => expect(feedback).toHaveBeenCalledWith({ message: 'Could not add files — Disk full', isError: true }))
+      expect(screen.getByRole('textbox')).toHaveValue('Keep this draft')
+      expect(screen.getByLabelText('Send message')).toBeEnabled()
+    } finally { unsubscribe() }
+  })
+
+  it('does not insert a pending image into a newly selected project', async () => {
+    let finish!: (path: string) => void
+    api.saveImage.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const view = render(<AgentTranscriptPanel key="first" {...props} />)
+    paste([new File(['image'], 'image.png', { type: 'image/png' })])
+    await waitFor(() => expect(api.saveImage).toHaveBeenCalled())
+    view.rerender(<AgentTranscriptPanel key="second" {...props} />)
+    await act(async () => finish('/tmp/old-project.png'))
+    expect(screen.getByRole('textbox')).toHaveValue('')
+    expect(screen.getByLabelText('Send message')).toBeEnabled()
+  })
+})
+
 describe('AgentTranscriptPanel error display', () => {
   afterEach(() => {
     cleanup()
@@ -107,6 +223,16 @@ describe('AgentTranscriptPanel error display', () => {
       await waitFor(() => expect(feedback).toHaveBeenCalledWith({ message: `Could not send the message — ${reason}`, isError: true }))
       expect(composer).toHaveValue('Continue with these findings')
     } finally { unsubscribe() }
+  })
+
+  it('preserves a failed synchronous send alongside a newer draft', async () => {
+    render(<AgentTranscriptPanel messages={[]} status={SessionStatus.IDLE} onStop={() => undefined}
+      onSend={() => { throw new Error('Could not start') }} />)
+    const field = screen.getByRole('textbox')
+    fireEvent.change(field, { target: { value: '/tmp/spec.md' } })
+    fireEvent.click(screen.getByLabelText('Send message'))
+    fireEvent.change(field, { target: { value: 'another thought' } })
+    await waitFor(() => expect(field).toHaveValue('/tmp/spec.md\n\nanother thought'))
   })
 
   it('does not render a separate banner for an error already shown as the final message', () => {

@@ -557,6 +557,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
   webUtils: {
+    readClipboardFilePaths: (): Promise<string[]> => ipcRenderer.invoke('composer:clipboardFilePaths'),
+    saveImage: (data: Uint8Array): Promise<string> => ipcRenderer.invoke('composer:saveImage', data),
     getPathForFile: (file: File): string => webUtils.getPathForFile(file)
   },
   terminal: {

@@ -247,6 +247,8 @@ interface AgentTranscriptPanelProps {
   onSend?: (message: string, options?: { attachments?: ComposerAttachment[] }) => void | Promise<void>
   onPickAttachments?: () => Promise<ComposerAttachment[]>
   onAddAttachmentPaths?: (filePaths: string[]) => Promise<ComposerAttachment[]>
+  /** Mastermind references original files instead of saving task attachments. */
+  fileReferences?: boolean
   className?: string
   /** Transient system status (e.g. 'Compacting conversation history…') */
   systemStatus?: string | null
@@ -805,6 +807,7 @@ export function AgentTranscriptPanel({
   onSend,
   onPickAttachments,
   onAddAttachmentPaths,
+  fileReferences = false,
   className,
   systemStatus,
   sessionId,
@@ -826,6 +829,8 @@ export function AgentTranscriptPanel({
   const [activeSearchResult, setActiveSearchResult] = useState(0)
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([])
   const [isDragOverComposer, setIsDragOverComposer] = useState(false)
+  const [preparingFiles, setPreparingFiles] = useState(false)
+  const preparingFilesRef = useRef(false)
   const [debugCopyToast, setDebugCopyToast] = useState(false)
   const taskArtifacts = useArtifactStore((state) => taskId ? (state.artifactsByTask[taskId] || EMPTY_ARTIFACTS) : EMPTY_ARTIFACTS)
   const selectArtifactTab = useArtifactStore((state) => state.selectTab)
@@ -1124,7 +1129,9 @@ export function AgentTranscriptPanel({
   }
 
   const handleSend = () => {
-    const value = inputRef.current?.value.trim()
+    if (preparingFilesRef.current || isStarting) return
+    const field = inputRef.current
+    const value = field?.value.trim()
     if (value && onSend) {
       // Whatever answer was expected by voice is not the answer that is now
       // coming, so it is dropped and this reply is not read aloud. A spoken
@@ -1132,7 +1139,12 @@ export function AgentTranscriptPanel({
       // straight afterwards, so the conversation loop is unaffected.
       void voiceApi.answerNotExpected(taskId)
       const attachmentsAtSend = pendingAttachments
-      const sent = onSend(value, attachmentsAtSend.length > 0 ? { attachments: attachmentsAtSend } : undefined)
+      let sent: void | Promise<void>
+      try {
+        sent = onSend(value, attachmentsAtSend.length > 0 ? { attachments: attachmentsAtSend } : undefined)
+      } catch (error) {
+        sent = Promise.reject(error)
+      }
       inputRef.current!.value = ''
       // Reset textarea height back to single row
       inputRef.current!.style.height = 'auto'
@@ -1142,8 +1154,10 @@ export function AgentTranscriptPanel({
       // The text goes back into the box and the failure is announced.
       void Promise.resolve(sent).catch((error: unknown) => {
         console.error('[AgentTranscriptPanel] Message send failed:', error)
-        if (inputRef.current && !inputRef.current.value) inputRef.current.value = value
-        setPendingAttachments(attachmentsAtSend)
+        if (!field || inputRef.current !== field) return
+        field.value = field.value ? `${value}\n\n${field.value}` : value
+        autoResize()
+        setPendingAttachments(current => mergeAttachments(attachmentsAtSend, current))
         const reason = (error instanceof Error ? error.message : typeof error === 'string' ? error : '')
           .replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
         dispatchShortcutFeedback(reason ? `Could not send the message — ${reason}` : 'Could not send the message. Please try again.', true)
@@ -1172,8 +1186,65 @@ export function AgentTranscriptPanel({
     setPendingAttachments((prev) => prev.filter((att) => att.id !== id))
   }
 
+  const insertFileReferences = async (files: File[], pastedText?: string) => {
+    const field = inputRef.current
+    if (!field || isStarting || preparingFilesRef.current) return
+    const start = field.selectionStart
+    const end = field.selectionEnd
+    const original = field.value
+    preparingFilesRef.current = true
+    setPreparingFiles(true)
+    try {
+      const api = window.electronAPI.webUtils
+      // Native URLs win over Finder's image thumbnail or display-name text.
+      let paths = pastedText !== undefined ? await api.readClipboardFilePaths() : []
+      if (!paths.length) {
+        paths = await Promise.all(files.map(async file => {
+          const path = api.getPathForFile(file)
+          if (path) return path
+          if (!file.type.startsWith('image/')) throw new Error('This file has no local path. Save it first, then drop it here.')
+          if (file.size > 50 * 1024 * 1024) throw new Error('Clipboard images must be at most 50 MB.')
+          return api.saveImage(new Uint8Array(await file.arrayBuffer()))
+        }))
+      }
+      if (inputRef.current !== field) return
+      const text = paths.length ? paths.map(path => /[\r\n]/.test(path) ? JSON.stringify(path) : path).join('\n') : pastedText
+      if (!text) throw new Error('No local file or supported image was found. Save the file first, then drop it here.')
+      // A voice draft may have changed the field during the native operation.
+      const from = field.value === original ? start : field.selectionStart
+      const to = field.value === original ? end : field.selectionEnd
+      const prefix = paths.length && from > 0 && field.value[from - 1] !== '\n' ? '\n' : ''
+      const suffix = paths.length && to < field.value.length && field.value[to] !== '\n' ? '\n' : ''
+      const insertion = `${prefix}${text}${suffix}`
+      field.readOnly = false
+      field.setSelectionRange(from, to)
+      // Chromium's editing command preserves native Undo for a normal paste.
+      // Do not focus a different field if the user moved away while preparing.
+      if (document.activeElement !== field || !document.execCommand?.('insertText', false, insertion)) {
+        field.setRangeText(insertion, from, to, 'end')
+      }
+      autoResize()
+    } catch (error) {
+      if (inputRef.current === field) {
+        const reason = (error instanceof Error ? error.message : String(error))
+          .replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
+        dispatchShortcutFeedback(`Could not add files — ${reason}`, true)
+      }
+    } finally {
+      preparingFilesRef.current = false
+      if (inputRef.current === field) setPreparingFiles(false)
+    }
+  }
+
+  const handleComposerPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!fileReferences) return
+    e.preventDefault()
+    e.stopPropagation()
+    void insertFileReferences(Array.from(e.clipboardData.files), e.clipboardData.getData('text/plain'))
+  }
+
   const handleComposerDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    if (!onAddAttachmentPaths || !Array.from(e.dataTransfer.types).includes('Files')) return
+    if ((!fileReferences && !onAddAttachmentPaths) || !Array.from(e.dataTransfer.types).includes('Files')) return
     e.preventDefault()
     e.stopPropagation()
     e.dataTransfer.dropEffect = 'copy'
@@ -1181,7 +1252,7 @@ export function AgentTranscriptPanel({
   }
 
   const handleComposerDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    if (!onAddAttachmentPaths) return
+    if (!fileReferences && !onAddAttachmentPaths) return
     e.preventDefault()
     e.stopPropagation()
     if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
@@ -1189,10 +1260,17 @@ export function AgentTranscriptPanel({
   }
 
   const handleComposerDrop = async (e: React.DragEvent<HTMLDivElement>) => {
-    if (!onAddAttachmentPaths) return
+    if (!fileReferences && !onAddAttachmentPaths) return
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return
     e.preventDefault()
     e.stopPropagation()
     setIsDragOverComposer(false)
+
+    if (fileReferences) {
+      inputRef.current?.focus()
+      await insertFileReferences(Array.from(e.dataTransfer.files))
+      return
+    }
 
     const filePaths = Array.from(e.dataTransfer.files)
       .map((file) => window.electronAPI.webUtils.getPathForFile(file))
@@ -1427,7 +1505,7 @@ export function AgentTranscriptPanel({
           >
             {isDragOverComposer && (
               <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-xl border border-dashed border-primary/40 bg-background/90">
-                <span className="text-xs font-medium text-primary">Drop files to attach them to this message</span>
+                <span className="text-xs font-medium text-primary">{fileReferences ? 'Drop files to insert their paths' : 'Drop files to attach them to this message'}</span>
               </div>
             )}
             {pendingAttachments.length > 0 && (
@@ -1458,6 +1536,8 @@ export function AgentTranscriptPanel({
                 ref={inputRef}
                 rows={1}
                 disabled={isStarting}
+                readOnly={preparingFiles}
+                onPaste={handleComposerPaste}
                 placeholder={isStarting ? 'Starting agent…' : 'Write a message...'}
                 className="flex-1 bg-input border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[32px] disabled:opacity-60"
                 onKeyDown={(e) => {
@@ -1482,10 +1562,11 @@ export function AgentTranscriptPanel({
                 <Paperclip className="h-4 w-4" />
               </Button>
             )}
-              <Button variant="default" size="icon" onClick={handleSend} className="h-[32px] w-[32px] shrink-0 rounded-lg" aria-label="Send message">
+              <Button variant="default" size="icon" onClick={handleSend} disabled={preparingFiles || isStarting} className="h-[32px] w-[32px] shrink-0 rounded-lg" aria-label="Send message">
                 <Send className="h-4 w-4" />
               </Button>
             </div>
+            {preparingFiles && <p role="status" className="text-xs text-muted-foreground">Preparing files…</p>}
           </div>
         )}
       </div>

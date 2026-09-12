@@ -80,6 +80,15 @@ beforeEach(() => {
 })
 
 describe('OrchestratorPanel — warming the session', () => {
+  it('rejects a message when startup fails so the composer can restore its draft', async () => {
+    settingsApi.get.mockResolvedValue('false')
+    agentSessionApi.start.mockRejectedValue(new Error('startup failed'))
+    render(<OrchestratorPanel onClose={vi.fn()} />)
+    await waitFor(() => expect(composer.send).toBeTypeOf('function'))
+    await expect(composer.send!('/tmp/spec.md')).rejects.toThrow('Mastermind agent session did not start')
+    expect(agentSessionApi.send).not.toHaveBeenCalled()
+  })
+
   it('starts the default agent at launch, before any message', async () => {
     await act(async () => {
       render(<OrchestratorPanel onClose={vi.fn()} />)

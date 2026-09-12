@@ -480,6 +480,8 @@ interface ElectronAPI {
     onProgress: (callback: (data: { agentName: string; stage: string; output: string; percent: number }) => void) => () => void
   }
   webUtils: {
+    readClipboardFilePaths: () => Promise<string[]>
+    saveImage: (data: Uint8Array) => Promise<string>
     getPathForFile: (file: File) => string
   }
   terminal: {

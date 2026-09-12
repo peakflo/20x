@@ -30,6 +30,12 @@ Each Factory execution receives a Group unless an existing project Group is sele
 
 Acceptance: create a Group with existing tasks; create a task inside it; move/remove members; check the same membership in Tasks and Canvas; close a panel and refresh/reopen; add a member while the Group is shown; run multiple Factory stages and recurring checks; delete only the Group while work continues; decline and then confirm a Group-plus-tasks deletion. Verify unrelated tasks and agent defaults remain unchanged.
 
+## Files in Mastermind
+
+Paste or drop local files into the Mastermind message box to insert their original absolute paths. Paths are editable message text and nothing sends automatically. Multiple files stay on separate lines. Pasted clipboard images without an existing path become private PNG files in the OS temporary directory (up to 50 MB each); 20x keeps them after sending or quitting and does not maintain an attachment library for them.
+
+The agent reads referenced files with its existing tools and permissions. A reference points to the current file contents, so moving/deleting a file or OS temporary-file cleanup can make it unavailable. Regular task attachments retain their existing storage behavior. Preparing an image blocks sending until its path is ready, and conversion or startup failures preserve the message draft.
+
 ## Shared task conversations
 
 The engineer and Mastermind can both message an existing Mastermind task at any time, using the same conversation. No ownership transfer is required. Messages to a running assignment invalidate its previous completion report until the agent responds to the new input. Follow-up conversation after a saved result does not restart a completed Goal or Routine.
