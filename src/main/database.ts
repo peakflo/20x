@@ -977,6 +977,7 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
 const SCHEMA_VERSION = 11
 
 export class DatabaseManager {
+  onTaskLifecycleChanged?: () => void
   private taskGroups?: TaskGroups
   get groups(): TaskGroups { return this.taskGroups ??= new TaskGroups(this) }
   public db!: Database.Database
@@ -2461,7 +2462,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     this.db.prepare(
       `UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`
     ).run(...values)
-
+    if (data.status) queueMicrotask(() => this.onTaskLifecycleChanged?.())
     return this.getTask(id)
   }
 
@@ -2469,6 +2470,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     this.deleteTaskAttachments(id)
     this.deleteTranscriptParts(id)
     const result = this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
+    // Observe committed state after the caller's transaction, including rollback.
+    if (result.changes) queueMicrotask(() => this.onTaskLifecycleChanged?.())
     return result.changes > 0
   }
 

@@ -4599,6 +4599,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       const adapterConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
       this.assertTaskNotControlled(session.taskId)
       if (this.sessions.get(sessionId) !== session) throw new TaskControlBlockedError('The task session was stopped before this answer could be sent.')
+      this.responsibilities?.assertNativeAnswerCurrent(sessionId, requestId)
       const response = requestId
         ? await adapter.respondToQuestion(sessionId, answers, adapterConfig, requestId)
         : await adapter.respondToQuestion(sessionId, answers, adapterConfig)
@@ -4623,6 +4624,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         }
         return false
       }
+
+      this.responsibilities?.nativeAnswerAccepted(sessionId, requestId, 'question', message ?? 'Answered')
 
       // Update session and task state after the adapter accepts the response.
       session.status = 'working'
@@ -4676,11 +4679,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         selectedOption = answerMap[message] || (approved ? 'approved' : 'abort')
       }
       console.log(`[AgentManager] Responding to ACP adapter approval with: ${selectedOption}`)
+      this.responsibilities?.assertNativeAnswerCurrent(sessionId, requestId)
       // OpenCode adapter returns boolean (true=handled, false=no permission found).
       // AcpAdapter returns void. Cast to boolean|void to handle both.
       const handled = await (adapter as unknown as {
         respondToApproval: (sid: string, approved: boolean, opt?: string, requestId?: string) => Promise<boolean | void>
       }).respondToApproval(sessionId, approved, selectedOption, requestId)
+      if (handled !== false) this.responsibilities?.nativeAnswerAccepted(sessionId, requestId, 'permission', message ?? (approved ? 'Approved' : 'Rejected'))
 
       // Provider callbacks do not survive a restored session. Resolve the old
       // card immediately instead of approving a newer request or sending a

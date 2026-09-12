@@ -66,6 +66,7 @@ export class MastermindFollowups {
   }
   async retry(projectId: string): Promise<void> {
     if (this.active.has(projectId)) throw new Error('A follow-up is still settling.')
+    this.manager.snapshot(projectId) // Reconcile obsolete requests before retrying any delivery.
     for (const r of this.rows<Review>('reviews').filter(r => r.projectId === projectId && r.error?.startsWith('Follow-up cleanup failed:'))) {
       r.error = undefined
       await this.release(r)
@@ -106,6 +107,24 @@ export class MastermindFollowups {
     for (const e of this.events(r).filter(e => e.state === 'reviewing')) { e.state = 'failed'; this.save('events', e) }
     void this.release(r)
   }
+  private current(e: Event, snapshot: ResponsibilitySnapshot): boolean {
+    const r = snapshot.responsibilities.find(r => r.id === e.responsibilityId)
+    if (e.kind === 'deadline' && r && Date.parse(r.agreement.deadline) > Date.now()) return false
+    if (e.kind === 'quiet') {
+      const step = snapshot.steps.findLast(s => s.responsibilityId === e.responsibilityId)
+      const live = e.taskId ? this.agents.findSessionByTaskId(e.taskId) : undefined
+      if (step?.taskId !== e.taskId || step?.state !== 'running' || live?.session.status !== 'working' || Date.now() - (live.session.lastActivityAt ?? Date.parse(step.createdAt)) < 600000) return false
+    }
+    return !!r && !['cancelled', 'taken_over'].includes(r.state)
+      && (!e.noticeId || snapshot.notices.some(n => n.id === e.noticeId && n.state === 'pending'))
+      && (e.noticeId !== undefined || !e.taskId || !!this.db.getTask(e.taskId))
+      && (!['progress', 'quiet', 'deadline'].includes(e.kind) || r.state === 'active')
+  }
+  reconcile(snapshot: ResponsibilitySnapshot, projectId?: string): void {
+    for (const e of this.rows<Event>('events').filter(e => (!projectId || e.projectId === projectId) && ['pending', 'reviewing', 'failed'].includes(e.state))) {
+      if (!this.current(e, snapshot)) { e.state = 'superseded'; this.save('events', e) }
+    }
+  }
   private collect(snapshot: ResponsibilitySnapshot): void {
     const known = new Map(this.rows<Event>('events').map(e => [e.id, e]))
     const add = (event: Omit<Event, 'state'>) => { if (!known.has(event.id)) this.save('events', { ...event, state: 'pending' }) }
@@ -126,10 +145,7 @@ export class MastermindFollowups {
       const lastActivity = live?.session.lastActivityAt ?? Date.parse(latest.createdAt)
       if (latest.state === 'running' && live?.session.status === 'working' && Date.now() - lastActivity >= 600000) add({ id: `quiet:${latest.id}:${this.manager.latestHumanInputId(latest.taskId) ?? 'initial'}`, projectId: r.projectId, responsibilityId: r.id, taskId: latest.taskId, kind: 'quiet', title: r.agreement.title, body: 'No visible activity for ten minutes. Silence alone does not establish failure. Inspect the latest transcript and, if useful, send one status question.', createdAt: now() })
     }
-    for (const e of this.rows<Event>('events').filter(e => ['pending', 'failed'].includes(e.state))) {
-      const r = snapshot.responsibilities.find(r => r.id === e.responsibilityId)
-      if (!r || r.state === 'cancelled' || (e.noticeId && !snapshot.notices.some(n => n.id === e.noticeId && n.state === 'pending')) || (['progress', 'quiet', 'deadline'].includes(e.kind) && r.state !== 'active')) { e.state = 'superseded'; this.save('events', e) }
-    }
+    this.reconcile(snapshot)
   }
   tick(snapshot: ResponsibilitySnapshot): void {
     if (!this.enabled || !this.agents.sendMastermindFollowup || !this.agents.publishMastermindFollowup) return
@@ -174,8 +190,8 @@ export class MastermindFollowups {
     for (const id of silentEventIds) if (!['progress', 'quiet'].includes(events.find(e => e.id === id)!.kind)) throw new Error('Results and blockers must reach the engineer.')
     for (const u of updates) if (typeof u.text !== 'string' || !u.text.trim() || u.text.length > 600) throw new Error('Keep each update between 1 and 600 characters.')
     const snapshot = this.manager.snapshot(r.projectId)
-    const current = events.filter(e => { const work = snapshot.responsibilities.find(work => work.id === e.responsibilityId); return work && work.state !== 'cancelled' && (!e.noticeId || snapshot.notices.some(n => n.id === e.noticeId && n.state === 'pending')) && (!['progress', 'quiet', 'deadline'].includes(e.kind) || work.state === 'active') })
-    const message = updates.filter(u => current.some(e => e.id === u.eventId)).map(u => { const e = events.find(e => e.id === u.eventId)!; return `**${e.title}**\n\n${u.text.trim()}${e.taskId ? `\n\n[Open task](#20x-task=${e.taskId})` : ''}${e.noticeId && urgent(e) ? '\n\nAnswer in Mastermind → Decisions.' : ''}` }).join('\n\n---\n\n')
+    const current = events.filter(e => this.current(e, snapshot))
+    const message = updates.filter(u => current.some(e => e.id === u.eventId)).map(u => { const e = events.find(e => e.id === u.eventId)!; return `**${e.title}**\n\n${u.text.trim()}${e.taskId && this.db.getTask(e.taskId) ? `\n\n[Open task](#20x-task=${e.taskId})` : ''}${e.noticeId && urgent(e) ? '\n\nAnswer in Mastermind → Decisions.' : ''}` }).join('\n\n---\n\n')
     this.db.db.transaction(() => {
       if (message) this.agents.publishMastermindFollowup!(projectConversationId(r.projectId), r.id, message)
       for (const e of events) { e.state = current.some(c => c.id === e.id) ? 'delivered' : 'superseded'; this.save('events', e) }
@@ -185,8 +201,7 @@ export class MastermindFollowups {
   }
   claimNudge(id: string, taskId: string): void {
     const r = this.require(id), event = this.events(r).find(e => e.kind === 'quiet' && e.taskId === taskId)
-    const step = this.manager.snapshot(r.projectId).steps.findLast(s => s.taskId === taskId)
-    if (!event || event.nudged || step?.state !== 'running' || this.agents.findSessionByTaskId(taskId)?.session.status !== 'working') throw new Error('Only one status follow-up to a quiet, running task is available in this review.')
+    if (!event || event.nudged || !this.current(event, this.manager.snapshot(r.projectId))) throw new Error('Only one status follow-up to a quiet, running task is available in this review.')
     event.nudged = true; this.save('events', event) // Record before sending; uncertain sends are never repeated.
   }
 }

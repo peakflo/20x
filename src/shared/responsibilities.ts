@@ -154,6 +154,8 @@ export interface WorkReport {
   factory?: FactoryDefinition
 }
 export interface ResponsibilityStep {
+  /** Snapshot-only: historical steps survive task deletion. */
+  taskAvailable?: boolean
   inputRevision?: number
   id: string
   responsibilityId: string
@@ -180,7 +182,11 @@ export interface ResponsibilityNotice {
   kind: 'result' | 'question' | 'recovery' | 'permission'
   title: string
   body: string
-  state: 'pending' | 'delivering' | 'answered' | 'read' | 'expired'
+  state: 'pending' | 'delivering' | 'answered' | 'read' | 'expired' | 'superseded'
+  agreementRevision?: number
+  inputRevision?: number
+  resolvedAt?: string
+  resolutionReason?: string
   answer: string | null
   deliveryError?: string
   callback?: boolean
@@ -188,6 +194,7 @@ export interface ResponsibilityNotice {
   recipient: { sessionId: string; requestId: string; responseType: 'permission' | 'question' } | null
   createdAt: string
 }
+export const isOpenNotice = (notice: ResponsibilityNotice): boolean => ['pending', 'delivering', 'expired'].includes(notice.state)
 export interface ProjectMemory {
   id: string
   projectId: string

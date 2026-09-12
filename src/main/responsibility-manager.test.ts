@@ -1249,3 +1249,160 @@ describe('Routine verified completion', () => {
     expect(snapshot().responsibilities[0].state).toBe('completed')
   })
 })
+
+describe('follow-up relevance', () => {
+  async function question(a = agreement) {
+    const r = await approve(a)
+    const step = snapshot().steps.find(s => s.responsibilityId === r.id)!
+    await finish(step, 'ask', 'Question: Which environment?\nWhy: The target is unclear.\nReply: Staging or production.')
+    return { r, step, notice: snapshot().notices.find(n => n.stepId === step.id && n.kind === 'question')! }
+  }
+
+  it('reconciles confirmed deletion immediately, including while proactive work is paused, and rejects a stale answer', async () => {
+    const { r, step, notice } = await question()
+    await manager.followups.setEnabled(project.id, false)
+    expect(db.deleteTask(step.taskId)).toBe(true)
+    await Promise.resolve() // Shared DB hook runs after the deleting transaction.
+    const saved = JSON.parse((db.db.prepare('SELECT data FROM mastermind_notices WHERE id=?').get(notice.id) as { data: string }).data)
+    expect(saved).toMatchObject({ state: 'superseded', resolutionReason: 'No longer needed — task deleted', resolvedAt: expect.any(String) })
+    expect(snapshot().steps.find(s => s.id === step.id)?.taskAvailable).toBe(false)
+    await expect(manager.answer(notice.id, 'Staging')).rejects.toThrow('already been handled')
+    expect(snapshot().responsibilities.find(v => v.id === r.id)?.state).toBe('blocked')
+  })
+
+  it('keeps declined bulk deletion pending and reconciles confirmed partial outcomes', async () => {
+    const first = await question(), second = await question({ ...agreement, title: 'Other question' })
+    const confirm = vi.fn(async () => false)
+    const control = new TaskControl(db, { withStoppedTasks: async (_ids, action, beforeStop) => { await beforeStop?.(); return action() } }, { completeTask: vi.fn() }, manager, confirm, vi.fn())
+    const args = { action: 'delete', task_ids: [first.step.taskId, second.step.taskId] }
+    try {
+      expect(await control.run(args)).toMatchObject({ cancelled: true })
+      expect(snapshot().notices.filter(n => n.state === 'pending')).toHaveLength(2)
+      confirm.mockResolvedValue(true)
+      const remove = db.deleteTask.bind(db)
+      vi.spyOn(db, 'deleteTask').mockImplementation(id => { if (id === first.step.taskId) throw new Error('Delete failed'); return remove(id) })
+      expect(await control.run(args)).toMatchObject({ success: false, deletedTaskIds: [second.step.taskId], remainingTaskIds: [first.step.taskId] })
+      expect(db.getTask(first.step.taskId)).toBeDefined()
+      expect(snapshot().notices.find(n => n.id === first.notice.id)?.resolutionReason).toContain('work cancelled')
+      expect(snapshot().notices.find(n => n.id === second.notice.id)?.state).toBe('superseded')
+      expect(snapshot().notices.filter(n => n.state === 'pending')).toHaveLength(0)
+    } finally { await control.stop() }
+  })
+
+  it('records exact accepted task permission responses without clearing unrelated native requests', async () => {
+    await approve()
+    const step = snapshot().steps[0], live = sessions.get(step.taskId)!
+    live.session.status = 'waiting_approval'
+    for (const requestId of ['first', 'second']) manager.observe('agent:approval', { taskId: step.taskId, sessionId: live.sessionId, requestId, description: 'Allow this action?' })
+    manager.nativeAnswerAccepted(live.sessionId, undefined, 'permission', 'Approved')
+    expect(snapshot().notices.filter(n => n.state === 'pending')).toHaveLength(2)
+    manager.nativeAnswerAccepted(live.sessionId, 'first', 'permission', 'Approved')
+    expect(snapshot().notices.find(n => n.recipient?.requestId === 'first')).toMatchObject({ state: 'answered', answer: 'Approved', resolvedAt: expect.any(String) })
+    expect(snapshot().notices.find(n => n.recipient?.requestId === 'second')?.state).toBe('pending')
+    expect(() => manager.assertNativeAnswerCurrent(live.sessionId, 'first')).toThrow('no longer current')
+    db.deleteTask(step.taskId)
+    expect(() => manager.assertNativeAnswerCurrent(live.sessionId, 'second')).toThrow('no longer current')
+  })
+
+  it('leaves a rolled-back deletion and failed completion pending', async () => {
+    const { step, notice } = await question()
+    expect(() => db.db.transaction(() => { db.deleteTask(step.taskId); throw new Error('rollback') })()).toThrow('rollback')
+    expect(() => db.updateTask(step.taskId, { status: 'completed' })).toThrow('Workflo must confirm')
+    await Promise.resolve()
+    expect(snapshot().notices.find(n => n.id === notice.id)?.state).toBe('pending')
+    expect(snapshot().steps.find(s => s.id === step.id)?.taskAvailable).toBe(true)
+  })
+
+  it.each(['cancel', 'complete', 'revise'] as const)('closes a question after confirmed %s without granting new work', async action => {
+    const { r, step, notice } = await question()
+    if (action === 'cancel') await manager.act(r.id, r.revision, 'cancel')
+    if (action === 'complete') db.updateTask(step.taskId, { status: 'completed' }, 'workflo-server')
+    if (action === 'revise') manager.propose(scope(), { ...agreement, title: 'Revised objective' }, input('Change the objective'), r.id)
+    await Promise.resolve()
+    const saved = snapshot().notices.find(n => n.id === notice.id)!
+    expect(saved).toMatchObject({ state: 'superseded', resolvedAt: expect.any(String) })
+    expect(saved.resolutionReason).toContain(action === 'cancel' ? 'cancelled' : action === 'complete' ? 'completed' : 'Replaced')
+    await expect(manager.answer(notice.id, 'Staging')).rejects.toThrow('already been handled')
+  })
+
+  it('keeps a workflow-wide recovery request when only its historical task was deleted', async () => {
+    const r = await approve({ ...agreement, maxSteps: 1 })
+    const step = snapshot().steps[0]
+    await finish(step)
+    const notice = snapshot().notices.find(n => n.kind === 'recovery')!
+    expect(notice.stepId).toBeNull()
+    db.deleteTask(step.taskId)
+    expect(snapshot().notices.find(n => n.id === notice.id)?.state).toBe('pending')
+    expect(snapshot().responsibilities.find(v => v.id === r.id)?.state).toBe('blocked')
+  })
+
+  it('preserves questions through pause and unrelated chat, then accepts an exact direct task reply with limited tools', async () => {
+    const { r, step, notice } = await question()
+    await manager.act(r.id, r.revision, 'pause')
+    manager.recordHumanInput(step.taskId, 'Explain the files you inspected')
+    await manager.prepareTaskMessage(step.taskId)
+    expect(snapshot().notices.find(n => n.id === notice.id)?.state).toBe('pending')
+    const config = { taskId: step.taskId, agentId: project.agentId, workspaceDir: dir, mcpServers: { existing: { type: 'http', url: 'http://localhost/existing' } } } as Parameters<ResponsibilityManager['configureSession']>[0]
+    manager.configureSession(config, 1234)
+    expect(config.mcpServers).toHaveProperty('existing')
+    expect(config.mcpServers).toHaveProperty('responsibilities')
+    const token = manager.tokenForTask(step.taskId)!
+    expect(manager.scopeForToken(token).conversationOnly).toBe(true)
+    expect((await callResponsibilityTool(manager, token, 'report_responsibility', {})).isError).toBe(true)
+    expect((await callResponsibilityTool(manager, token, 'delegate_responsibility', {})).isError).toBe(true)
+    const reply = manager.recordHumanInput(step.taskId, 'Staging')!
+    expect((await callResponsibilityTool(manager, token, 'answer_project_question', { noticeId: notice.id, humanInputId: reply.id })).isError).not.toBe(true)
+    expect(snapshot().notices.find(n => n.id === notice.id)).toMatchObject({ state: 'answered', answer: 'Staging', resolvedAt: expect.any(String) })
+    expect(snapshot().responsibilities.find(v => v.id === r.id)?.state).toBe('paused')
+  })
+
+  it('rejects task replies to another task or native permission and accepts a direct Mastermind answer once', async () => {
+    const first = await question()
+    const second = await question({ ...agreement, title: 'Other work' })
+    const reply = manager.recordHumanInput(first.step.taskId, 'Staging')!
+    const token = manager.tokenForTask(first.step.taskId)!
+    expect((await callResponsibilityTool(manager, token, 'answer_project_question', { noticeId: second.notice.id, humanInputId: reply.id })).isError).toBe(true)
+    const native = { ...first.notice, id: 'native', callback: true }
+    db.db.prepare('INSERT INTO mastermind_notices(id,data) VALUES(?,?)').run(native.id, JSON.stringify(native))
+    expect((await callResponsibilityTool(manager, token, 'answer_project_question', { noticeId: native.id, humanInputId: reply.id })).isError).toBe(true)
+    const direct = input('Staging')
+    await manager.answerFromConversation(scope(), first.notice.id, direct)
+    expect(snapshot().notices.find(n => n.id === first.notice.id)).toMatchObject({ state: 'answered', answer: 'Staging' })
+    await expect(manager.answerFromConversation(scope(), first.notice.id, direct)).rejects.toThrow()
+  })
+
+  it('repairs legacy questions after restart and keeps uncertain delivery visible until its work ends', async () => {
+    const { step, notice } = await question()
+    await manager.stop()
+    db.db.prepare("UPDATE mastermind_notices SET data=json_remove(data,'$.agreementRevision','$.inputRevision') WHERE id=?").run(notice.id)
+    db.deleteTask(step.taskId)
+    manager = new ResponsibilityManager(db, runtime, vi.fn(), collect, inspect)
+    manager.start(); await manager.reconcile()
+    expect(snapshot().notices.find(n => n.id === notice.id)?.state).toBe('superseded')
+    const next = await question({ ...agreement, title: 'Uncertain reply' })
+    db.db.prepare("UPDATE mastermind_notices SET data=json_set(data,'$.state','delivering','$.answer','Staging') WHERE id=?").run(next.notice.id)
+    await manager.stop(); manager.start(); await manager.reconcile()
+    expect(snapshot().notices.find(n => n.id === next.notice.id)).toMatchObject({ state: 'expired', deliveryError: expect.stringContaining('before answer delivery was confirmed') })
+    expect(snapshot().notices.find(n => n.id === next.notice.id)?.resolvedAt).toBeUndefined()
+    await manager.act(next.r.id, next.r.revision, 'cancel')
+    expect(snapshot().notices.find(n => n.id === next.notice.id)?.state).toBe('superseded')
+  })
+
+  it.each([false, true])('never revives cancelled work when an in-flight native answer %s', async fails => {
+    const r = await approve()
+    const step = snapshot().steps[0], live = sessions.get(step.taskId)!
+    live.session.status = 'waiting_approval'
+    manager.observe('agent:approval', { taskId: step.taskId, sessionId: live.sessionId, requestId: 'permission', description: 'Allow the requested command?' })
+    const notice = snapshot().notices.find(n => n.kind === 'permission')!
+    let resolve!: () => void, reject!: (e: Error) => void
+    vi.mocked(runtime.respondToPermission).mockImplementation(() => new Promise<void>((a, b) => { resolve = a; reject = b }))
+    const answering = manager.answer(notice.id, 'Approved', true)
+    const outcome = expect(answering).rejects.toThrow(fails ? 'delivery uncertain' : 'work changed')
+    await manager.act(r.id, r.revision, 'cancel')
+    if (fails) reject(new Error('delivery uncertain')); else resolve()
+    await outcome
+    expect(snapshot().responsibilities[0].state).toBe('cancelled')
+    expect(snapshot().notices.find(n => n.id === notice.id)?.state).toBe('superseded')
+    expect(snapshot().notices.filter(n => n.state === 'pending')).toHaveLength(0)
+  })
+})

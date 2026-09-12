@@ -12,7 +12,7 @@ import type { TaskControl } from './task-control'
 import type { SessionConfig } from './adapters/coding-agent-adapter'
 import { TaskStatus } from '../shared/constants'
 import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../shared/system-authority'
-import { projectConversationId, isSourceCollection, decisionQuestionGuidance, decisionQuestionLimit } from '../shared/responsibilities'
+import { projectConversationId, isSourceCollection, isOpenNotice, decisionQuestionGuidance, decisionQuestionLimit } from '../shared/responsibilities'
 import { collectSource, sourceSnapshot, type RoutineSources } from './routine-sources'
 import { Factories } from './factories'
 import { MastermindFollowups, FOLLOWUP_PROMPT } from './mastermind-followups'
@@ -29,7 +29,7 @@ type Table = 'projects' | 'agreements' | 'steps' | 'notices' | 'memory' | 'input
 interface HumanInput { id: string; projectId: string; taskId: string; text: string; createdAt: string }
 interface SourceEvent { id: string; responsibilityId: string; output: string; createdAt: string; handled: boolean }
 type AgentRuntime = Pick<AgentManager, 'startSession' | 'stopSession' | 'findSessionByTaskId' | 'getSessionStatus' | 'respondToPermission'> & Partial<Pick<AgentManager, 'sendByTaskId' | 'sendMastermindFollowup' | 'publishMastermindFollowup' | 'sendMastermindTaskNudge'>>
-export interface ResponsibilityScope { taskId: string; projectId: string; stepId?: string; phase?: WorkPhase; followupId?: string }
+export interface ResponsibilityScope { taskId: string; projectId: string; stepId?: string; phase?: WorkPhase; followupId?: string; conversationOnly?: boolean }
 
 function text(value: unknown, label: string, limit = 12000): string {
   if (typeof value !== 'string' || !value.trim() || value.length > limit) throw new Error(`${label} is required (maximum ${limit} characters).`)
@@ -137,19 +137,68 @@ export class ResponsibilityManager {
     if (!record) throw new Error('Project not found.')
     return record
   }
-  private save(record: ResponsibilityRecord): void { record.updatedAt = now(); this.put('agreements', record); this.changed() }
+  private save(record: ResponsibilityRecord): void { record.updatedAt = now(); this.put('agreements', record); this.reconcileNotices(); this.changed() }
+
+  private closeNotice(n: ResponsibilityNotice, state: 'answered' | 'read' | 'superseded', reason: string): void {
+    n.state = state; n.resolvedAt = now(); n.resolutionReason = reason
+    this.put('notices', n)
+    if (state === 'superseded') this.permissionWaiters.get(n.id)?.(false)
+  }
+
+  /** Shared by snapshots, mutations, answer delivery and proactive publication. */
+  private reconcileNotices(): boolean {
+    const records = new Map(this.all<ResponsibilityRecord>('agreements').map(r => [r.id, r]))
+    const steps = this.all<ResponsibilityStep>('steps')
+    const stepsById = new Map(steps.map(s => [s.id, s]))
+    const latestSteps = new Map(steps.map(s => [s.responsibilityId, s]))
+    const tasks = new Map((this.db.db.prepare('SELECT id, status FROM tasks').all() as { id: string; status: string }[]).map(t => [t.id, t]))
+    let changed = false
+    for (const n of this.all<ResponsibilityNotice>('notices').filter(isOpenNotice)) {
+      if (n.kind === 'result' || !n.responsibilityId) continue // Results remain readable history, including after completion.
+      const r = records.get(n.responsibilityId)
+      const linked = stepsById.get(n.stepId ?? '')
+      const step = (linked?.responsibilityId === n.responsibilityId ? linked : undefined)
+        ?? (!n.stepId && r?.agreement.kind === 'task' ? steps.findLast(s => s.responsibilityId === r.id && s.createdAt <= n.createdAt) : undefined)
+      const task = step ? tasks.get(step.taskId) : undefined
+      const needsCleanup = n.kind === 'recovery' && step && !['held', 'settled'].includes(step.state)
+      const legacyRevisionChanged = r && n.agreementRevision === undefined && r.revision > 1
+        && (r.state === 'proposed' || (this.get<HumanInput>('inputs', r.humanInputId)?.createdAt ?? '') > n.createdAt)
+      let reason: string | undefined
+      if (!r || r.deletedAt) reason = 'No longer needed — work deleted'
+      else if (step && !task) reason = 'No longer needed — task deleted'
+      else if (r.state === 'cancelled' && !needsCleanup) reason = 'No longer needed — work cancelled'
+      else if (r.state === 'completed' && !needsCleanup) reason = 'No longer needed — work completed'
+      else if (task?.status === TaskStatus.Completed && !needsCleanup) reason = 'No longer needed — task completed'
+      else if ((n.agreementRevision !== undefined && n.agreementRevision !== r.revision) || legacyRevisionChanged) reason = 'Replaced by a revised agreement'
+      else if (n.kind === 'question' && !n.callback && !n.recipient && step) {
+        const later = latestSteps.get(r.id)?.id !== step.id
+        if (later || (step.report && (step.report.action !== 'ask' || (n.inputRevision !== undefined && n.inputRevision !== (step.inputRevision ?? 0))))) reason = 'Replaced by newer work'
+      }
+      if (reason) { this.closeNotice(n, 'superseded', reason); changed = true }
+    }
+    return changed
+  }
+
+  private readonly taskLifecycleChanged = (): void => {
+    if (!this.enabled || !this.db.db.open) return
+    this.reconcileNotices(); this.changed()
+  }
 
   snapshot(projectId?: string): ResponsibilitySnapshot {
+    this.reconcileNotices()
     const responsibilities = this.all<ResponsibilityRecord>('agreements').filter(r => !r.deletedAt && (!projectId || r.projectId === projectId))
     const ids = new Set(responsibilities.map(r => r.id))
-    return {
+    const taskIds = new Set(this.db.db.prepare('SELECT id FROM tasks').pluck().all() as string[])
+    const snapshot: ResponsibilitySnapshot = {
       projects: this.all<ProjectRecord>('projects'), responsibilities,
-      followups: Object.fromEntries(this.all<ProjectRecord>('projects').map(p => [p.id, this.followups.status(p.id)])),
-      notices: this.all<ResponsibilityNotice>('notices').filter(r => (!projectId || r.projectId === projectId) && (!r.responsibilityId || ids.has(r.responsibilityId))),
+      notices: this.all<ResponsibilityNotice>('notices').filter(r => !projectId || r.projectId === projectId),
       memory: this.all<ProjectMemory>('memory').filter(r => !projectId || r.projectId === projectId),
-      steps: this.all<ResponsibilityStep>('steps').filter(r => ids.has(r.responsibilityId)),
+      steps: this.all<ResponsibilityStep>('steps').filter(r => ids.has(r.responsibilityId)).map(s => ({ ...s, taskAvailable: taskIds.has(s.taskId) })),
       factories: this.factories.list(projectId), factoryProposals: this.factories.proposals(projectId)
     }
+    this.followups.reconcile(snapshot, projectId)
+    snapshot.followups = Object.fromEntries(snapshot.projects.map(p => [p.id, this.followups.status(p.id)]))
+    return snapshot
   }
 
   proposeFactory(scope: ResponsibilityScope, args: Record<string, unknown>, operation: 'save' | 'delete' = 'save'): unknown {
@@ -382,7 +431,7 @@ export class ResponsibilityManager {
     const id = key ? digest([r.id, kind, key]) : randomUUID()
     const existing = this.get<ResponsibilityNotice>('notices', id)
     if (existing) return existing
-    const notice: ResponsibilityNotice = { id, projectId: r.projectId, responsibilityId: r.id, stepId: step?.id ?? null, kind, title, body, state: 'pending', answer: null, recipient: null, createdAt: now() }
+    const notice: ResponsibilityNotice = { id, projectId: r.projectId, responsibilityId: r.id, stepId: step?.id ?? null, agreementRevision: r.revision, inputRevision: step?.inputRevision ?? 0, kind, title, body, state: 'pending', answer: null, recipient: null, createdAt: now() }
     this.put('notices', notice); this.changed()
     return notice
   }
@@ -540,16 +589,17 @@ export class ResponsibilityManager {
         r.next = null
       } else if (action !== 'resume') r.next = { phase: this.factory(r) && r.agreement.kind !== 'task' ? 'coordinate' : 'work', instruction: `Continue from the current working files and recorded results. Do not repeat completed external actions. ${r.agreement.objective}` }
       for (const n of this.all<ResponsibilityNotice>('notices').filter(n => n.responsibilityId === id && n.kind === 'recovery' && n.state === 'pending')) {
-        n.state = 'answered'; n.answer = `Engineer chose ${action}`; this.put('notices', n)
+        n.answer = `Engineer chose ${action}`; this.closeNotice(n, 'answered', `Engineer chose ${action}`)
       }
     } else throw new Error('Unknown responsibility action.')
     this.save(r); this.wake()
   }
 
   async answer(id: string, answer: string, approved = false): Promise<void> {
+    if (this.reconcileNotices()) this.changed()
     const n = this.get<ResponsibilityNotice>('notices', id)
-    if (!n || n.state !== 'pending') throw new Error('This item has already been handled or expired.')
-    if (n.kind === 'result') { n.state = 'read'; this.put('notices', n); this.changed(); return }
+    if (!n || n.state !== 'pending') throw new Error('This item has already been handled or expired. Refresh to see the current work.')
+    if (n.kind === 'result') { this.closeNotice(n, 'read', 'Marked read'); this.changed(); return }
     const r = this.responsibility(n.responsibilityId!)
     if (n.kind === 'recovery') throw new Error('Use the responsibility recovery action after inspecting its work.')
     const reply = text(answer, 'Answer')
@@ -574,6 +624,8 @@ export class ResponsibilityManager {
       if (this.permissionWaiters.has(id)) this.permissionWaiters.get(id)!(n.kind === 'question' || approved, reply)
       else if (n.recipient) {
         const handled = await this.agents.respondToPermission(n.recipient.sessionId, approved, reply, undefined, n.recipient.responseType, n.recipient.requestId)
+        this.reconcileNotices()
+        if (this.get<ResponsibilityNotice>('notices', id)?.state === 'superseded') throw new Error('The work changed while your answer was being delivered. Review its current state.')
         if (handled === false) { n.state = 'expired'; this.put('notices', n); this.changed(); return }
       }
       else {
@@ -592,15 +644,44 @@ export class ResponsibilityManager {
           r.next = { phase, ...(questionStep?.completeRoutine ? { completeRoutine: true } : {}), instruction: `Engineer answer to "${n.body}": ${reply}\nContinue only inside the existing agreement.` }
           if (r.state === 'blocked') r.state = 'active'
         }
+        this.closeNotice(n, 'answered', 'Answer accepted')
         this.save(r)
       }
-      n.state = 'answered'; this.put('notices', n); this.changed(); this.wake()
-    } catch (error) { n.state = 'expired'; n.deliveryError = (error as Error).message; this.put('notices', n); this.block(r, `Answer delivery failed or is uncertain: ${n.deliveryError}`); throw error }
+      this.reconcileNotices()
+      const current = this.get<ResponsibilityNotice>('notices', id)!
+      if (current.state === 'superseded') throw new Error('The work changed while your answer was being delivered. Review its current state.')
+      this.closeNotice(current, 'answered', 'Answer accepted'); this.changed(); this.wake()
+    } catch (error) {
+      this.reconcileNotices()
+      const current = this.get<ResponsibilityNotice>('notices', id)!
+      if (current.state !== 'superseded') {
+        current.state = 'expired'; current.deliveryError = (error as Error).message; this.put('notices', current)
+        this.block(this.responsibility(r.id), `Answer delivery failed or is uncertain: ${current.deliveryError}`)
+      }
+      this.changed(); throw error
+    }
+  }
+
+  assertNativeAnswerCurrent(sessionId: string, requestId?: string): void {
+    if (!requestId) return
+    if (this.reconcileNotices()) this.changed()
+    const n = this.all<ResponsibilityNotice>('notices').find(n => n.recipient?.sessionId === sessionId && n.recipient.requestId === requestId)
+    if (n && !['pending', 'delivering'].includes(n.state)) throw new Error('This request is no longer current. Review the latest work before answering.')
+  }
+
+  nativeAnswerAccepted(sessionId: string, requestId: string | undefined, responseType: 'question' | 'permission', answer: string): void {
+    if (!requestId) return // Never infer which native request a generic session response handled.
+    this.reconcileNotices()
+    const n = this.all<ResponsibilityNotice>('notices').find(n => n.recipient?.sessionId === sessionId && n.recipient.requestId === requestId && n.recipient.responseType === responseType)
+    if (!n || !['pending', 'delivering'].includes(n.state)) return
+    n.answer = answer; this.closeNotice(n, 'answered', 'Answer accepted in task'); this.changed()
   }
 
   start(): void {
     if (this.enabled) return
     this.enabled = true
+    this.db.onTaskLifecycleChanged = this.taskLifecycleChanged
+    this.reconcileNotices()
     this.followups.start()
     // Missing live sessions after quit/crash are interrupted work, never success.
     for (const step of this.all<ResponsibilityStep>('steps').filter(s => ['reserved', 'running', 'releasing'].includes(s.state))) {
@@ -608,6 +689,7 @@ export class ResponsibilityManager {
       this.block(this.responsibility(step.responsibilityId), '20x closed before this work settled. Inspect its saved output and working files, then recover automation if needed. You can message its task directly.', step)
     }
     for (const n of this.all<ResponsibilityNotice>('notices').filter(n => ((n.kind === 'permission' || n.callback) && n.state === 'pending') || n.state === 'delivering')) {
+      if (n.state === 'delivering') n.deliveryError = '20x closed before answer delivery was confirmed. Inspect the task before trying again.'
       n.state = 'expired'; this.put('notices', n)
     }
     this.timer = setInterval(() => this.wake(), 5000)
@@ -617,6 +699,7 @@ export class ResponsibilityManager {
 
   async stop(): Promise<void> {
     this.enabled = false
+    if (this.db.onTaskLifecycleChanged === this.taskLifecycleChanged) this.db.onTaskLifecycleChanged = undefined
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     for (const controller of this.collectors.values()) controller.abort()
@@ -633,6 +716,7 @@ export class ResponsibilityManager {
 
   /** Reconcile saved work even when recurrence is paused or the drawer is closed. */
   async tick(): Promise<void> {
+    if (this.reconcileNotices()) this.changed()
     for (const step of this.all<ResponsibilityStep>('steps').filter(s => s.state === 'running')) {
       const live = this.agents.findSessionByTaskId(step.taskId)
       if (step.collection && (Date.now() - Date.parse(step.createdAt) > 60000 || Date.parse(this.responsibility(step.responsibilityId).agreement.deadline) <= Date.now())) {
@@ -952,7 +1036,7 @@ export class ResponsibilityManager {
     if (!scope) throw new Error('This responsibility session has expired.')
     if (scope.stepId) {
       const step = this.get<ResponsibilityStep>('steps', scope.stepId)
-      if (!step || !['reserved', 'running'].includes(step.state) || ['taken_over', 'cancelled'].includes(this.responsibility(step.responsibilityId).state)) throw new Error('This assignment no longer owns the work.')
+      if (!step || !this.db.getTask(step.taskId) || (scope.conversationOnly ? !['settled', 'held', 'unknown'].includes(step.state) : !['reserved', 'running'].includes(step.state) || ['taken_over', 'cancelled'].includes(this.responsibility(step.responsibilityId).state))) throw new Error('This assignment no longer owns the work.')
     }
     return { ...scope, followupId: !scope.stepId ? this.followups.reviewFor(scope.taskId)?.id : undefined }
   }
@@ -960,11 +1044,11 @@ export class ResponsibilityManager {
     const project = this.projectForTask(taskId)
     if (!project) return undefined
     const step = this.stepForTask(taskId)
-    if (step && !['reserved', 'running'].includes(step.state)) return undefined
+    if (step && (!this.db.getTask(taskId) || step.state === 'releasing')) return undefined
     const existing = this.taskTokens.get(taskId)
     if (existing) return existing
     const token = randomUUID()
-    this.tokens.set(token, { taskId, projectId: project.id, stepId: step?.id, phase: step?.phase }); this.taskTokens.set(taskId, token)
+    this.tokens.set(token, { taskId, projectId: project.id, stepId: step?.id, phase: step?.phase, ...(step && !['reserved', 'running'].includes(step.state) ? { conversationOnly: true } : {}) }); this.taskTokens.set(taskId, token)
     return token
   }
 
@@ -1010,6 +1094,8 @@ export class ResponsibilityManager {
     if (step && !['reserved', 'running'].includes(step.state)) {
       config.workspaceDir = r!.workspace ?? project.root
       config.systemPrompt = (config.systemPrompt ?? '') + this.taskMessageContext(config.taskId)
+      const token = this.tokenForTask(config.taskId)
+      if (token && port) config.mcpServers = { ...config.mcpServers, responsibilities: { type: 'http', url: `http://127.0.0.1:${port}/mcp?responsibility=${token}` } }
       return
     }
     const token = this.tokenForTask(config.taskId)
@@ -1057,7 +1143,7 @@ export class ResponsibilityManager {
   taskMessageContext(taskId: string): string {
     const step = this.stepForTask(taskId)
     if (!step) return ''
-    if (!['reserved', 'running'].includes(step.state)) return '\n\n[20x task context: this is a follow-up conversation on saved work. Answer the message in this same task; its earlier automation result remains historical and does not authorize restarting a workflow.]'
+    if (!['reserved', 'running'].includes(step.state)) return '\n\n[20x task context: this is a follow-up conversation on saved work. Answer the message in this same task; its earlier automation result remains historical and does not authorize restarting a workflow. Read responsibility_context for pending questions and recorded direct human input. If the latest human message clearly answers one ordinary question from this exact task, use answer_project_question with its noticeId and that humanInputId. This records the answer and continues only within the existing agreement. An unrelated message is not an answer; clarify ambiguous replies. Native permission requests keep their Decisions controls.]'
     return `\n\n[20x task context: respond to the new message before finishing. The current inputRevision is ${step.inputRevision ?? 0}; include that exact inputRevision in report_responsibility. Older reports cannot finish this assignment.]`
   }
 
@@ -1083,8 +1169,9 @@ export class ResponsibilityManager {
   revokeConversation(taskId: string): void { this.revoke(taskId) }
   async answerFromConversation(scope: ResponsibilityScope, noticeId: string, humanInputId: string): Promise<unknown> {
     const input = this.get<HumanInput>('inputs', humanInputId), notice = this.get<ResponsibilityNotice>('notices', noticeId)
-    if (scope.stepId || scope.followupId || !input || input.projectId !== scope.projectId || input.taskId !== scope.taskId || input.id !== this.latestHumanInputId(scope.taskId)) throw new Error('Use the latest direct engineer reply in this project conversation.')
+    if ((scope.stepId && !scope.conversationOnly) || scope.followupId || !input || input.projectId !== scope.projectId || input.taskId !== scope.taskId || input.id !== this.latestHumanInputId(scope.taskId)) throw new Error('Use the latest direct engineer reply in this project conversation.')
     if (!notice || notice.projectId !== scope.projectId || notice.kind !== 'question' || notice.callback || notice.recipient || notice.questions) throw new Error('This question uses its existing Decisions controls; it cannot be answered by a background review or inferred approval.')
+    if (scope.conversationOnly && (notice.stepId !== scope.stepId || input.createdAt < notice.createdAt)) throw new Error('Only a new direct reply to this task’s own question can be accepted here.')
     await this.answer(noticeId, input.text)
     return { answered: true }
   }

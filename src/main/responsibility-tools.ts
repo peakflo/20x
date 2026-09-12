@@ -139,7 +139,7 @@ const workerTools: Tool[] = [
     }
   }
 ]
-export const responsibilityTools = (scope: ResponsibilityScope): Tool[] => scope.followupId ? [contextTool, resultTool, finishFollowup, ...rootTools.filter(t => t.name === 'send_message')] : !scope.stepId ? rootTools : scope.phase === 'setup' ? [...workerTools, ...rootTools.filter(t => ['propose_responsibility', 'discover_source_tools'].includes(t.name))] : workerTools
+export const responsibilityTools = (scope: ResponsibilityScope): Tool[] => scope.conversationOnly ? [contextTool, resultTool, ...rootTools.filter(t => t.name === 'answer_project_question')] : scope.followupId ? [contextTool, resultTool, finishFollowup, ...rootTools.filter(t => t.name === 'send_message')] : !scope.stepId ? rootTools : scope.phase === 'setup' ? [...workerTools, ...rootTools.filter(t => ['propose_responsibility', 'discover_source_tools'].includes(t.name))] : workerTools
 
 export async function callResponsibilityTool(manager: ResponsibilityManager, token: string, name: string, args: Record<string, unknown> = {}) {
   try {

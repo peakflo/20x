@@ -1931,6 +1931,27 @@ describe('AgentManager session ID re-keying redirect', () => {
     expect(dualAdapter.respondToQuestion).not.toHaveBeenCalled()
   })
 
+  it.each(['question', 'permission'] as const)('settles the exact Mastermind %s only after provider acceptance', async responseType => {
+    const { mgr, session } = createManagerWithSession()
+    const send = vi.fn(async () => true)
+    session.adapter = { ...session.adapter, respondToQuestion: send, respondToApproval: send } as any
+    vi.spyOn(mgr as any, 'buildSessionConfig').mockResolvedValue({ workspaceDir: '/tmp/ws' })
+    const service = { assertNativeAnswerCurrent: vi.fn(), nativeAnswerAccepted: vi.fn() }
+    mgr.setResponsibilityManager(service as unknown as Parameters<AgentManager['setResponsibilityManager']>[0])
+    send.mockRejectedValueOnce(new Error('Unconfirmed delivery'))
+    await expect(mgr.respondToPermission('temp-id', true, 'Yes', undefined, responseType, 'exact-request')).rejects.toThrow('Unconfirmed delivery')
+    expect(service.nativeAnswerAccepted).not.toHaveBeenCalled()
+    send.mockResolvedValueOnce(false)
+    await mgr.respondToPermission('temp-id', true, 'Yes', undefined, responseType, 'exact-request')
+    expect(service.nativeAnswerAccepted).not.toHaveBeenCalled()
+    await mgr.respondToPermission('temp-id', true, 'Yes', undefined, responseType, 'exact-request')
+    expect(service.nativeAnswerAccepted).toHaveBeenCalledExactlyOnceWith('temp-id', 'exact-request', responseType, 'Yes')
+    send.mockClear()
+    service.assertNativeAnswerCurrent.mockImplementation(() => { throw new Error('No longer current') })
+    await expect(mgr.respondToPermission('temp-id', true, 'Yes', undefined, responseType, 'exact-request')).rejects.toThrow('No longer current')
+    expect(send).not.toHaveBeenCalled()
+  })
+
   it('closes a stale request-scoped approval without sending a continuation', async () => {
     const { mgr, session } = createManagerWithSession()
     const dualAdapter = {

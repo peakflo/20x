@@ -6,7 +6,7 @@ import { applyUiCommand } from '@/lib/ui-remote-control'
 import { Button } from '@/components/ui/Button'
 import { CollapsibleDescription } from '@/components/ui/CollapsibleDescription'
 import type { ProjectRecord, ResponsibilityRecord, ResponsibilitySnapshot, ResponsibilityNotice, ProjectMemory } from '@shared/responsibilities'
-import { isSourceCollection } from '@shared/responsibilities'
+import { isSourceCollection, isOpenNotice } from '@shared/responsibilities'
 import { FactoryConfirmation, FactoryGuide } from '@/components/factories/FactoriesWorkspace'
 import { useUIStore } from '@/stores/ui-store'
 
@@ -53,17 +53,30 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
 
   const run = async (action: () => Promise<unknown>): Promise<void> => {
     setBusy(true); setError('')
-    try { await action(); await refresh() } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+    try { await action() } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally {
+      try { await refresh() } catch (e) { setError(String(e)) }
+      setBusy(false)
+    }
   }
   if (!api) return null
   const records = snapshot.responsibilities.filter(r => r.projectId === projectId)
   const notices = snapshot.notices.filter(n => n.projectId === projectId)
-  const pending = notices.filter(n => n.state === 'pending' && n.kind !== 'result')
+  const pending = notices.filter(n => isOpenNotice(n) && n.kind !== 'result')
+  const history = notices.filter(n => !isOpenNotice(n)).sort((a, b) => (b.resolvedAt ?? b.createdAt).localeCompare(a.resolvedAt ?? a.createdAt))
   const unread = notices.filter(n => n.state === 'pending' && n.kind === 'result')
   const proposals = records.filter(r => r.state === 'proposed')
   const factoryProposals = (snapshot.factoryProposals ?? []).filter(p => p.definition.projectId === projectId)
   const followup = snapshot.followups?.[projectId]
   const proactiveEnabled = followup?.enabled !== false
+  const renderNotice = (n: ResponsibilityNotice) => {
+    const step = snapshot.steps.find(s => s.id === n.stepId && s.responsibilityId === n.responsibilityId)
+    const prior = snapshot.steps.filter(s => s.taskAvailable !== false && s.responsibilityId === n.responsibilityId && s.createdAt <= (step?.createdAt ?? n.createdAt)).reverse()
+    const target = step?.taskAvailable === false ? undefined : step && step.phase !== 'coordinate' ? step : prior.find(s => s.phase === 'work') ?? step ?? prior[0]
+    return <NoticeCard key={n.id} notice={n} busy={busy}
+      reviewWork={records.some(r => r.id === n.responsibilityId) ? () => { setReviewId(n.responsibilityId); setTab('work') } : undefined}
+      openTask={target ? () => run(async () => { await useTaskStore.getState().fetchTasks(); const result = applyUiCommand({ kind: 'open_task', taskId: target.taskId, where: 'modal' }); if (!result.applied) throw new Error(result.detail) }) : undefined}
+      answer={(answer, approved) => run(() => api.answer(n.id, answer, approved))} />
+  }
   return <section aria-label="Project responsibilities" className="shrink-0 rounded-2xl border border-border bg-card shadow-card">
     <div className="flex items-center gap-2 p-2">
       <button aria-label={expanded ? 'Collapse responsibilities' : 'Show responsibilities'} onClick={() => setExpanded(!expanded)} className="rounded p-1 hover:bg-accent">
@@ -105,22 +118,15 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
           {records.length === 0 && <p className="text-sm text-muted-foreground">Ask for a Task, describe a Goal, or teach a Routine in the conversation below. Mastermind will propose the agreement here.</p>}
           {records.map(r => <div key={r.id} ref={r.id === reviewId ? reviewRef : undefined} tabIndex={r.id === reviewId ? -1 : undefined}><AgreementCard record={r} reviewing={r.id === reviewId} unresolved={snapshot.steps.some(s => s.responsibilityId === r.id && !['held', 'settled'].includes(s.state))} busy={busy} act={action => run(() => api.act(r.id, r.revision, action))} />
             {snapshot.steps.filter(s => s.responsibilityId === r.id).map(s => <div key={s.id} className="ml-2 mt-1 rounded border border-border p-2 text-xs">
-              <button className="font-medium text-primary underline" onClick={() => void run(async () => { await useTaskStore.getState().fetchTasks(); const opened = applyUiCommand({ kind: 'open_task', taskId: s.taskId, where: 'modal' }); if (!opened.applied) throw new Error(opened.detail) })}>Open {s.phase} · {s.state.replace('_', ' ')}</button>
+              {s.taskAvailable === false ? <span className="text-muted-foreground">Task deleted · {s.phase}</span> : <button className="font-medium text-primary underline" onClick={() => void run(async () => { await useTaskStore.getState().fetchTasks(); const opened = applyUiCommand({ kind: 'open_task', taskId: s.taskId, where: 'modal' }); if (!opened.applied) throw new Error(opened.detail) })}>Open {s.phase} · {s.state.replace('_', ' ')}</button>}
               {s.report && <details className="mt-1"><summary className="cursor-pointer">Result and evidence</summary><p className="mt-2 whitespace-pre-wrap">{s.report.summary}</p><p className="mt-1 break-all">{s.report.work.checkout} · {s.report.work.revision}</p><ul className="mt-1 list-inside list-disc">{s.report.evidence.map((e, i) => <li className="break-words" key={i}>{e}</li>)}</ul></details>}
             </div>)}
           </div>)}
         </div>}
         {tab === 'decisions' && <div className="space-y-3">
           {notices.length === 0 && <p className="text-sm text-muted-foreground">Results and questions arrive here, even when the conversation is busy.</p>}
-          {[...notices].sort((a, b) => Number(b.state === 'pending') - Number(a.state === 'pending') || b.createdAt.localeCompare(a.createdAt)).map(n => {
-            const step = snapshot.steps.find(s => s.id === n.stepId && s.responsibilityId === n.responsibilityId)
-            const prior = snapshot.steps.filter(s => s.responsibilityId === n.responsibilityId && s.createdAt <= (step?.createdAt ?? n.createdAt)).reverse()
-            const target = step && step.phase !== 'coordinate' ? step : prior.find(s => s.phase === 'work') ?? step ?? prior[0]
-            return <NoticeCard key={n.id} notice={n} busy={busy}
-              reviewWork={records.some(r => r.id === n.responsibilityId) ? () => { setReviewId(n.responsibilityId); setTab('work') } : undefined}
-              openTask={target ? () => run(async () => { await useTaskStore.getState().fetchTasks(); const result = applyUiCommand({ kind: 'open_task', taskId: target.taskId, where: 'modal' }); if (!result.applied) throw new Error(result.detail) }) : undefined}
-              answer={(answer, approved) => run(() => api.answer(n.id, answer, approved))} />
-          })}
+          {notices.filter(isOpenNotice).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(renderNotice)}
+          {history.length > 0 && <details><summary className="cursor-pointer text-xs text-muted-foreground">History ({history.length})</summary><div className="mt-3 space-y-3">{history.map(renderNotice)}</div></details>}
         </div>}
         {tab === 'memory' && <MemoryEditor key={projectId} memory={snapshot.memory.filter(m => m.projectId === projectId)} busy={busy} save={(kind, value, id) => run(() => api.remember(projectId, kind, value, id))} forget={id => run(() => api.forget(id))} />}
         <p className="mt-3 text-[11px] text-muted-foreground">Fully quitting 20x stops agents and monitoring. Saved work and decisions remain available when you reopen.</p>
@@ -183,7 +189,7 @@ function NoticeCard({ notice: n, busy, answer, openTask, reviewWork }: { notice:
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const question = n.kind === 'question' && !n.questions ? /^Question:\s*([^\n]+)\nWhy:\s*([^\n]+)\nReply:\s*([\s\S]+)$/i.exec(n.body.trim()) : null
   return <article className="rounded-lg border border-border p-3 text-sm">
-    <div className="mb-2 flex justify-between gap-2 text-xs text-muted-foreground"><span>{{ question: 'Decision', permission: 'Permission request', recovery: 'Needs attention', result: 'Update' }[n.kind]}</span><span className="capitalize">{n.state}</span></div>
+    <div className="mb-2 flex justify-between gap-2 text-xs text-muted-foreground"><span>{{ question: 'Decision', permission: 'Permission request', recovery: 'Needs attention', result: 'Update' }[n.kind]}</span><span className="capitalize">{n.state === 'superseded' ? n.resolutionReason?.startsWith('Replaced') ? 'Replaced' : 'No longer needed' : n.state}</span></div>
     <CollapsibleDescription taskId={`notice-title-${n.id}`} description={question?.[1] ?? n.title} collapsedLines={2} className="[&_p]:font-semibold" />
     {question ? <>
       <dl className="mt-2 space-y-2">
@@ -198,6 +204,8 @@ function NoticeCard({ notice: n, busy, answer, openTask, reviewWork }: { notice:
       {openTask && <Button size="sm" variant="outline" disabled={busy} onClick={() => void openTask()}>Open task</Button>}
       {((n.state === 'pending' && n.kind === 'recovery') || n.state === 'expired') && <Button size="sm" disabled={busy} onClick={() => useUIStore.getState().draftInMastermind(n.projectId, `Help me resolve the follow-up "${n.title}". Review the saved progress, explain what needs my decision, and propose any changes for my approval before restarting.\n\nFollow-up: ${n.id}${n.responsibilityId ? `; work: ${n.responsibilityId}` : ''}`)}>Ask Mastermind</Button>}
     </div>
+    {n.resolutionReason && <p className="mt-2 text-xs text-muted-foreground">{n.resolutionReason}</p>}
+    {n.resolvedAt && <time className="mt-1 block text-xs text-muted-foreground" dateTime={n.resolvedAt}>{new Date(n.resolvedAt).toLocaleString()}</time>}
     {n.answer && <p className="mt-2 whitespace-pre-wrap text-muted-foreground">Your answer: {n.answer}</p>}
     {n.deliveryError && <p role="alert" className="mt-2 text-xs text-destructive">Approval delivery failed or is unconfirmed: {n.deliveryError}</p>}
     {n.state === 'expired' && <p className="mt-2 text-xs text-muted-foreground">This request expired. Review the work or ask Mastermind what to do next.</p>}

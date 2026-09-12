@@ -247,3 +247,40 @@ it('shows captured access and verified-stop behavior, and sends permission appro
   expect(screen.getByText(/Full access — read-only work is an instruction/)).toBeInTheDocument()
   expect(screen.getByText(/Stop scheduling once the success evidence/)).toBeInTheDocument()
 })
+
+it('moves obsolete questions to collapsed history, removes broken task links and refreshes on a stale reply error', async () => {
+  snapshot.responsibilities[0].state = 'blocked'
+  snapshot.steps = [{ id: 'step', responsibilityId: 'work', taskId: 'deleted-task', phase: 'work', state: 'settled', taskAvailable: true, createdAt: '2026-01-01' }] as ResponsibilitySnapshot['steps']
+  snapshot.notices = [{ id: 'question', projectId: 'project', responsibilityId: 'work', stepId: 'step', kind: 'question', title: 'Choose the environment', body: 'Staging or production?', state: 'pending', answer: null, recipient: null, createdAt: '2026-01-02' }]
+  vi.mocked(api.answer).mockImplementation(async () => {
+    snapshot.steps[0].taskAvailable = false
+    Object.assign(snapshot.notices[0], { state: 'superseded', resolutionReason: 'No longer needed — task deleted', resolvedAt: '2026-01-03T10:00:00Z' })
+    throw new Error('The work changed. Refresh to see the current work.')
+  })
+  render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+  fireEvent.click(await screen.findByText('1 decision need you'))
+  fireEvent.change(screen.getByRole('textbox', { name: 'Answer Choose the environment' }), { target: { value: 'Staging' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('The work changed')
+  const history = await screen.findByText('History (1)')
+  expect(history.closest('details')).not.toHaveAttribute('open')
+  expect(screen.queryByText('1 decision need you')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Send answer' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Open task' })).not.toBeInTheDocument()
+  fireEvent.click(history)
+  expect(screen.getByText('No longer needed — task deleted')).toBeInTheDocument()
+  expect(history.closest('details')!.querySelector('time')).toHaveAttribute('dateTime', '2026-01-03T10:00:00Z')
+  fireEvent.click(screen.getByRole('tab', { name: 'work' }))
+  expect(screen.getByText('Task deleted · work')).toBeInTheDocument()
+})
+
+it('keeps uncertain delivery visible and actionable above answered history', async () => {
+  const notice = { projectId: 'project', responsibilityId: 'work', stepId: null, kind: 'question' as const, title: 'Choose the environment', body: 'Staging or production?', answer: 'Staging', recipient: null, createdAt: '2026-01-02' }
+  snapshot.notices = [{ ...notice, id: 'uncertain', state: 'expired', deliveryError: 'The recipient did not confirm delivery' }, { ...notice, id: 'answered', state: 'answered', resolvedAt: '2026-01-03', resolutionReason: 'Answer accepted' }]
+  render(<ResponsibilitiesPanel onProjectChange={vi.fn()} />)
+  fireEvent.click(await screen.findByText('1 decision need you'))
+  expect(screen.getByRole('alert')).toHaveTextContent('did not confirm delivery')
+  expect(screen.getByRole('button', { name: 'Ask Mastermind' })).toBeInTheDocument()
+  expect(screen.getByText('History (1)').closest('details')).not.toHaveAttribute('open')
+  expect(api.answer).not.toHaveBeenCalled()
+})

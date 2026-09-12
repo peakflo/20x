@@ -218,3 +218,38 @@ describe('proactive Mastermind follow-up', () => {
   })
 
 })
+
+it('drops a deleted task question during review and never retries the obsolete event', async () => {
+  const step = await task('ask')
+  db.deleteTask(step.taskId)
+  expect(finish('Please choose an environment.')).toEqual({ published: false })
+  expect(runtime.publishMastermindFollowup).not.toHaveBeenCalled()
+  expect(events().every(e => e.state === 'superseded')).toBe(true)
+  live.get(rootId())!.session.status = 'idle'; await flush()
+  await manager.followups.retry(project.id); await flush()
+  expect(runtime.publishMastermindFollowup).not.toHaveBeenCalled()
+  expect(snapshot().followups?.[project.id].pending).toBe(0)
+})
+
+it('keeps a completed result readable but removes a deleted task link before publication', async () => {
+  const step = await task()
+  db.deleteTask(step.taskId)
+  expect(finish()).toEqual({ published: true })
+  const message = db.getTranscriptParts(rootId())[0].content
+  expect(message).toContain('Review its result')
+  expect(message).not.toContain('#20x-task=')
+})
+
+it.each(['quiet', 'deadline'])('rechecks %s observations before nudging or publishing', async kind => {
+  const step = await task('running')
+  if (kind === 'quiet') live.get(step.taskId)!.session.lastActivityAt = Date.now() - 600001
+  else db.db.prepare("UPDATE mastermind_agreements SET data=json_set(data,'$.agreement.deadline','2020-01-01') WHERE id=?").run(step.responsibilityId)
+  await flush()
+  expect(events()[0].kind).toBe(kind)
+  if (kind === 'quiet') {
+    live.get(step.taskId)!.session.lastActivityAt = Date.now()
+    expect(() => manager.followups.claimNudge(root().followupId!, step.taskId)).toThrow('quiet, running task')
+  } else db.db.prepare("UPDATE mastermind_agreements SET data=json_set(data,'$.agreement.deadline','2030-01-01') WHERE id=?").run(step.responsibilityId)
+  expect(finish('This task needs attention.')).toEqual({ published: false })
+  expect(runtime.publishMastermindFollowup).not.toHaveBeenCalled()
+})
