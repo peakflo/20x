@@ -4,6 +4,8 @@ import { ArtifactClipboardMode, ArtifactContentKind, ArtifactType, type Artifact
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS, ArtifactsPanel } from './ArtifactsPanel'
 
+vi.mock('mermaid', () => ({ default: { initialize: vi.fn(), render: vi.fn().mockResolvedValue({ svg: '<svg data-testid="stable-diagram" />' }) } }))
+
 const artifactApi: ArtifactApi = {
   scan: vi.fn().mockResolvedValue([]),
   read: vi.fn().mockResolvedValue(null),
@@ -22,6 +24,27 @@ afterEach(() => {
 })
 
 describe('ArtifactsPanel', () => {
+  it('keeps the document and diagram mounted through resize and background refresh', async () => {
+    let refresh!: () => void
+    vi.spyOn(window, 'setInterval').mockImplementation((callback, timeout) => { if (timeout === 30_000) refresh = callback as () => void; return 1 as unknown as ReturnType<typeof window.setInterval> })
+    vi.spyOn(window, 'clearInterval').mockImplementation(() => {})
+    const read = vi.fn().mockResolvedValue({ kind: ArtifactContentKind.TEXT, content: '```mermaid\ngraph TD\nA --> B\n```\n\nEnd of report' })
+    const artifact: Artifact = { id: 'report', taskId: 'task-1', title: 'Report', type: ArtifactType.MARKDOWN, path: 'report.md', updatedAt: 1, reloadTrigger: 0 }
+    const props = { taskId: 'task-1', artifacts: [artifact], ui: { ...baseUi, activeTabId: 'report' }, artifactApi: { scan: vi.fn(), read }, hasChanges: false, hasOutput: false, onSelectTab: vi.fn(), onCloseTab: vi.fn(), onToggleOpen: vi.fn(), onToggleRail: vi.fn(), details: null, changes: null, output: null }
+    const view = render(<ArtifactsPanel {...props} className="w-96" />)
+    const diagram = await view.findByTestId('stable-diagram')
+    const paragraph = view.getByText('End of report')
+    const scroll = paragraph.closest('.overflow-y-auto')!
+    scroll.scrollTop = 320
+    view.rerender(<ArtifactsPanel {...props} className="w-80" />)
+    expect(view.getByTestId('stable-diagram')).toBe(diagram)
+    await act(async () => refresh())
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(view.getByText('End of report')).toBe(paragraph)
+    expect(view.getByTestId('stable-diagram')).toBe(diagram)
+    expect(scroll.scrollTop).toBe(320)
+  })
+
   it('opens supporting file links, selects files, and copies the selected file', async () => {
     const files = ['artifacts/demo/docs/start.md', 'artifacts/demo/data.csv', 'artifacts/demo/index.html']
     const artifact: Artifact = { id: 'demo', taskId: 'task-1', title: 'Report', type: ArtifactType.MARKDOWN, path: files[0], files, updatedAt: 1, reloadTrigger: 0 }

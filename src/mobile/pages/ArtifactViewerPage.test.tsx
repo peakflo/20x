@@ -5,6 +5,8 @@ import { ArtifactViewerPage } from './ArtifactViewerPage'
 import { api } from '../api/client'
 import { useArtifactStore } from '../stores/artifact-store'
 
+vi.mock('mermaid', () => ({ default: { initialize: vi.fn(), render: vi.fn().mockResolvedValue({ svg: '<svg data-testid="stable-diagram" />' }) } }))
+
 const writeText = vi.fn().mockResolvedValue(undefined)
 
 beforeEach(() => {
@@ -17,9 +19,30 @@ beforeEach(() => {
   })
 })
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('ArtifactViewerPage', () => {
+  it('keeps the diagram and scroll container through parent renders and refresh', async () => {
+    let refresh!: () => void
+    vi.spyOn(window, 'setInterval').mockImplementation((callback, timeout) => { if (timeout === 30_000) refresh = callback as () => void; return 1 as unknown as ReturnType<typeof window.setInterval> })
+    vi.spyOn(window, 'clearInterval').mockImplementation(() => {})
+    useArtifactStore.setState({ artifactsByTask: new Map([['task-1', [{ id: 'report', taskId: 'task-1', title: 'Report', type: ArtifactType.MARKDOWN, path: 'report.md', updatedAt: 1, reloadTrigger: 0 }]]]) })
+    vi.mocked(api.artifacts.content).mockResolvedValue({ kind: ArtifactContentKind.TEXT, content: '```mermaid\ngraph TD\nA --> B\n```\n\nEnd of report' })
+    const view = render(<ArtifactViewerPage taskId="task-1" artifactId="report" onNavigate={vi.fn()} />)
+    const diagram = await view.findByTestId('stable-diagram')
+    const paragraph = view.getByText('End of report')
+    const scroll = paragraph.closest('.overflow-auto')!
+    scroll.scrollTop = 320
+    view.rerender(<ArtifactViewerPage taskId="task-1" artifactId="report" onNavigate={vi.fn()} />)
+    expect(view.getByTestId('stable-diagram')).toBe(diagram)
+    const reads = vi.mocked(api.artifacts.content).mock.calls.length
+    await act(async () => refresh())
+    expect(api.artifacts.content).toHaveBeenCalledTimes(reads + 1)
+    expect(view.getByTestId('stable-diagram')).toBe(diagram)
+    expect(view.getByText('End of report')).toBe(paragraph)
+    expect(scroll.scrollTop).toBe(320)
+  })
+
   it('opens nested file links and copies the selected file content', async () => {
     const files = ['artifacts/demo/docs/start.md', 'artifacts/demo/data.csv', 'artifacts/demo/index.html']
     useArtifactStore.setState({ artifactsByTask: new Map([['task-1', [{ id: 'demo', taskId: 'task-1', title: 'Report', type: ArtifactType.MARKDOWN, path: files[0], files, updatedAt: 1, reloadTrigger: 0 }]]]) })
