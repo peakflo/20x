@@ -2973,7 +2973,9 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
         // Don't show the alarming "incompatible" dialog — just clear the session_id
         // so the UI shows "Start" instead. This commonly happens with subtask sessions.
         const currentTask = this.db.getTask(taskId)
-        if (currentTask && (currentTask.status === TaskStatus.ReadyForReview || currentTask.status === TaskStatus.Completed)) {
+        const pendingFeedback = currentTask?.status === TaskStatus.AgentLearning
+          && this.db.getSetting(`session-feedback-completion:${taskId}`)
+        if (currentTask && (currentTask.status === TaskStatus.ReadyForReview || currentTask.status === TaskStatus.Completed || pendingFeedback)) {
           console.log(`[AgentManager] Session ended normally for ${currentTask.status} task ${taskId} — clearing session_id`)
           this.updateTaskFromLocalAgent(taskId, { session_id: null })
           this.sendToRenderer('task:updated', { taskId, updates: { session_id: null } })
