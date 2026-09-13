@@ -162,6 +162,7 @@ describe('MCP endpoint over HTTP', () => {
     // Scoped-only tools must not appear.
     expect(names).not.toContain('get_parent_task')
     expect(names).not.toContain('get_own_task')
+    expect(names).not.toContain('manage_factory')
 
     await client.close()
   })

@@ -46,6 +46,29 @@ export const taskControlTools: Tool[] = [
   }
 ]
 
+/** Controls available only through a responsibility-scoped Mastermind conversation. */
+export const responsibilityControlTools: Tool[] = [
+  {
+    name: 'manage_responsibility', description: 'Act on an exact current Task, Goal, or Routine agreement after a direct engineer request. Use inspect_responsibilities first. The app shows the full target and asks the engineer to confirm before running a source trial, approving, pausing, resuming, recovering, or cancelling. This never changes the agreement or its authority. Do not use for ordinary tasks or schedules.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: { type: 'string' }, responsibility_id: { type: 'string' }, action: { type: 'string', enum: ['trial', 'approve', 'pause', 'resume', 'recover', 'cancel'] } }, required: ['humanInputId', 'responsibility_id', 'action'] }
+  },
+  {
+    name: 'manage_factory', description: 'Save or discard one exact pending Factory preview after a direct engineer request. Find its ID in responsibility_context, then read the exact preview with read_factory. The app shows the exact diagram and guide and asks the engineer to confirm. Saving a deletion preview removes that Factory; admitted executions retain their snapshot.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: { type: 'string' }, proposal_id: { type: 'string' }, action: { type: 'string', enum: ['save', 'discard'] } }, required: ['humanInputId', 'proposal_id', 'action'] }
+  },
+  {
+    name: 'manage_project_decision', description: 'Answer one exact current native task question or permission request, or mark a result read, after a direct engineer reply. Ordinary automation questions use answer_project_question instead. The app shows the exact request and proposed response for confirmation. For a multi-question request supply answers keyed by its exact question text. Recovery uses manage_responsibility after inspection.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: {
+      humanInputId: { type: 'string' }, notice_id: { type: 'string' }, action: { type: 'string', enum: ['approve', 'reject', 'answer', 'mark_read'] },
+      answer: { type: 'string', maxLength: 12000 }, answers: { type: 'object', additionalProperties: { type: 'string', maxLength: 12000 } }
+    }, required: ['humanInputId', 'notice_id', 'action'] }
+  },
+  {
+    name: 'manage_project_memory', description: 'Correct or forget one exact saved project fact or preference after a direct engineer request. Read responsibility_context first. A correction uses the exact latest engineer message as the replacement; it cannot grant permission. The app shows the old and replacement values for confirmation.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: { type: 'string' }, memory_id: { type: 'string' }, action: { type: 'string', enum: ['replace', 'forget'] } }, required: ['humanInputId', 'memory_id', 'action'] }
+  }
+]
+
 type Confirmation = { title: string; detail: string; confirmLabel: string; signal: AbortSignal }
 type Runtime = Pick<AgentManager, 'withStoppedTasks'>
 const fingerprint = (tasks: TaskRecord[]): string => createHash('sha256').update(JSON.stringify(tasks.map(task => {
@@ -223,6 +246,101 @@ export class TaskControl {
     const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : ''
     return snapshot.responsibilities.filter(r => (!args.responsibility_id || r.id === args.responsibility_id) && (!query || r.agreement.title.toLowerCase().includes(query) || r.id === query))
       .map(r => ({ id: r.id, title: r.agreement.title, kind: r.agreement.kind, state: r.state, revision: r.revision, steps: r.steps, project: snapshot.projects.find(p => p.id === r.projectId)?.name ?? r.projectId }))
+  }
+
+  async manageResponsibility(args: Record<string, unknown>, projectId?: string): Promise<unknown> {
+    return this.runExclusive(async () => {
+      const action = String(args.action)
+      if (!['trial', 'approve', 'pause', 'resume', 'recover', 'cancel'].includes(action)) throw new Error('Choose a valid responsibility action.')
+      const snapshot = this.responsibilities.snapshot(projectId)
+      const record = snapshot.responsibilities.find(r => r.id === args.responsibility_id)
+      if (!record) throw new Error('Responsibility not found in this project. Inspect current responsibilities first.')
+      const valid = action === 'trial' ? record.state === 'proposed' && !!record.agreement.source
+        : action === 'approve' ? record.state === 'proposed'
+        : action === 'pause' ? record.state === 'active'
+        : action === 'resume' ? ['paused', 'taken_over'].includes(record.state)
+        : action === 'recover' ? ['blocked', 'cancelled'].includes(record.state)
+        : !['completed', 'cancelled'].includes(record.state)
+      if (!valid) throw new Error(`This action does not apply while the responsibility is ${record.state.replace('_', ' ')}.`)
+      const label = { trial: 'Run source trial', approve: record.agreement.kind === 'routine' ? 'Approve and activate' : 'Approve and start', pause: 'Pause new work', resume: 'Resume responsibility', recover: 'Recover responsibility', cancel: 'Cancel responsibility' }[action]!
+      const approved = await this.confirm({ title: `${label} for “${record.agreement.title}”?`, confirmLabel: label, signal: this.shutdown.signal,
+        detail: `Project: ${snapshot.projects.find(p => p.id === record.projectId)?.name ?? record.projectId}\nResponsibility: ${record.id}\nRevision: ${record.revision}\nState: ${record.state}\n\nAgreement:\n${JSON.stringify(record.agreement, null, 2)}\n\nThis action does not revise the agreement or expand its authority.` })
+      if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, responsibilityId: record.id, action }
+      const current = this.responsibilities.snapshot(projectId).responsibilities.find(r => r.id === record.id)
+      if (JSON.stringify(current) !== JSON.stringify(record)) throw new Error('The responsibility changed. Inspect it and confirm again.')
+      await this.responsibilities.act(record.id, record.revision, action)
+      const updated = this.responsibilities.snapshot(projectId).responsibilities.find(r => r.id === record.id)
+      return { success: true, responsibilityId: record.id, action, state: updated?.state }
+    })
+  }
+
+  async manageFactory(args: Record<string, unknown>, projectId?: string): Promise<unknown> {
+    return this.runExclusive(async () => {
+      const action = String(args.action)
+      if (!['save', 'discard'].includes(action)) throw new Error('Choose save or discard.')
+      const snapshot = this.responsibilities.snapshot(projectId)
+      const proposal = snapshot.factoryProposals?.find(p => p.id === args.proposal_id)
+      if (!proposal) throw new Error('Factory preview not found in this project. Read the current preview first.')
+      const applying = action === 'save'
+      const label = applying ? proposal.operation === 'delete' ? 'Delete Factory' : 'Save this Factory' : 'Discard preview'
+      const approved = await this.confirm({ title: `${label} “${proposal.definition.name}”?`, confirmLabel: label, signal: this.shutdown.signal,
+        detail: `Project: ${snapshot.projects.find(p => p.id === proposal.definition.projectId)?.name ?? proposal.definition.projectId}\nProposal: ${proposal.id}\nOperation: ${proposal.operation}\n\nDiagram:\n${proposal.definition.diagram}\n\nInstructions:\n${proposal.definition.guide}\n\nFactories guide work but never grant permission or expand an agreement.` })
+      if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, proposalId: proposal.id, action }
+      const current = this.responsibilities.snapshot(projectId).factoryProposals?.find(p => p.id === proposal.id)
+      if (JSON.stringify(current) !== JSON.stringify(proposal)) throw new Error('The Factory preview changed. Read it and confirm again.')
+      this.responsibilities.decideFactory(proposal.id, applying)
+      return { success: true, proposalId: proposal.id, factoryId: proposal.definition.id, action, operation: proposal.operation }
+    })
+  }
+
+  async manageDecision(args: Record<string, unknown>, projectId?: string): Promise<unknown> {
+    return this.runExclusive(async () => {
+      const action = String(args.action)
+      const snapshot = this.responsibilities.snapshot(projectId)
+      const notice = snapshot.notices.find(n => n.id === args.notice_id)
+      if (!notice || notice.state !== 'pending') throw new Error('Decision not found or no longer pending in this conversation.')
+      if (notice.kind === 'recovery') throw new Error('Inspect the saved work, then use manage_responsibility to recover or cancel it.')
+      if (notice.kind === 'question' && !notice.callback && !notice.recipient && !notice.questions) throw new Error('Use answer_project_question for this ordinary automation question.')
+      if (notice.kind === 'result' && action !== 'mark_read') throw new Error('A result can only be marked read.')
+      if (notice.kind !== 'result' && action === 'mark_read') throw new Error('Choose an answer for this decision.')
+      if (notice.kind === 'permission' && !['approve', 'reject'].includes(action)) throw new Error('Approve or reject this permission request.')
+      if (notice.kind === 'question' && action !== 'answer') throw new Error('Answer this question.')
+      let answer = typeof args.answer === 'string' && args.answer.trim() ? args.answer.trim() : action === 'approve' ? 'Approved' : action === 'reject' ? 'Rejected' : action === 'mark_read' ? 'Read' : ''
+      if (notice.questions) {
+        if (!args.answers || typeof args.answers !== 'object' || Array.isArray(args.answers)) throw new Error('Supply answers for every question.')
+        answer = JSON.stringify(args.answers)
+      }
+      if (!answer) throw new Error('An answer is required.')
+      const label = action === 'mark_read' ? 'Mark read' : action === 'approve' ? 'Approve request' : action === 'reject' ? 'Reject request' : 'Send answer'
+      const approved = await this.confirm({ title: `${label} for “${notice.title}”?`, confirmLabel: label, signal: this.shutdown.signal,
+        detail: `Decision: ${notice.id}\nType: ${notice.kind}\n\nRequest:\n${notice.body}\n\nProposed response:\n${notice.questions ? JSON.stringify(args.answers, null, 2) : answer}\n\nThis response applies only to this exact pending request.` })
+      if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, noticeId: notice.id, action }
+      const current = this.responsibilities.snapshot(projectId).notices.find(n => n.id === notice.id)
+      if (JSON.stringify(current) !== JSON.stringify(notice)) throw new Error('The decision changed. Review it and confirm again.')
+      await this.responsibilities.answer(notice.id, answer, action === 'approve')
+      return { success: true, noticeId: notice.id, action }
+    })
+  }
+
+  async manageMemory(args: Record<string, unknown>, projectId?: string): Promise<unknown> {
+    return this.runExclusive(async () => {
+      const action = String(args.action)
+      if (!['replace', 'forget'].includes(action)) throw new Error('Choose replace or forget.')
+      const snapshot = this.responsibilities.snapshot(projectId)
+      const memory = snapshot.memory.find(item => item.id === args.memory_id)
+      if (!memory) throw new Error('Project memory not found. Read current memory first.')
+      const replacement = action === 'replace' ? String(args.value ?? '').trim() : ''
+      if (action === 'replace' && !replacement) throw new Error('A replacement from the latest engineer message is required.')
+      const label = action === 'replace' ? 'Save correction' : 'Forget memory'
+      const approved = await this.confirm({ title: `${label}?`, confirmLabel: label, signal: this.shutdown.signal,
+        detail: `Memory: ${memory.id}\nKind: ${memory.kind}\n\nCurrent value:\n${memory.text}${action === 'replace' ? `\n\nReplacement:\n${replacement}` : ''}\n\nProject memory never grants execution permission.` })
+      if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, memoryId: memory.id, action }
+      const current = this.responsibilities.snapshot(projectId).memory.find(item => item.id === memory.id)
+      if (JSON.stringify(current) !== JSON.stringify(memory)) throw new Error('Project memory changed. Read it and confirm again.')
+      if (action === 'replace') this.responsibilities.remember(memory.projectId, memory.kind, replacement, memory.id)
+      else this.responsibilities.forget(memory.id)
+      return { success: true, memoryId: memory.id, action }
+    })
   }
 
   async deleteProposal(args: Record<string, unknown>, projectId?: string): Promise<unknown> {

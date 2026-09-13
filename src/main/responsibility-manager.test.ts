@@ -155,6 +155,69 @@ describe('Run now responsibilities', () => {
   })
 })
 
+describe('Mastermind follow-up actions', () => {
+  let control: TaskControl
+  let confirm: ReturnType<typeof vi.fn<ConstructorParameters<typeof TaskControl>[4]>>
+  beforeEach(() => {
+    confirm = vi.fn(async () => true)
+    control = new TaskControl(db, { withStoppedTasks: async (_ids, action, beforeStop) => { await beforeStop?.(); return action() } }, { completeTask: vi.fn() }, manager, confirm, vi.fn())
+    manager.setTaskControl(control)
+  })
+  afterEach(async () => { await control.stop() })
+
+  it('confirms and applies an exact responsibility action from the latest engineer follow-up', async () => {
+    const proposal = manager.propose(scope(), agreement, input('Prepare this Goal for review.'))
+    const humanInputId = input('Approve and start that exact Goal.')
+    const result = await callResponsibilityTool(manager, manager.tokenForTask(scope().taskId)!, 'manage_responsibility', {
+      humanInputId, responsibility_id: proposal.id, action: 'approve'
+    })
+    expect(result.isError).not.toBe(true)
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining('Approve and start'), detail: expect.stringContaining(proposal.id) }))
+    expect(snapshot().responsibilities.find(r => r.id === proposal.id)?.state).toBe('active')
+  })
+
+  it('never lets a model flag bypass declined Factory confirmation', async () => {
+    manager.proposeFactory(scope(), { humanInputId: input('Draft a review Factory.'), name: 'Review', diagram: 'review -> done', guide: 'Review and report.' })
+    const preview = snapshot().factoryProposals![0]
+    confirm.mockResolvedValueOnce(false)
+    const result = await callResponsibilityTool(manager, manager.tokenForTask(scope().taskId)!, 'manage_factory', {
+      humanInputId: input('Save that exact preview.'), proposal_id: preview.id, action: 'save', approved: true
+    })
+    expect(JSON.stringify(result)).toContain('cancelled')
+    expect(snapshot().factories).toEqual([])
+    expect(snapshot().factoryProposals).toEqual([preview])
+  })
+
+  it('confirms project memory correction using the exact latest engineer message', async () => {
+    manager.remember(project.id, 'fact', 'The release branch is old.')
+    const memory = snapshot().memory[0]
+    const humanInputId = input('The release branch is main.')
+    const result = await callResponsibilityTool(manager, manager.tokenForTask(scope().taskId)!, 'manage_project_memory', {
+      humanInputId, memory_id: memory.id, action: 'replace'
+    })
+    expect(result.isError).not.toBe(true)
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.stringContaining('Replacement:\nThe release branch is main.') }))
+    expect(snapshot().memory[0]).toMatchObject({ id: memory.id, kind: 'fact', text: 'The release branch is main.' })
+  })
+
+  it('confirms an exact native task decision from Mastermind and rejects stale human input', async () => {
+    await approve()
+    const step = snapshot().steps[0], live = sessions.get(step.taskId)!
+    live.session.status = 'waiting_approval'
+    manager.observe('agent:approval', { taskId: step.taskId, sessionId: live.sessionId, requestId: 'native-command', description: 'Allow the requested command?' })
+    const notice = snapshot().notices.find(n => n.recipient?.requestId === 'native-command')!
+    const token = manager.tokenForTask(scope().taskId)!
+    const stale = input('Explain the permission request.')
+    const current = input('Approve that exact permission request.')
+    expect((await callResponsibilityTool(manager, token, 'manage_project_decision', { humanInputId: stale, notice_id: notice.id, action: 'approve' })).isError).toBe(true)
+    const result = await callResponsibilityTool(manager, token, 'manage_project_decision', { humanInputId: current, notice_id: notice.id, action: 'approve' })
+    expect(result.isError).not.toBe(true)
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.stringContaining('Allow the requested command?') }))
+    expect(runtime.respondToPermission).toHaveBeenCalledWith(live.sessionId, true, 'Approved', undefined, 'permission', 'native-command')
+    expect(snapshot().notices.find(n => n.id === notice.id)?.state).toBe('answered')
+  })
+})
+
 describe('project work-agent default', () => {
   it.each(['delegate_responsibility', 'prepare_routine', 'goal', 'routine'])(
     'persists the default for %s and keeps admitted work pinned when it changes', async kind => {
@@ -986,26 +1049,33 @@ describe('Factories through the existing responsibility lifecycle', () => {
     expect(snapshot().steps).toHaveLength(1)
   })
 
-  it('exposes the Factory proposal and read paths over real scoped HTTP MCP without model approval', async () => {
-    setResponsibilityManager(manager)
+  it('exposes pending Factory previews and saves one through the confirmed Mastermind action', async () => {
+    const confirmation = vi.fn(async () => true)
+    const control = new TaskControl(db, { withStoppedTasks: async (_ids, action) => action() }, { completeTask: vi.fn() }, manager, confirmation, vi.fn())
+    manager.setTaskControl(control); setTaskControl(control); setResponsibilityManager(manager)
     const port = await startTaskApiServer(db)
     const token = manager.tokenForTask(projectConversationId(project.id))!
     const client = new Client({ name: 'factory-transport', version: '1' })
     try {
       await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp?responsibility=${token}`)))
       const names = (await client.listTools()).tools.map(t => t.name)
-      expect(names).toEqual(expect.arrayContaining(['read_factory', 'propose_factory', 'delete_factory']))
-      expect(names).not.toContain('approve_factory')
+      expect(names).toEqual(expect.arrayContaining(['read_factory', 'propose_factory', 'delete_factory', 'manage_factory']))
       const proposed = await client.callTool({ name: 'propose_factory', arguments: { humanInputId: input('Teach a local review guide'), name: 'Transport review', diagram: 'review -> done', guide: 'Read only and report privately.' } })
       expect(proposed.isError).not.toBe(true)
       expect(snapshot().factories).toEqual([])
       const preview = snapshot().factoryProposals![0]
-      manager.decideFactory(preview.id, true)
+      expect(manager.context(scope())).toMatchObject({ factoryProposals: [{ id: preview.id, definition: { name: 'Transport review' } }] })
+      expect(JSON.stringify(manager.context(scope()))).not.toContain('review -> done')
+      const readPreview = await client.callTool({ name: 'read_factory', arguments: { factoryId: preview.id } })
+      expect(JSON.parse((readPreview.content as Array<{ text: string }>)[0].text)).toMatchObject({ id: preview.id, definition: { diagram: 'review -> done', guide: 'Read only and report privately.' } })
+      const saved = await client.callTool({ name: 'manage_factory', arguments: { humanInputId: input('Save that exact Factory preview.'), proposal_id: preview.id, action: 'save' } })
+      expect(saved.isError).not.toBe(true)
+      expect(confirmation).toHaveBeenCalledWith(expect.objectContaining({ title: 'Save this Factory “Transport review”?', detail: expect.stringContaining('Read only and report privately.') }))
       const catalog = await client.callTool({ name: 'read_factory', arguments: {} })
       expect(JSON.parse((catalog.content as Array<{ text: string }>)[0].text)).toEqual([{ id: preview.definition.id, name: 'Transport review' }])
       const invalid = await client.callTool({ name: 'propose_factory', arguments: { humanInputId: 'worker-result', name: 'Unauthorized', diagram: 'x', guide: 'x' } })
       expect(invalid.isError).toBe(true)
-    } finally { await client.close(); stopTaskApiServer(); setResponsibilityManager(undefined) }
+    } finally { await client.close(); stopTaskApiServer(); setTaskControl(undefined); setResponsibilityManager(undefined); await control.stop() }
   })
 
   it('keeps Factory stages together, respects manual moves, and leaves later stages Ungrouped after deleting only the Group', async () => {

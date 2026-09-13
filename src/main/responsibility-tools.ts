@@ -1,6 +1,6 @@
 import type { Tool } from '@modelcontextprotocol/server'
 import type { ResponsibilityManager, ResponsibilityScope } from './responsibility-manager'
-import { taskControlTools } from './task-control'
+import { responsibilityControlTools, taskControlTools } from './task-control'
 import { decisionQuestionGuidance } from '../shared/responsibilities'
 
 const string = { type: 'string' }
@@ -65,7 +65,7 @@ const resultTool: Tool = {
   inputSchema: { type: 'object', properties: { taskId: string }, required: ['taskId'] }
 }
 const factoryTool: Tool = {
-  name: 'read_factory', description: 'Read a bounded Factory catalog or one complete definition. Workers only see their admitted snapshot; source classifiers can select a current project guide. Reading never grants permission.',
+  name: 'read_factory', description: 'Read a bounded saved Factory catalog, one complete definition, or an exact pending preview listed by responsibility_context. Workers only see their admitted snapshot; source classifiers can select a current project guide. Reading never grants permission.',
   inputSchema: { type: 'object', properties: { factoryId: string }, additionalProperties: false }
 }
 const rootTools: Tool[] = [
@@ -86,7 +86,7 @@ const rootTools: Tool[] = [
     name: 'run_automation_now', description: 'Consume the next scheduled cycle of an exact active Routine or schedule now, after an explicit current engineer request. Inspect first. This preserves future cadence, never overlaps active work, and cannot resume, recover, revise or approve anything. Active Goals progress continuously; for a Goal this only reports its queued/running state and never repeats a settled step.',
     inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: string, targetType: { type: 'string', enum: ['responsibility', 'schedule'] }, targetId: string }, required: ['humanInputId', 'targetType', 'targetId'] }
   },
-  ...taskControlTools,
+  ...taskControlTools, ...responsibilityControlTools,
   {
     name: 'send_message', description: 'Send a follow-up to an existing task in this project, using its same conversation. Works while the agent is running or after it stopped; no takeover or duplicate task is needed. This is a message, not approval for expanded scope or restarting a completed workflow.',
     inputSchema: { type: 'object', additionalProperties: false, properties: { task_id: string, text: string }, required: ['task_id', 'text'] }
@@ -127,7 +127,7 @@ const finishFollowup: Tool = {
     silentEventIds: { type: 'array', items: string, maxItems: 8 }
   }, required: ['updates', 'silentEventIds'] }
 }
-rootTools.push({ name: 'answer_project_question', description: 'Route the latest direct human clarification to one exact pending ordinary question. Use the recorded humanInputId; never synthesize an answer or approval. If the intended question is ambiguous, ask. Native questions and permissions retain their desktop controls.', inputSchema: { type: 'object', additionalProperties: false, properties: { noticeId: string, humanInputId: string }, required: ['noticeId', 'humanInputId'] } })
+rootTools.push({ name: 'answer_project_question', description: 'Route the latest direct human clarification to one exact pending ordinary question. Use the recorded humanInputId; never synthesize an answer or approval. If the intended question is ambiguous, ask. Use manage_project_decision for an exact native question or permission request.', inputSchema: { type: 'object', additionalProperties: false, properties: { noticeId: string, humanInputId: string }, required: ['noticeId', 'humanInputId'] } })
 const workerTools: Tool[] = [
   contextTool, resultTool, factoryTool,
   {
@@ -170,6 +170,10 @@ export async function callResponsibilityTool(manager: ResponsibilityManager, tok
       case 'run_automation_now': result = await manager.runAutomationNowFromMastermind(scope, args); break
       case 'inspect_responsibilities': result = await manager.controlTasks(scope, args, true, 'proposal'); break
       case 'delete_responsibility_proposal': result = await manager.controlTasks(scope, args, false, 'proposal'); break
+      case 'manage_responsibility': result = await manager.controlTasks(scope, args, false, 'responsibility'); break
+      case 'manage_factory': result = await manager.controlTasks(scope, args, false, 'factory'); break
+      case 'manage_project_decision': result = await manager.controlTasks(scope, args, false, 'decision'); break
+      case 'manage_project_memory': result = await manager.controlTasks(scope, args, false, 'memory'); break
       case 'discover_source_tools': result = await manager.sourceTools(scope, args.serverId as string | undefined, args.agentId as string | undefined); break
       case 'read_responsibility_result': result = manager.readResult(scope, args.taskId as string); break
       case 'delegate_responsibility': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, args.factoryId as string | undefined, false, args.summary as string | undefined, args.agentId as string | undefined, args.groupId as string | null | undefined); break
