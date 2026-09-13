@@ -9,6 +9,7 @@ import { isMastermindTask } from '../shared/responsibilities'
 import type { RecurrenceScheduler } from './recurrence-scheduler'
 import { isWorkfloLinkedTask } from './workflo-task-sync'
 import type { TaskGroup, TaskGroupAction, TaskGroupResult } from '../shared/task-groups'
+import type { AutomationRunNowResult, AutomationRunNowTarget } from '../shared/automation-run-now'
 
 export const taskControlTools: Tool[] = [
   {
@@ -65,7 +66,7 @@ export class TaskControl {
     private readonly responsibilities: ResponsibilityManager,
     private readonly confirm: (request: Confirmation) => Promise<boolean>,
     private readonly notify: (channel: string, data: unknown) => void,
-    private readonly recurrence?: Pick<RecurrenceScheduler, 'setPaused' | 'setMode' | 'history' | 'recover' | 'releaseForControl'>
+    private readonly recurrence?: Pick<RecurrenceScheduler, 'setPaused' | 'setMode' | 'history' | 'recover' | 'releaseForControl' | 'runNow'>
   ) {
     db.groups.onChanged = () => notify('task-groups:changed', {})
   }
@@ -142,6 +143,45 @@ export class TaskControl {
     return JSON.stringify({ group: this.db.groups.get(id), tasks: Object.entries(snapshot.membership).filter(([, group]) => group === id), executions: Object.entries(snapshot.executions).filter(([, group]) => group === id) })
   }
 
+  private taskProjectId(taskId: string): string | undefined {
+    const owned = this.responsibilities.projectForTask(taskId)?.id
+    if (owned) return owned
+    const snapshot = this.db.groups.snapshot()
+    const groupId = snapshot.membership[taskId]
+    return groupId ? snapshot.groups.find(group => group.id === groupId)?.projectId ?? undefined : undefined
+  }
+
+  async runAutomationNow(target: AutomationRunNowTarget, projectId?: string, requestId?: string): Promise<AutomationRunNowResult> {
+    if (!target || !['responsibility', 'schedule'].includes(target.type) || typeof target.id !== 'string' || !target.id) throw new Error('Choose an exact Goal, Routine, or schedule.')
+    let task: TaskRecord | undefined
+    if (target.type === 'schedule') {
+      if (!this.recurrence) throw new Error('Schedule controls are unavailable.')
+      task = this.task(target.id)
+      if (projectId && this.taskProjectId(task.id) !== projectId) throw new Error('This schedule does not belong to the current workspace.')
+    }
+    const receiptKey = requestId ? `automation-run-now:${createHash('sha256').update(JSON.stringify([projectId, requestId, target])).digest('hex')}` : undefined
+    if (receiptKey) {
+      const saved = this.db.getSetting(receiptKey)
+      if (saved) {
+        const receipt = JSON.parse(saved) as { result?: AutomationRunNowResult; error?: string }
+        if (receipt.result) return receipt.result
+        return { status: 'not_runnable', message: receipt.error ?? 'This Run now request was already accepted; inspect current automation state before trying again.', target }
+      }
+      this.db.setSetting(receiptKey, JSON.stringify({ acceptedAt: new Date().toISOString() }))
+    }
+    try {
+      const result = target.type === 'responsibility'
+        ? this.responsibilities.runResponsibilityNow(target.id, projectId)
+        : await this.recurrence!.runNow(task!.id)
+      if (target.type === 'schedule') this.notify('tasks:refresh', {})
+      if (receiptKey) this.db.setSetting(receiptKey, JSON.stringify({ result }))
+      return result
+    } catch (error) {
+      if (receiptKey) this.db.setSetting(receiptKey, JSON.stringify({ error: (error as Error).message }))
+      throw error
+    }
+  }
+
   private task(id: unknown, projectId?: string): TaskRecord {
     if (typeof id !== 'string' || !id || isMastermindTask(id)) throw new Error('Choose an existing task, not a Mastermind conversation.')
     const task = this.db.getTask(id)
@@ -160,11 +200,11 @@ export class TaskControl {
     const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : ''
     const tasks = args.task_id ? [this.task(args.task_id, projectId)] : this.db.getTasks()
     return tasks.filter(t => {
-      const owner = this.responsibilities.projectForTask(t.id)
-      return !isMastermindTask(t.id) && (!projectId || !owner || owner.id === projectId) && (!query || t.title.toLowerCase().includes(query) || t.id === query)
+      const owner = this.taskProjectId(t.id)
+      return !isMastermindTask(t.id) && (!projectId || owner === projectId) && (!query || t.title.toLowerCase().includes(query) || t.id === query)
     }).slice(0, 100).map(t => ({ id: t.id, title: t.title, status: t.status, parentTaskId: t.parent_task_id,
       source: t.source_id ? this.db.getTaskSource(t.source_id)?.name ?? t.source : 'Local task',
-      project: this.responsibilities.projectForTask(t.id)?.name ?? null, groupId: membership[t.id] ?? null, updatedAt: t.updated_at,
+      project: this.taskProjectId(t.id) ? this.responsibilities.snapshot().projects.find(project => project.id === this.taskProjectId(t.id))?.name ?? null : null, groupId: membership[t.id] ?? null, updatedAt: t.updated_at,
       recurrenceParentId: t.recurrence_parent_id,
       schedule: t.is_recurring && !t.recurrence_parent_id ? { pattern: t.recurrence_pattern, mode: t.recurrence_mode || 'separate', paused: !!t.recurrence_paused, nextAt: t.next_occurrence_at } : null }))
   }

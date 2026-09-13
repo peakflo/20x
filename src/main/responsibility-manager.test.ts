@@ -122,6 +122,38 @@ describe('external Mastermind requests', () => {
   })
 })
 
+describe('Run now responsibilities', () => {
+  it('consumes a Routine cycle early, preserves cadence, and never repeats a Goal step', async () => {
+    const routine = await approve({ ...agreement, kind: 'routine', title: 'Scheduled reminder', schedule: '*/10 * * * *', stopOnSuccess: undefined })
+    const scheduledAt = manager.snapshot(project.id).responsibilities.find(record => record.id === routine.id)!.nextAt!
+    expect(manager.runResponsibilityNow(routine.id, project.id)).toMatchObject({ status: 'queued' })
+    await manager.reconcile()
+    const updated = manager.snapshot(project.id).responsibilities.find(record => record.id === routine.id)!
+    expect(Date.parse(updated.nextAt!)).toBeGreaterThan(Date.parse(scheduledAt))
+    expect(updated.runNow).toBeUndefined()
+
+    const goal = manager.propose(scope(), { ...agreement, title: 'Continuous goal' }, input('Start this Goal.'))
+    await manager.act(goal.id, goal.revision, 'approve'); await manager.reconcile()
+    expect(manager.runResponsibilityNow(goal.id, project.id)).toMatchObject({ status: 'already_running' })
+    expect(snapshot().steps.filter(step => step.responsibilityId === goal.id)).toHaveLength(1)
+  })
+
+  it('lets only the root Mastermind route an explicit current request through the shared command', async () => {
+    const runAutomationNow = vi.fn(async () => ({ status: 'queued', message: 'Queued', target: { type: 'responsibility' as const, id: 'routine' } }))
+    manager.setTaskControl({ runAutomationNow } as unknown as TaskControl)
+    const humanInputId = input('Run the exact Routine now.')
+    const result = await callResponsibilityTool(manager, manager.tokenForTask(scope().taskId)!, 'run_automation_now', { humanInputId, targetType: 'responsibility', targetId: 'routine' })
+    expect(result.isError).not.toBe(true)
+    expect(runAutomationNow).toHaveBeenCalledWith({ type: 'responsibility', id: 'routine' }, project.id, humanInputId)
+  })
+
+  it('does not bypass paused Routine state', async () => {
+    const routine = await approve({ ...agreement, kind: 'routine', schedule: '*/10 * * * *', stopOnSuccess: undefined })
+    await manager.act(routine.id, routine.revision, 'pause')
+    expect(manager.runResponsibilityNow(routine.id, project.id)).toMatchObject({ status: 'not_runnable', message: expect.stringContaining('paused') })
+  })
+})
+
 describe('project work-agent default', () => {
   it.each(['delegate_responsibility', 'prepare_routine', 'goal', 'routine'])(
     'persists the default for %s and keeps admitted work pinned when it changes', async kind => {

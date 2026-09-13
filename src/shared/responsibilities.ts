@@ -126,6 +126,8 @@ export interface ResponsibilityRecord {
   workspace: string | null
   trial: { output: string; at: string; revision: number; evidence?: string } | null
   lastCollectedAt?: string
+  /** Durable receipt for one early Routine occurrence. */
+  runNow?: { requestedAt: string; scheduledAt: string }
   /** Factory selected for the current Routine event only. */
   eventFactory?: FactoryDefinition
   factoryStartStep?: number

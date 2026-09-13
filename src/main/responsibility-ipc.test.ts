@@ -20,19 +20,24 @@ it('opens a directory picker only for the desktop and returns no path on cancell
   vi.mocked(ipcMain.handle).mockClear()
 })
 
-it('accepts agreement approvals and human provenance only from the main desktop frame', () => {
-  const service = { act: vi.fn(), ownsTask: () => true, recordHumanInput: vi.fn() } as unknown as ResponsibilityManager
+it('accepts agreement approvals, Run now, and human provenance only from the main desktop frame', () => {
+  const service = { act: vi.fn(), runAutomationNowFromDesktop: vi.fn(), ownsTask: () => true, recordHumanInput: vi.fn() } as unknown as ResponsibilityManager
   const main = { mainFrame: {} } as WebContents
   registerResponsibilityIpc(service, () => main)
   const handle = vi.mocked(ipcMain.handle).mock.calls.find(([name]) => name === 'responsibilities:act')![1]
+  const runNow = vi.mocked(ipcMain.handle).mock.calls.find(([name]) => name === 'automation:runNow')![1]
   const desktop = { sender: main, senderFrame: main.mainFrame } as IpcMainInvokeEvent
   const embedded = { sender: main, senderFrame: {} } as IpcMainInvokeEvent
   expect(() => handle(embedded, 'goal', 1, 'approve')).toThrow('main 20x window')
   expect(() => recordResponsibilityHumanInput('project', 'May deploy', embedded)).toThrow('main 20x window')
+  expect(() => runNow(embedded, { type: 'schedule', id: 'schedule' })).toThrow('main 20x window')
   expect(service.act).not.toHaveBeenCalled()
+  expect(service.runAutomationNowFromDesktop).not.toHaveBeenCalled()
   handle(desktop, 'goal', 1, 'approve')
+  runNow(desktop, { type: 'schedule', id: 'schedule' })
   recordResponsibilityHumanInput('project', 'My actual request', desktop)
   expect(service.act).toHaveBeenCalledWith('goal', 1, 'approve')
+  expect(service.runAutomationNowFromDesktop).toHaveBeenCalledWith({ type: 'schedule', id: 'schedule' })
   expect(service.recordHumanInput).toHaveBeenCalledWith('project', 'My actual request')
 })
 

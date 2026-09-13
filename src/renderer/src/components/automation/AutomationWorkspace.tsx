@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { CalendarClock } from 'lucide-react'
+import { CalendarClock, Loader2, Play } from 'lucide-react'
 import { useTaskStore } from '@/stores/task-store'
 import { useTaskGroupStore } from '@/stores/task-group-store'
 import { useUIStore } from '@/stores/ui-store'
 import { taskWorkspaceId, WorkspaceBadge } from '@/components/ui/WorkspaceBadge'
 import { TaskStatus } from '@/types'
 import type { ResponsibilitySnapshot, ResponsibilityState } from '@shared/responsibilities'
+import type { AutomationRunNowTarget } from '@shared/automation-run-now'
+import { Button } from '@/components/ui/Button'
 
 const stateLabels: Record<ResponsibilityState, string> = {
   proposed: 'Awaiting approval', active: 'Active', paused: 'Paused', blocked: 'Blocked',
@@ -29,6 +31,8 @@ export function AutomationWorkspace() {
   const membership = useTaskGroupStore(s => s.membership)
   const [snapshot, setSnapshot] = useState<ResponsibilitySnapshot | null>(null)
   const [error, setError] = useState('')
+  const [running, setRunning] = useState<string>()
+  const [runStatus, setRunStatus] = useState('')
 
   useEffect(() => {
     const api = window.electronAPI?.responsibilities
@@ -49,6 +53,18 @@ export function AutomationWorkspace() {
     return () => { live = false; off() }
   }, [syncMastermindSnapshot])
 
+  const runNow = async (target: AutomationRunNowTarget) => {
+    setRunning(target.id); setRunStatus('')
+    try {
+      const result = await window.electronAPI.automation.runNow(target)
+      setRunStatus(result.message)
+      await useTaskStore.getState().fetchTasks()
+      const next = await window.electronAPI.responsibilities.snapshot()
+      setSnapshot(next); syncMastermindSnapshot(next)
+    } catch (e) { setRunStatus(e instanceof Error ? e.message : String(e)) }
+    finally { setRunning(undefined) }
+  }
+
   const workspaceForTask = (taskId: string) => taskWorkspaceId(taskId, taskProjects, groups, membership)
   const schedules = tasks.filter(t => t.is_recurring && !t.recurrence_parent_id && (!projectId || workspaceForTask(t.id) === projectId))
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
@@ -60,6 +76,7 @@ export function AutomationWorkspace() {
       <h1 className="flex items-center gap-2 text-xl font-semibold"><CalendarClock size={22} />Automation</h1>
       <p className="mt-2 text-sm text-muted-foreground">Schedules, goals, and recurring workflows for {projectId ? snapshot?.projects.find(project => project.id === projectId)?.name ?? 'the selected workspace' : 'all workspaces'}. This list updates automatically; manage them through Mastermind.</p>
     </header>
+    {runStatus && <p role="status" className="mb-4 text-sm text-muted-foreground">{runStatus}</p>}
 
     <section aria-labelledby="automation-schedules" className="mb-8">
       <h2 id="automation-schedules" className="mb-3 font-semibold">Scheduled tasks <span className="text-muted-foreground">({schedules.length})</span></h2>
@@ -69,7 +86,7 @@ export function AutomationWorkspace() {
       {schedules.length > 0 && <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-left text-sm">
           <caption className="sr-only">Scheduled tasks for the selected workspace filter</caption>
-          <thead className="bg-muted/40 text-xs text-muted-foreground"><tr><th scope="col" className="p-3">Schedule</th><th scope="col" className="p-3">Status</th><th scope="col" className="p-3">Timing</th></tr></thead>
+          <thead className="bg-muted/40 text-xs text-muted-foreground"><tr><th scope="col" className="p-3">Schedule</th><th scope="col" className="p-3">Status</th><th scope="col" className="p-3">Timing</th><th scope="col" className="p-3">Actions</th></tr></thead>
           <tbody>{schedules.map(task => {
             const completed = task.recurrence_mode === 'reuse' && task.status === TaskStatus.Completed
             const stopped = task.recurrence_paused || completed
@@ -83,6 +100,11 @@ export function AutomationWorkspace() {
               <td className="p-3 text-xs text-muted-foreground">
                 <p>Next scheduled: {task.server_managed || stopped ? '—' : dateLabel(task.next_occurrence_at)}</p>
                 <p className="mt-1">Last triggered: {dateLabel(task.last_occurrence_at)}</p>
+              </td>
+              <td className="p-3">
+                <Button size="sm" variant="outline" title="Consume the next scheduled occurrence now" disabled={!!running || task.server_managed || stopped || !task.next_occurrence_at} onClick={() => void runNow({ type: 'schedule', id: task.id })}>
+                  {running === task.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Run now
+                </Button>
               </td>
             </tr>
           })}</tbody>
@@ -98,8 +120,10 @@ export function AutomationWorkspace() {
       {work.length > 0 && <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-left text-sm">
           <caption className="sr-only">Mastermind project goals and routines</caption>
-          <thead className="bg-muted/40 text-xs text-muted-foreground"><tr><th scope="col" className="p-3">Goal or routine</th><th scope="col" className="p-3">Status</th><th scope="col" className="p-3">Progress and next step</th></tr></thead>
-          <tbody>{work.map(record => <tr key={record.id} className="border-t border-border align-top">
+          <thead className="bg-muted/40 text-xs text-muted-foreground"><tr><th scope="col" className="p-3">Goal or routine</th><th scope="col" className="p-3">Status</th><th scope="col" className="p-3">Progress and next step</th><th scope="col" className="p-3">Actions</th></tr></thead>
+          <tbody>{work.map(record => {
+            const unresolved = snapshot?.steps.some(step => step.responsibilityId === record.id && !['held', 'settled'].includes(step.state))
+            return <tr key={record.id} className="border-t border-border align-top">
             <th scope="row" className="p-3 font-normal">
               <div className="flex flex-wrap items-center gap-2"><p className="break-words font-medium">{record.agreement.title}</p><WorkspaceBadge projectId={record.projectId} /></div>
               <p className="mt-1 text-xs text-muted-foreground">{record.agreement.kind === 'goal' ? 'Goal' : 'Recurring workflow'}</p>
@@ -114,7 +138,15 @@ export function AutomationWorkspace() {
               </>}
               {record.next && !['completed', 'cancelled'].includes(record.state) && <p className="mt-1 whitespace-pre-wrap break-words">Saved next step: {record.next.instruction}</p>}
             </td>
-          </tr>)}</tbody>
+            <td className="p-3 text-xs text-muted-foreground">
+              {record.agreement.kind === 'goal'
+                ? record.state === 'active' ? unresolved ? 'Step in progress' : record.next ? 'Next step queued' : 'Running continuously' : '—'
+                : record.state === 'active' && unresolved ? 'Cycle in progress'
+                : record.state === 'active' && record.next ? 'Cycle queued'
+                : record.state === 'active' && record.nextAt ? <Button size="sm" variant="outline" title="Run the next scheduled Routine cycle now" disabled={!!running} onClick={() => void runNow({ type: 'responsibility', id: record.id })}>{running === record.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} Run now</Button>
+                : '—'}
+            </td>
+          </tr>})}</tbody>
         </table>
       </div>}
     </section>

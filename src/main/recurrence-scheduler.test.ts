@@ -223,6 +223,33 @@ describe('RecurrenceScheduler — handing new instances to auto-start', () => {
     return template.id
   }
 
+  it('consumes one future occurrence early without changing cadence or future auto-start settings', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2030-01-02T08:30:00Z'))
+    const { db } = createTestDb()
+    const template = db.createTask(makeTask({ title: 'Daily report', is_recurring: true, recurrence_pattern: '0 9 * * *', auto_start_agent: false }))!
+    db.updateTask(template.id, { next_occurrence_at: '2030-01-02T09:00:00.000Z' })
+    const scheduler = new RecurrenceScheduler(db, 'UTC')
+    const onInstancesCreated = vi.fn(); scheduler.setOnInstancesCreated(onInstancesCreated)
+    try {
+      expect(await scheduler.runNow(template.id)).toMatchObject({ status: 'queued', nextAt: '2030-01-03T09:00:00.000Z' })
+      const instance = db.getTasks().find(task => task.recurrence_parent_id === template.id)!
+      expect(instance).toMatchObject({ created_at: '2030-01-02T09:00:00.000Z', auto_start_agent: true })
+      expect(db.getTask(template.id)).toMatchObject({ auto_start_agent: false, last_occurrence_at: '2030-01-02T09:00:00.000Z', next_occurrence_at: '2030-01-03T09:00:00.000Z' })
+      expect(onInstancesCreated).toHaveBeenCalledOnce()
+      expect(await scheduler.runNow(template.id)).toMatchObject({ status: 'already_queued' })
+    } finally { vi.useRealTimers(); db.db.close() }
+  })
+
+  it('rejects paused schedules without consuming their next occurrence', async () => {
+    const { db } = createTestDb()
+    const id = dueTemplate(db)
+    const scheduler = new RecurrenceScheduler(db, 'UTC')
+    scheduler.setPaused(id, true)
+    expect(await scheduler.runNow(id)).toMatchObject({ status: 'not_runnable', nextAt: null })
+    expect(db.getTasks().filter(task => task.recurrence_parent_id === id)).toHaveLength(0)
+    db.db.close()
+  })
+
   it('fires the callback once after a tick that created instances', async () => {
     const { db } = createTestDb()
     dueTemplate(db)

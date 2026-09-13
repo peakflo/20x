@@ -29,6 +29,21 @@ beforeEach(() => {
 })
 afterEach(async () => { await control.stop(); db.db.close() })
 
+describe('Run now command', () => {
+  it('records a Mastermind request before consuming a schedule and returns the same result on retry', async () => {
+    const schedule = db.createTask({ title: 'Scheduled check', is_recurring: true, recurrence_pattern: '*/5 * * * *' })!
+    db.updateTask(schedule.id, { next_occurrence_at: new Date(Date.now() + 300000).toISOString() })
+    const result = { status: 'queued' as const, message: 'Queued', target: { type: 'schedule' as const, id: schedule.id }, nextAt: schedule.next_occurrence_at }
+    const runNow = vi.fn(async () => result)
+    const responsibilities = { projectForTask: () => undefined, stepForTask: () => undefined, snapshot: () => ({ responsibilities: [] }) } as unknown as ResponsibilityManager
+    control = new TaskControl(db, { withStoppedTasks: async (_ids, action) => action() }, { completeTask: complete }, responsibilities, confirm, notify, { runNow } as never)
+
+    expect(await control.runAutomationNow(result.target, undefined, 'human-input')).toEqual(result)
+    expect(await control.runAutomationNow(result.target, undefined, 'human-input')).toEqual(result)
+    expect(runNow).toHaveBeenCalledOnce()
+  })
+})
+
 describe('Mastermind task administration', () => {
   it.each(['none', 'reuse', 'separate'] as const)('stops local work with local-only resources and waits for Workflo completion (schedule: %s)', async schedule => {
     db.db.exec('ALTER TABLE tasks ADD COLUMN heartbeat_enabled INTEGER NOT NULL DEFAULT 0')

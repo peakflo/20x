@@ -82,6 +82,10 @@ const rootTools: Tool[] = [
     name: 'delete_factory', description: 'Propose deletion of an exact project Factory from direct engineer input. Requires desktop confirmation; admitted work retains its guide and history.',
     inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: string, factoryId: string }, required: ['humanInputId', 'factoryId'] }
   },
+  {
+    name: 'run_automation_now', description: 'Consume the next scheduled cycle of an exact active Routine or schedule now, after an explicit current engineer request. Inspect first. This preserves future cadence, never overlaps active work, and cannot resume, recover, revise or approve anything. Active Goals progress continuously; for a Goal this only reports its queued/running state and never repeats a settled step.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { humanInputId: string, targetType: { type: 'string', enum: ['responsibility', 'schedule'] }, targetId: string }, required: ['humanInputId', 'targetType', 'targetId'] }
+  },
   ...taskControlTools,
   {
     name: 'send_message', description: 'Send a follow-up to an existing task in this project, using its same conversation. Works while the agent is running or after it stopped; no takeover or duplicate task is needed. This is a message, not approval for expanded scope or restarting a completed workflow.',
@@ -163,6 +167,7 @@ export async function callResponsibilityTool(manager: ResponsibilityManager, tok
       case 'manage_group': result = await manager.controlTasks(scope, args, false, 'group'); break
       case 'inspect_tasks': result = await manager.controlTasks(scope, args, true); break
       case 'manage_task': result = await manager.controlTasks(scope, args); break
+      case 'run_automation_now': result = await manager.runAutomationNowFromMastermind(scope, args); break
       case 'inspect_responsibilities': result = await manager.controlTasks(scope, args, true, 'proposal'); break
       case 'delete_responsibility_proposal': result = await manager.controlTasks(scope, args, false, 'proposal'); break
       case 'discover_source_tools': result = await manager.sourceTools(scope, args.serverId as string | undefined, args.agentId as string | undefined); break

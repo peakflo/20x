@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { AutomationWorkspace } from './AutomationWorkspace'
 import { useTaskStore } from '@/stores/task-store'
@@ -46,9 +46,11 @@ beforeEach(() => {
     pickProjectFolder: vi.fn(), createProject: vi.fn(), act: vi.fn(), answer: vi.fn(), remember: vi.fn(), decideFactory: vi.fn(), forget: vi.fn()
   }
   window.electronAPI.responsibilities = api
+  window.electronAPI.automation = { runNow: vi.fn(async target => ({ status: 'queued' as const, message: 'Queued now', target })) }
+  window.electronAPI.db.getTasks = vi.fn(async () => useTaskStore.getState().tasks)
 })
 
-it('lists all schedules and project goals/routines without task filters, duplicate runs, or mutation controls', async () => {
+it('lists all schedules and project goals/routines without task filters or duplicate runs', async () => {
   useTaskStore.setState({ tasks: [
     task('Recurring check'), task('Old schedule', { recurrence_mode: 'separate', recurrence_paused: true }),
     task('Completed schedule', { status: TaskStatus.Completed }),
@@ -72,13 +74,35 @@ it('lists all schedules and project goals/routines without task filters, duplica
   expect(screen.getAllByText('Goal')).toHaveLength(2)
   expect(screen.getAllByText('Example project')).toHaveLength(3)
   expect(within(screen.getByText('Finished goal').closest('tr')!).queryByText(/Saved next step/)).not.toBeInTheDocument()
-  expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  const scheduleButtons = screen.getAllByRole('button', { name: /Run now/ })
+  expect(scheduleButtons).toHaveLength(4)
+  expect(within(screen.getByText('Recurring check').closest('tr')!).getByRole('button', { name: /Run now/ })).toBeEnabled()
+  for (const title of ['Old schedule', 'Completed schedule', 'Source schedule']) expect(within(screen.getByText(title).closest('tr')!).getByRole('button', { name: /Run now/ })).toBeDisabled()
+  expect(within(screen.getByText('Ship feature').closest('tr')!).getByText('Next step queued')).toBeInTheDocument()
   expect(screen.queryByRole('link')).not.toBeInTheDocument()
   expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
   expect(api.act).not.toHaveBeenCalled()
+  expect(window.electronAPI.automation.runNow).not.toHaveBeenCalled()
   expect(window.electronAPI.db.manageScheduleTask).not.toHaveBeenCalled()
   unmount()
   expect(unsubscribe).toHaveBeenCalledOnce()
+})
+
+it('runs the next Routine cycle through the shared automation command and never offers to rerun a Goal step', async () => {
+  snapshot.responsibilities = [{ ...responsibility('Release monitor', 'routine'), next: null }, responsibility('Ship feature', 'goal')]
+  render(<AutomationWorkspace />)
+  const routine = within((await screen.findByText('Release monitor')).closest('tr')!)
+  fireEvent.click(routine.getByRole('button', { name: /Run now/ }))
+  await waitFor(() => expect(window.electronAPI.automation.runNow).toHaveBeenCalledWith({ type: 'responsibility', id: 'Release monitor' }))
+  expect(await screen.findByText('Queued now')).toBeInTheDocument()
+  expect(within(screen.getByText('Ship feature').closest('tr')!).queryByRole('button')).not.toBeInTheDocument()
+})
+
+it('runs the next scheduled-task occurrence through the same command', async () => {
+  useTaskStore.setState({ tasks: [task('Daily schedule')] })
+  render(<AutomationWorkspace />)
+  fireEvent.click(within((await screen.findByText('Daily schedule')).closest('tr')!).getByRole('button', { name: /Run now/ }))
+  await waitFor(() => expect(window.electronAPI.automation.runNow).toHaveBeenCalledWith({ type: 'schedule', id: 'Daily schedule' }))
 })
 
 it('follows the Mastermind workspace and labels local work', async () => {

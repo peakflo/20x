@@ -217,6 +217,7 @@ interface ElectronAPI {
   taskConfirmation: import('@shared/task-confirmation').TaskConfirmationApi
   taskGroups: import('@shared/task-groups').TaskGroupsApi
   responsibilities: import('@shared/responsibilities').ResponsibilitiesApi
+  automation: import('@shared/automation-run-now').AutomationRunNowApi
   mastermindMcp: import('@shared/mastermind-mcp').MastermindMcpApi
   db: {
     getScheduleRuns: (id: string, runId?: string, before?: string) => Promise<unknown>

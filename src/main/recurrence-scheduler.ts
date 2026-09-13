@@ -6,6 +6,7 @@ import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager, RecurrencePatternRecord, RecurrencePatternObject, TaskRecord } from './database'
 import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
+import type { AutomationRunNowResult } from '../shared/automation-run-now'
 
 /** Safely parse a JSON column that should be an array */
 function safeParseArray<T = string>(raw: string | null | undefined): T[] {
@@ -86,6 +87,7 @@ export class RecurrenceScheduler {
   private onInstancesCreated: (() => void) | null = null
   /** Instances created during the current tick. */
   private createdInstanceCount = 0
+  private readonly processing = new Set<string>()
 
   constructor(dbManager: DatabaseManager, timezone?: string, private runs?: ScheduleRuns) {
     this.dbManager = dbManager
@@ -203,89 +205,79 @@ export class RecurrenceScheduler {
       // Hand the new instances to whoever owns auto-start. This is a
       // notification, never a dependency: if nothing is registered the
       // automation sweep picks the instances up on its own tick.
-      if (this.createdInstanceCount > 0) {
-        this.createdInstanceCount = 0
-        try {
-          this.onInstancesCreated?.()
-        } catch (err) {
-          console.error('[RecurrenceScheduler] onInstancesCreated callback failed:', err)
-        }
-      }
+      this.notifyInstancesCreated()
     } catch (err) {
       console.error('[RecurrenceScheduler] Error in checkAndCreateDueInstances:', err)
     }
   }
 
-  /**
-   * Simplified backfill: create ONE instance for the latest missed occurrence,
-   * then fast-forward next_occurrence_at to the next future time.
-   */
-  private async catchUpMissedOccurrences(template: TaskRecord): Promise<void> {
-    // Another template's awaited processing may have allowed a pause or edit.
-    const current = this.dbManager.getTask(template.id)
-    if (!current || !current.is_recurring || current.recurrence_parent_id || current.recurrence_paused) return
-    template = current
-    if (isWorkfloLinkedTask(this.dbManager, template)) return
-    if (!template.recurrence_pattern || !template.next_occurrence_at || Date.parse(template.next_occurrence_at) > Date.now()) {
-      return
-    }
-
-    const now = new Date()
-
-    // Create one instance for the current (latest missed) occurrence
-    if (isReusableSchedule(template)) {
-      if (!this.runs) throw new Error('Schedule execution is unavailable.')
-      if (template.status === TaskStatus.Completed) { this.setPaused(template.id, true); return }
-      const run = this.runs.pending(template.id, template.next_occurrence_at)
-      if (run.state === 'pending' && template.auto_start_agent) {
-        // Reservation happens synchronously; a slow provider must not delay other schedules.
-        void this.runs.start(template.id, undefined, true).catch(error => console.error('[RecurrenceScheduler] Reusable check did not start:', error))
-      }
-    } else this.createInstanceFromTemplate(template, template.next_occurrence_at)
-
-    // Fast-forward: find the next future occurrence after NOW
-    let nextOccurrence = this.calculateNextOccurrence(
-      template.recurrence_pattern,
-      template.next_occurrence_at
-    )
-
-    // Skip past any still-missed occurrences to find the next future one
-    let iterations = 0
-    while (nextOccurrence && new Date(nextOccurrence) <= now && iterations < 1000) {
-      nextOccurrence = this.calculateNextOccurrence(
-        template.recurrence_pattern,
-        nextOccurrence
-      )
-      iterations++
-    }
-
-    if (!nextOccurrence) {
-      // No more occurrences — mark template as finished
-      this.dbManager.db.prepare(`
-        UPDATE tasks
-        SET next_occurrence_at = NULL, updated_at = ?
-        WHERE id = ?
-      `).run(now.toISOString(), template.id)
-      return
-    }
-
-    this.dbManager.db.prepare(`
-      UPDATE tasks
-      SET last_occurrence_at = ?,
-          next_occurrence_at = ?,
-          updated_at = ?
-      WHERE id = ?
-    `).run(
-      template.next_occurrence_at,
-      nextOccurrence,
-      now.toISOString(),
-      template.id
-    )
-
-    console.log(`[RecurrenceScheduler] Processed occurrence for schedule "${template.title}", next: ${nextOccurrence}`)
+  private notifyInstancesCreated(): void {
+    if (!this.createdInstanceCount) return
+    this.createdInstanceCount = 0
+    try { this.onInstancesCreated?.() }
+    catch (error) { console.error('[RecurrenceScheduler] onInstancesCreated callback failed:', error) }
   }
 
-  private createInstanceFromTemplate(template: TaskRecord, occurrenceTime: string): void {
+  async runNow(taskId: string): Promise<AutomationRunNowResult> {
+    const target = { type: 'schedule' as const, id: taskId }
+    const template = this.dbManager.getTask(taskId)
+    if (!template || !template.is_recurring || template.recurrence_parent_id || !template.recurrence_pattern) throw new Error('Choose a recurring task template, not an individual run.')
+    if (template.server_managed || isWorkfloLinkedTask(this.dbManager, template)) throw new Error('This schedule is managed by its source.')
+    if (template.recurrence_paused) return { status: 'not_runnable', message: 'Resume this schedule before running it.', target, nextAt: null }
+    if (template.status === TaskStatus.Completed) return { status: 'not_runnable', message: 'This schedule is completed.', target, nextAt: template.next_occurrence_at }
+    if (!template.next_occurrence_at) return { status: 'not_runnable', message: 'This schedule has no next occurrence.', target, nextAt: null }
+    if (this.processing.has(taskId)) return { status: 'already_running', message: 'This schedule is already being triggered.', target, nextAt: template.next_occurrence_at }
+    if (isReusableSchedule(template)) {
+      const active = this.runs?.active(taskId)
+      if (active) return { status: active.state === 'pending' ? 'already_queued' : 'already_running', message: 'This reusable schedule already has an active check.', target, nextAt: template.next_occurrence_at }
+    } else {
+      const active = this.dbManager.getTasks().find(task => task.recurrence_parent_id === taskId && ['not_started', 'agent_working', 'triaging', 'agent_learning'].includes(task.status))
+      if (active) return { status: active.status === 'not_started' ? 'already_queued' : 'already_running', message: 'This schedule already has an occurrence queued or in progress.', target, nextAt: template.next_occurrence_at }
+    }
+    const consumed = await this.processOccurrence(template, true)
+    if (!consumed) return { status: 'already_queued', message: 'The next schedule occurrence was already consumed.', target, nextAt: this.dbManager.getTask(taskId)?.next_occurrence_at }
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) this.mainWindow.webContents.send('tasks:refresh')
+    this.notifyInstancesCreated()
+    return { status: 'queued', message: 'The next scheduled occurrence was queued now.', target, nextAt: this.dbManager.getTask(taskId)?.next_occurrence_at }
+  }
+
+  /** Create one occurrence and advance from its scheduled time, whether due normally or consumed early. */
+  private async processOccurrence(template: TaskRecord, manual: boolean): Promise<boolean> {
+    if (this.processing.has(template.id)) return false
+    this.processing.add(template.id)
+    try {
+      const current = this.dbManager.getTask(template.id)
+      if (!current || !current.is_recurring || current.recurrence_parent_id || current.recurrence_paused || current.server_managed || isWorkfloLinkedTask(this.dbManager, current)) return false
+      template = current
+      if (!template.recurrence_pattern || !template.next_occurrence_at || (!manual && Date.parse(template.next_occurrence_at) > Date.now())) return false
+      if (template.status === TaskStatus.Completed) { this.setPaused(template.id, true); return false }
+      const scheduledAt = template.next_occurrence_at
+      const now = new Date()
+      let nextOccurrence = this.calculateNextOccurrence(template.recurrence_pattern, scheduledAt)
+      for (let skipped = 0; nextOccurrence && new Date(nextOccurrence) <= now && skipped < 1000; skipped++) nextOccurrence = this.calculateNextOccurrence(template.recurrence_pattern, nextOccurrence)
+      let reusableRun: ReturnType<NonNullable<typeof this.runs>['pending']> | undefined
+      this.dbManager.db.transaction(() => {
+        if (isReusableSchedule(template)) {
+          if (!this.runs) throw new Error('Schedule execution is unavailable.')
+          reusableRun = this.runs.pending(template.id, scheduledAt)
+        } else this.createInstanceFromTemplate(template, scheduledAt, manual)
+        this.dbManager.db.prepare(`UPDATE tasks SET last_occurrence_at = ?, next_occurrence_at = ?, updated_at = ? WHERE id = ?`).run(scheduledAt, nextOccurrence, now.toISOString(), template.id)
+      })()
+      if (reusableRun?.state === 'pending' && (manual || template.auto_start_agent)) {
+        // The durable run exists before provider startup; failures are retained for inspection.
+        void this.runs!.start(template.id, undefined, !manual).catch(error => console.error('[RecurrenceScheduler] Reusable check did not start:', error))
+      }
+      console.log(`[RecurrenceScheduler] Processed occurrence for schedule "${template.title}", next: ${nextOccurrence}`)
+      return true
+    } finally { this.processing.delete(template.id) }
+  }
+
+  /** Simplified backfill: consume one latest missed occurrence, then fast-forward. */
+  private async catchUpMissedOccurrences(template: TaskRecord): Promise<void> {
+    await this.processOccurrence(template, false)
+  }
+
+  private createInstanceFromTemplate(template: TaskRecord, occurrenceTime: string, startNow = false): void {
     const id = createId()
     const now = new Date().toISOString()
 
@@ -317,7 +309,7 @@ export class RecurrenceScheduler {
       0, // Not recurring
       null, // No recurrence pattern
       template.id, // Link back to template
-      template.auto_start_agent ? 1 : 0,
+      template.auto_start_agent || startNow ? 1 : 0,
       template.auto_complete_without_review ? 1 : 0,
       occurrenceTime, // Use occurrence time as created_at
       now
@@ -326,7 +318,7 @@ export class RecurrenceScheduler {
     this.createdInstanceCount += 1
 
     console.log(`[RecurrenceScheduler] Created instance ${id} from template ${template.id}`, {
-      auto_start_agent: template.auto_start_agent,
+      auto_start_agent: template.auto_start_agent || startNow,
       auto_complete_without_review: template.auto_complete_without_review,
       agent_id: template.agent_id
     })

@@ -1,5 +1,6 @@
 import { dialog, ipcMain, type WebContents, type IpcMainInvokeEvent } from 'electron'
 import type { ResponsibilityManager } from './responsibility-manager'
+import type { AutomationRunNowTarget } from '../shared/automation-run-now'
 
 let manager: ResponsibilityManager | undefined
 let desktop: (() => WebContents | undefined) | undefined
@@ -24,6 +25,7 @@ export function registerResponsibilityIpc(service: ResponsibilityManager, mainWi
     return result.canceled ? null : result.filePaths[0] ?? null
   })
   ipcMain.handle('responsibilities:createProject', (event, name: string, root: string, agentId: string) => { assertDesktop(event); return service.createProject(name, root, agentId) })
+  ipcMain.handle('automation:runNow', (event, target: AutomationRunNowTarget) => { assertDesktop(event); return service.runAutomationNowFromDesktop(target) })
   ipcMain.handle('responsibilities:act', (event, id: string, revision: number, action: string) => { assertDesktop(event); return service.act(id, revision, action) })
   ipcMain.handle('responsibilities:answer', (event, id: string, answer: string, approved?: boolean) => { assertDesktop(event); return service.answer(id, answer, approved) })
   ipcMain.handle('responsibilities:remember', (event, projectId: string, kind: 'fact' | 'preference', text: string, id?: string) => { assertDesktop(event); return service.remember(projectId, kind, text, id) })

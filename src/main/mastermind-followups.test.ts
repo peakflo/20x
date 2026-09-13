@@ -56,7 +56,7 @@ describe('proactive Mastermind follow-up', () => {
     db.setSetting(`mastermind_agent:${rootId()}`, agent.id)
     const step = await task()
     expect(runtime.sendMastermindFollowup).toHaveBeenCalledWith(rootId(), agent.id, expect.any(String), expect.any(Function))
-    expect(responsibilityTools(root()).map(t => t.name)).toEqual(['responsibility_context', 'read_responsibility_result', 'finish_followup', 'send_message'])
+    expect(responsibilityTools(root()).map(t => t.name)).toEqual(['responsibility_context', 'read_responsibility_result', 'finish_followup', 'send_message', 'finish_external_request'])
     expect(finish()).toEqual({ published: true })
     expect(db.getTranscriptParts(rootId())[0].content).toContain(`#20x-task=${step.taskId}`)
     live.get(rootId())!.session.status = 'idle'; await flush(); await flush()
