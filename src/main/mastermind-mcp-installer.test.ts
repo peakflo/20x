@@ -5,18 +5,18 @@ import { dirname, join } from 'node:path'
 import type { MastermindMcpStatus } from '../shared/mastermind-mcp'
 import { installedSkillState, MastermindMcpInstaller } from './mastermind-mcp-installer'
 
-const bundled = '---\nmetadata:\n  version: "1"\n---\nUse Mastermind.\n'
+const bundled = '---\nmetadata:\n  version: "2"\n---\nUse Mastermind.\n'
 const homes: string[] = []
-const fakeStatus = { enabled: false, running: false, url: '', skillVersion: '1', clients: {} } as MastermindMcpStatus
+const fakeStatus = { enabled: false, running: false, url: '', skillVersion: '2', clients: {} } as MastermindMcpStatus
 
 afterEach(async () => { await Promise.all(homes.splice(0).map(path => rm(path, { recursive: true, force: true }))) })
 
 describe('Mastermind MCP skill version', () => {
   it('distinguishes missing, current, outdated, modified, and unavailable skills', () => {
     expect(installedSkillState(undefined, bundled)).toEqual({ state: 'not_installed' })
-    expect(installedSkillState(bundled, bundled)).toEqual({ state: 'current', version: '1' })
-    expect(installedSkillState(bundled.replace('version: "1"', 'version: "0"'), bundled)).toEqual({ state: 'outdated', version: '0' })
-    expect(installedSkillState(`${bundled}local change\n`, bundled)).toEqual({ state: 'modified', version: '1' })
+    expect(installedSkillState(bundled, bundled)).toEqual({ state: 'current', version: '2' })
+    expect(installedSkillState(bundled.replace('version: "2"', 'version: "1"'), bundled)).toEqual({ state: 'outdated', version: '1' })
+    expect(installedSkillState(`${bundled}local change\n`, bundled)).toEqual({ state: 'modified', version: '2' })
     expect(installedSkillState(bundled, bundled, false)).toEqual({ state: 'client_unavailable' })
   })
 

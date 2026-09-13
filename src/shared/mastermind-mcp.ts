@@ -1,7 +1,7 @@
 export const MASTERMIND_MCP_PORT = 20621
 export const MASTERMIND_MCP_URL = `http://127.0.0.1:${MASTERMIND_MCP_PORT}/mcp`
 export const MASTERMIND_MCP_SETTING = 'mastermind_mcp_enabled'
-export const MASTERMIND_MCP_SKILL_VERSION = '1'
+export const MASTERMIND_MCP_SKILL_VERSION = '2'
 
 export type MastermindMcpClient = 'codex' | 'pi' | 'claude'
 export type MastermindMcpRequestState = 'queued' | 'delivering' | 'processing' | 'answered' | 'action_required' | 'failed'

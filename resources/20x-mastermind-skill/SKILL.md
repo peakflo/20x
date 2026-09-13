@@ -1,8 +1,8 @@
 ---
 name: 20x-mastermind
-description: Communicate explicit user requests to the 20x workspace Mastermind for delegation, Tasks, Goals, Routines, Factories, monitoring, project memory, or 20x setup. Use only when the user asks to involve or configure 20x.
+description: Communicate explicit user requests to the 20x workspace Mastermind for delegation, Tasks, Goals, Routines, Factories, monitoring, running automation now, project memory, or 20x setup. Use only when the user asks to involve or configure 20x.
 metadata:
-  version: "1"
+  version: "2"
   product: 20x
 ---
 
@@ -19,6 +19,12 @@ Call the `20x` MCP tool `communicate_with_mastermind` with:
 - `request_id`: a new UUID for this message.
 
 If the result is `processing`, repeat the exact same call with the same request ID. Never change the payload while polling. A follow-up is a new message with a new request ID; Mastermind retains the workspace conversation.
+
+## Run now
+
+When the user explicitly asks to run a Goal, Routine, or scheduled task now, send that exact request to Mastermind. Do not create a replacement task or message an existing worker to imitate a run. Mastermind inspects the workspace-owned target and applies the same controls as the desktop.
+
+Run now consumes the next eligible Routine or schedule cycle early without shifting future cadence. It does not add a cycle, overlap queued or running work, or bypass paused, blocked, approval, recovery, deadline, or budget state. Active Goals already advance continuously, so Mastermind reports their current state without repeating a settled step.
 
 ## Safety
 
