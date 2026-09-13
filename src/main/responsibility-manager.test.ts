@@ -64,7 +64,8 @@ async function finish(step: ResponsibilityStep, action = 'done', next?: string) 
 
 describe('external Mastermind requests', () => {
   beforeEach(() => {
-    runtime.sendMastermindFollowup = vi.fn(async (taskId, _agentId, _prompt, beforeSend) => {
+    runtime.sendMastermindFollowup = vi.fn(async function (this: typeof runtime, taskId: string, _agentId: string, _prompt: string, beforeSend: (sessionId: string) => void) {
+      expect(this).toBe(runtime)
       let live = sessions.get(taskId)
       if (!live) {
         live = { sessionId: `session-${taskId}`, session: { workspaceDir: dir, status: 'working' } }
