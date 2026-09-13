@@ -2,6 +2,7 @@ import { memo, useMemo } from 'react'
 import { Calendar, AlarmClockOff, Repeat, HeartPulse, ListTree, ChevronRight } from 'lucide-react'
 import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
+import { useTaskWorkspaceId, WorkspaceBadge } from '@/components/ui/WorkspaceBadge'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, RecurrencePattern, RecurrencePatternObject } from '@/types'
@@ -92,6 +93,7 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
     return Boolean(sess?.pendingApproval && sess.status !== SessionStatus.IDLE && sess.pendingApproval.action)
   })
   const hasActiveAgent = sessionStatus != null && sessionStatus !== SessionStatus.IDLE
+  const workspaceProjectId = useTaskWorkspaceId(task.id)
 
   // Determine status indicator color — memoized to avoid recalculation on every render
   const statusColor = useMemo(() => {
@@ -181,6 +183,7 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
             {task.source !== 'local' && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-muted-foreground">{task.source}</span>
             )}
+            <WorkspaceBadge projectId={workspaceProjectId} className="max-w-28 truncate px-1.5 py-0 text-[10px]" />
           </div>
         </div>
       </div>

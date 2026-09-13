@@ -186,14 +186,21 @@ export class ResponsibilityManager {
 
   snapshot(projectId?: string): ResponsibilitySnapshot {
     this.reconcileNotices()
-    const responsibilities = this.all<ResponsibilityRecord>('agreements').filter(r => !r.deletedAt && (!projectId || r.projectId === projectId))
+    const allResponsibilities = this.all<ResponsibilityRecord>('agreements')
+    const responsibilities = allResponsibilities.filter(r => !r.deletedAt && (!projectId || r.projectId === projectId))
     const ids = new Set(responsibilities.map(r => r.id))
+    const projectByResponsibility = new Map(allResponsibilities.map(r => [r.id, r.projectId]))
     const taskIds = new Set(this.db.db.prepare('SELECT id FROM tasks').pluck().all() as string[])
+    const allSteps = this.all<ResponsibilityStep>('steps')
     const snapshot: ResponsibilitySnapshot = {
       projects: this.all<ProjectRecord>('projects'), responsibilities,
       notices: this.all<ResponsibilityNotice>('notices').filter(r => !projectId || r.projectId === projectId),
       memory: this.all<ProjectMemory>('memory').filter(r => !projectId || r.projectId === projectId),
-      steps: this.all<ResponsibilityStep>('steps').filter(r => ids.has(r.responsibilityId)).map(s => ({ ...s, taskAvailable: taskIds.has(s.taskId) })),
+      steps: allSteps.filter(r => ids.has(r.responsibilityId)).map(s => ({ ...s, taskAvailable: taskIds.has(s.taskId) })),
+      taskProjects: Object.fromEntries(allSteps.flatMap(step => {
+        const owner = projectByResponsibility.get(step.responsibilityId)
+        return owner && taskIds.has(step.taskId) && (!projectId || owner === projectId) ? [[step.taskId, owner]] : []
+      })),
       factories: this.factories.list(projectId), factoryProposals: this.factories.proposals(projectId)
     }
     this.followups.reconcile(snapshot, projectId)
@@ -242,7 +249,7 @@ export class ResponsibilityManager {
     const record = this.responsibility(text(id, 'Proposal ID'))
     if (projectId && record.projectId !== projectId) throw new Error('This proposal belongs to another project. Switch to that project or All tasks in Mastermind.')
     if (record.deletedAt) throw new Error('This proposal was already deleted.')
-    if (record.state !== 'proposed') throw new Error('Only inactive proposals can be deleted with this control. Review existing work in Mastermind first.')
+    if (!['proposed', 'cancelled'].includes(record.state)) throw new Error('Only proposed or cancelled responsibilities can be deleted with this control. Review existing work in Mastermind first.')
     const steps = this.all<ResponsibilityStep>('steps').filter(s => s.responsibilityId === record.id)
     if (this.collectors.has(record.id) || this.unsettled(record.id).length || steps.some(s => this.launching.has(s.taskId) || this.agents.findSessionByTaskId(s.taskId))) throw new Error('Wait for the proposal’s source trial or agent to finish and release before deleting it.')
     return record

@@ -23,7 +23,7 @@ const agreement: ResponsibilityRecord = {
 beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
-  useUIStore.setState({ mastermindDraft: null, mastermindProjectToOpen: null })
+  useUIStore.setState({ mastermindDraft: null, mastermindProjectToOpen: null, mastermindProjectId: '', mastermindProjects: [], mastermindTaskProjects: {}, mastermindSnapshotLoaded: false, mastermindSelectionHydrated: false })
   snapshot = { projects: [{ id: 'project', name: 'Example project', root: '/example', agentId: 'agent', createdAt: '2026-01-01' }], responsibilities: [structuredClone(agreement)], notices: [], memory: [], steps: [] }
   api = {
     setProactive: vi.fn(async () => {}), retryFollowups: vi.fn(async () => {}), snapshot: vi.fn(async () => structuredClone(snapshot)), pickProjectFolder: vi.fn(async () => null), createProject: vi.fn(), act: vi.fn(async () => {}), answer: vi.fn(async () => {}), decideFactory: vi.fn(async () => {}), remember: vi.fn(async () => {}), forget: vi.fn(async () => {}), onChanged: vi.fn(() => () => {})

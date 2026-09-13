@@ -25,6 +25,8 @@ import { TaskStatus } from '@/types'
 import { FactoryCanvas } from '@/components/factories/FactoryCanvas'
 import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
 import { CanvasGroups, CanvasGroupsMenu } from './CanvasGroups'
+import { taskWorkspaceId } from '@/components/ui/WorkspaceBadge'
+import { useTaskGroupStore } from '@/stores/task-group-store'
 
 /**
  * Check if a panel is visible in the current viewport (with generous margin).
@@ -228,6 +230,21 @@ export function InfiniteCanvas() {
   const previousTaskStatusRef = useRef(new Map<string, TaskStatus>())
   const viewport = useCanvasStore((s) => s.viewport)
   const panels = useCanvasStore((s) => s.panels)
+  const projectId = useUIStore((s) => s.mastermindProjectId)
+  const taskProjects = useUIStore((s) => s.mastermindTaskProjects)
+  const workspaceDataLoaded = useUIStore((s) => s.mastermindSnapshotLoaded)
+  const groups = useTaskGroupStore((s) => s.groups)
+  const membership = useTaskGroupStore((s) => s.membership)
+  const groupsLoaded = useTaskGroupStore((s) => s.isLoaded)
+  const workspacePanels = useMemo(() => {
+    if (!projectId || !workspaceDataLoaded || !groupsLoaded) return panels
+    return panels.filter(panel => {
+      if ((panel.type === 'task' || panel.type === 'transcript') && panel.refId) return taskWorkspaceId(panel.refId, taskProjects, groups, membership) === projectId
+      if (panel.canvasGroupId) return groups.find(group => group.id === panel.canvasGroupId)?.projectId === projectId
+      return panel.type !== 'task' && panel.type !== 'transcript'
+    })
+  }, [panels, projectId, workspaceDataLoaded, groupsLoaded, taskProjects, groups, membership])
+  const workspacePanelIds = useMemo(() => new Set(workspacePanels.map(panel => panel.id)), [workspacePanels])
   const isLoaded = useCanvasStore((s) => s.isLoaded)
   const zoomTo = useCanvasStore((s) => s.zoomTo)
   const resetViewport = useCanvasStore((s) => s.resetViewport)
@@ -303,16 +320,25 @@ export function InfiniteCanvas() {
     return () => observer.disconnect()
   }, [])
 
+  // Keep a newly selected workspace in view without changing persisted panel state.
+  const fittedWorkspaceRef = useRef('')
+  useEffect(() => {
+    if (!projectId) { fittedWorkspaceRef.current = ''; return }
+    if (fittedWorkspaceRef.current === projectId || !isLoaded || !workspaceDataLoaded || !groupsLoaded || !workspacePanels.length || containerSize.width < 10 || containerSize.height < 10) return
+    fitToContent(containerSize.width, containerSize.height, undefined, workspacePanelIds)
+    fittedWorkspaceRef.current = projectId
+  }, [isLoaded, projectId, workspaceDataLoaded, groupsLoaded, workspacePanels, workspacePanelIds, containerSize, fitToContent])
+
   // Compute which panels are visible in the current viewport
   const visiblePanelIds = useMemo(() => {
     const set = new Set<string>()
-    for (const p of panels) {
+    for (const p of workspacePanels) {
       if (isPanelVisible(p, viewport, containerSize.width, containerSize.height)) {
         set.add(p.id)
       }
     }
     return set
-  }, [panels, viewport, containerSize])
+  }, [workspacePanels, viewport, containerSize])
 
   // ── Consume pending task from "Open in Canvas" button ────
   const canvasPendingTaskId = useUIStore((s) => s.canvasPendingTaskId)
@@ -324,7 +350,7 @@ export function InfiniteCanvas() {
   useEffect(() => {
     const previousStatuses = previousTaskStatusRef.current
     const taskPanels = new Map<string, CanvasPanelData>()
-    for (const panel of panels) {
+    for (const panel of workspacePanels) {
       if (panel.type === 'task' && panel.refId) taskPanels.set(panel.refId, panel)
     }
 
@@ -356,7 +382,7 @@ export function InfiniteCanvas() {
         setStatusHighlights((current) => current.filter((item) => item.id !== highlight.id))
       }, STATUS_HIGHLIGHT_MS)
     }
-  }, [allTasks, panels])
+  }, [allTasks, workspacePanels])
 
   useEffect(() => {
     if (!canvasPendingTaskId) return
@@ -431,13 +457,11 @@ export function InfiniteCanvas() {
         return
       }
       case 'focus_task': {
-        const target = useCanvasStore
-          .getState()
-          .panels.find((p) => p.type === 'task' && p.refId === pendingViewCommand.taskId)
+        const target = workspacePanels.find((p) => p.type === 'task' && p.refId === pendingViewCommand.taskId)
         if (target) focusPanel(target.id, rect.width, rect.height)
       }
     }
-  }, [pendingViewCommand, fitToContent, resetViewport, zoomTo, focusPanel])
+  }, [pendingViewCommand, fitToContent, resetViewport, zoomTo, focusPanel, workspacePanels])
 
   // ── Consume pending app from "Open in Canvas" button ────
   useEffect(() => {
@@ -858,7 +882,7 @@ export function InfiniteCanvas() {
         const digitMatch = e.code.match(/^Digit([1-9])$/)
         if (digitMatch) {
           const idx = parseInt(digitMatch[1], 10) - 1
-          const currentPanels = useCanvasStore.getState().panels
+          const currentPanels = workspacePanels
           if (idx < currentPanels.length) {
             e.preventDefault()
             const container = containerRef.current
@@ -875,7 +899,7 @@ export function InfiniteCanvas() {
       // Tab / Shift+Tab: cycle through panels
       if (e.code === 'Tab' && !isInputFocused && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
-        const currentPanels = useCanvasStore.getState().panels
+        const currentPanels = workspacePanels
         if (currentPanels.length === 0) return
 
         const next = e.shiftKey
@@ -962,7 +986,7 @@ export function InfiniteCanvas() {
       window.removeEventListener('keyup', handleKeyUp)
       window.removeEventListener('blur', handleBlur)
     }
-  }, [zoomStep, resetViewport, focusedPanelIndex, commitViewport, setConnectingFromId])
+  }, [zoomStep, resetViewport, focusedPanelIndex, commitViewport, setConnectingFromId, workspacePanels])
 
   const zoomPercent = Math.round(viewport.zoom * 100)
 
@@ -1014,13 +1038,13 @@ export function InfiniteCanvas() {
           <SnapGuides />
 
           {/* Connection lines */}
-          <CanvasConnections mouseCanvasPos={mouseCanvasPos} />
+          <CanvasConnections mouseCanvasPos={mouseCanvasPos} visiblePanelIds={workspacePanelIds} />
 
           {/* Drawing layer — figures above edges, below panels */}
           <DrawingLayer />
 
           {/* Render panels — off-viewport panels are frozen (content hidden) */}
-          {panels.map((panel, index) => (
+          {workspacePanels.map((panel, index) => (
             <CanvasPanel
               key={panel.id}
               panel={panel}
@@ -1036,7 +1060,7 @@ export function InfiniteCanvas() {
         <div data-canvas-bg="true" className="absolute inset-0" style={{ zIndex: -1 }} />
       </div>
 
-      {statusHighlights.map((highlight) => {
+      {statusHighlights.filter(highlight => workspacePanelIds.has(highlight.panelId)).map((highlight) => {
         const beacon = getOffscreenBeacon(highlight, viewport, containerSize.width, containerSize.height)
         if (!beacon) return null
         const DirectionIcon = beacon.direction === 'left'
@@ -1151,6 +1175,7 @@ export function InfiniteCanvas() {
       <CanvasMinimap
         containerWidth={containerSize.width}
         containerHeight={containerSize.height}
+        visiblePanelIds={workspacePanelIds}
       />
 
       {/* ── Drawing: toolbar (bottom-center) + selection properties (top-center) ──
@@ -1160,7 +1185,7 @@ export function InfiniteCanvas() {
       {drawingSelectedCount > 0 && <DrawingProperties />}
 
       {/* ── Empty state ── */}
-      {panels.length === 0 && (
+      {workspacePanels.length === 0 && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
           <div className="text-center">
             <div className="text-muted-foreground/30 text-sm font-medium mb-1">

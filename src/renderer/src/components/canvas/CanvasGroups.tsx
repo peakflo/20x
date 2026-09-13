@@ -5,6 +5,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { useTaskGroupStore } from '@/stores/task-group-store'
 import { useUIStore } from '@/stores/ui-store'
 import { GroupControls } from '../tasks/TaskGroups'
+import { WorkspaceBadge } from '@/components/ui/WorkspaceBadge'
 
 const GAP = 36
 const HEADER = 42
@@ -21,6 +22,9 @@ function layoutFor(index: number, count: number, x: number, y: number) {
 export function CanvasGroups() {
   const groups = useTaskGroupStore((s) => s.groups)
   const membership = useTaskGroupStore((s) => s.membership)
+  const projectId = useUIStore((s) => s.mastermindProjectId)
+  const workspaceDataLoaded = useUIStore((s) => s.mastermindSnapshotLoaded)
+  const visibleGroups = useMemo(() => projectId && workspaceDataLoaded ? groups.filter(group => group.projectId === projectId) : groups, [groups, projectId, workspaceDataLoaded])
   const canvasGroupId = useTaskGroupStore((s) => s.canvasGroupId)
   const tasks = useTaskStore((s) => s.tasks)
   const isLoaded = useCanvasStore((s) => s.isLoaded)
@@ -32,17 +36,17 @@ export function CanvasGroups() {
 
   useEffect(() => {
     if (!isLoaded || !canvasGroupId) return
-    const group = groups.find((candidate) => candidate.id === canvasGroupId)
+    const group = visibleGroups.find((candidate) => candidate.id === canvasGroupId)
     if (!group) return
     useTaskGroupStore.setState({ canvasGroupId: null })
     useCanvasStore.getState().showGroup(group.id, Object.entries(membership).filter(([, id]) => id === group.id).map(([taskId]) => taskId))
     useUIStore.getState().setSidebarView('canvas')
-  }, [canvasGroupId, groups, membership, isLoaded])
+  }, [canvasGroupId, visibleGroups, membership, isLoaded])
 
-  const groupMembers = useMemo(() => groups.map((group) => ({
+  const groupMembers = useMemo(() => visibleGroups.map((group) => ({
     group,
     taskIds: Object.entries(membership).filter(([, groupId]) => groupId === group.id).map(([taskId]) => taskId),
-  })), [groups, membership])
+  })), [visibleGroups, membership])
 
   useEffect(() => {
     if (!isLoaded) return
@@ -96,6 +100,7 @@ export function CanvasGroups() {
         <div className="flex h-10 items-center gap-2 border-b border-primary/20 px-3 text-xs font-semibold text-primary" style={{ pointerEvents: 'auto' }}>
           <Layers className="h-3.5 w-3.5" />
           <span>{group.name}</span>
+          <WorkspaceBadge projectId={group.projectId} />
           <span className="text-muted-foreground">{taskIds.length}</span>
           <GroupControls groupId={group.id} />
           <button type="button" aria-label={`Hide ${group.name}`} className="ml-auto text-muted-foreground hover:text-foreground" onClick={() => hideGroup(group.id)}><X className="h-3.5 w-3.5" /></button>
@@ -108,6 +113,9 @@ export function CanvasGroups() {
 export function CanvasGroupsMenu() {
   const groups = useTaskGroupStore((s) => s.groups)
   const membership = useTaskGroupStore((s) => s.membership)
+  const projectId = useUIStore((s) => s.mastermindProjectId)
+  const workspaceDataLoaded = useUIStore((s) => s.mastermindSnapshotLoaded)
+  const visibleGroups = projectId && workspaceDataLoaded ? groups.filter(group => group.projectId === projectId) : groups
   const setView = useTaskGroupStore((s) => s.setView)
   const showGroup = useCanvasStore((s) => s.showGroup)
   const shownGroupIds = useCanvasStore((s) => s.shownGroupIds)
@@ -118,9 +126,9 @@ export function CanvasGroupsMenu() {
     <button type="button" className="rounded-lg border border-border/50 bg-popover px-2 py-1 text-xs shadow" onClick={() => setMenuOpen((open) => !open)}><Layers className="mr-1 inline h-3.5 w-3.5" />Groups</button>
     {menuOpen && <div className="mt-1 w-64 rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
       <button type="button" className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted" onClick={() => { setSidebarView('tasks'); setView('groups'); setMenuOpen(false) }}>Manage groups in Tasks</button>
-      {groups.length === 0 && <p className="p-2 text-xs text-muted-foreground">No groups yet.</p>}
-      {groups.map((group) => <div key={group.id} className="flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted">
-        <button type="button" className="min-w-0 flex-1 text-left" onClick={() => { showGroup(group.id, Object.entries(membership).filter(([, id]) => id === group.id).map(([taskId]) => taskId)); setMenuOpen(false) }}>{group.name} <span className="text-muted-foreground">{shownGroupIds.includes(group.id) ? 'Shown' : 'Show'}</span></button>
+      {visibleGroups.length === 0 && <p className="p-2 text-xs text-muted-foreground">No groups yet.</p>}
+      {visibleGroups.map((group) => <div key={group.id} className="flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted">
+        <button type="button" className="min-w-0 flex-1 text-left" onClick={() => { showGroup(group.id, Object.entries(membership).filter(([, id]) => id === group.id).map(([taskId]) => taskId)); setMenuOpen(false) }}>{group.name} <span className="text-muted-foreground">{shownGroupIds.includes(group.id) ? 'Shown' : 'Show'}</span></button><WorkspaceBadge projectId={group.projectId} />
         <GroupControls groupId={group.id} />
       </div>)}
     </div>}

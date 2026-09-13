@@ -16,7 +16,10 @@ const inputClass = 'w-full rounded-md border border-border bg-background px-2 py
 export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (project: ProjectRecord | null) => void }) {
   const api = window.electronAPI?.responsibilities
   const [snapshot, setSnapshot] = useState(empty)
-  const [projectId, setProjectId] = useState('')
+  const projectId = useUIStore(s => s.mastermindProjectId)
+  const setProjectId = useUIStore(s => s.setMastermindProjectId)
+  const hydrateProjectId = useUIStore(s => s.hydrateMastermindProjectId)
+  const syncMastermindSnapshot = useUIStore(s => s.syncMastermindSnapshot)
   const [expanded, setExpanded] = useState(false)
   const [tab, setTab] = useState<'work' | 'decisions' | 'memory'>('work')
   const [creating, setCreating] = useState(false)
@@ -27,22 +30,25 @@ export function ResponsibilitiesPanel({ onProjectChange }: { onProjectChange: (p
   const projectChosen = useRef(false)
   const draft = useUIStore(s => s.mastermindDraft)
   const openProject = useUIStore(s => s.mastermindProjectToOpen)
-  useEffect(() => { if (openProject) { projectChosen.current = true; setProjectId(openProject); setExpanded(true); useUIStore.setState({ mastermindProjectToOpen: null }) } }, [openProject])
+  useEffect(() => { if (openProject) { projectChosen.current = true; setProjectId(openProject); setExpanded(true); useUIStore.setState({ mastermindProjectToOpen: null }); void settingsApi.set('mastermind_project', openProject).catch(e => setError(String(e))) } }, [openProject, setProjectId])
   useEffect(() => {
     if (!draft) return
     projectChosen.current = true
     setProjectId(draft.projectId); setExpanded(true)
     void settingsApi.set('mastermind_project', draft.projectId).catch(e => setError(String(e)))
-  }, [draft])
+  }, [draft, setProjectId])
   const refresh = useCallback(async () => {
-    if (api) setSnapshot(await api.snapshot())
-  }, [api])
+    if (!api) return
+    const next = await api.snapshot()
+    setSnapshot(next)
+    syncMastermindSnapshot(next)
+  }, [api, syncMastermindSnapshot])
   useEffect(() => {
     if (!api) return
     void refresh().catch(e => setError(String(e)))
-    void settingsApi.get('mastermind_project').then(id => { if (id && !projectChosen.current) setProjectId(id) })
+    void settingsApi.get('mastermind_project').then(id => { if (!projectChosen.current) hydrateProjectId(id ?? '') })
     return api.onChanged(() => { void refresh().catch(e => setError(String(e))) })
-  }, [api, refresh])
+  }, [api, refresh, hydrateProjectId])
   useEffect(() => { onProjectChange(snapshot.projects.find(p => p.id === projectId) ?? null) }, [projectId, snapshot.projects, onProjectChange])
   useEffect(() => { setReviewId(null) }, [projectId])
   useEffect(() => {

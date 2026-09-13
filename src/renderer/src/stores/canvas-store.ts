@@ -230,7 +230,8 @@ interface CanvasState {
   fitToContent: (
     containerWidth: number,
     containerHeight: number,
-    contentBounds?: { minX: number; minY: number; maxX: number; maxY: number }
+    contentBounds?: { minX: number; minY: number; maxX: number; maxY: number },
+    panelIds?: Set<string>
   ) => void
   focusPanel: (id: string, containerWidth: number, containerHeight: number) => void
 
@@ -355,8 +356,8 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
     scheduleSave()
   },
 
-  fitToContent: (containerWidth: number, containerHeight: number, contentBounds) => {
-    const { panels } = get()
+  fitToContent: (containerWidth: number, containerHeight: number, contentBounds, panelIds) => {
+    const panels = panelIds ? get().panels.filter(panel => panelIds.has(panel.id)) : get().panels
     if (panels.length === 0 && !contentBounds) return
     // Guard against zero-size container (window minimized, being dragged, not laid out yet)
     if (!containerWidth || !containerHeight || containerWidth < 10 || containerHeight < 10) return

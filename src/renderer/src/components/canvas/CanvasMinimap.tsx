@@ -219,9 +219,11 @@ const MinimapContent = memo(function MinimapContent({
 function CanvasMinimapComponent({
   containerWidth,
   containerHeight,
+  visiblePanelIds,
 }: {
   containerWidth: number
   containerHeight: number
+  visiblePanelIds?: Set<string>
 }) {
   const panels = useCanvasStore((s) => s.panels)
   const viewport = useCanvasStore((s) => s.viewport)
@@ -231,6 +233,8 @@ function CanvasMinimapComponent({
   const setViewport = useCanvasStore((s) => s.setViewport)
   const zoomTo = useCanvasStore((s) => s.zoomTo)
   const fitToContent = useCanvasStore((s) => s.fitToContent)
+  const visiblePanels = useMemo(() => visiblePanelIds ? panels.filter(panel => visiblePanelIds.has(panel.id)) : panels, [panels, visiblePanelIds])
+  const visibleEdges = useMemo(() => edges.filter(edge => (!visiblePanelIds || visiblePanelIds.has(edge.fromPanelId)) && (!visiblePanelIds || visiblePanelIds.has(edge.toPanelId))), [edges, visiblePanelIds])
 
   const [collapsed, setCollapsed] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
@@ -238,11 +242,11 @@ function CanvasMinimapComponent({
 
   // ── Compute bounding box of all panels + drawing figures ──
   const bounds = useMemo(() => {
-    if (panels.length === 0 && figures.length === 0) {
+    if (visiblePanels.length === 0 && figures.length === 0) {
       return { minX: 0, minY: 0, maxX: 1000, maxY: 800 }
     }
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-    for (const p of panels) {
+    for (const p of visiblePanels) {
       minX = Math.min(minX, p.x)
       minY = Math.min(minY, p.y)
       maxX = Math.max(maxX, p.x + p.width)
@@ -257,7 +261,7 @@ function CanvasMinimapComponent({
     // Add padding
     const pad = 100
     return { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad }
-  }, [panels, figures])
+  }, [visiblePanels, figures])
 
   // ── Scale factor: canvas space → minimap space ──────────
   const canvasW = bounds.maxX - bounds.minX
@@ -387,7 +391,7 @@ function CanvasMinimapComponent({
     return subscribeLiveViewport(applyLiveViewport)
   }, [containerWidth, containerHeight, collapsed])
 
-  if (panels.length === 0 && figures.length === 0) return null
+  if (visiblePanels.length === 0 && figures.length === 0) return null
 
   return (
     <div
@@ -433,8 +437,8 @@ function CanvasMinimapComponent({
             onMouseLeave={handleMouseUp}
           >
             <MinimapContent
-              panels={panels}
-              edges={edges}
+              panels={visiblePanels}
+              edges={visibleEdges}
               figures={figures}
               bounds={bounds}
               scale={scale}
@@ -504,7 +508,7 @@ function CanvasMinimapComponent({
 
             <button
               className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
-              onClick={(e) => { e.stopPropagation(); fitToContent(containerWidth, containerHeight, figuresBounds) }}
+              onClick={(e) => { e.stopPropagation(); fitToContent(containerWidth, containerHeight, figuresBounds, visiblePanelIds) }}
               title="Fit all content"
             >
               <Maximize2 className="h-3 w-3" />

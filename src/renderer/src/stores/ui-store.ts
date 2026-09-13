@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { TaskStatus, SettingsTab } from '@/types'
 import type { TaskPriority } from '@/types'
+import type { ResponsibilitySnapshot } from '@shared/responsibilities'
 
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
@@ -52,6 +53,15 @@ interface UIState {
   createTaskPrefill: { title: string; description: string } | null
   /** Whether the Mastermind drawer is open (global) */
   showOrchestrator: boolean
+  /** The Mastermind project selector is also the workspace filter for work views. Empty means all workspaces. */
+  mastermindProjectId: string
+  mastermindProjects: Array<{ id: string; name: string }>
+  mastermindTaskProjects: Record<string, string>
+  mastermindSnapshotLoaded: boolean
+  mastermindSelectionHydrated: boolean
+  setMastermindProjectId: (projectId: string) => void
+  hydrateMastermindProjectId: (projectId: string) => void
+  syncMastermindSnapshot: (snapshot: ResponsibilitySnapshot) => void
   mastermindProjectToOpen: string | null
   openMastermindProject: (projectId: string) => void
   mastermindDraft: { id: string; projectId: string; text: string } | null
@@ -121,10 +131,28 @@ export const useUIStore = create<UIState>((set) => ({
   canvasPendingApp: null,
   createTaskPrefill: null,
   showOrchestrator: false,
+  mastermindProjectId: '',
+  mastermindProjects: [],
+  mastermindTaskProjects: {},
+  mastermindSnapshotLoaded: false,
+  mastermindSelectionHydrated: false,
+  setMastermindProjectId: mastermindProjectId => set({ mastermindProjectId, mastermindSelectionHydrated: true }),
+  hydrateMastermindProjectId: mastermindProjectId => set(state => state.mastermindSelectionHydrated ? {} : { mastermindProjectId, mastermindSelectionHydrated: true }),
+  syncMastermindSnapshot: snapshot => {
+    const responsibilityProjects = new Map(snapshot.responsibilities.map(record => [record.id, record.projectId]))
+    set({
+      mastermindProjects: snapshot.projects.map(({ id, name }) => ({ id, name })),
+      mastermindTaskProjects: snapshot.taskProjects ?? Object.fromEntries(snapshot.steps.flatMap(step => {
+        const projectId = responsibilityProjects.get(step.responsibilityId)
+        return projectId ? [[step.taskId, projectId]] : []
+      })),
+      mastermindSnapshotLoaded: true
+    })
+  },
   mastermindProjectToOpen: null,
-  openMastermindProject: projectId => set({ showOrchestrator: true, mastermindProjectToOpen: projectId }),
+  openMastermindProject: projectId => set({ showOrchestrator: true, mastermindProjectId: projectId, mastermindSelectionHydrated: true, mastermindProjectToOpen: projectId }),
   mastermindDraft: null,
-  draftInMastermind: (projectId, text) => set({ showOrchestrator: true, mastermindDraft: { id: crypto.randomUUID(), projectId, text } }),
+  draftInMastermind: (projectId, text) => set({ showOrchestrator: true, mastermindProjectId: projectId, mastermindSelectionHydrated: true, mastermindDraft: { id: crypto.randomUUID(), projectId, text } }),
   clearMastermindDraft: (id) => set(s => s.mastermindDraft?.id === id ? { mastermindDraft: null } : {}),
   canvasResponsibilityId: null,
   canvasResponsibilityRequest: 0,

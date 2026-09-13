@@ -39,6 +39,7 @@ import { ArtifactRail } from '@/components/artifacts/ArtifactRail'
 import type { Artifact, ArtifactUIState } from '@shared/artifacts'
 import { dispatchShortcutFeedback, onTaskShortcut, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
 import { useTaskGroupStore } from '@/stores/task-group-store'
+import { useTaskWorkspaceId, WorkspaceBadge } from '@/components/ui/WorkspaceBadge'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 const DEFAULT_ARTIFACT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
@@ -146,6 +147,7 @@ function TaskWorkspaceComponent({
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
   const taskGroupId = useTaskGroupStore((s) => task ? s.membership[task.id] : undefined)
   const taskGroup = useTaskGroupStore((s) => taskGroupId ? s.groups.find((group) => group.id === taskGroupId) : undefined)
+  const workspaceProjectId = useTaskWorkspaceId(task?.id)
   const setGroupView = useTaskGroupStore((s) => s.setView)
   const setSidebarView = useUIStore((s) => s.setSidebarView)
   const selectTask = useTaskStore((s) => s.selectTask)
@@ -1134,7 +1136,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
   return (
     <>
       <div className="relative flex h-full min-h-0 flex-col bg-background">
-        {taskGroup && <button className="w-fit px-4 pt-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => { selectTask(null); setGroupView(taskGroup.id); setSidebarView('tasks') }}>Part of {taskGroup.name}</button>}
+        <div className="flex items-center gap-2 px-4 pt-2"><WorkspaceBadge projectId={workspaceProjectId} />{taskGroup && <button className="text-xs text-muted-foreground hover:text-foreground" onClick={() => { selectTask(null); setGroupView(taskGroup.id); setSidebarView('tasks') }}>Part of {taskGroup.name}</button>}</div>
         <TaskHeaderBar
           task={task}
           agent={assignedAgent}

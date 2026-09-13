@@ -185,7 +185,7 @@ it.each(['delegate_responsibility', 'prepare_routine'])('stores a display summar
   expect(() => manager.propose(scope(), { ...agreement, summary: 'x'.repeat(241) }, humanInputId)).toThrow('240 characters')
 })
 
-describe('deleting inactive proposals through Mastermind', () => {
+describe('deleting proposed and cancelled responsibilities through Mastermind', () => {
   let service: TaskControl
   let confirm: ReturnType<typeof vi.fn<ConstructorParameters<typeof TaskControl>[4]>>
   const rootCall = (name: string, args: Record<string, unknown>) => callResponsibilityTool(manager, manager.tokenForTask(projectConversationId(project.id))!, name, args)
@@ -228,7 +228,7 @@ describe('deleting inactive proposals through Mastermind', () => {
       expect(snapshot().responsibilities).toHaveLength(2)
       expect(await rootCall('delete_responsibility_proposal', { responsibility_id: goal.id })).not.toHaveProperty('isError', true)
       expect(await call('delete_responsibility_proposal', { responsibility_id: routine.id })).toMatchObject({ success: true, deleted: true, responsibilityId: routine.id })
-      expect(confirm.mock.calls.at(-1)![0].detail).toContain(`Proposal: ${routine.id}`)
+      expect(confirm.mock.calls.at(-1)![0].detail).toContain(`Responsibility: ${routine.id}`)
       expect(snapshot().responsibilities).toEqual([])
       const retained = JSON.parse((db.db.prepare('SELECT data FROM mastermind_agreements WHERE id = ?').get(routine.id) as { data: string }).data)
       expect(retained).toMatchObject({ state: 'cancelled', deletedAt: expect.any(String), trial: { output: '{"release":"green"}' } })
@@ -246,6 +246,22 @@ describe('deleting inactive proposals through Mastermind', () => {
     }
   })
 
+  it('deletes a cancelled Goal only after its worker is released', async () => {
+    const goal = await approve()
+    const retainedTaskId = snapshot().steps[0].taskId
+    vi.mocked(runtime.stopSession).mockRejectedValueOnce(new Error('Uncertain stop'))
+    await expect(manager.act(goal.id, goal.revision, 'cancel')).rejects.toThrow('Uncertain stop')
+    expect(snapshot().responsibilities[0].state).toBe('cancelled')
+    await expect(service.deleteProposal({ responsibility_id: goal.id })).rejects.toThrow('finish and release')
+    expect(confirm).not.toHaveBeenCalled()
+
+    sessions.clear()
+    await manager.act(goal.id, goal.revision, 'recover')
+    expect(await service.deleteProposal({ responsibility_id: goal.id })).toMatchObject({ success: true, deleted: true, responsibilityId: goal.id })
+    expect(snapshot().responsibilities).toEqual([])
+    expect(snapshot().taskProjects).toMatchObject({ [retainedTaskId]: project.id })
+  })
+
   it('rejects cross-project and worker deletion, and refuses an agreement activated during confirmation', async () => {
     const proposal = manager.propose(scope(), agreement, input())
     mkdirSync(join(dir, 'other'))
@@ -253,7 +269,7 @@ describe('deleting inactive proposals through Mastermind', () => {
     await expect(service.deleteProposal({ responsibility_id: proposal.id }, other.id)).rejects.toThrow('another project')
     expect(confirm).not.toHaveBeenCalled()
     confirm.mockImplementationOnce(async () => { await manager.act(proposal.id, proposal.revision, 'approve'); return true })
-    await expect(service.deleteProposal({ responsibility_id: proposal.id })).rejects.toThrow('inactive proposals')
+    await expect(service.deleteProposal({ responsibility_id: proposal.id })).rejects.toThrow('proposed or cancelled')
     await manager.reconcile()
     const step = snapshot().steps[0]
     const worker = manager.tokenForTask(step.taskId)!

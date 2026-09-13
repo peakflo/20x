@@ -209,6 +209,8 @@ export interface ResponsibilitySnapshot {
   notices: ResponsibilityNotice[]
   memory: ProjectMemory[]
   steps: ResponsibilityStep[]
+  /** Durable task ownership, including tasks retained after their responsibility is deleted. */
+  taskProjects?: Record<string, string>
   followups?: Record<string, { enabled: boolean; reviewing: boolean; pending: number; error?: string }>
   factories?: FactoryDefinition[]
   factoryProposals?: FactoryProposal[]

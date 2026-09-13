@@ -8,6 +8,7 @@ import { TaskStatus } from '@/types'
 import { useTaskGroupStore } from '@/stores/task-group-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
+import { WorkspaceBadge } from '@/components/ui/WorkspaceBadge'
 
 interface TaskGroupsProps {
   tasks: WorkfloTask[]
@@ -237,13 +238,16 @@ function NewGroupDialog({
   const [description, setDescription] = useState('')
   const [projectId, setProjectId] = useState('')
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([])
+  const selectedWorkspace = useUIStore((state) => state.mastermindProjectId)
   useEffect(() => {
-    if (open)
+    if (open) {
+      setProjectId(selectedWorkspace)
       void window.electronAPI?.responsibilities
         ?.snapshot()
         .then((snapshot) => setProjects(snapshot.projects))
         .catch(() => setProjects([]))
-  }, [open])
+    }
+  }, [open, selectedWorkspace])
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent>
@@ -309,12 +313,18 @@ export function TaskGroups({ tasks, allTasks, selectedTaskId, onSelectTask, onCr
   const manage = useTaskGroupStore((s) => s.manage)
   const setView = useTaskGroupStore((s) => s.setView)
   const setCreationGroup = useTaskGroupStore((s) => s.setCreationGroup)
+  const projectId = useUIStore((s) => s.mastermindProjectId)
+  const workspaceDataLoaded = useUIStore((s) => s.mastermindSnapshotLoaded)
   const selectTask = useTaskStore((s) => s.selectTask)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [newGroupOpen, setNewGroupOpen] = useState(false)
   useEffect(() => {
     void fetch()
   }, [fetch])
+  const visibleGroups = useMemo(() => projectId && workspaceDataLoaded ? groups.filter(group => group.projectId === projectId) : groups, [groups, projectId, workspaceDataLoaded])
+  useEffect(() => {
+    if (projectId && workspaceDataLoaded && !['groups', 'all', 'ungrouped'].includes(view) && !visibleGroups.some(group => group.id === view)) setView('groups')
+  }, [projectId, workspaceDataLoaded, view, visibleGroups, setView])
   const openGroup = (id: string) => {
     selectTask(null)
     setSelected(new Set())
@@ -364,7 +374,7 @@ export function TaskGroups({ tasks, allTasks, selectedTaskId, onSelectTask, onCr
         <Button variant="ghost" className="justify-start" onClick={() => setNewGroupOpen(true)}>
           <Plus className="h-3.5 w-3.5" /> New group
         </Button>
-        {groups.map((group) => {
+        {visibleGroups.map((group) => {
           const groupTasks = allTasks.filter((task) => membership[task.id] === group.id)
           const attention = groupTasks.filter((task) => attentionStatuses.has(task.status)).length
           return (
@@ -376,7 +386,8 @@ export function TaskGroups({ tasks, allTasks, selectedTaskId, onSelectTask, onCr
               <div className="flex items-center gap-2 text-sm font-medium">
                 <Folder className="h-4 w-4" />
                 {group.name}
-                <span className="ml-auto text-xs text-muted-foreground">{groupTasks.length}</span>
+                <WorkspaceBadge projectId={group.projectId} className="ml-auto" />
+                <span className="text-xs text-muted-foreground">{groupTasks.length}</span>
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
                 {group.description || 'No description'}
@@ -434,6 +445,7 @@ export function TaskGroups({ tasks, allTasks, selectedTaskId, onSelectTask, onCr
         <span className="truncate text-sm font-medium">
           {group?.name ?? (view === 'all' ? 'All tasks' : 'Ungrouped')}
         </span>
+        {group && <WorkspaceBadge projectId={group.projectId} />}
         {group && (
           <span className="text-xs text-muted-foreground">
             {allTasks.filter((task) => membership[task.id] === group.id).length}

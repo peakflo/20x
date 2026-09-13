@@ -8,8 +8,10 @@ import { useCanvasStore, type CanvasPanelData, type CanvasEdge } from '@/stores/
  */
 export function CanvasConnections({
   mouseCanvasPos,
+  visiblePanelIds,
 }: {
   mouseCanvasPos: { x: number; y: number } | null
+  visiblePanelIds?: Set<string>
 }) {
   const panels = useCanvasStore((s) => s.panels)
   const edges = useCanvasStore((s) => s.edges)
@@ -23,13 +25,13 @@ export function CanvasConnections({
 
   const panelMap = useMemo(() => {
     const map = new Map<string, CanvasPanelData>()
-    for (const p of panels) map.set(p.id, p)
+    for (const p of panels) if (!visiblePanelIds || visiblePanelIds.has(p.id)) map.set(p.id, p)
     if (liveDrag) {
       const dragged = map.get(liveDrag.id)
       if (dragged) map.set(dragged.id, { ...dragged, x: liveDrag.x, y: liveDrag.y })
     }
     return map
-  }, [panels, liveDrag])
+  }, [panels, liveDrag, visiblePanelIds])
 
   /**
    * Find the best connection anchor point on a panel edge

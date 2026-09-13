@@ -19,6 +19,8 @@ import { WebPagePanelContent } from './WebPagePanelContent'
 import { TerminalPanelContent } from './TerminalPanelContent'
 import { BrowserPanelContent } from './BrowserPanelContent'
 import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
+import { useTaskWorkspaceId, WorkspaceBadge } from '@/components/ui/WorkspaceBadge'
+import { useTaskGroupStore } from '@/stores/task-group-store'
 
 /**
  * Off-viewport ("frozen") resource panel content.
@@ -78,6 +80,9 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   const dragCommit = useRef({ x: 0, y: 0 })
   const resizeCommit = useRef({ w: 0, h: 0 })
   const previousTaskStatusRef = useRef<TaskStatus | undefined>(undefined)
+  const taskWorkspaceProjectId = useTaskWorkspaceId((panel.type === 'task' || panel.type === 'transcript') ? panel.refId : undefined)
+  const groupWorkspaceProjectId = useTaskGroupStore(state => panel.canvasGroupId ? state.groups.find(group => group.id === panel.canvasGroupId)?.projectId : undefined)
+  const workspaceProjectId = taskWorkspaceProjectId ?? groupWorkspaceProjectId ?? null
 
   // ── Drag handling ─────────────────────────────────────────
   const handleDragStart = useCallback(
@@ -541,6 +546,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         <span className="text-xs text-foreground truncate flex-1 font-medium">
           {panel.title}
         </span>
+        <WorkspaceBadge projectId={workspaceProjectId} className="max-w-28 shrink-0 truncate px-1.5 py-0 text-[9px]" />
 
         {/* Task layout toggle — always visible for task panels */}
         {panel.type === 'task' && (

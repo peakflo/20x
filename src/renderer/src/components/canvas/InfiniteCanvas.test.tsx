@@ -15,6 +15,18 @@ vi.mock('./drawing/DrawingLayer', async (importOriginal) => {
   return { ...actual, pasteImageAt: vi.fn().mockResolvedValue(null) }
 })
 
+const uiStoreState = vi.hoisted(() => ({
+  canvasPendingTaskId: null as string | null,
+  clearCanvasPendingTask: vi.fn(),
+  canvasPendingApp: null as { workflowId: string; name: string } | null,
+  clearCanvasPendingApp: vi.fn(),
+  sidebarView: 'canvas',
+  mastermindProjectId: '',
+  mastermindProjects: [] as Array<{ id: string; name: string }>,
+  mastermindTaskProjects: {} as Record<string, string>,
+  mastermindSnapshotLoaded: false,
+}))
+
 const taskStoreState = vi.hoisted(() => ({
   tasks: [] as WorkfloTask[],
   selectedTaskId: null as string | null,
@@ -76,16 +88,7 @@ vi.mock('@/stores/agent-store', () => ({
 }))
 
 vi.mock('@/stores/ui-store', () => ({
-  useUIStore: vi.fn((selector) => {
-    const state = {
-      canvasPendingTaskId: null,
-      clearCanvasPendingTask: vi.fn(),
-      canvasPendingApp: null,
-      clearCanvasPendingApp: vi.fn(),
-      sidebarView: 'canvas',
-    }
-    return selector ? selector(state) : state
-  }),
+  useUIStore: vi.fn((selector) => selector ? selector(uiStoreState) : uiStoreState),
 }))
 
 describe('InfiniteCanvas', () => {
@@ -115,6 +118,10 @@ describe('InfiniteCanvas', () => {
     taskStoreState.selectedTaskId = null
     taskStoreState.isLoading = false
     taskStoreState.error = null
+    uiStoreState.mastermindProjectId = ''
+    uiStoreState.mastermindProjects = []
+    uiStoreState.mastermindTaskProjects = {}
+    uiStoreState.mastermindSnapshotLoaded = false
 
     useDrawingStore.setState({
       objects: [],
@@ -173,6 +180,30 @@ describe('InfiniteCanvas', () => {
     render(<InfiniteCanvas />)
     expect(screen.getByText('My Task Panel')).toBeTruthy()
     expect(screen.getByText('Task')).toBeTruthy()
+  })
+
+  it('filters task panels by the Mastermind workspace without deleting canvas state', () => {
+    taskStoreState.tasks = [makeTask(), makeTask({ id: 'task-other', title: 'Other task' })]
+    uiStoreState.mastermindProjectId = 'project'
+    uiStoreState.mastermindProjects = [{ id: 'project', name: 'Example workspace' }, { id: 'other', name: 'Other workspace' }]
+    uiStoreState.mastermindTaskProjects = { 'task-123': 'project', 'task-other': 'other' }
+    uiStoreState.mastermindSnapshotLoaded = true
+    useCanvasStore.getState().addPanel({ type: 'task', title: 'Project panel', refId: 'task-123', x: 0, y: 0, width: 400, height: 300 })
+    useCanvasStore.getState().addPanel({ type: 'task', title: 'Other panel', refId: 'task-other', x: 500, y: 0, width: 400, height: 300 })
+    useCanvasStore.getState().addPanel({ type: 'app', title: 'Global tool', x: 0, y: 400, width: 400, height: 300 })
+
+    const { rerender } = render(<InfiniteCanvas />)
+    expect(screen.getByText('Project panel')).toBeInTheDocument()
+    expect(screen.queryByText('Other panel')).not.toBeInTheDocument()
+    expect(screen.getAllByText('Global tool').length).toBeGreaterThan(0)
+    expect(screen.getByText('Example workspace')).toBeInTheDocument()
+    expect(screen.getByText('No workspace')).toBeInTheDocument()
+    expect(useCanvasStore.getState().panels).toHaveLength(3)
+
+    uiStoreState.mastermindProjectId = ''
+    rerender(<InfiniteCanvas />)
+    expect(screen.getByText('Other panel')).toBeInTheDocument()
+    expect(useCanvasStore.getState().panels).toHaveLength(3)
   })
 
   it('unmounts off-screen task content while keeping the lightweight panel shell', async () => {

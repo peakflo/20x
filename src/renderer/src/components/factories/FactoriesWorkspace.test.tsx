@@ -15,7 +15,7 @@ let snapshot: ResponsibilitySnapshot
 let changed: () => void
 beforeEach(() => {
   cleanup(); vi.clearAllMocks()
-  useUIStore.setState({ mastermindDraft: null, showOrchestrator: false, canvasResponsibilityId: null })
+  useUIStore.setState({ mastermindDraft: null, showOrchestrator: false, canvasResponsibilityId: null, mastermindProjectId: '', mastermindProjects: [], mastermindTaskProjects: {}, mastermindSnapshotLoaded: false })
   useCanvasStore.setState({ panels: [], edges: [], nextZIndex: 1, shownGroupIds: [], closedGroupMemberIds: {} })
   useTaskGroupStore.setState({ groups: [], membership: {}, executions: {}, canvasGroupId: null })
   snapshot = { projects: [{ id: 'project', name: 'Example', root: '/example', agentId: 'agent', createdAt: '2026-01-01' }, { id: 'other', name: 'Other', root: '/other', agentId: 'agent', createdAt: '2026-01-01' }], responsibilities: [], steps: [], memory: [], notices: [], factories: [factory], factoryProposals: [] }
@@ -26,11 +26,13 @@ it('shows diagrams/instructions, filters by project, and drafts Use/Edit/Create 
   render(<FactoriesWorkspace />)
   expect(await screen.findByLabelText('Rendered diagram')).toHaveTextContent('A[Review]')
   expect(screen.getByText(factory.guide)).toBeInTheDocument()
+  expect(screen.getAllByText('Example').length).toBeGreaterThan(0)
   fireEvent.click(screen.getByRole('button', { name: 'Use' }))
   expect(useUIStore.getState()).toMatchObject({ showOrchestrator: true, mastermindDraft: { projectId: 'project', text: expect.stringContaining('(ID factory)') } })
   fireEvent.click(screen.getByRole('button', { name: 'Edit in Mastermind' }))
   expect(useUIStore.getState().mastermindDraft?.text).toContain('revise Factory')
   fireEvent.change(screen.getByLabelText('Factory project'), { target: { value: 'other' } })
+  expect(useUIStore.getState().mastermindProjectId).toBe('other')
   expect(screen.queryByRole('button', { name: 'Use' })).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Create in Mastermind' }))
   expect(useUIStore.getState().mastermindDraft?.projectId).toBe('other')

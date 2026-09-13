@@ -19,7 +19,12 @@ describe('useUIStore', () => {
       deletingTaskId: null,
       settingsTab: SettingsTab.GENERAL,
       createTaskPrefill: null,
-      showOrchestrator: false
+      showOrchestrator: false,
+      mastermindProjectId: '',
+      mastermindProjects: [],
+      mastermindTaskProjects: {},
+      mastermindSnapshotLoaded: false,
+      mastermindSelectionHydrated: false
     })
   })
 
@@ -36,6 +41,28 @@ describe('useUIStore', () => {
     expect(state.activeModal).toBeNull()
     expect(state.editingTaskId).toBeNull()
     expect(state.deletingTaskId).toBeNull()
+  })
+
+  it('shares Mastermind project selection and task ownership with workspace views', () => {
+    useUIStore.getState().syncMastermindSnapshot({
+      projects: [{ id: 'project', name: 'Example', root: '/example', agentId: 'agent', createdAt: '' }],
+      responsibilities: [{ id: 'work', projectId: 'project' }],
+      steps: [{ taskId: 'task', responsibilityId: 'work' }],
+      notices: [], memory: []
+    } as never)
+    useUIStore.getState().setMastermindProjectId('project')
+    expect(useUIStore.getState()).toMatchObject({ mastermindProjectId: 'project', mastermindProjects: [{ id: 'project', name: 'Example' }], mastermindTaskProjects: { task: 'project' }, mastermindSnapshotLoaded: true })
+    useUIStore.getState().openMastermindProject('project')
+    expect(useUIStore.getState()).toMatchObject({ showOrchestrator: true, mastermindProjectId: 'project' })
+  })
+
+  it('restores the saved workspace without overriding a live choice', () => {
+    useUIStore.getState().hydrateMastermindProjectId('saved')
+    useUIStore.getState().hydrateMastermindProjectId('late')
+    expect(useUIStore.getState().mastermindProjectId).toBe('saved')
+    useUIStore.getState().setMastermindProjectId('chosen')
+    useUIStore.getState().hydrateMastermindProjectId('later')
+    expect(useUIStore.getState().mastermindProjectId).toBe('chosen')
   })
 
   it('setSidebarView changes the view', () => {

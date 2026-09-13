@@ -24,11 +24,11 @@ export const taskControlTools: Tool[] = [
     }, required: ['action'] }
   },
   {
-    name: 'inspect_responsibilities', description: 'Find saved project Task, Goal and Routine agreements by title or exact responsibility ID. Includes inactive proposals shown in Automation and Mastermind Work, which are distinct from ordinary 20x tasks. Use before deleting a proposal; clarify ambiguous matches.',
+    name: 'inspect_responsibilities', description: 'Find saved project Task, Goal and Routine agreements by title or exact responsibility ID. Includes proposed and cancelled responsibilities shown in Automation and Mastermind Work, which are distinct from ordinary 20x tasks. Use before deletion; clarify ambiguous matches.',
     inputSchema: { type: 'object', additionalProperties: false, properties: { query: { type: 'string' }, responsibility_id: { type: 'string' } } }
   },
   {
-    name: 'delete_responsibility_proposal', description: 'Ask the engineer to confirm deleting an exact inactive Task, Goal or Routine proposal from Mastermind Work and Automation. Retains any source-trial tasks, results, files and project memory. Refuses active or changed agreements and unresolved source trials; does not cancel running work. Use manage_task for ordinary task or recurring-task deletion. Mastermind administration: do not delegate or use computer control. No model approval flag; report only the returned outcome.',
+    name: 'delete_responsibility_proposal', description: 'Ask the engineer to confirm deleting an exact proposed or cancelled Task, Goal or Routine responsibility from Mastermind Work and Automation. Retains any source-trial tasks, results, files and project memory. Refuses active or changed agreements and unresolved source trials or workers; does not cancel running work. Use manage_task for ordinary task or recurring-task deletion. Mastermind administration: do not delegate or use computer control. No model approval flag; report only the returned outcome.',
     inputSchema: { type: 'object', additionalProperties: false, properties: { responsibility_id: { type: 'string' } }, required: ['responsibility_id'] }
   },
   {
@@ -189,8 +189,8 @@ export class TaskControl {
     return this.runExclusive(async () => {
       const proposal = this.responsibilities.proposalForDeletion(args.responsibility_id, projectId)
       const project = this.responsibilities.snapshot(proposal.projectId).projects.find(p => p.id === proposal.projectId)
-      const approved = await this.confirm({ title: `Delete ${proposal.agreement.kind} proposal “${proposal.agreement.title}”?`, confirmLabel: 'Delete proposal', signal: this.shutdown.signal,
-        detail: `Project: ${project?.name ?? proposal.projectId}\nProposal: ${proposal.id}\nRevision: ${proposal.revision}\nObjective: ${proposal.agreement.objective}\n\nRemove this inactive proposal from Work and Automation. Any source-trial tasks, saved results, files, and project memory remain. Running or changed proposals cannot be deleted with this confirmation.` })
+      const approved = await this.confirm({ title: `Delete ${proposal.agreement.kind} “${proposal.agreement.title}”?`, confirmLabel: 'Delete responsibility', signal: this.shutdown.signal,
+        detail: `Project: ${project?.name ?? proposal.projectId}\nResponsibility: ${proposal.id}\nRevision: ${proposal.revision}\nObjective: ${proposal.agreement.objective}\n\nRemove this proposed or cancelled responsibility from Work and Automation. Any source-trial tasks, saved results, files, and project memory remain. Running, unreleased, or changed responsibilities cannot be deleted with this confirmation.` })
       if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, responsibilityId: proposal.id }
       this.responsibilities.deleteProposal(proposal.id, proposal, projectId)
       return { success: true, deleted: true, responsibilityId: proposal.id, title: proposal.agreement.title }

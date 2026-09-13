@@ -10,6 +10,8 @@ import { useUIStore } from '@/stores/ui-store'
 import { TaskStatus } from '@/types'
 import type { CanvasPanelType } from '@/stores/canvas-store'
 import type { DrawingTool } from '@/components/canvas/drawing/types'
+import { taskWorkspaceId } from '@/components/ui/WorkspaceBadge'
+import { useTaskGroupStore } from '@/stores/task-group-store'
 
 interface ContextMenuPosition {
   clientX: number
@@ -54,7 +56,19 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
   const addPanel = useCanvasStore((s) => s.addPanel)
   const panels = useCanvasStore((s) => s.panels)
   const openCreateModal = useUIStore((s) => s.openCreateModal)
+  const projectId = useUIStore((s) => s.mastermindProjectId)
+  const projects = useUIStore((s) => s.mastermindProjects)
+  const taskProjects = useUIStore((s) => s.mastermindTaskProjects)
+  const workspaceDataLoaded = useUIStore((s) => s.mastermindSnapshotLoaded)
+  const groups = useTaskGroupStore((s) => s.groups)
+  const membership = useTaskGroupStore((s) => s.membership)
+  const groupsLoaded = useTaskGroupStore((s) => s.isLoaded)
   const setDrawingTool = useDrawingStore((s) => s.setTool)
+  const workspaceForTask = (taskId: string) => taskWorkspaceId(taskId, taskProjects, groups, membership)
+  const workspaceName = (taskId: string) => {
+    const id = workspaceForTask(taskId)
+    return id ? projects.find(project => project.id === id)?.name ?? 'Unknown workspace' : 'No workspace'
+  }
 
   // Close on click outside
   useEffect(() => {
@@ -107,10 +121,11 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
   )
 
   // Reusable tasks for the menu (non-completed, max 10)
+  const filterReady = workspaceDataLoaded && groupsLoaded
   const availableTasks = tasks
-    .filter((t) => t.status !== TaskStatus.Completed)
+    .filter((t) => t.status !== TaskStatus.Completed && (!projectId || !filterReady || workspaceForTask(t.id) === projectId))
     .slice(0, 10)
-
+  const availableSessions = activeSessions.filter(({ taskId }) => !projectId || !filterReady || workspaceForTask(taskId) === projectId)
 
   return (
     <div
@@ -210,7 +225,7 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
                 key={task.id}
                 icon={<CheckSquare className="h-3.5 w-3.5 text-blue-400" />}
                 label={task.title}
-                sublabel={task.status.replace(/_/g, ' ')}
+                sublabel={`${task.status.replace(/_/g, ' ')} · ${workspaceName(task.id)}`}
                 onClick={() => handleAddPanel('task', task.title, task.id)}
               />
             ))}
@@ -218,16 +233,16 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
         )}
 
         {/* Transcripts section */}
-        {activeSessions.length > 0 && (
+        {availableSessions.length > 0 && (
           <MenuSection title="Agent Transcripts">
-            {activeSessions.map(({ taskId, messageCount }) => {
+            {availableSessions.map(({ taskId, messageCount }) => {
               const task = tasks.find((t) => t.id === taskId)
               return (
                 <MenuItem
                   key={taskId}
                   icon={<MessageSquare className="h-3.5 w-3.5 text-teal-400" />}
                   label={task?.title || `Session ${taskId.slice(0, 8)}`}
-                  sublabel={`${messageCount} messages`}
+                  sublabel={`${messageCount} messages · ${workspaceName(taskId)}`}
                   onClick={() =>
                     handleAddPanel(
                       'transcript',
@@ -242,7 +257,7 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
         )}
 
         {/* Empty state */}
-        {availableTasks.length === 0 && activeSessions.length === 0 && applications.length === 0 && (
+        {availableTasks.length === 0 && availableSessions.length === 0 && applications.length === 0 && (
           <div className="px-3 py-4 text-center text-[11px] text-muted-foreground/40">
             No tasks, sessions, or applications available.
             <br />

@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { CalendarClock } from 'lucide-react'
 import { useTaskStore } from '@/stores/task-store'
+import { useTaskGroupStore } from '@/stores/task-group-store'
+import { useUIStore } from '@/stores/ui-store'
+import { taskWorkspaceId, WorkspaceBadge } from '@/components/ui/WorkspaceBadge'
 import { TaskStatus } from '@/types'
 import type { ResponsibilitySnapshot, ResponsibilityState } from '@shared/responsibilities'
 
@@ -19,6 +22,11 @@ export function AutomationWorkspace() {
   const tasks = useTaskStore(s => s.tasks)
   const tasksLoading = useTaskStore(s => s.isLoading)
   const tasksError = useTaskStore(s => s.error)
+  const projectId = useUIStore(s => s.mastermindProjectId)
+  const taskProjects = useUIStore(s => s.mastermindTaskProjects)
+  const syncMastermindSnapshot = useUIStore(s => s.syncMastermindSnapshot)
+  const groups = useTaskGroupStore(s => s.groups)
+  const membership = useTaskGroupStore(s => s.membership)
   const [snapshot, setSnapshot] = useState<ResponsibilitySnapshot | null>(null)
   const [error, setError] = useState('')
 
@@ -31,7 +39,7 @@ export function AutomationWorkspace() {
       const current = ++request
       try {
         const next = await api.snapshot()
-        if (live && current === request) { setSnapshot(next); setError('') }
+        if (live && current === request) { setSnapshot(next); syncMastermindSnapshot(next); setError('') }
       } catch (e) {
         if (live && current === request) setError(`Could not refresh project goals and routines: ${String(e)}`)
       }
@@ -39,17 +47,18 @@ export function AutomationWorkspace() {
     const off = api.onChanged(() => { void refresh() })
     void refresh()
     return () => { live = false; off() }
-  }, [])
+  }, [syncMastermindSnapshot])
 
-  const schedules = tasks.filter(t => t.is_recurring && !t.recurrence_parent_id)
+  const workspaceForTask = (taskId: string) => taskWorkspaceId(taskId, taskProjects, groups, membership)
+  const schedules = tasks.filter(t => t.is_recurring && !t.recurrence_parent_id && (!projectId || workspaceForTask(t.id) === projectId))
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
-  const work = (snapshot?.responsibilities ?? []).filter(r => r.agreement.kind === 'goal' || r.agreement.kind === 'routine')
+  const work = (snapshot?.responsibilities ?? []).filter(r => (r.agreement.kind === 'goal' || r.agreement.kind === 'routine') && (!projectId || r.projectId === projectId))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 
   return <div className="h-full overflow-auto p-6">
     <header className="mb-6">
       <h1 className="flex items-center gap-2 text-xl font-semibold"><CalendarClock size={22} />Automation</h1>
-      <p className="mt-2 text-sm text-muted-foreground">Schedules, goals, and recurring workflows across all projects. This list updates automatically; manage them through Mastermind.</p>
+      <p className="mt-2 text-sm text-muted-foreground">Schedules, goals, and recurring workflows for {projectId ? snapshot?.projects.find(project => project.id === projectId)?.name ?? 'the selected workspace' : 'all workspaces'}. This list updates automatically; manage them through Mastermind.</p>
     </header>
 
     <section aria-labelledby="automation-schedules" className="mb-8">
@@ -59,14 +68,14 @@ export function AutomationWorkspace() {
       {!tasksLoading && !tasksError && !schedules.length && <p className="text-sm text-muted-foreground">No scheduled tasks yet. Ask Mastermind to set up a recurring workflow.</p>}
       {schedules.length > 0 && <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-left text-sm">
-          <caption className="sr-only">Scheduled tasks across all projects</caption>
+          <caption className="sr-only">Scheduled tasks for the selected workspace filter</caption>
           <thead className="bg-muted/40 text-xs text-muted-foreground"><tr><th scope="col" className="p-3">Schedule</th><th scope="col" className="p-3">Status</th><th scope="col" className="p-3">Timing</th></tr></thead>
           <tbody>{schedules.map(task => {
             const completed = task.recurrence_mode === 'reuse' && task.status === TaskStatus.Completed
             const stopped = task.recurrence_paused || completed
             return <tr key={task.id} className="border-t border-border align-top">
               <th scope="row" className="p-3 font-normal">
-                <p className="break-words font-medium">{task.title}</p>
+                <div className="flex flex-wrap items-center gap-2"><p className="break-words font-medium">{task.title}</p><WorkspaceBadge projectId={workspaceForTask(task.id)} /></div>
                 <p className="mt-1 break-words text-xs text-muted-foreground">{task.repos.length ? task.repos.join(', ') : 'No repository linked'}</p>
                 {!task.server_managed && <p className="mt-1 text-xs text-muted-foreground">{task.recurrence_mode === 'reuse' ? 'Reuse one task' : 'Create a task each time'} · {task.auto_start_agent ? 'Auto-start enabled' : 'Manual start'}</p>}
               </th>
@@ -92,8 +101,8 @@ export function AutomationWorkspace() {
           <thead className="bg-muted/40 text-xs text-muted-foreground"><tr><th scope="col" className="p-3">Goal or routine</th><th scope="col" className="p-3">Status</th><th scope="col" className="p-3">Progress and next step</th></tr></thead>
           <tbody>{work.map(record => <tr key={record.id} className="border-t border-border align-top">
             <th scope="row" className="p-3 font-normal">
-              <p className="break-words font-medium">{record.agreement.title}</p>
-              <p className="mt-1 text-xs text-muted-foreground">{record.agreement.kind === 'goal' ? 'Goal' : 'Recurring workflow'} · {snapshot?.projects.find(p => p.id === record.projectId)?.name ?? 'Unknown project'}</p>
+              <div className="flex flex-wrap items-center gap-2"><p className="break-words font-medium">{record.agreement.title}</p><WorkspaceBadge projectId={record.projectId} /></div>
+              <p className="mt-1 text-xs text-muted-foreground">{record.agreement.kind === 'goal' ? 'Goal' : 'Recurring workflow'}</p>
               <p className="mt-1 whitespace-pre-wrap break-words text-xs text-muted-foreground">{record.agreement.objective}</p>
             </th>
             <td className="p-3">{stateLabels[record.state]}</td>

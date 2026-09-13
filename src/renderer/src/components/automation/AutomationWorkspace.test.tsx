@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest'
 import { AutomationWorkspace } from './AutomationWorkspace'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
+import { useTaskGroupStore } from '@/stores/task-group-store'
 import { TaskStatus, type WorkfloTask } from '@/types'
 import type { ResponsibilitiesApi, ResponsibilityRecord, ResponsibilitySnapshot } from '@shared/responsibilities'
 
@@ -33,7 +34,8 @@ beforeEach(() => {
   cleanup()
   vi.clearAllMocks()
   useTaskStore.setState({ tasks: [], isLoading: false, error: null })
-  useUIStore.setState({ searchQuery: 'unrelated', statusFilter: TaskStatus.Completed, sourceFilter: 'unrelated' })
+  useUIStore.setState({ searchQuery: 'unrelated', statusFilter: TaskStatus.Completed, sourceFilter: 'unrelated', mastermindProjectId: '', mastermindProjects: [], mastermindTaskProjects: {}, mastermindSnapshotLoaded: false })
+  useTaskGroupStore.setState({ groups: [], membership: {}, executions: {}, isLoaded: true })
   snapshot = {
     projects: [{ id: 'project', name: 'Example project', root: '/example', agentId: 'agent', createdAt: '2030-01-01' }],
     responsibilities: [], notices: [], memory: [], steps: []
@@ -67,7 +69,8 @@ it('lists all schedules and project goals/routines without task filters, duplica
   expect(old.getByText('Next scheduled: —')).toBeInTheDocument()
   expect(within(screen.getByText('Completed schedule').closest('tr')!).getByText('Completed')).toBeInTheDocument()
   expect(within(screen.getByText('Source schedule').closest('tr')!).getByText('Managed by source')).toBeInTheDocument()
-  expect(screen.getAllByText('Goal · Example project')).toHaveLength(2)
+  expect(screen.getAllByText('Goal')).toHaveLength(2)
+  expect(screen.getAllByText('Example project')).toHaveLength(3)
   expect(within(screen.getByText('Finished goal').closest('tr')!).queryByText(/Saved next step/)).not.toBeInTheDocument()
   expect(screen.queryByRole('button')).not.toBeInTheDocument()
   expect(screen.queryByRole('link')).not.toBeInTheDocument()
@@ -76,6 +79,26 @@ it('lists all schedules and project goals/routines without task filters, duplica
   expect(window.electronAPI.db.manageScheduleTask).not.toHaveBeenCalled()
   unmount()
   expect(unsubscribe).toHaveBeenCalledOnce()
+})
+
+it('follows the Mastermind workspace and labels local work', async () => {
+  snapshot.projects.push({ id: 'other', name: 'Other workspace', root: '/other', agentId: 'agent', createdAt: '2030-01-01' })
+  snapshot.responsibilities = [responsibility('Project goal', 'goal'), { ...responsibility('Other goal', 'goal'), projectId: 'other' }]
+  useTaskStore.setState({ tasks: [task('Project schedule'), task('Local schedule')] })
+  useTaskGroupStore.setState({ groups: [{ id: 'group', name: 'Project work', description: '', projectId: 'project', createdAt: '2030-01-01' }], membership: { 'Project schedule': 'group' }, executions: {}, isLoaded: true })
+  render(<AutomationWorkspace />)
+  await screen.findByText('Other goal')
+  expect(screen.getByText('Local schedule').closest('tr')).toHaveTextContent('No workspace')
+
+  act(() => useUIStore.getState().setMastermindProjectId('project'))
+  expect(screen.getByText('Project schedule')).toBeInTheDocument()
+  expect(screen.getByText('Project goal')).toBeInTheDocument()
+  expect(screen.queryByText('Local schedule')).not.toBeInTheDocument()
+  expect(screen.queryByText('Other goal')).not.toBeInTheDocument()
+
+  act(() => useUIStore.getState().setMastermindProjectId(''))
+  expect(screen.getByText('Local schedule')).toBeInTheDocument()
+  expect(screen.getByText('Other goal')).toBeInTheDocument()
 })
 
 it('updates from task events and project notifications while the page stays open', async () => {

@@ -46,6 +46,7 @@ import { dispatchTaskShortcut, findComposerElement, focusComposerInput, getNextN
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import { composerCanSubmit, MASTERMIND_COMPOSER_KEY, sendComposerMessage, setActiveComposer } from '@/lib/voice-dictation-target'
 import { useTaskGroupStore } from '@/stores/task-group-store'
+import { taskWorkspaceId } from '@/components/ui/WorkspaceBadge'
 
 const isWindows = navigator.platform.toLowerCase().startsWith('win') || navigator.userAgent.includes('Windows')
 const isMac = navigator.platform.toLowerCase().includes('mac')
@@ -93,6 +94,17 @@ export function AppLayout() {
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
   const fetchTaskGroups = useTaskGroupStore((s) => s.fetch)
   const clearCreationGroup = useTaskGroupStore((s) => s.setCreationGroup)
+  const taskGroups = useTaskGroupStore((s) => s.groups)
+  const taskGroupMembership = useTaskGroupStore((s) => s.membership)
+  const taskGroupsLoaded = useTaskGroupStore((s) => s.isLoaded)
+  const mastermindProjectId = useUIStore((s) => s.mastermindProjectId)
+  const mastermindTaskProjects = useUIStore((s) => s.mastermindTaskProjects)
+  const mastermindSnapshotLoaded = useUIStore((s) => s.mastermindSnapshotLoaded)
+  const workspaceFilterReady = mastermindSnapshotLoaded && taskGroupsLoaded
+  const inSelectedWorkspace = useCallback((taskId: string) => !mastermindProjectId || !workspaceFilterReady || taskWorkspaceId(taskId, mastermindTaskProjects, taskGroups, taskGroupMembership) === mastermindProjectId, [mastermindProjectId, workspaceFilterReady, mastermindTaskProjects, taskGroups, taskGroupMembership])
+  const workspaceTasks = useMemo(() => tasks.filter(task => inSelectedWorkspace(task.id)), [tasks, inSelectedWorkspace])
+  const workspaceAllTasks = useMemo(() => allTasks.filter(task => inSelectedWorkspace(task.id)), [allTasks, inSelectedWorkspace])
+  const workspaceSelectedTask = selectedTask && inSelectedWorkspace(selectedTask.id) ? selectedTask : undefined
 
   // ── Command palette ──
   const [cmdOpen, setCmdOpen] = useState(false)
@@ -134,7 +146,27 @@ export function AppLayout() {
     return api.onChanged(() => { void fetchTaskGroups() })
   }, [fetchTaskGroups])
 
+  useEffect(() => {
+    let live = true
+    const responsibilities = window.electronAPI?.responsibilities
+    void settingsApi.get('mastermind_project').then(id => {
+      if (live) useUIStore.getState().hydrateMastermindProjectId(id ?? '')
+    }).catch(error => console.error('[Workspace] Failed to restore selection:', error))
+    if (!responsibilities) return () => { live = false }
+    const refresh = async () => {
+      const snapshot = await responsibilities.snapshot()
+      if (live) useUIStore.getState().syncMastermindSnapshot(snapshot)
+    }
+    void refresh().catch(error => console.error('[Workspace] Failed to load ownership:', error))
+    const unsubscribe = responsibilities.onChanged(() => { void refresh().catch(error => console.error('[Workspace] Failed to refresh ownership:', error)) })
+    return () => { live = false; unsubscribe() }
+  }, [])
+
   useEffect(() => { void fetchTaskGroups() }, [allTasks, fetchTaskGroups])
+
+  useEffect(() => {
+    if (selectedTask && mastermindProjectId && workspaceFilterReady && !inSelectedWorkspace(selectedTask.id)) selectTask(null)
+  }, [selectedTask?.id, mastermindProjectId, workspaceFilterReady, inSelectedWorkspace, selectTask])
 
   useEffect(() => {
     if (!selectedTask || sidebarView !== 'tasks') return
@@ -169,8 +201,8 @@ export function AppLayout() {
     () => dashboardPreviewTaskId ? allTasks.find((t) => t.id === dashboardPreviewTaskId) : undefined,
     [dashboardPreviewTaskId, allTasks]
   )
-  const filteredTasksRef = useRef(tasks)
-  filteredTasksRef.current = tasks
+  const filteredTasksRef = useRef(workspaceTasks)
+  filteredTasksRef.current = workspaceTasks
 
   const handleGoToFullView = useCallback((taskId: string) => {
     closeDashboardPreview()
@@ -219,7 +251,7 @@ export function AppLayout() {
     [requestComplete, selectNextActiveTask]
   )
 
-  const selectedTaskId = selectedTask?.id
+  const selectedTaskId = workspaceSelectedTask?.id
   const handleEditSelectedTask = useCallback(() => {
     if (selectedTaskId) openEditModal(selectedTaskId)
   }, [openEditModal, selectedTaskId])
@@ -363,7 +395,7 @@ export function AppLayout() {
       .map((element) => element.dataset.keyboardTaskId)
       .filter((id): id is string => !!id)
     const groupState = useTaskGroupStore.getState()
-    const fallbackIds = tasks
+    const fallbackIds = workspaceTasks
       .filter(task => sidebarView !== 'tasks' || groupState.view === 'all' || (groupState.view === 'ungrouped' ? !groupState.membership[task.id] : groupState.membership[task.id] === groupState.view))
       .filter((task) => !task.parent_task_id && task.status !== TaskStatus.Completed && !isSnoozed(task.snoozed_until))
       .map((task) => task.id)
@@ -376,7 +408,7 @@ export function AppLayout() {
     if (activeModal === 'settings') closeModal()
     setSidebarView('tasks')
     selectTask(ids[nextIndex])
-  }, [activeModal, closeModal, selectTask, selectedTaskId, setSidebarView, sidebarView, tasks])
+  }, [activeModal, closeModal, selectTask, selectedTaskId, setSidebarView, sidebarView, workspaceTasks])
 
   const openSelectedTask = useCallback(() => {
     if (activeTaskId) handleGoToFullView(activeTaskId)
@@ -497,10 +529,10 @@ export function AppLayout() {
   }), [clearTaskSelection, completeActiveTask, deleteActiveTask, focusComposer, focusSearch, navigateVisibleTask, nudgeActiveTask, openActiveTaskOnCanvas, openParentTask, openSelectedTask, openSubtasks, runActiveHeartbeat, runTaskShortcut, toggleMastermindAudio, toggleTaskAudio])
 
   const overdueCount = useMemo(
-    () => tasks.filter(
+    () => workspaceTasks.filter(
       (t) => isOverdue(t.due_date) && t.status !== TaskStatus.Completed && !isSnoozed(t.snoozed_until)
     ).length,
-    [tasks]
+    [workspaceTasks]
   )
 
   useOverdueNotifications(tasks)
@@ -810,9 +842,9 @@ export function AppLayout() {
         {/* Sidebar — only for tasks and skills views, and when not collapsed */}
         {(sidebarView === 'tasks' || sidebarView === 'skills') && !sidebarCollapsed && (
           <Sidebar
-            tasks={tasks}
-            allTasks={allTasks}
-            selectedTaskId={selectedTask?.id || null}
+            tasks={workspaceTasks}
+            allTasks={workspaceAllTasks}
+            selectedTaskId={workspaceSelectedTask?.id || null}
             overdueCount={overdueCount}
             onSelectTask={selectTask}
             onCreateTask={openGlobalCreateTask}
@@ -851,7 +883,7 @@ export function AppLayout() {
               </Suspense>
             ) : sidebarView !== 'canvas' ? (
               <TaskWorkspace
-              task={selectedTask}
+              task={workspaceSelectedTask}
               agents={agents}
               onEdit={handleEditSelectedTask}
               onDelete={handleDeleteSelectedTask}
