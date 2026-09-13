@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Loader2, Wifi, WifiOff, RefreshCw, Edit3, Trash2, KeyRound } from 'lucide-react'
+import { Plus, Loader2, Wifi, WifiOff, RefreshCw, Edit3, Trash2, KeyRound, Copy } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+import { Switch } from '@/components/ui/Switch'
 import { SettingsSection } from '../SettingsSection'
 import { McpServerFormDialog } from '../forms/McpServerFormDialog'
 import { useMcpStore } from '@/stores/mcp-store'
 import type { McpServer, CreateMcpServerDTO } from '@/types'
+import type { MastermindMcpClient, MastermindMcpStatus } from '@shared/mastermind-mcp'
 
 interface McpConnectionInfo {
   status: 'idle' | 'testing' | 'connected' | 'failed'
@@ -27,10 +29,43 @@ export function ToolsMcpSettings() {
   } = useMcpStore()
   const [connections, setConnections] = useState<Map<string, McpConnectionInfo>>(new Map())
   const [mcpDialog, setMcpDialog] = useState<McpDialogState>({ open: false })
+  const [mastermind, setMastermind] = useState<MastermindMcpStatus>()
+  const [mastermindBusy, setMastermindBusy] = useState<string>()
+  const [mastermindMessage, setMastermindMessage] = useState<string>()
+
+  const loadMastermind = useCallback(async () => {
+    try { setMastermind(await window.electronAPI.mastermindMcp.status()) }
+    catch (error) { setMastermindMessage(error instanceof Error ? error.message : 'Could not read 20x MCP status.') }
+  }, [])
 
   useEffect(() => {
     fetchServers()
+    void loadMastermind()
   }, [])
+
+  const toggleMastermind = async (enabled: boolean) => {
+    setMastermindBusy('toggle'); setMastermindMessage(undefined)
+    try { setMastermind(await window.electronAPI.mastermindMcp.setEnabled(enabled)) }
+    catch (error) { setMastermindMessage(error instanceof Error ? error.message : 'Could not update 20x MCP.'); await loadMastermind() }
+    finally { setMastermindBusy(undefined) }
+  }
+
+  const installMastermind = async (client: MastermindMcpClient) => {
+    setMastermindBusy(client); setMastermindMessage(undefined)
+    try {
+      const result = await window.electronAPI.mastermindMcp.install(client)
+      setMastermind(result.status)
+      setMastermindMessage(result.changedPaths.length ? `Changed ${result.changedPaths.join(', ')}. Restart existing ${client} sessions.${result.backupPaths.length ? ` Backups: ${result.backupPaths.join(', ')}.` : ''}` : `${client} is already current.`)
+    } catch (error) { setMastermindMessage(error instanceof Error ? error.message : `Could not install for ${client}.`) }
+    finally { setMastermindBusy(undefined) }
+  }
+
+  const checkMastermind = async () => {
+    setMastermindBusy('check'); setMastermindMessage(undefined)
+    try { setMastermind(await window.electronAPI.mastermindMcp.checkSkillVersions()) }
+    catch (error) { setMastermindMessage(error instanceof Error ? error.message : 'Could not check skill versions.') }
+    finally { setMastermindBusy(undefined) }
+  }
 
   useEffect(() => {
     if (servers.length > 0) {
@@ -136,6 +171,56 @@ export function ToolsMcpSettings() {
 
   return (
     <>
+      <SettingsSection
+        title="20x Mastermind MCP"
+        description="Let Codex, Pi, and Claude communicate with the Mastermind that owns each workspace"
+      >
+        <div className="rounded-lg border border-border bg-card p-4 space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <div className="text-sm font-medium">Enable local MCP endpoint</div>
+              <div className="text-xs text-muted-foreground mt-1">
+                {mastermind?.running ? 'Running on this computer' : mastermind?.error ? 'Could not start' : mastermind?.enabled ? 'Stopped' : 'Disabled'}
+                {mastermind?.error ? ` · ${mastermind.error}` : ''}
+              </div>
+            </div>
+            <Switch checked={mastermind?.enabled ?? false} disabled={!mastermind || mastermindBusy === 'toggle'} onCheckedChange={(enabled) => void toggleMastermind(enabled)} />
+          </div>
+          <div className="flex items-center gap-2 rounded bg-muted px-3 py-2">
+            <code className="text-xs flex-1 truncate">{mastermind?.url ?? 'http://127.0.0.1:20621/mcp'}</code>
+            <Button variant="ghost" size="icon" title="Copy endpoint" onClick={() => void navigator.clipboard.writeText(mastermind?.url ?? 'http://127.0.0.1:20621/mcp')}>
+              <Copy className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          <div className="space-y-2">
+            {(['codex', 'pi', 'claude'] as const).map(client => {
+              const clientStatus = mastermind?.clients[client]
+              const ready = clientStatus?.configured && clientStatus.skillState === 'current'
+              return (
+                <div key={client} className="flex items-center gap-3 rounded border border-border px-3 py-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium capitalize">{client === 'claude' ? 'Claude Code' : client}</div>
+                    <div className="text-xs text-muted-foreground truncate">
+                      {!clientStatus?.available ? 'Client not found' : ready ? `Current · skill v${mastermind?.skillVersion}` : clientStatus.skillState.replace('_', ' ')}
+                    </div>
+                  </div>
+                  <Button size="sm" variant={ready ? 'ghost' : 'secondary'} disabled={!clientStatus?.available || !!mastermindBusy || ready} onClick={() => void installMastermind(client)}>
+                    {mastermindBusy === client ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : ready ? 'Installed' : clientStatus?.skillState === 'not_installed' ? 'Install' : 'Update'}
+                  </Button>
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">Bundled skill v{mastermind?.skillVersion ?? '…'} · configuration changes preserve unrelated settings.</p>
+            <Button size="sm" variant="ghost" disabled={!!mastermindBusy} onClick={() => void checkMastermind()}>
+              <RefreshCw className="h-3.5 w-3.5" /> Check versions
+            </Button>
+          </div>
+          {mastermindMessage && <p className="text-xs text-muted-foreground">{mastermindMessage}</p>}
+        </div>
+      </SettingsSection>
+
       <SettingsSection
         title="MCP Servers"
         description="Manage Model Context Protocol servers for tools and integrations"

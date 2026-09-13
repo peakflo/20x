@@ -1,6 +1,7 @@
 import type { TaskGroupsApi } from '../shared/task-groups'
 import type { TaskConfirmationApi, TaskConfirmation } from '../shared/task-confirmation'
 import type { ResponsibilitiesApi } from '../shared/responsibilities'
+import type { MastermindMcpApi, MastermindMcpClient } from '../shared/mastermind-mcp'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
@@ -31,6 +32,12 @@ const responsibilities: ResponsibilitiesApi = {
     return () => { ipcRenderer.removeListener('responsibilities:changed', handler) }
   }
 }
+const mastermindMcp: MastermindMcpApi = {
+  status: () => ipcRenderer.invoke('mastermindMcp:status'),
+  setEnabled: enabled => ipcRenderer.invoke('mastermindMcp:setEnabled', enabled),
+  install: (client: MastermindMcpClient) => ipcRenderer.invoke('mastermindMcp:install', client),
+  checkSkillVersions: () => ipcRenderer.invoke('mastermindMcp:checkSkills')
+}
 const taskConfirmation: TaskConfirmationApi = {
   current: () => ipcRenderer.invoke('task-confirmation:current'),
   answer: (id, approved) => ipcRenderer.invoke('task-confirmation:answer', id, approved),
@@ -44,6 +51,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   taskGroups,
   taskConfirmation,
   responsibilities,
+  mastermindMcp,
   db: {
     getScheduleRuns: (id: string, runId?: string, before?: string) => ipcRenderer.invoke('db:getScheduleRuns', id, runId, before),
     manageScheduleTask: (id: string, action: string) => ipcRenderer.invoke('db:manageScheduleTask', id, action),

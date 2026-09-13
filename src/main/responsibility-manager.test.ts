@@ -18,7 +18,7 @@ let manager: ResponsibilityManager
 let db: ReturnType<typeof createTestDb>['db']
 let project: ReturnType<ResponsibilityManager['createProject']>
 let sessions: Map<string, { sessionId: string; session: { workspaceDir: string; status: string } }>
-let runtime: Pick<AgentManager, 'startSession' | 'stopSession' | 'findSessionByTaskId' | 'getSessionStatus' | 'respondToPermission' | 'sendByTaskId'>
+let runtime: Pick<AgentManager, 'startSession' | 'stopSession' | 'findSessionByTaskId' | 'getSessionStatus' | 'respondToPermission' | 'sendByTaskId'> & Partial<Pick<AgentManager, 'sendMastermindFollowup'>>
 let collect: ReturnType<typeof vi.fn<typeof collectSource>>
 let inspect: ReturnType<typeof vi.fn<typeof captureWork>>
 let agreement: ResponsibilityAgreement
@@ -61,6 +61,66 @@ async function finish(step: ResponsibilityStep, action = 'done', next?: string) 
   sessions.get(step.taskId)!.session.status = 'idle'
   await manager.reconcile()
 }
+
+describe('external Mastermind requests', () => {
+  beforeEach(() => {
+    runtime.sendMastermindFollowup = vi.fn(async (taskId, _agentId, _prompt, beforeSend) => {
+      let live = sessions.get(taskId)
+      if (!live) {
+        live = { sessionId: `session-${taskId}`, session: { workspaceDir: dir, status: 'working' } }
+        sessions.set(taskId, live)
+      }
+      beforeSend?.(live.sessionId)
+    }) as AgentManager['sendMastermindFollowup']
+  })
+
+  it('persists one request, deduplicates polling, and publishes its answer through Mastermind', async () => {
+    const first = manager.communicateWithMastermind(dir, 'Set up a bounded CI monitoring proposal.', 'request-1')
+    const duplicate = manager.communicateWithMastermind(dir, 'Set up a bounded CI monitoring proposal.', 'request-1')
+    expect(first).toMatchObject({ request_id: 'request-1', status: 'processing', workspace: { id: project.id } })
+    expect(duplicate).toEqual(first)
+    expect(() => manager.communicateWithMastermind(dir, 'Different request.', 'request-1')).toThrow('different content')
+    expect((db.db.prepare("SELECT count(*) AS count FROM mastermind_inputs WHERE json_extract(data, '$.origin')='mcp'").get() as { count: number }).count).toBe(1)
+
+    await manager.tick()
+    expect(runtime.sendMastermindFollowup).toHaveBeenCalledTimes(1)
+    expect((runtime.sendMastermindFollowup as ReturnType<typeof vi.fn>).mock.calls[0][2]).toContain('finish_external_request')
+    const request = db.db.prepare("SELECT json_extract(data, '$.humanInputId') AS humanInputId FROM mastermind_requests WHERE id='request-1'").get() as { humanInputId: string }
+    expect(() => manager.setDefaultWorkAgent(scope(), request.humanInputId, project.agentId)).toThrow('engineer request')
+    expect(() => manager.rememberPreference(scope(), request.humanInputId)).toThrow('engineer correction')
+    expect(() => manager.controlTasks(scope(), {}, false)).toThrow('External requests cannot administer')
+    const result = await callResponsibilityTool(manager, manager.tokenForTask(scope().taskId)!, 'finish_external_request', {
+      requestId: 'request-1', status: 'action_required', reply: 'I prepared the monitoring proposal; approve it in 20x.'
+    })
+    expect(result.isError).not.toBe(true)
+    expect(manager.mastermindMcpRequest('request-1')).toMatchObject({
+      status: 'action_required', reply: 'I prepared the monitoring proposal; approve it in 20x.'
+    })
+  })
+
+  it('uses the most specific workspace and registers an unknown workspace with the default agent', () => {
+    const nested = join(dir, 'nested'), deep = join(nested, 'src')
+    mkdirSync(deep, { recursive: true })
+    const nestedProject = manager.createProject('Nested', nested, project.agentId)
+    expect(manager.communicateWithMastermind(deep, 'Use the nested workspace.', 'request-nested').workspace.id).toBe(nestedProject.id)
+
+    const unknown = mkdtempSync(join(tmpdir(), '20x-external-workspace-'))
+    try {
+      expect(manager.communicateWithMastermind(unknown, 'Register this workspace.', 'request-new').workspace).toMatchObject({ root: realpathSync(unknown) })
+      expect(manager.snapshot().projects).toHaveLength(3)
+    } finally { rmSync(unknown, { recursive: true, force: true }) }
+  })
+
+  it('does not retry an ambiguously delivered request after restart', async () => {
+    manager.communicateWithMastermind(dir, 'Inspect this workspace.', 'request-restart')
+    await manager.tick()
+    expect(manager.mastermindMcpRequest('request-restart').status).toBe('processing')
+    await manager.stop()
+    manager = new ResponsibilityManager(db, runtime, vi.fn(), collect, inspect)
+    manager.start()
+    expect(manager.mastermindMcpRequest('request-restart')).toMatchObject({ status: 'failed', reply: expect.stringContaining('not retried') })
+  })
+})
 
 describe('project work-agent default', () => {
   it.each(['delegate_responsibility', 'prepare_routine', 'goal', 'routine'])(

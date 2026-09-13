@@ -108,6 +108,10 @@ const rootTools: Tool[] = [
     inputSchema: { type: 'object', properties: { humanInputId: string, agreement, replaces: string }, required: ['humanInputId', 'agreement'] }
   },
   {
+    name: 'finish_external_request', description: 'Finish the active request received through the local 20x MCP. Save one plain-language reply for the calling agent and link relevant Work when applicable. The reply is published into Mastermind; do not repeat it afterward.',
+    inputSchema: { type: 'object', additionalProperties: false, properties: { requestId: string, status: { type: 'string', enum: ['answered', 'action_required'] }, reply: { ...string, maxLength: 6000 }, responsibilityId: string }, required: ['requestId', 'status', 'reply'] }
+  },
+  {
     name: 'remember_project_fact', description: 'Record an observed project fact with its source. This cannot create preferences or permissions; the engineer can inspect, edit or delete it.',
     inputSchema: { type: 'object', properties: { text: string, source: string }, required: ['text', 'source'] }
   }
@@ -139,7 +143,7 @@ const workerTools: Tool[] = [
     }
   }
 ]
-export const responsibilityTools = (scope: ResponsibilityScope): Tool[] => scope.conversationOnly ? [contextTool, resultTool, ...rootTools.filter(t => t.name === 'answer_project_question')] : scope.followupId ? [contextTool, resultTool, finishFollowup, ...rootTools.filter(t => t.name === 'send_message')] : !scope.stepId ? rootTools : scope.phase === 'setup' ? [...workerTools, ...rootTools.filter(t => ['propose_responsibility', 'discover_source_tools'].includes(t.name))] : workerTools
+export const responsibilityTools = (scope: ResponsibilityScope): Tool[] => scope.conversationOnly ? [contextTool, resultTool, ...rootTools.filter(t => t.name === 'answer_project_question')] : scope.followupId ? [contextTool, resultTool, finishFollowup, ...rootTools.filter(t => ['send_message', 'finish_external_request'].includes(t.name))] : !scope.stepId ? rootTools : scope.phase === 'setup' ? [...workerTools, ...rootTools.filter(t => ['propose_responsibility', 'discover_source_tools'].includes(t.name))] : workerTools
 
 export async function callResponsibilityTool(manager: ResponsibilityManager, token: string, name: string, args: Record<string, unknown> = {}) {
   try {
@@ -166,6 +170,7 @@ export async function callResponsibilityTool(manager: ResponsibilityManager, tok
       case 'delegate_responsibility': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, args.factoryId as string | undefined, false, args.summary as string | undefined, args.agentId as string | undefined, args.groupId as string | null | undefined); break
       case 'prepare_routine': result = manager.delegate(scope, args.humanInputId as string, args.title as string, args.basedOn as string | undefined, undefined, true, args.summary as string | undefined, args.agentId as string | undefined, args.groupId as string | null | undefined); break
       case 'propose_responsibility': result = manager.propose(scope, args.agreement, args.humanInputId as string, args.replaces as string | undefined); break
+      case 'finish_external_request': result = manager.finishExternalRequest(scope, args); break
       case 'report_responsibility': result = await manager.report(scope, args); break
       case 'remember_project_preference': manager.rememberPreference(scope, args.humanInputId as string, args.id as string | undefined); result = { saved: true }; break
       case 'remember_project_fact':

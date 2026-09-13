@@ -137,6 +137,10 @@
       {
         "from": "resources/icon.ico",
         "to": "icon.ico"
+      },
+      {
+        "from": "resources/20x-mastermind-skill",
+        "to": "20x-mastermind-skill"
       }
     ],
     "afterPack": "./scripts/after-pack.js",

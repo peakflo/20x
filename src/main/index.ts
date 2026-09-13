@@ -1,6 +1,8 @@
 import { ScheduleRuns } from './schedule-runs'
 import { ResponsibilityManager } from './responsibility-manager'
 import { registerResponsibilityIpc } from './responsibility-ipc'
+import { registerMastermindMcpIpc, startConfiguredMastermindMcp } from './mastermind-mcp-ipc'
+import { stopMastermindMcpServer } from './mastermind-mcp-server'
 import { setResponsibilityManager, setTaskControl } from './task-api-server'
 import { execFile, execSync } from 'child_process'
 import { readdirSync } from 'fs'
@@ -281,6 +283,7 @@ async function sweepLeakedWorkspaces(graceMs?: number, orphansIgnoreTaskState = 
 }
 
 async function shutdownAppServices(): Promise<void> {
+  stopMastermindMcpServer()
   recurrenceScheduler?.stop()
   await scheduleRuns?.stop()
   await taskControl?.stop()
@@ -1040,6 +1043,7 @@ app.whenReady().then(async () => {
   setTaskControl(taskControl)
   setResponsibilityManager(responsibilityManager)
   registerResponsibilityIpc(responsibilityManager, () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : undefined)
+  registerMastermindMcpIpc(db, responsibilityManager, () => mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : undefined)
 
   heartbeatScheduler = new HeartbeatScheduler(db, agentManager)
   taskAutomationScheduler = new TaskAutomationScheduler(db, agentManager)
@@ -1170,6 +1174,8 @@ app.whenReady().then(async () => {
 
   // Due source checks need the same restored authentication as ordinary agent sessions.
   responsibilityManager.start()
+  try { await startConfiguredMastermindMcp(db, responsibilityManager) }
+  catch (error) { console.error('[Mastermind MCP] Could not start:', error) }
   registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined, workspaceCleanupScheduler ?? undefined, voiceSessionManager ?? undefined, taskAutomationScheduler ?? undefined, taskControl ?? undefined)
 
   // ── Media permission handler (design §5.9) ────────────────────────────────
