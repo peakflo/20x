@@ -100,6 +100,23 @@ describe('external Mastermind requests', () => {
     })
   })
 
+  it('keeps a long-running external request pollable until its Mastermind session actually ends', async () => {
+    manager.communicateWithMastermind(dir, 'Inspect a complex workflow.', 'request-long')
+    await manager.tick()
+    db.db.prepare("UPDATE mastermind_requests SET data=json_set(data, '$.startedAt', ?) WHERE id='request-long'")
+      .run(new Date(Date.now() - 10 * 60_000).toISOString())
+
+    await manager.tick()
+    expect(manager.mastermindMcpRequest('request-long').status).toBe('processing')
+
+    sessions.get(projectConversationId(project.id))!.session.status = 'idle'
+    await manager.tick()
+    expect(manager.mastermindMcpRequest('request-long')).toMatchObject({
+      status: 'failed', reply: expect.stringContaining('ended before finishing')
+    })
+    expect(runtime.sendMastermindFollowup).toHaveBeenCalledTimes(1)
+  })
+
   it('uses the most specific workspace and registers an unknown workspace with the default agent', () => {
     const nested = join(dir, 'nested'), deep = join(nested, 'src')
     mkdirSync(deep, { recursive: true })

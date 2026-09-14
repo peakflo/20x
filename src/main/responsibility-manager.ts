@@ -1107,9 +1107,14 @@ export class ResponsibilityManager {
 
   private async processExternalRequests(): Promise<void> {
     const requests = this.all<MastermindMcpRequest>('requests')
-    for (const request of requests.filter(request => request.state === 'processing' && Date.now() - Date.parse(request.startedAt ?? request.createdAt) > 120000)) {
-      request.state = 'failed'; request.error = 'Mastermind did not finish this request within two minutes.'; request.finishedAt = now()
-      this.put('requests', request)
+    for (const request of requests.filter(request => request.state === 'processing')) {
+      const session = request.sessionId ? this.agents.getSessionStatus(request.sessionId) : null
+      if (session && !['idle', 'error'].includes(session.status)) continue
+      request.state = 'failed'
+      request.error = session?.status === 'error'
+        ? 'The Mastermind session failed before finishing this request; it was not retried.'
+        : 'The Mastermind session ended before finishing this request; it was not retried. Inspect saved state before sending another mutation.'
+      request.finishedAt = now(); this.put('requests', request)
     }
     const busyProjects = new Set(requests.filter(request => ['delivering', 'processing'].includes(request.state)).map(request => request.projectId))
     for (const request of requests.filter(request => request.state === 'queued')) {
