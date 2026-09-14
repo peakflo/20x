@@ -1,4 +1,3 @@
-import { readdir, readFile, lstat, readlink } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -43,30 +42,12 @@ function inside(path: string, root: string): boolean {
 }
 function canonical(path: string): string { return realpathSync(resolve(path)) }
 
-/** Capture the actual checkout, including uncommitted and untracked work. */
+/** Capture checkout identity without traversing project files. */
 export async function captureWork(checkout: string): Promise<WorkEvidence> {
   const root = canonical(checkout)
-  const hashes: Array<[string, string]> = []
-  let bytes = 0
-  async function walk(dir: string): Promise<void> {
-    for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-      if (['.git', 'node_modules', '.next', 'out', 'dist', '.agents', '.claude', '.codex'].includes(entry.name)) continue
-      const path = join(dir, entry.name)
-      if (entry.isSymbolicLink()) { hashes.push([relative(root, path), digest(await readlink(path))]); continue }
-      if (entry.isDirectory()) await walk(path)
-      else if (entry.isFile()) {
-        const size = (await lstat(path)).size
-        bytes += size
-        // ponytail: bounded checkout scan; use repository manifests if large workspaces need verification.
-        if (hashes.length >= 20000 || bytes > 100 * 1024 * 1024) throw new Error('Checkout exceeds the verification scan limit. Narrow the working checkout before continuing.')
-        hashes.push([relative(root, path), createHash('sha256').update(await readFile(path)).digest('hex')])
-      }
-    }
-  }
-  await walk(root)
   let revision = 'non-git workspace'
   try { revision = (await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root, timeout: 10000 })).stdout.trim() } catch { /* non-Git projects are supported */ }
-  return { checkout: root, revision, fingerprint: digest(hashes) }
+  return { checkout: root, revision, fingerprint: digest({ checkout: root, revision }) }
 }
 
 /** Durable responsibilities around 20x Tasks. AgentManager still owns all agent processes. */

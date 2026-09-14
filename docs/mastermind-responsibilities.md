@@ -77,13 +77,13 @@ Ask Mastermind to run a source trial, approve, pause, resume, recover, or cancel
 - Sources are learned through conversation. A routine can use a finite command, configured MCP reads, or a collection combining both. MCP connections and authentication remain in the existing 20x MCP settings, with availability controlled by the selected agent's existing tool assignments. There is no Slack/Notion/Git-specific routine type or project-local configuration importer.
 - Merge, deployment, production mutation, destructive data operations, secrets and external communication require direct human approval. No source, worker result or remembered preference can enlarge that authority.
 - Step budgets include work, source classification, optional collection reasoning, and verification. Deadline and repeated no-progress checks stop additional admission. Pausing does not abandon observation.
-- Project work and verification results record the actual checkout, revision and working-file fingerprint. Reasoning-only coordination and setup record a scoped receipt without reading project files; the project root is an identity boundary, not a checkout to scan. A project worker must use a narrower working checkout when its actual checkout exceeds the bounded inspection limit.
+- Project work and verification results record the canonical checkout path and Git revision when available. The compatible receipt is derived from that metadata; 20x never enumerates or hashes project files. Reasoning-only coordination and setup use a scoped receipt. The project root remains an identity boundary, not a checkout to scan; independent verification inspects the current checkout directly.
 
 ## Validation record
 
 Implementation validation, regression coverage, and live product evidence are recorded in the PR. Unit tests with a controlled agent prove control-plane behavior, not actual provider execution. No merge or deployment is part of this change.
 
-The native Codex worker/verifier journey passed against a temporary non-Git project through the real HTTP MCP endpoint. Both tasks settled with matching file fingerprints and both runtimes were released. The full regression suite passed with process inspection enabled; focused lifecycle, provider, renderer, and IPC checks cover the final changes. Commands and results are recorded in the PR.
+The native Codex worker/verifier journey passed against a temporary non-Git project through the real HTTP MCP endpoint. Both tasks settled with matching checkout receipts and both runtimes were released. The full regression suite passed with process inspection enabled; focused lifecycle, provider, renderer, and IPC checks cover the final changes. Commands and results are recorded in the PR.
 
 The built desktop app opened with an isolated temporary database. Visual interaction could not be completed because the computer-use service was not approved to access the generic Electron application. Renderer and IPC checks are automated; no manual desktop acceptance or full working-day soak is claimed.
 

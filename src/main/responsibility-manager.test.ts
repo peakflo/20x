@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync, readFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync, readFileSync, truncateSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { ResponsibilityManager, captureWork, collectSource } from './responsibility-manager'
 import { projectConversationId } from '../shared/responsibilities'
@@ -1015,14 +1016,28 @@ describe('learned routines', () => {
   })
 })
 
-describe('real bounded source and working-file checks', () => {
-  it('collects a finite program and hashes changed uncommitted files', async () => {
+describe('real bounded source and checkout receipts', () => {
+  it('collects a finite program without reading workspace files', async () => {
     const result = await collectSource({ command: process.execPath, args: ['-e', 'process.stdout.write(JSON.stringify({b:2,a:1}))'], description: 'Local source fixture' }, dir, new AbortController().signal)
     expect(result).toBe('{"a":1,"b":2}')
-    writeFileSync(join(dir, 'example.txt'), 'before')
+    writeFileSync(join(dir, 'large.bin'), '')
+    truncateSync(join(dir, 'large.bin'), 101 * 1024 * 1024)
     const before = await captureWork(dir)
-    writeFileSync(join(dir, 'example.txt'), 'after')
-    expect((await captureWork(dir)).fingerprint).not.toBe(before.fingerprint)
+    writeFileSync(join(dir, 'large.bin'), 'changed')
+    expect(await captureWork(dir)).toEqual(before)
+  })
+
+  it('changes the checkout receipt when Git HEAD changes', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: dir })
+    writeFileSync(join(dir, 'tracked.txt'), 'one')
+    execFileSync('git', ['add', 'tracked.txt'], { cwd: dir })
+    execFileSync('git', ['-c', 'user.name=20x Test', '-c', 'user.email=test@20x.local', 'commit', '-qm', 'one'], { cwd: dir })
+    const before = await captureWork(dir)
+    writeFileSync(join(dir, 'tracked.txt'), 'two')
+    expect(await captureWork(dir)).toEqual(before)
+    execFileSync('git', ['add', 'tracked.txt'], { cwd: dir })
+    execFileSync('git', ['-c', 'user.name=20x Test', '-c', 'user.email=test@20x.local', 'commit', '-qm', 'two'], { cwd: dir })
+    expect((await captureWork(dir)).revision).not.toBe(before.revision)
   })
 })
 
@@ -1208,12 +1223,11 @@ describe('Factories through the existing responsibility lifecycle', () => {
     return step
   }
 
-  it('does not scan project files for coordination but keeps work checkout verification', async () => {
+  it('uses reasoning receipts for coordination and checkout receipts for project work', async () => {
     const factory = saveFactory()
     await approve({ ...agreement, factoryId: factory.id })
     const coordinator = snapshot().steps.at(-1)!
     inspect.mockClear()
-    inspect.mockRejectedValue(new Error('Checkout exceeds the verification scan limit.'))
 
     const report = await manager.report(manager.scopeForToken(manager.tokenForTask(coordinator.taskId)!), {
       summary: 'Inventory is required', evidence: ['Current context'], checkout: dir, action: 'task', next: 'Read the source inventory.'
@@ -1225,9 +1239,9 @@ describe('Factories through the existing responsibility lifecycle', () => {
     await manager.reconcile()
     const work = snapshot().steps.at(-1)!
     expect(work.phase).toBe('work')
-    await expect(manager.report(manager.scopeForToken(manager.tokenForTask(work.taskId)!), {
+    await manager.report(manager.scopeForToken(manager.tokenForTask(work.taskId)!), {
       summary: 'Inventory complete', evidence: ['Source output'], checkout: dir, action: 'done'
-    })).rejects.toThrow('verification scan limit')
+    })
     expect(inspect).toHaveBeenCalledTimes(1)
   })
 
