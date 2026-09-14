@@ -1,3 +1,4 @@
+import { nodeWorkerRuntime } from '../node-worker-runtime'
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { EventEmitter } from 'events'
 import { StringDecoder } from 'string_decoder'
@@ -20,7 +21,6 @@ vi.mock('../enterprise-ai-gateway', () => ({
 import {
   PiAdapter,
   buildPiMcpConfigDocument,
-  findPiNodeRuntime,
   sanitizePiMcpServerName,
   sanitizePiSessionName,
   withProviderNameLimitHint,
@@ -80,26 +80,6 @@ describe('PiAdapter', () => {
     vi.clearAllMocks()
   })
 
-  it('uses the LSUIElement Electron helper as the bundled Node runtime on macOS', () => {
-    const executable = '/Applications/20x.app/Contents/MacOS/20x'
-
-    expect(findPiNodeRuntime('darwin', executable, () => true)).toBe(
-      '/Applications/20x.app/Contents/Frameworks/20x Helper.app/Contents/MacOS/20x Helper',
-    )
-  })
-
-  it('does not fall back to the foreground Electron app when its macOS helper is missing', () => {
-    expect(findPiNodeRuntime(
-      'darwin',
-      '/Applications/20x.app/Contents/MacOS/20x',
-      () => false,
-    )).toBeNull()
-  })
-
-  it('uses the Electron executable as bundled Node outside macOS', () => {
-    expect(findPiNodeRuntime('linux', '/opt/20x/electron', () => false)).toBe('/opt/20x/electron')
-  })
-
   it('uses the native Pi session file and applies model selection through RPC', async () => {
     const child = fakeProcess()
     spawnMock.mockReturnValue(child)
@@ -127,7 +107,7 @@ describe('PiAdapter', () => {
     })
 
     expect(id).toBe('/sessions/native-session.jsonl')
-    expect(spawnMock.mock.calls[0][0]).toBe(findPiNodeRuntime(process.platform, process.execPath))
+    expect(spawnMock.mock.calls[0][0]).toBe(nodeWorkerRuntime().execPath)
     const args = spawnMock.mock.calls[0][1] as string[]
     expect(args[0]).toBe('/usr/local/bin/pi')
     expect(args).toContain('--mode')
@@ -136,7 +116,7 @@ describe('PiAdapter', () => {
     expect(args).not.toContain('--provider')
     expect(args).not.toContain('--model')
     expect(spawnMock.mock.calls[0][2]).toMatchObject({
-      env: expect.objectContaining({ ELECTRON_RUN_AS_NODE: '1' }),
+      env: nodeWorkerRuntime().env,
       shell: false,
     })
     expect(command).toHaveBeenLastCalledWith(
@@ -179,7 +159,7 @@ describe('PiAdapter', () => {
       ],
       default: { peakflo: 'model-one' },
     })
-    expect(spawnMock.mock.calls[0][0]).toBe(findPiNodeRuntime(process.platform, process.execPath))
+    expect(spawnMock.mock.calls[0][0]).toBe(nodeWorkerRuntime().execPath)
     expect(spawnMock.mock.calls[0][1]).toEqual([
       '/usr/local/bin/pi',
       '--mode',
@@ -188,7 +168,7 @@ describe('PiAdapter', () => {
       '--approve',
     ])
     expect(spawnMock.mock.calls[0][2]).toMatchObject({
-      env: expect.objectContaining({ ELECTRON_RUN_AS_NODE: '1' }),
+      env: nodeWorkerRuntime().env,
       shell: false,
     })
   })

@@ -1,5 +1,8 @@
 # Voice control (phase 1 — speech to text)
 
+On macOS, the voice worker requires Node.js on PATH. Install Node.js from
+Settings → General if it is missing.
+
 Voice control lets a user dictate into 20x and run a small set of task commands
 by speech. Speech recognition runs on the user's computer. No audio is stored,
 and no audio leaves the device.

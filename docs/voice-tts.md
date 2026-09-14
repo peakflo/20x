@@ -1,5 +1,8 @@
 # Spoken answers (phase 2 — text to speech)
 
+On macOS, the voice worker requires Node.js on PATH. Install Node.js from
+Settings → General if it is missing.
+
 Phase 1 gave 20x ears. This gives it a voice: it reads an agent answer aloud on
 the desktop. Speech is produced on this computer. No text and no audio leave the
 device.

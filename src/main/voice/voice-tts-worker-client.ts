@@ -6,6 +6,7 @@
  * running, and voice must simply go quiet.
  */
 
+import { nodeWorkerRuntime } from '../node-worker-runtime'
 import { fork, type ChildProcess } from 'child_process'
 import { EventEmitter } from 'events'
 import { join } from 'path'
@@ -245,11 +246,11 @@ export class VoiceTtsWorkerClient extends EventEmitter {
 
   private spawn(): void {
     if (this.isRunning) return
+    const runtime = nodeWorkerRuntime()
     this.child = fork(this.scriptPath, [], {
-      execPath: process.execPath,
+      execPath: runtime.execPath,
       env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: '1',
+        ...runtime.env,
         ...(this.modulePath ? { VOICE_ENGINE_MODULE: this.modulePath } : {}),
       },
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],

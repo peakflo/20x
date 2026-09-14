@@ -6,6 +6,7 @@
  * renderer running.
  */
 
+import { nodeWorkerRuntime } from '../node-worker-runtime'
 import { fork, type ChildProcess } from 'child_process'
 import { EventEmitter } from 'events'
 import { join } from 'path'
@@ -181,13 +182,11 @@ export class VoiceWorkerClient extends EventEmitter {
 
   private spawn(): void {
     if (this.isRunning) return
+    const runtime = nodeWorkerRuntime()
     this.child = fork(this.scriptPath, [], {
-      // Electron ships its own Node. `ELECTRON_RUN_AS_NODE` runs the worker as
-      // a plain Node process, which is the pattern the MCP servers already use.
-      execPath: process.execPath,
+      execPath: runtime.execPath,
       env: {
-        ...process.env,
-        ELECTRON_RUN_AS_NODE: '1',
+        ...runtime.env,
         // The runtime is installed on request into the application data
         // directory, so the worker loads it by absolute path.
         ...(this.modulePath ? { VOICE_ENGINE_MODULE: this.modulePath } : {}),

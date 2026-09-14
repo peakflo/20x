@@ -7,6 +7,7 @@
 
 const { join } = require('path')
 const { rm, readdir, stat } = require('fs/promises')
+const { flipFuses, getCurrentFuseWire, FuseVersion, FuseV1Options } = require('@electron/fuses')
 
 /**
  * Map electron-builder arch+platform to the ripgrep/audio-capture directory
@@ -91,6 +92,19 @@ async function cleanupSdkPath(sdkPath, keepDir) {
 }
 
 async function afterPack(context) {
+  if (context.electronPlatformName === 'darwin') {
+    const appPath = join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
+    await flipFuses(appPath, {
+      version: FuseVersion.V1,
+      [FuseV1Options.RunAsNode]: false,
+    })
+    const wire = await getCurrentFuseWire(appPath)
+    if (wire[FuseV1Options.RunAsNode] !== 0x30) {
+      throw new Error('Packaged RunAsNode fuse must be disabled')
+    }
+    console.log('[after-pack] RunAsNode: Disabled')
+  }
+
   const appRoots = await getExistingAppRoots(context)
 
   if (appRoots.length === 0) {

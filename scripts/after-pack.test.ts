@@ -1,4 +1,5 @@
 import afterPack from './after-pack'
+import { getCurrentFuseWire, FuseV1Options } from '@electron/fuses'
 import { mkdtemp, mkdir, rm, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -15,7 +16,42 @@ async function exists(targetPath: string) {
 
 const tempDirs: string[] = []
 
+async function makeApp(tempDir: string) {
+  const appPath = join(tempDir, '20x.app')
+  const framework = join(appPath, 'Contents', 'Frameworks', 'Electron Framework.framework')
+  await mkdir(framework, { recursive: true })
+  // A V1 fuse wire, including a future fuse that must stay unchanged.
+  await writeFile(join(framework, 'Electron Framework'), Buffer.concat([
+    Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX'),
+    Buffer.from([1, 9]),
+    Buffer.from('101100011'),
+  ]))
+  return appPath
+}
+
+function context(appOutDir: string) {
+  return { appOutDir, electronPlatformName: 'darwin', arch: 1,
+    packager: { appInfo: { productFilename: '20x' } } }
+}
+
 describe('after-pack', () => {
+  it('disables only RunAsNode even when there are no unpacked cleanup roots', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'after-pack-fuses-'))
+    tempDirs.push(tempDir)
+    const appPath = await makeApp(tempDir)
+    const before = await getCurrentFuseWire(appPath)
+    await afterPack(context(tempDir))
+    expect(await getCurrentFuseWire(appPath)).toEqual({
+      ...before, [FuseV1Options.RunAsNode]: 0x30,
+    })
+  })
+
+  it('fails packaging when the macOS framework cannot be read', async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), 'after-pack-missing-'))
+    tempDirs.push(tempDir)
+    await expect(afterPack(context(tempDir))).rejects.toThrow()
+  })
+
   afterEach(async () => {
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
   })
@@ -23,6 +59,8 @@ describe('after-pack', () => {
   it('cleans non-target claude-agent-sdk binaries from mac app bundle resources', async () => {
     const tempDir = await mkdtemp(join(tmpdir(), 'after-pack-'))
     tempDirs.push(tempDir)
+
+    await makeApp(tempDir)
 
     const unpackedRoot = join(
       tempDir,

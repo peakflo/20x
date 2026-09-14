@@ -1938,12 +1938,11 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       mcpServerPath = mcpServerPath.replace('app.asar', 'app.asar.unpacked')
     }
 
-    // On Windows, ELECTRON_RUN_AS_NODE with packaged 20x.exe doesn't work properly —
-    // it still initializes Electron internals. Use system 'node' instead.
-    // On Mac/Linux, process.execPath with ELECTRON_RUN_AS_NODE works fine.
-    const isWin = process.platform === 'win32'
-    const mcpCommand = isWin ? 'node' : process.execPath
-    const mcpEnv = isWin ? {} : { ELECTRON_RUN_AS_NODE: '1' }
+    // Direct stdio use needs standalone Node on macOS and Windows. Agent
+    // sessions use the in-process HTTP endpoint instead.
+    const useSystemNode = process.platform === 'win32' || process.platform === 'darwin'
+    const mcpCommand = useSystemNode ? 'node' : process.execPath
+    const mcpEnv = useSystemNode ? {} : { ELECTRON_RUN_AS_NODE: '1' }
 
     // Start the HTTP API server so the MCP server can call back to it
     startTaskApiServer(this).catch(err =>

@@ -58,6 +58,7 @@
   "devDependencies": {
     "@electron-toolkit/preload": "^3.0.1",
     "@electron-toolkit/tsconfig": "^1.0.1",
+    "@electron/fuses": "^1.8.0",
     "@electron/notarize": "^2.5.0",
     "@electron/rebuild": "^4.0.3",
     "@radix-ui/react-alert-dialog": "^1.1.15",
