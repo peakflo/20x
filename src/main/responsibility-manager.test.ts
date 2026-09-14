@@ -1208,6 +1208,29 @@ describe('Factories through the existing responsibility lifecycle', () => {
     return step
   }
 
+  it('does not scan project files for coordination but keeps work checkout verification', async () => {
+    const factory = saveFactory()
+    await approve({ ...agreement, factoryId: factory.id })
+    const coordinator = snapshot().steps.at(-1)!
+    inspect.mockClear()
+    inspect.mockRejectedValue(new Error('Checkout exceeds the verification scan limit.'))
+
+    const report = await manager.report(manager.scopeForToken(manager.tokenForTask(coordinator.taskId)!), {
+      summary: 'Inventory is required', evidence: ['Current context'], checkout: dir, action: 'task', next: 'Read the source inventory.'
+    })
+    expect(report.work).toMatchObject({ checkout: realpathSync(dir), revision: 'reasoning-only' })
+    expect(inspect).not.toHaveBeenCalled()
+
+    sessions.get(coordinator.taskId)!.session.status = 'idle'
+    await manager.reconcile()
+    const work = snapshot().steps.at(-1)!
+    expect(work.phase).toBe('work')
+    await expect(manager.report(manager.scopeForToken(manager.tokenForTask(work.taskId)!), {
+      summary: 'Inventory complete', evidence: ['Source output'], checkout: dir, action: 'done'
+    })).rejects.toThrow('verification scan limit')
+    expect(inspect).toHaveBeenCalledTimes(1)
+  })
+
   it('requires exact desktop confirmation and invalidates revised previews; workers cannot mutate guides', async () => {
     const args = { humanInputId: input('Teach PR Review'), name: 'PR Review', diagram: 'review -> done', guide: 'Review within the approved scope.' }
     manager.proposeFactory(scope(), args)
@@ -1603,7 +1626,9 @@ describe('configured worker access and recurring setup', () => {
     const candidate = { ...agreement, basedOn: prep.id, kind: 'routine', schedule: '*/10 * * * *', stopOnSuccess: true, source: { command: 'read-fixture', args: [], description: 'Read approved evidence' } }
     expect((await callResponsibilityTool(manager, token, 'propose_responsibility', { agreement: candidate, humanInputId: input('Different human request') })).isError).toBe(true)
     expect((await callResponsibilityTool(manager, token, 'propose_responsibility', { agreement: candidate, humanInputId: human })).isError).not.toBe(true)
+    inspect.mockClear()
     await finish(setup)
+    expect(inspect).not.toHaveBeenCalled()
     const routine = snapshot().responsibilities.find(r => r.agreement.kind === 'routine')!
     expect(snapshot().responsibilities.find(r => r.id === prep.id)).toMatchObject({ state: 'completed', routineSetup: { proposalId: routine.id } })
     expect(db.groups.snapshot().executions[routine.id]).toBe(group.id)

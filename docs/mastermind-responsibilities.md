@@ -77,7 +77,7 @@ Ask Mastermind to run a source trial, approve, pause, resume, recover, or cancel
 - Sources are learned through conversation. A routine can use a finite command, configured MCP reads, or a collection combining both. MCP connections and authentication remain in the existing 20x MCP settings, with availability controlled by the selected agent's existing tool assignments. There is no Slack/Notion/Git-specific routine type or project-local configuration importer.
 - Merge, deployment, production mutation, destructive data operations, secrets and external communication require direct human approval. No source, worker result or remembered preference can enlarge that authority.
 - Step budgets include work, source classification, optional collection reasoning, and verification. Deadline and repeated no-progress checks stop additional admission. Pausing does not abandon observation.
-- Results record the actual checkout, revision and working-file fingerprint. Large checkouts that exceed the bounded inspection limit require a narrower working checkout; this is reported rather than silently counted as verified.
+- Project work and verification results record the actual checkout, revision and working-file fingerprint. Reasoning-only coordination and setup record a scoped receipt without reading project files; the project root is an identity boundary, not a checkout to scan. A project worker must use a narrower working checkout when its actual checkout exceeds the bounded inspection limit.
 
 ## Validation record
 

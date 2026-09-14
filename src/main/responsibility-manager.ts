@@ -1328,8 +1328,13 @@ export class ResponsibilityManager {
     const project = this.project(r.projectId)
     const assigned = this.agents.findSessionByTaskId(step.taskId)?.session.workspaceDir ?? r.workspace ?? project.root
     if (!inside(checkout, project.root) && !inside(checkout, canonical(assigned))) throw new Error('The reported checkout is outside the reserved project/workspace.')
-    const evidenceRoot = step.phase === 'coordinate' || (step.phase === 'classify' && action === 'complete') ? r.workspace ?? project.root : checkout
-    const work = step.collection ? { checkout, revision: 'source-evidence', fingerprint: digest(step.collection.evidence) } : await this.inspectWork(evidenceRoot)
+    const evidenceRoot = step.phase === 'classify' && action === 'complete' ? r.workspace ?? project.root : checkout
+    // Reasoning-only phases have no project tools; the project root is scope, not a checkout to scan.
+    const work = step.collection
+      ? { checkout, revision: 'source-evidence', fingerprint: digest(step.collection.evidence) }
+      : ['coordinate', 'setup'].includes(step.phase)
+        ? { checkout, revision: 'reasoning-only', fingerprint: digest({ responsibilityId: r.id, revision: r.revision, phase: step.phase, inputRevision: step.inputRevision ?? 0 }) }
+        : await this.inspectWork(evidenceRoot)
     const current = this.get<ResponsibilityStep>('steps', step.id)!
     if ((current.inputRevision ?? 0) !== (step.inputRevision ?? 0) || !['reserved', 'running'].includes(current.state) || ['taken_over', 'cancelled'].includes(this.responsibility(r.id).state)) throw new Error('Assignment changed during verification.')
     if (action !== 'ask' && step.phase === 'verify' && step.expectedWork && digest(step.expectedWork) !== digest(work)) throw new Error('The working files or revision changed after the worker report. Report a question; do not claim completion of different work.')
@@ -1379,7 +1384,7 @@ export class ResponsibilityManager {
     const report = step.report!
     let verificationError: unknown
     try {
-      if (step.report?.action !== 'ask' && !['classify', 'setup'].includes(step.phase) && !step.collection && digest(await this.inspectWork(report.work.checkout)) !== digest(report.work)) throw new Error('The working files changed after the report.')
+      if (step.report?.action !== 'ask' && !['classify', 'coordinate', 'setup'].includes(step.phase) && !step.collection && digest(await this.inspectWork(report.work.checkout)) !== digest(report.work)) throw new Error('The working files changed after the report.')
       if (step.collection && r.agreement.source) this.sources?.validate(r.agreement.source, r.agreement.agentId)
     } catch (error) { verificationError = error }
     const current = this.get<ResponsibilityStep>('steps', step.id)!
