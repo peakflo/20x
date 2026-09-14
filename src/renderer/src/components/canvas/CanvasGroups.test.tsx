@@ -58,7 +58,10 @@ describe('CanvasGroups', () => {
 
   it('waits for saved layout, opens a requested Factory after async data, and connects Groups opened through Tasks', async () => {
     window.electronAPI.responsibilities = { snapshot: vi.fn(async () => ({ steps: [{ responsibilityId: 'r1', executionId: 'execution', taskId: 't1', phase: 'coordinate' }, { responsibilityId: 'r1', executionId: 'execution', taskId: 't2', phase: 'work', predecessorTaskIds: ['t1'] }] })), onChanged: vi.fn(() => vi.fn()) } as never
-    useTaskGroupStore.setState({ membership: { t1: 'g1', t2: 'g1' }, executions: { execution: 'g1' } })
+    useTaskGroupStore.setState({
+      groups: [{ id: 'g1', name: 'Execution', description: '', projectId: null, createdAt: '' }, { id: 'g2', name: 'Work item', description: '', projectId: null, createdAt: '' }],
+      membership: { t1: 'g1', t2: 'g2' }, executions: { execution: 'g1', 'execution:item:key': 'g2' }
+    })
     useCanvasStore.setState({ isLoaded: false })
     useUIStore.getState().showResponsibilityOnCanvas('r1')
     render(<><CanvasGroups /><FactoryCanvas /></>)
@@ -66,6 +69,7 @@ describe('CanvasGroups', () => {
     expect(useCanvasStore.getState().panels).toHaveLength(0)
     act(() => useCanvasStore.setState({ isLoaded: true }))
     await waitFor(() => expect(useCanvasStore.getState().panels).toHaveLength(2))
+    expect(useCanvasStore.getState().shownGroupIds).toEqual(expect.arrayContaining(['g1', 'g2']))
     await waitFor(() => expect(useCanvasStore.getState().edges).toHaveLength(1))
     act(() => useCanvasStore.getState().removePanel(useCanvasStore.getState().panels[0].id))
     await act(async () => {})

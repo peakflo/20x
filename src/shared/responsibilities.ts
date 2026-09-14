@@ -109,6 +109,13 @@ export interface ResponsibilityAgreement {
   access?: ExecutionAccess
 }
 export type ResponsibilityExecutionState = 'pending' | 'running' | 'needs_attention' | 'ready_for_review' | 'done' | 'interrupted' | 'cancelled'
+export interface ResponsibilityWorkItem {
+  /** Stable semantic identity within one execution, chosen from the work itself. */
+  key: string
+  title: string
+  /** Optional presentation name; grouping never changes authority or dependencies. */
+  groupName?: string
+}
 export interface ResponsibilityExecution {
   id: string
   sequence: number
@@ -148,7 +155,7 @@ export interface ResponsibilityRecord {
   routineSetup?: { proposalId?: string }
   /** Preparation evidence; unlike basedOn, this does not require the setup task to finish first. */
   preparedFrom?: string
-  next: { phase: WorkPhase; instruction: string; eventId?: string; executionKey?: string; agentId?: string; predecessorTaskIds?: string[]; completeRoutine?: boolean } | null
+  next: { phase: WorkPhase; instruction: string; eventId?: string; executionKey?: string; agentId?: string; predecessorTaskIds?: string[]; workItem?: ResponsibilityWorkItem; completeRoutine?: boolean } | null
   createdAt: string
   updatedAt: string
 }
@@ -168,6 +175,7 @@ export interface WorkReport {
   factoryId?: string
   predecessorTaskIds?: string[]
   factory?: FactoryDefinition
+  workItem?: ResponsibilityWorkItem
 }
 export interface ResponsibilityStep {
   /** Snapshot-only: historical steps survive task deletion. */
@@ -191,6 +199,7 @@ export interface ResponsibilityStep {
   agent?: FactoryAgent
   factory?: FactoryDefinition
   predecessorTaskIds?: string[]
+  workItem?: ResponsibilityWorkItem
 }
 export interface ResponsibilityNotice {
   id: string

@@ -5,6 +5,7 @@ import { useUIStore } from '@/stores/ui-store'
 import { isFinishedExecutionState } from '@/lib/execution-groups'
 import { useTaskGroupStore } from '@/stores/task-group-store'
 import type { ResponsibilityStep } from '@shared/responsibilities'
+import { executionIdForGroupLink } from '@shared/task-groups'
 
 export function syncFactoryCanvas(steps: ResponsibilityStep[], tasks: Array<{ id: string; title: string }>, allowNewPanels = true): void {
   if (!steps.length) return
@@ -73,12 +74,16 @@ export function FactoryCanvas() {
     const firstOpen = opened.current !== key
     if (firstOpen) {
       opened.current = key
-      const groupId = executionId ? executions[executionId] : undefined
+      const groupIds = executionId ? [...new Set(Object.entries(executions)
+        .filter(([link, groupId]) => groupId && executionIdForGroupLink(link) === executionId)
+        .map(([, groupId]) => groupId!))] : []
       const execution = executionId ? executionRecords[executionId] : undefined
       if (isFinishedExecutionState(execution?.state) && !useUIStore.getState().showCompletedExecutions) useUIStore.getState().toggleCompletedExecutions()
-      if (groupId) {
-        const memberIds = Object.entries(useTaskGroupStore.getState().membership).filter(([, group]) => group === groupId).map(([taskId]) => taskId)
-        useCanvasStore.getState().showGroup(groupId, memberIds)
+      if (groupIds.length) {
+        for (const groupId of groupIds) {
+          const memberIds = Object.entries(useTaskGroupStore.getState().membership).filter(([, group]) => group === groupId).map(([taskId]) => taskId)
+          useCanvasStore.getState().showGroup(groupId, memberIds)
+        }
       } else syncFactoryCanvas(selectedSteps, tasks, true)
     }
     const target = [...selectedSteps].reverse().find(s => s.phase === 'work' && tasks.some(t => t.id === s.taskId)) ?? selectedSteps.find(s => tasks.some(t => t.id === s.taskId))

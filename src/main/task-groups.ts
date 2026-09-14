@@ -1,6 +1,6 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseManager } from './database'
-import type { TaskGroup, TaskGroupsSnapshot } from '../shared/task-groups'
+import { EXECUTION_ITEM_LINK, type TaskGroup, type TaskGroupsSnapshot } from '../shared/task-groups'
 import { isMastermindTask } from '../shared/responsibilities'
 
 interface SavedGroups {
@@ -103,6 +103,11 @@ export class TaskGroups {
     if (groupId) this.get(groupId, projectId)
     this.assignExecution(id, groupId)
     return groupId
+  }
+
+  ensureExecutionItem(executionId: string, itemKey: string, name: string, projectId: string): string | null {
+    const key = createHash('sha256').update(itemKey).digest('hex')
+    return this.ensureExecution(`${executionId}${EXECUTION_ITEM_LINK}${key}`, name, projectId)
   }
 
   remove(id: string): void {

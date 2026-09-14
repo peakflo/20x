@@ -35,17 +35,24 @@ describe('GroupControls', () => {
     expect(screen.getByText('Final output')).toBeInTheDocument()
   })
 
-  it('shows execution status and hides Done execution Groups without deleting them', async () => {
-    vi.mocked(window.electronAPI.taskGroups.snapshot).mockResolvedValue({ groups: [{ id: 'group-1', name: 'Group', description: '', projectId: null, createdAt: '' }], membership: { 'task-1': 'group-1' }, executions: { execution: 'group-1' } })
-    useTaskGroupStore.setState({ executions: { execution: 'group-1' }, membership: { 'task-1': 'group-1' } })
+  it('shows execution status and hides all Done item Groups without deleting them', async () => {
+    const groups = [
+      { id: 'group-1', name: 'Execution Group', description: '', projectId: null, createdAt: '' },
+      { id: 'group-2', name: 'Work item Group', description: '', projectId: null, createdAt: '' }
+    ]
+    const executions = { execution: 'group-1', 'execution:item:key': 'group-2' }
+    vi.mocked(window.electronAPI.taskGroups.snapshot).mockResolvedValue({ groups, membership: { 'task-1': 'group-2' }, executions })
+    useTaskGroupStore.setState({ groups, executions, membership: { 'task-1': 'group-2' } })
     useUIStore.setState({ mastermindExecutions: { execution: { id: 'execution', sequence: 1, predecessorId: null, trigger: 'test', state: 'done', startedAt: '' } }, showCompletedExecutions: false })
     render(<TaskGroups tasks={[task]} allTasks={[task]} selectedTaskId={null} onSelectTask={vi.fn()} onCreateTask={vi.fn()} />)
     await act(async () => {})
-    expect(screen.queryByText('Group')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByText('Show completed executions (1)'))
-    expect(screen.getByText('Group')).toBeInTheDocument()
-    expect(screen.getByText('Done')).toBeInTheDocument()
-    expect(useTaskGroupStore.getState().groups).toHaveLength(1)
+    expect(screen.queryByText('Execution Group')).not.toBeInTheDocument()
+    expect(screen.queryByText('Work item Group')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('Show completed executions (2)'))
+    expect(screen.getByText('Execution Group')).toBeInTheDocument()
+    expect(screen.getByText('Work item Group')).toBeInTheDocument()
+    expect(screen.getAllByText('Done')).toHaveLength(2)
+    expect(useTaskGroupStore.getState().groups).toHaveLength(2)
   })
 
   it('keeps group context for task creation and manages selected tasks', async () => {

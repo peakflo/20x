@@ -44,6 +44,15 @@ it('deletes a Group alone without stopping tasks and never recreates its executi
   expect(new TaskGroups(db).snapshot()).toEqual({ groups: [], membership: {}, executions: { execution: null } })
 })
 
+it('creates distinct execution item Groups and reuses a stable item key', () => {
+  const first = db.groups.ensureExecutionItem('execution', 'issue:a', 'Goal · Issue A', 'project')!
+  const same = new TaskGroups(db).ensureExecutionItem('execution', 'issue:a', 'Ignored rename', 'project')!
+  const second = db.groups.ensureExecutionItem('execution', 'issue:b', 'Goal · Issue B', 'project')!
+  expect(same).toBe(first)
+  expect(second).not.toBe(first)
+  expect(db.groups.snapshot().groups.map(group => group.name)).toEqual(['Goal · Issue A', 'Goal · Issue B'])
+})
+
 it('uses one confirmation for the Group, dependent tasks, and recurring instances', async () => {
   const id = db.groups.create('Delivery').id
   const other = db.groups.create('Other').id

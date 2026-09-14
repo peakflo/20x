@@ -56,9 +56,9 @@ async function approve(a = agreement) {
   await manager.act(r.id, r.revision, 'approve'); await manager.reconcile()
   return r
 }
-async function finish(step: ResponsibilityStep, action = 'done', next?: string) {
+async function finish(step: ResponsibilityStep, action = 'done', next?: string, extra: Record<string, unknown> = {}) {
   const token = manager.tokenForTask(step.taskId)!
-  await manager.report(manager.scopeForToken(token), { summary: `Evidence from ${step.phase} ${step.id}`, evidence: ['regression check passed'], checkout: dir, action, next })
+  await manager.report(manager.scopeForToken(token), { summary: `Evidence from ${step.phase} ${step.id}`, evidence: ['regression check passed'], checkout: dir, action, next, ...extra })
   sessions.get(step.taskId)!.session.status = 'idle'
   await manager.reconcile()
 }
@@ -1156,6 +1156,42 @@ describe('dynamic source collection lifecycle', () => {
   })
 })
 
+describe('dynamic Goal work Groups', () => {
+  it('creates one Group per discovered item and reuses its stable key across later Tasks', async () => {
+    const r = await approve({ ...agreement, title: 'Investigate failures' })
+    const executionId = snapshot().responsibilities.find(record => record.id === r.id)!.currentExecutionId!
+    await finish(snapshot().steps.at(-1)!, 'continue', 'Investigate the first independent failure.', {
+      workItem: { key: 'failure:first', title: 'First failure', groupName: 'Goal - Investigate failures - First failure' }
+    })
+    const first = snapshot().steps.at(-1)!
+    await finish(first, 'continue', 'Verify the first failure fix.', {
+      workItem: { key: 'failure:first', title: 'First failure' }
+    })
+    const firstFollowup = snapshot().steps.at(-1)!
+    await finish(firstFollowup, 'continue', 'Investigate the second independent failure.', {
+      workItem: { key: 'failure:second', title: 'Second failure' }
+    })
+    const second = snapshot().steps.at(-1)!
+    const groups = db.groups.snapshot()
+
+    expect(first.workItem?.key).toBe('failure:first')
+    expect(firstFollowup.workItem?.key).toBe('failure:first')
+    expect(second.workItem?.key).toBe('failure:second')
+    expect(groups.membership[first.taskId]).toBe(groups.membership[firstFollowup.taskId])
+    expect(groups.membership[second.taskId]).not.toBe(groups.membership[first.taskId])
+    expect(db.groups.get(groups.membership[first.taskId]).name).toBe('Goal - Investigate failures - First failure')
+    expect(Object.keys(groups.executions).filter(key => key.startsWith(`${executionId}:item:`))).toHaveLength(2)
+  })
+
+  it('rejects item grouping outside assignment selection', async () => {
+    await approve()
+    const step = snapshot().steps.at(-1)!
+    await expect(manager.report(manager.scopeForToken(manager.tokenForTask(step.taskId)!), {
+      summary: 'Done', evidence: ['Checked'], checkout: dir, action: 'done', workItem: { key: 'x', title: 'X' }
+    })).rejects.toThrow('next Goal or Factory assignment')
+  })
+})
+
 describe('Factories through the existing responsibility lifecycle', () => {
   function saveFactory(name = 'PR Review', guide = 'Review, fix valid findings within scope, then independently verify. Ask the engineer at a handoff.') {
     manager.proposeFactory(scope(), { humanInputId: input('Teach this work pattern'), name, diagram: 'graph TD\n A[Review] --> B{Findings?}\n B --> C[Fix]\n C --> D[Verify]', guide })
@@ -1271,6 +1307,24 @@ describe('Factories through the existing responsibility lifecycle', () => {
     expect(snapshot().responsibilities[0].state).toBe('active')
     new ResponsibilityManager(db, runtime)
     expect(db.groups.snapshot().groups.map(g => g.id)).toEqual([moved.id])
+  })
+
+  it('lets Factory coordination route distinct items into reusable Groups', async () => {
+    const f = saveFactory()
+    await approve({ ...agreement, title: 'Deliver selected work', factoryId: f.id })
+    await advance('task', 'Implement item A', { workItem: { key: 'item:a', title: 'Item A' } })
+    const first = snapshot().steps.at(-1)!
+    await advance('done')
+    await advance('task', 'Review item A', { workItem: { key: 'item:a', title: 'Item A' } })
+    const review = snapshot().steps.at(-1)!
+    await advance('done')
+    await advance('task', 'Implement item B', { workItem: { key: 'item:b', title: 'Item B' } })
+    const second = snapshot().steps.at(-1)!
+    const membership = db.groups.snapshot().membership
+    expect(membership[first.taskId]).toBe(membership[review.taskId])
+    expect(membership[second.taskId]).not.toBe(membership[first.taskId])
+    expect(db.groups.get(membership[first.taskId]).name).toBe('Deliver selected work · Item A')
+    expect(db.groups.get(membership[second.taskId]).name).toBe('Deliver selected work · Item B')
   })
 
   it('supports a selected Group at admission and stops only its current execution before bulk deletion', async () => {

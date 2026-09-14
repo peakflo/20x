@@ -8,7 +8,7 @@ import { PluginActionId, TaskStatus } from '../shared/constants'
 import { isMastermindTask } from '../shared/responsibilities'
 import type { RecurrenceScheduler } from './recurrence-scheduler'
 import { isWorkfloLinkedTask } from './workflo-task-sync'
-import type { TaskGroup, TaskGroupAction, TaskGroupResult } from '../shared/task-groups'
+import { executionIdForGroupLink, type TaskGroup, type TaskGroupAction, type TaskGroupResult } from '../shared/task-groups'
 import type { AutomationRunNowResult, AutomationRunNowTarget } from '../shared/automation-run-now'
 
 export const taskControlTools: Tool[] = [
@@ -425,7 +425,7 @@ export class TaskControl {
       if (this.db.getSetting(`workflo-completion:${item.id}`) || this.db.getSetting(`workflo-upload:${item.id}`)) throw new Error('This task has a pending Workflo command. Sync and resolve that command before completing or deleting it.')
     }
     const affectedSteps = affected.flatMap(task => { const step = this.responsibilities.stepForTask(task.id); return step ? [step] : [] })
-    const executionIds = [...new Set([...affectedSteps.flatMap(step => step.executionId ? [step.executionId] : []), ...Object.entries(this.db.groups.snapshot().executions).filter(([, id]) => group && id === group.id).map(([id]) => id)])]
+    const executionIds = [...new Set([...affectedSteps.flatMap(step => step.executionId ? [step.executionId] : []), ...Object.entries(this.db.groups.snapshot().executions).filter(([, id]) => group && id === group.id).map(([link]) => executionIdForGroupLink(link))])]
     const owners = [...new Set([...affectedSteps.map(step => step.responsibilityId), ...executionIds.flatMap(id => { const owner = this.responsibilities.responsibilityForExecution(id); return owner ? [owner.id] : [] })])]
     const ownerSnapshot = this.responsibilities.snapshot()
     const agreements = ownerSnapshot.responsibilities.filter(r => owners.includes(r.id))

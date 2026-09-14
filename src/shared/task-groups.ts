@@ -1,3 +1,6 @@
+export const EXECUTION_ITEM_LINK = ':item:'
+export const executionIdForGroupLink = (link: string): string => link.split(EXECUTION_ITEM_LINK, 1)[0]
+
 export interface TaskGroup {
   id: string
   name: string
@@ -10,7 +13,7 @@ export interface TaskGroupsSnapshot {
   groups: TaskGroup[]
   /** Effective membership, including inherited subtask and recurring-instance membership. */
   membership: Record<string, string>
-  /** Execution ID to presentation Group; null preserves an explicit Ungrouped choice. */
+  /** Execution or execution-item link to presentation Group; null preserves an explicit Ungrouped choice. */
   executions: Record<string, string | null>
 }
 

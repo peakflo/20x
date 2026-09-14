@@ -1,4 +1,5 @@
 import type { ResponsibilityExecution, ResponsibilityExecutionState } from '@shared/responsibilities'
+import { executionIdForGroupLink } from '@shared/task-groups'
 
 const priority: Record<ResponsibilityExecutionState, number> = {
   interrupted: 6,
@@ -27,7 +28,7 @@ export function executionStateForGroup(
 ): ResponsibilityExecutionState | undefined {
   return Object.entries(links)
     .filter(([, linkedGroupId]) => linkedGroupId === groupId)
-    .flatMap(([executionId]) => executions[executionId] ? [executions[executionId].state] : [])
+    .flatMap(([link]) => executions[executionIdForGroupLink(link)] ? [executions[executionIdForGroupLink(link)].state] : [])
     .sort((a, b) => priority[b] - priority[a])[0]
 }
 
