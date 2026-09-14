@@ -252,7 +252,7 @@ interface ElectronAPI {
   }
   agentSession: {
     start: (agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => Promise<AgentSessionStartResult>
-    resume: (agentId: string, taskId: string, ocSessionId: string) => Promise<AgentSessionStartResult>
+    resume: (agentId: string, taskId: string, ocSessionId: string) => Promise<AgentSessionStartResult & { ended?: boolean }>
     abort: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stopByTaskId: (taskId: string) => Promise<AgentSessionSuccessResult & { sessionId: string | null }>

@@ -1,11 +1,12 @@
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Bot, Check, ChevronDown, ExternalLink, FolderOpen, Layers, Menu, MoreHorizontal, Pencil, Play, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, Bot, Check, ChevronDown, ExternalLink, FolderOpen, Layers, Menu, MoreHorizontal, Pencil, Play, RotateCcw, Sparkles, Terminal, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+import { AnthropicLogo, OpenAILogo, OpenCodeLogo, PiLogo } from '@/components/icons/AgentLogos'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { TaskStatusBadge } from './TaskStatusBadge'
-import { TASK_STATUSES, TaskStatus } from '@/types'
+import { CodingAgentType, TASK_STATUSES, TaskStatus } from '@/types'
 import type { Agent, WorkfloTask } from '@/types'
 
 export enum TaskPrimaryAction {
@@ -22,6 +23,23 @@ const ACTION_META = {
   [TaskPrimaryAction.RESTART]: { label: 'Restart', icon: RotateCcw },
   [TaskPrimaryAction.TRIAGE]: { label: 'Triage', icon: Sparkles },
   [TaskPrimaryAction.COMPLETE]: { label: 'Complete', icon: Check }
+}
+
+function getHarnessLogo(agent?: Agent | null): React.FC<{ className?: string }> {
+  switch (agent?.config?.coding_agent) {
+    case CodingAgentType.CLAUDE_CODE:
+      return AnthropicLogo
+    case CodingAgentType.OPENCODE:
+      return OpenCodeLogo
+    case CodingAgentType.CODEX:
+      return OpenAILogo
+    case CodingAgentType.CURSOR:
+      return Terminal
+    case CodingAgentType.PI:
+      return PiLogo
+    default:
+      return Bot
+  }
 }
 
 interface TaskHeaderBarProps {
@@ -126,6 +144,7 @@ export function TaskHeaderBar({
 
   const actionMeta = action ? ACTION_META[action] : null
   const ActionIcon = actionMeta?.icon
+  const HarnessIcon = getHarnessLogo(agent)
   const showStandaloneComplete = task.status !== TaskStatus.Completed
     && !!onComplete
     && (action !== TaskPrimaryAction.COMPLETE || !onAction)
@@ -204,7 +223,7 @@ export function TaskHeaderBar({
               aria-expanded={agentMenuOpen}
               data-testid="header-agent-trigger"
             >
-              <Bot className="h-3 w-3 shrink-0" />
+              <HarnessIcon className="h-3 w-3 shrink-0" />
               <span className="truncate">{agent?.name || 'Unassigned'}</span>
               <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
             </button>
@@ -224,29 +243,35 @@ export function TaskHeaderBar({
                   <span>Unassigned</span>
                   {!task.agent_id && <Check className="h-3.5 w-3.5 text-primary" />}
                 </button>
-                {agents.map((a) => (
-                  <button
-                    key={a.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={task.agent_id === a.id}
-                    onClick={() => {
-                      setAgentMenuOpen(false)
-                      if (task.agent_id !== a.id) void onAssignAgent(a.id)
-                    }}
-                    className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground hover:bg-accent"
-                    data-testid={`header-agent-option-${a.id}`}
-                  >
-                    <span className="truncate">{a.name}</span>
-                    {task.agent_id === a.id && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
-                  </button>
-                ))}
+                {agents.map((a) => {
+                  const AgentLogo = getHarnessLogo(a)
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={task.agent_id === a.id}
+                      onClick={() => {
+                        setAgentMenuOpen(false)
+                        if (task.agent_id !== a.id) void onAssignAgent(a.id)
+                      }}
+                      className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground hover:bg-accent"
+                      data-testid={`header-agent-option-${a.id}`}
+                    >
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <AgentLogo className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{a.name}</span>
+                      </span>
+                      {task.agent_id === a.id && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+                    </button>
+                  )
+                })}
               </div>
             )}
           </div>
         ) : (
           <span className="hidden items-center gap-1.5 rounded-full border border-border/50 bg-card px-2 py-1 text-[11px] text-muted-foreground lg:inline-flex">
-            <Bot className="h-3 w-3" />
+            <HarnessIcon className="h-3 w-3" />
             <span className="truncate">{agent?.name || 'Unassigned'}</span>
           </span>
         )}
@@ -283,7 +308,7 @@ export function TaskHeaderBar({
           <div className="absolute right-0 top-9 z-50 w-44 overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
             {[
               { label: 'Send to Workflo', icon: ExternalLink, action: enterpriseConnected && !task.source_id ? () => uploadToWorkflo(false) : undefined },
-              { label: 'Run agent in Workflo', icon: Bot, action: enterpriseConnected && !task.source_id && task.agent_id ? () => uploadToWorkflo(true) : undefined },
+              { label: 'Run agent in Workflo', icon: HarnessIcon, action: enterpriseConnected && !task.source_id && task.agent_id ? () => uploadToWorkflo(true) : undefined },
               { label: 'Edit task', icon: Pencil, action: onEdit },
               { label: 'Snooze', icon: ChevronDown, action: onSnooze },
               { label: 'Open in canvas', icon: Layers, action: onOpenCanvas },

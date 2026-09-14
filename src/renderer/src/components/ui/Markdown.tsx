@@ -14,7 +14,7 @@
  * ever need this.
  */
 
-import React, { Fragment, memo, useMemo, useState } from 'react'
+import React, { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Check, Copy } from 'lucide-react'
@@ -35,6 +35,7 @@ interface MarkdownProps {
   size?: MarkdownSize
   className?: string
   highlightQuery?: string
+  onLinkClick?: (href: string) => boolean
 }
 
 // Hoisted to module scope to prevent recreation on every render
@@ -195,8 +196,13 @@ const SIZE_CLASSES = {
  * (e.g., the agent transcript) where parent scrolling would otherwise trigger
  * recreation of the components config object on every frame.
  */
-export const Markdown = memo(function Markdown({ children, size = 'sm', className, highlightQuery }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ children, size = 'sm', className, highlightQuery, onLinkClick }: MarkdownProps) {
   const classes = SIZE_CLASSES[size]
+  // Link behavior can change on resize, refresh, or file selection. Keep it
+  // current without replacing the component types passed to ReactMarkdown:
+  // replacing those types unmounts the content and redraws Mermaid diagrams.
+  const linkClickRef = useRef(onLinkClick)
+  useLayoutEffect(() => { linkClickRef.current = onLinkClick }, [onLinkClick])
 
   // Memoize the components config object per `size` to avoid creating a new
   // object reference on every render — ReactMarkdown does a shallow comparison.
@@ -267,7 +273,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
     },
     // Links
     a: ({ children, ...props }: React.ComponentPropsWithoutRef<'a'>) => (
-      <a className="text-primary hover:underline cursor-pointer" target="_blank" rel="noopener noreferrer" {...props}>{highlightReactNode(children, highlightQuery)}</a>
+      <a className="text-primary hover:underline cursor-pointer" target={props.href?.startsWith('#') ? undefined : '_blank'} rel="noopener noreferrer" {...props} onClick={(event) => { if (props.href && linkClickRef.current?.(props.href)) event.preventDefault() }}>{highlightReactNode(children, highlightQuery)}</a>
     ),
     // Images
     img: ({ alt, src, ...props }: React.ComponentPropsWithoutRef<'img'>) => (

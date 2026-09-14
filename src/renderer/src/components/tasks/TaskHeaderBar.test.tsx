@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { TaskStatus } from '@/types'
-import type { WorkfloTask } from '@/types'
+import { CodingAgentType, TaskStatus } from '@/types'
+import type { Agent, WorkfloTask } from '@/types'
 import { TaskHeaderBar, TaskPrimaryAction } from './TaskHeaderBar'
 
 function makeTask(status = TaskStatus.NotStarted): WorkfloTask {
@@ -50,6 +50,18 @@ const requiredProps = {
   onToggleDetails: vi.fn(),
   onEdit: vi.fn(),
   onDelete: vi.fn()
+}
+
+function makeAgent(codingAgent?: CodingAgentType): Agent {
+  return {
+    id: 'agent-1',
+    name: 'Backend Agent',
+    server_url: 'http://localhost:4096',
+    config: codingAgent ? { coding_agent: codingAgent } : {},
+    is_default: false,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z'
+  }
 }
 
 afterEach(cleanup)
@@ -112,5 +124,51 @@ describe('TaskHeaderBar', () => {
     )
 
     expect(screen.queryByTestId('header-cta-complete')).not.toBeInTheDocument()
+  })
+
+  it('shows the assigned agent harness icon instead of the robot in the top bar', () => {
+    render(
+      <TaskHeaderBar
+        {...requiredProps}
+        task={makeTask()}
+        agent={makeAgent(CodingAgentType.CLAUDE_CODE)}
+        agents={[makeAgent(CodingAgentType.CLAUDE_CODE)]}
+        onAssignAgent={vi.fn()}
+      />
+    )
+
+    const trigger = screen.getByTestId('header-agent-trigger')
+    expect(trigger.querySelector('svg')).not.toBeNull()
+    expect(trigger.querySelector('.lucide-bot')).toBeNull()
+  })
+
+  it('falls back to the robot icon when no harness is set', () => {
+    render(
+      <TaskHeaderBar
+        {...requiredProps}
+        task={makeTask()}
+        agents={[makeAgent()]}
+        onAssignAgent={vi.fn()}
+      />
+    )
+
+    const trigger = screen.getByTestId('header-agent-trigger')
+    expect(trigger.querySelector('.lucide-bot')).not.toBeNull()
+  })
+
+  it('lists the harness icon next to each agent in the assignment menu', () => {
+    render(
+      <TaskHeaderBar
+        {...requiredProps}
+        task={makeTask()}
+        agents={[makeAgent(CodingAgentType.OPENCODE)]}
+        onAssignAgent={vi.fn()}
+      />
+    )
+
+    fireEvent.click(screen.getByTestId('header-agent-trigger'))
+    const option = screen.getByTestId('header-agent-option-agent-1')
+    expect(option.querySelector('svg')).not.toBeNull()
+    expect(option.querySelector('.lucide-bot')).toBeNull()
   })
 })

@@ -79,7 +79,8 @@ describe('task artifact files', () => {
       path: 'outputs/dashboard/index.html',
       title: 'dashboard',
       type: ArtifactType.HTML,
-      workpieceKey: 'outputs/dashboard'
+      workpieceKey: 'outputs/dashboard',
+      files: ['outputs/dashboard/README.md', 'outputs/dashboard/index.html', 'outputs/dashboard/styles.css']
     }))
   })
 
@@ -107,7 +108,8 @@ describe('task artifact files', () => {
       title: 'Sales dashboard',
       type: ArtifactType.HTML,
       path: `artifacts/${registered.artifactId}/index.html`,
-      workpieceKey: registered.artifactId
+      workpieceKey: registered.artifactId,
+      files: [`artifacts/${registered.artifactId}/index.html`, `artifacts/${registered.artifactId}/styles.css`]
     }))
     await expect(listRegisteredTaskArtifacts(workspaceDir, 'task-1')).resolves.toEqual([
       expect.objectContaining({
@@ -119,9 +121,20 @@ describe('task artifact files', () => {
     await expect(listTaskArtifactEntries(workspaceDir, 'task-1')).resolves.toEqual([
       expect.objectContaining({
         path: `artifacts/${registered.artifactId}/index.html`,
-        workpieceKey: registered.artifactId
+        workpieceKey: registered.artifactId,
+      files: [`artifacts/${registered.artifactId}/index.html`, `artifacts/${registered.artifactId}/styles.css`]
       })
     ])
+  })
+
+  it('makes registered binary files available for save and copy without scanning unrelated binaries', async () => {
+    const record = await createRegisteredTaskArtifact(workspaceDir, 'task-1', { title: 'Files', type: ArtifactType.FILE })
+    const result = await writeRegisteredTaskArtifactFile(workspaceDir, 'task-1', { artifactId: record.artifactId, filename: 'bundle.zip', content: 'UEsDBA==', encoding: 'base64' })
+    expect(result.files).toEqual([`artifacts/${record.artifactId}/bundle.zip`])
+    expect(await readTaskArtifact(workspaceDir, result.path!)).toEqual({ kind: ArtifactContentKind.DATA_URL, content: 'data:application/octet-stream;base64,UEsDBA==', mimeType: 'application/octet-stream' })
+    expect(await resolveTaskArtifactFilePath(workspaceDir, result.path!)).toBeTruthy()
+    await writeFile(join(workspaceDir, 'unregistered.zip'), 'private')
+    expect(await readTaskArtifact(workspaceDir, 'unregistered.zip')).toBeNull()
   })
 
   it('reads and exact-edits registered files while enforcing task and path boundaries', async () => {

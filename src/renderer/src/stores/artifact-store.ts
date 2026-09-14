@@ -191,6 +191,7 @@ export function artifactsFromMessage(taskId: string, message: ArtifactMessageLik
           title: typeof value.title === 'string' ? value.title : titleFromTarget(path),
           path,
           workpieceKey,
+          files: Array.isArray(value.files) ? value.files.filter((file): file is string => typeof file === 'string') : undefined,
           updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : updatedAt
         })
       }
@@ -229,6 +230,7 @@ function fromFileEntry(taskId: string, entry: ArtifactFileEntry): Omit<Artifact,
     title: entry.title || titleFromTarget(path),
     path,
     workpieceKey: entry.workpieceKey,
+    files: entry.files,
     updatedAt: entry.updatedAt
   }
 }
@@ -265,6 +267,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         && previous.path === candidate.path
         && previous.url === candidate.url
         && previous.workpieceKey === candidate.workpieceKey
+        && JSON.stringify(previous.files) === JSON.stringify(candidate.files)
         && previous.updatedAt === candidate.updatedAt
         && (!shouldFollow || (currentUI.open && currentUI.activeTabId === id))
       ) {
@@ -393,6 +396,7 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
           && previous.path === candidate.path
           && previous.url === candidate.url
           && previous.workpieceKey === candidate.workpieceKey
+          && JSON.stringify(previous.files) === JSON.stringify(candidate.files)
           && previous.updatedAt === candidate.updatedAt
         ) continue
 

@@ -101,7 +101,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentSession: {
     start: (agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<{ sessionId: string }> =>
       ipcRenderer.invoke('agentSession:start', agentId, taskId, workspaceDir, skipInitialPrompt),
-    resume: (agentId: string, taskId: string, ocSessionId: string): Promise<{ sessionId: string }> =>
+    resume: (agentId: string, taskId: string, ocSessionId: string): Promise<{ sessionId: string; ended?: boolean }> =>
       ipcRenderer.invoke('agentSession:resume', agentId, taskId, ocSessionId),
     abort: (sessionId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agentSession:abort', sessionId),

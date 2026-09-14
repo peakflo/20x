@@ -1,3 +1,5 @@
+import { ArtifactFileSelector } from './ArtifactFileSelector'
+import { useArtifactNavigation } from './use-artifact-navigation'
 import { useEffect, useState, type ReactNode } from 'react'
 import { PanelRightClose } from 'lucide-react'
 import { ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
@@ -34,6 +36,8 @@ export interface ArtifactsPanelProps {
 export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutput, changesCount, onSelectTab, onCloseTab, onToggleOpen, details, changes, output, className }: ArtifactsPanelProps) {
   const active = ui.activeTabId || PinnedArtifactTabId.DETAILS
   const activeArtifact = artifacts.find((artifact) => artifact.id === active)
+  const navigation = useArtifactNavigation(activeArtifact)
+  const selectedArtifact = navigation.selectedArtifact
   const [refreshTrigger, setRefreshTrigger] = useState(0)
 
   useEffect(() => {
@@ -49,17 +53,19 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
       <div className="relative">
         <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? 'pr-52' : 'pr-11'} />
         <div className="absolute right-2 top-1.5 flex items-center gap-1 bg-background">
-          {activeArtifact && <ArtifactCopyActions key={activeArtifact.id} artifact={activeArtifact} artifactApi={artifactApi} />}
+          {activeArtifact && <ArtifactCopyActions key={`${activeArtifact.id}:${selectedArtifact?.path}`} artifact={selectedArtifact!} artifactApi={artifactApi} />}
           <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
         </div>
       </div>
+      <ArtifactFileSelector files={navigation.files} path={selectedArtifact?.path} onSelect={navigation.selectFile} />
+      {navigation.linkError && <div role="alert" className="px-3 py-2 text-sm text-red-400">{navigation.linkError}</div>}
       <div className="relative min-h-0 flex-1">
         <div className={active === PinnedArtifactTabId.DETAILS ? 'h-full' : 'hidden'}>{details}</div>
         {hasChanges && active === PinnedArtifactTabId.CHANGES && <div className="h-full">{changes}</div>}
         {hasOutput && <div className={active === PinnedArtifactTabId.OUTPUT ? 'h-full overflow-y-auto p-4' : 'hidden'}>{output}</div>}
         {artifacts.map((artifact) => (
           <div key={artifact.id} className={active === artifact.id ? 'h-full' : 'hidden'}>
-            {active === artifact.id ? <ArtifactViewer artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} /> : null}
+            {active === artifact.id ? <ArtifactViewer artifact={selectedArtifact!} artifactApi={artifactApi} refreshTrigger={refreshTrigger} onLinkClick={navigation.openLink} /> : null}
           </div>
         ))}
       </div>
@@ -67,11 +73,11 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
   )
 }
 
-function ArtifactViewer({ artifact, artifactApi, refreshTrigger }: { artifact: Artifact; artifactApi: ArtifactApi; refreshTrigger: number }) {
+function ArtifactViewer({ artifact, artifactApi, refreshTrigger, onLinkClick }: { artifact: Artifact; artifactApi: ArtifactApi; refreshTrigger: number; onLinkClick: (href: string) => boolean }) {
   switch (artifact.type) {
-    case ArtifactType.MARKDOWN: return <MarkdownArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
+    case ArtifactType.MARKDOWN: return <MarkdownArtifactView onLinkClick={onLinkClick} artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
     case ArtifactType.IMAGE: return <ImageArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
-    case ArtifactType.HTML: return <HtmlArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
+    case ArtifactType.HTML: return <HtmlArtifactView onLinkClick={onLinkClick} artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
     case ArtifactType.PR: return <PrArtifactView artifact={artifact} refreshTrigger={refreshTrigger} />
     default: return <FileArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
   }

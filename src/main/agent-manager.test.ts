@@ -1967,13 +1967,13 @@ describe('AgentManager session ID re-keying redirect', () => {
 })
 
 describe('AgentManager resumeAdapterSession — SESSION_ENDED for completed tasks', () => {
-  it('returns empty string instead of throwing for ReadyForReview tasks', async () => {
+  it.each([TaskStatus.ReadyForReview, TaskStatus.AgentLearning])('returns an ended session for %s with user feedback intent', async (status) => {
     const mockDb = {
       getTask: vi.fn(() => ({
         id: 'task-1',
         title: 'Test',
         agent_id: 'agent-1',
-        status: TaskStatus.ReadyForReview,
+        status,
       })),
       getAgent: vi.fn(() => ({
         id: 'agent-1',
@@ -1985,7 +1985,7 @@ describe('AgentManager resumeAdapterSession — SESSION_ENDED for completed task
       getMcpServer: vi.fn(() => null),
       getSecretsByIds: vi.fn(() => []),
       getSecretsWithValues: vi.fn(() => []),
-      getSetting: vi.fn(() => null),
+      getSetting: vi.fn((key: string) => key === 'session-feedback-completion:task-1' ? '{"completeAtSource":false}' : null),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 
     const mgr = new AgentManager(mockDb)

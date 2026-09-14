@@ -142,12 +142,12 @@ describe('useArtifactStore', () => {
 
   it('hydrates the registry through the artifact API without following the result', async () => {
     const api: ArtifactApi = {
-      scan: vi.fn().mockResolvedValue([{ path: 'report.md', title: 'report.md', type: ArtifactType.MARKDOWN, updatedAt: 5, size: 20 }]),
+      scan: vi.fn().mockResolvedValue([{ path: 'report.md', files: ['report.md', 'data.csv'], title: 'report.md', type: ArtifactType.MARKDOWN, updatedAt: 5, size: 20 }]),
       read: vi.fn().mockResolvedValue({ kind: ArtifactContentKind.TEXT, content: '# Report' })
     }
     await useArtifactStore.getState().hydrate('task-1', api)
     expect(api.scan).toHaveBeenCalledWith('task-1')
-    expect(useArtifactStore.getState().getArtifacts('task-1')).toEqual([expect.objectContaining({ path: 'report.md' })])
+    expect(useArtifactStore.getState().getArtifacts('task-1')).toEqual([expect.objectContaining({ path: 'report.md', files: ['report.md', 'data.csv'] })])
     expect(useArtifactStore.getState().getUI('task-1').activeTabId).toBeNull()
     expect(useArtifactStore.getState().hydratedTasks['task-1']).toBe(true)
   })

@@ -116,6 +116,33 @@ describe('TaskDetailPage', () => {
     }
   })
 
+  it.each([true, false])('starts learning when the saved session ended, source completion %s', async (completeAtSource) => {
+    const task = makeTask({agent_id: 'agent-1', source_id: 'notion', source: 'Notion', session_id: 'ended'})
+    const originalUpdate = useTaskStore.getState().updateTask
+    const updateTask = vi.fn().mockResolvedValue(true)
+    const resume = vi.spyOn(api.sessions, 'resume').mockResolvedValue({sessionId: ''})
+    const start = vi.spyOn(api.sessions, 'start').mockResolvedValue({sessionId: 'learning'})
+    const send = vi.spyOn(api.sessions, 'send').mockResolvedValue({success: true})
+    useTaskStore.setState({tasks: [task], isLoading: false, updateTask})
+    try {
+      const view = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
+      fireEvent.click(view.getByTestId('main-cta-complete'))
+      if (!completeAtSource) fireEvent.click(view.getByRole('radio', {name: "I'll do it manually"}))
+      fireEvent.click(view.getByRole('button', {name: 'Rate 5'}))
+      fireEvent.click(view.getByRole('button', {name: 'Submit Feedback'}))
+      await waitFor(() => expect(send).toHaveBeenCalledWith('learning', expect.stringContaining('User rated this session 5/5'), task.id, task.agent_id))
+      expect(start).toHaveBeenCalledWith('agent-1', task.id, true)
+      expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({status: 'agent_learning', feedback_rating: 5, complete_at_source: completeAtSource}))
+      expect(completeMock).not.toHaveBeenCalled()
+    } finally {
+      cleanup()
+      useTaskStore.setState({updateTask: originalUpdate})
+      resume.mockRestore()
+      start.mockRestore()
+      send.mockRestore()
+    }
+  })
+
   it.each(['approve', undefined])('shows the Session Feedback action %s before Skip completes', async (action) => {
     const task = makeTask({ agent_id: 'agent-1', source_id: 'session-feedback', source: 'Session Feedback',
       output_fields: action ? [{ id: 'action', value: action }] : [] })

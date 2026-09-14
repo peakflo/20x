@@ -717,26 +717,13 @@ tags:
 Update existing skills that were helpful or create new ones for patterns worth reusing.`
 
     try {
-      if (!session.sessionId) {
-        const readySessionId = await ensureChatSession()
+      // Resume if possible, or start a learning-only session when the old
+      // adapter session has ended. The feedback prompt is the sole new task.
+      if (!useAgentStore.getState().sessions.get(task.id)?.sessionId) {
+        const readySessionId = task.session_id
+          ? await ensureChatSession(true)
+          : await start(task.agent_id, task.id, undefined, true)
         if (!readySessionId) throw new Error('Could not start the learning session.')
-
-        // Wait for messages to load (poll for session to be ready)
-        await new Promise<void>((resolve) => {
-          const checkReady = () => {
-            const latestSession = useAgentStore.getState().sessions.get(task.id)
-            if (latestSession?.messages && latestSession.messages.length > 0) {
-              resolve()
-            } else {
-              setTimeout(checkReady, 500)
-            }
-          }
-          setTimeout(checkReady, 500)
-          // Timeout after 10 seconds
-          setTimeout(() => {
-            resolve()
-          }, 10000)
-        })
       }
 
       // Send feedback message through normal flow so it shows in UI
@@ -745,9 +732,13 @@ Update existing skills that were helpful or create new ones for patterns worth r
       // Backend will handle skill sync and task completion when session goes idle
     } catch (error) {
       console.error('Failed to send feedback:', error)
+      const toastId = `feedback-${task.id}`
+      showProgressToast(toastId, 'Learning could not start')
+      failProgressToast(toastId, error instanceof Error ? error.message : String(error))
       await taskApi.update(task.id, { status: TaskStatus.ReadyForReview })
+      setShowFeedback(true)
     }
-  }, [ensureChatSession, sendMessage, session.sessionId, task, onCompleteTask])
+  }, [ensureChatSession, sendMessage, start, task])
 
   const handleFeedbackSkip = useCallback(async (completeAtSource: boolean) => {
     if (!task?.id) return
