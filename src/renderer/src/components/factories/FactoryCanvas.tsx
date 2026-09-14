@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
+import { isFinishedExecutionState } from '@/lib/execution-groups'
 import { useTaskGroupStore } from '@/stores/task-group-store'
 import type { ResponsibilityStep } from '@shared/responsibilities'
 
@@ -14,7 +15,7 @@ export function syncFactoryCanvas(steps: ResponsibilityStep[], tasks: Array<{ id
     const groups = useTaskGroupStore.getState()
     if (!task || useCanvasStore.getState().panels.some(p => p.type === 'task' && p.refId === task.id)) continue
     // Group frames own opening grouped tasks; only an explicit ungrouped flow request opens panels here.
-    if (!allowNewPanels || groups.executions[step.responsibilityId] || groups.membership[task.id]) continue
+    if (!allowNewPanels || groups.executions[step.executionId ?? step.responsibilityId] || groups.membership[task.id]) continue
     canvas.addPanel({ type: 'task', refId: task.id, title: task.title, x: origin + i * (DEFAULT_PANEL_WIDTH + 40), y: 0, width: DEFAULT_PANEL_WIDTH, height: DEFAULT_PANEL_HEIGHT })
   }
   const panels = useCanvasStore.getState().panels
@@ -39,6 +40,7 @@ export function FactoryCanvas() {
   const panels = useCanvasStore(s => s.panels)
   const isLoaded = useCanvasStore(s => s.isLoaded)
   const executions = useTaskGroupStore(s => s.executions)
+  const executionRecords = useUIStore(s => s.mastermindExecutions)
   const [steps, setSteps] = useState<ResponsibilityStep[]>([])
   const [error, setError] = useState('')
   const focused = useRef<string | null>(null)
@@ -63,13 +65,17 @@ export function FactoryCanvas() {
     // Draw saved Factory handoffs for any visible Group, including Groups opened from Tasks.
     syncFactoryCanvas(steps, tasks, false)
     if (!id) return
-    const selectedSteps = steps.filter(s => s.responsibilityId === id)
+    const responsibilitySteps = steps.filter(s => s.responsibilityId === id)
+    const executionId = responsibilitySteps.findLast(step => step.executionId)?.executionId
+    const selectedSteps = executionId ? responsibilitySteps.filter(step => step.executionId === executionId) : responsibilitySteps
     if (!selectedSteps.length) return
     const key = `${id}:${request}`
     const firstOpen = opened.current !== key
     if (firstOpen) {
       opened.current = key
-      const groupId = executions[id]
+      const groupId = executionId ? executions[executionId] : undefined
+      const execution = executionId ? executionRecords[executionId] : undefined
+      if (isFinishedExecutionState(execution?.state) && !useUIStore.getState().showCompletedExecutions) useUIStore.getState().toggleCompletedExecutions()
       if (groupId) {
         const memberIds = Object.entries(useTaskGroupStore.getState().membership).filter(([, group]) => group === groupId).map(([taskId]) => taskId)
         useCanvasStore.getState().showGroup(groupId, memberIds)
@@ -80,6 +86,6 @@ export function FactoryCanvas() {
       focused.current = key
       useCanvasStore.getState().requestViewCommand({ kind: 'focus_task', taskId: target.taskId })
     }
-  }, [steps, tasks, id, request, shownGroupIds, closedGroupMemberIds, panels, executions, isLoaded, groupsLoaded])
+  }, [steps, tasks, id, request, shownGroupIds, closedGroupMemberIds, panels, executions, executionRecords, isLoaded, groupsLoaded])
   return error ? <p role="alert" className="absolute bottom-16 left-4 z-50 rounded bg-background p-2 text-sm text-destructive">Could not refresh Factory tasks: {error}</p> : null
 }

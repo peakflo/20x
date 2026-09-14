@@ -84,6 +84,14 @@ export class TaskGroups {
     const state = this.read(); state.executions[id] = groupId; this.save(state)
   }
 
+  rekeyExecution(previousId: string, executionId: string): void {
+    const state = this.read()
+    if (!Object.hasOwn(state.executions, previousId) || Object.hasOwn(state.executions, executionId)) return
+    state.executions[executionId] = state.executions[previousId]
+    delete state.executions[previousId]
+    this.save(state)
+  }
+
   admit(taskId: string, groupId: string | null): void {
     if (this.db.getTask(taskId) && !Object.hasOwn(this.read().membership, taskId)) this.assign([taskId], groupId)
   }

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { TaskStatus, SettingsTab } from '@/types'
 import type { TaskPriority } from '@/types'
-import { isOpenNotice, type ResponsibilitySnapshot } from '@shared/responsibilities'
+import { isOpenNotice, type ResponsibilityExecution, type ResponsibilitySnapshot } from '@shared/responsibilities'
 
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
@@ -14,6 +14,7 @@ const SIDEBAR_COLLAPSED_KEY = 'ui-sidebar-collapsed'
 const SIDEBAR_MIN_WIDTH = 220
 const SIDEBAR_MAX_WIDTH = 440
 const SIDEBAR_DEFAULT_WIDTH = 264
+const SHOW_COMPLETED_EXECUTIONS_KEY = 'ui-show-completed-executions'
 
 function readStoredWidth(): number {
   try {
@@ -58,6 +59,9 @@ interface UIState {
   mastermindProjects: Array<{ id: string; name: string }>
   mastermindTaskProjects: Record<string, string>
   mastermindTaskAttention: Record<string, 'result' | 'decision' | 'approval' | 'attention'>
+  mastermindExecutions: Record<string, ResponsibilityExecution>
+  showCompletedExecutions: boolean
+  toggleCompletedExecutions: () => void
   mastermindSnapshotLoaded: boolean
   mastermindSelectionHydrated: boolean
   setMastermindProjectId: (projectId: string) => void
@@ -136,6 +140,13 @@ export const useUIStore = create<UIState>((set) => ({
   mastermindProjects: [],
   mastermindTaskProjects: {},
   mastermindTaskAttention: {},
+  mastermindExecutions: {},
+  showCompletedExecutions: (() => { try { return localStorage.getItem(SHOW_COMPLETED_EXECUTIONS_KEY) === '1' } catch { return false } })(),
+  toggleCompletedExecutions: () => set(state => {
+    const showCompletedExecutions = !state.showCompletedExecutions
+    try { localStorage.setItem(SHOW_COMPLETED_EXECUTIONS_KEY, showCompletedExecutions ? '1' : '0') } catch { /* ignore */ }
+    return { showCompletedExecutions }
+  }),
   mastermindSnapshotLoaded: false,
   mastermindSelectionHydrated: false,
   setMastermindProjectId: mastermindProjectId => set({ mastermindProjectId, mastermindSelectionHydrated: true }),
@@ -158,6 +169,7 @@ export const useUIStore = create<UIState>((set) => ({
         return projectId ? [[step.taskId, projectId]] : []
       })),
       mastermindTaskAttention,
+      mastermindExecutions: Object.fromEntries(snapshot.responsibilities.flatMap(record => (record.executions ?? []).map(execution => [execution.id, execution]))),
       mastermindSnapshotLoaded: true
     })
   },

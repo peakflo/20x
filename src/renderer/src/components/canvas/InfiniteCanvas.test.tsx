@@ -24,6 +24,8 @@ const uiStoreState = vi.hoisted(() => ({
   mastermindProjectId: '',
   mastermindProjects: [] as Array<{ id: string; name: string }>,
   mastermindTaskProjects: {} as Record<string, string>,
+  mastermindExecutions: {} as Record<string, import('@shared/responsibilities').ResponsibilityExecution>,
+  showCompletedExecutions: false,
   mastermindSnapshotLoaded: false,
 }))
 
@@ -121,6 +123,8 @@ describe('InfiniteCanvas', () => {
     uiStoreState.mastermindProjectId = ''
     uiStoreState.mastermindProjects = []
     uiStoreState.mastermindTaskProjects = {}
+    uiStoreState.mastermindExecutions = {}
+    uiStoreState.showCompletedExecutions = false
     uiStoreState.mastermindSnapshotLoaded = false
 
     useDrawingStore.setState({
@@ -157,6 +161,16 @@ describe('InfiniteCanvas', () => {
         expect(viewport.y + (parseFloat(frame.style.top) + parseFloat(frame.style.height) / 2) * viewport.zoom).toBeCloseTo(400)
       })
     } finally { bounds.mockRestore() }
+  })
+
+  it('hides Done execution panels without deleting their saved layout', () => {
+    taskStoreState.tasks = [makeTask()]
+    useTaskGroupStore.setState({ groups: [{ id: 'g1', name: 'Run 1', description: '', projectId: null, createdAt: '' }], membership: { 'task-123': 'g1' }, executions: { execution: 'g1' } })
+    uiStoreState.mastermindExecutions = { execution: { id: 'execution', sequence: 1, predecessorId: null, trigger: 'test', state: 'done', startedAt: '' } }
+    useCanvasStore.getState().addPanel({ type: 'task', title: 'Finished execution task', refId: 'task-123', canvasGroupId: 'g1', x: 100, y: 100, width: 400, height: 300 })
+    render(<InfiniteCanvas />)
+    expect(screen.queryByText('Finished execution task')).toBeNull()
+    expect(useCanvasStore.getState().panels).toHaveLength(1)
   })
 
   it('should show zoom controls', () => {

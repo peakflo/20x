@@ -27,6 +27,7 @@ import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from 
 import { CanvasGroups, CanvasGroupsMenu } from './CanvasGroups'
 import { taskWorkspaceId } from '@/components/ui/WorkspaceBadge'
 import { useTaskGroupStore } from '@/stores/task-group-store'
+import { executionStateForGroup, isFinishedExecutionState } from '@/lib/execution-groups'
 
 /**
  * Check if a panel is visible in the current viewport (with generous margin).
@@ -235,15 +236,18 @@ export function InfiniteCanvas() {
   const workspaceDataLoaded = useUIStore((s) => s.mastermindSnapshotLoaded)
   const groups = useTaskGroupStore((s) => s.groups)
   const membership = useTaskGroupStore((s) => s.membership)
+  const executionLinks = useTaskGroupStore((s) => s.executions)
   const groupsLoaded = useTaskGroupStore((s) => s.isLoaded)
-  const workspacePanels = useMemo(() => {
-    if (!projectId || !workspaceDataLoaded || !groupsLoaded) return panels
-    return panels.filter(panel => {
-      if ((panel.type === 'task' || panel.type === 'transcript') && panel.refId) return taskWorkspaceId(panel.refId, taskProjects, groups, membership) === projectId
-      if (panel.canvasGroupId) return groups.find(group => group.id === panel.canvasGroupId)?.projectId === projectId
-      return panel.type !== 'task' && panel.type !== 'transcript'
-    })
-  }, [panels, projectId, workspaceDataLoaded, groupsLoaded, taskProjects, groups, membership])
+  const executions = useUIStore((s) => s.mastermindExecutions)
+  const showCompletedExecutions = useUIStore((s) => s.showCompletedExecutions)
+  const workspacePanels = useMemo(() => panels.filter(panel => {
+    const groupId = panel.canvasGroupId ?? ((panel.type === 'task' || panel.type === 'transcript') && panel.refId ? membership[panel.refId] : undefined)
+    if (!showCompletedExecutions && groupId && isFinishedExecutionState(executionStateForGroup(groupId, executionLinks, executions))) return false
+    if (!projectId || !workspaceDataLoaded || !groupsLoaded) return true
+    if ((panel.type === 'task' || panel.type === 'transcript') && panel.refId) return taskWorkspaceId(panel.refId, taskProjects, groups, membership) === projectId
+    if (panel.canvasGroupId) return groups.find(group => group.id === panel.canvasGroupId)?.projectId === projectId
+    return panel.type !== 'task' && panel.type !== 'transcript'
+  }), [panels, projectId, workspaceDataLoaded, groupsLoaded, taskProjects, groups, membership, executionLinks, executions, showCompletedExecutions])
   const workspacePanelIds = useMemo(() => new Set(workspacePanels.map(panel => panel.id)), [workspacePanels])
   const isLoaded = useCanvasStore((s) => s.isLoaded)
   const zoomTo = useCanvasStore((s) => s.zoomTo)

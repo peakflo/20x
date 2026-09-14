@@ -108,6 +108,18 @@ export interface ResponsibilityAgreement {
   /** Captured from agent settings by 20x, never accepted from a model. */
   access?: ExecutionAccess
 }
+export type ResponsibilityExecutionState = 'pending' | 'running' | 'needs_attention' | 'ready_for_review' | 'done' | 'interrupted' | 'cancelled'
+export interface ResponsibilityExecution {
+  id: string
+  sequence: number
+  predecessorId: string | null
+  trigger: string
+  state: ResponsibilityExecutionState
+  startedAt: string
+  finishedAt?: string
+  finalStepId?: string
+  consumedBy?: string
+}
 export interface ResponsibilityRecord {
   id: string
   projectId: string
@@ -128,13 +140,15 @@ export interface ResponsibilityRecord {
   lastCollectedAt?: string
   /** Durable receipt for one early Routine occurrence. */
   runNow?: { requestedAt: string; scheduledAt: string }
+  /** Durable execution lineage, bounded by the approved step budget. */
+  executions?: ResponsibilityExecution[]
+  currentExecutionId?: string
   /** Factory selected for the current Routine event only. */
   eventFactory?: FactoryDefinition
-  factoryStartStep?: number
   routineSetup?: { proposalId?: string }
   /** Preparation evidence; unlike basedOn, this does not require the setup task to finish first. */
   preparedFrom?: string
-  next: { phase: WorkPhase; instruction: string; eventId?: string; agentId?: string; predecessorTaskIds?: string[]; completeRoutine?: boolean } | null
+  next: { phase: WorkPhase; instruction: string; eventId?: string; executionKey?: string; agentId?: string; predecessorTaskIds?: string[]; completeRoutine?: boolean } | null
   createdAt: string
   updatedAt: string
 }
@@ -158,6 +172,8 @@ export interface WorkReport {
 export interface ResponsibilityStep {
   /** Snapshot-only: historical steps survive task deletion. */
   taskAvailable?: boolean
+  /** Durable execution membership; absent only on unmigrated historical data. */
+  executionId?: string
   inputRevision?: number
   id: string
   responsibilityId: string
@@ -181,6 +197,7 @@ export interface ResponsibilityNotice {
   projectId: string
   responsibilityId: string | null
   stepId: string | null
+  executionId?: string
   kind: 'result' | 'question' | 'recovery' | 'permission'
   title: string
   body: string

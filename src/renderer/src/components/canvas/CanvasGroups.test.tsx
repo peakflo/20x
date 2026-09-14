@@ -14,7 +14,7 @@ describe('CanvasGroups', () => {
   beforeEach(() => {
     useCanvasStore.setState({ panels: [], edges: [], nextZIndex: 1, isLoaded: true, shownGroupIds: [], closedGroupMemberIds: {} })
     useTaskGroupStore.setState({ isLoaded: true, groups: [{ id: 'g1', name: 'Group 1', description: '', projectId: null, createdAt: '' }], membership: { t1: 'g1' }, executions: {}, canvasGroupId: null })
-    useUIStore.setState({ canvasResponsibilityId: null, canvasResponsibilityRequest: 0 })
+    useUIStore.setState({ canvasResponsibilityId: null, canvasResponsibilityRequest: 0, mastermindExecutions: {}, showCompletedExecutions: false })
   })
   afterEach(cleanup)
 
@@ -43,9 +43,22 @@ describe('CanvasGroups', () => {
     expect(useTaskGroupStore.getState().membership).toEqual({ t1: 'g1', t2: 'g1' })
   })
 
+  it('filters a Done execution without deleting its persisted canvas panels', async () => {
+    useTaskGroupStore.setState({ executions: { execution: 'g1' } })
+    useUIStore.setState({ mastermindExecutions: { execution: { id: 'execution', sequence: 1, predecessorId: null, trigger: 'test', state: 'done', startedAt: '' } }, showCompletedExecutions: false })
+    useCanvasStore.getState().addPanel({ type: 'task', refId: 't1', canvasGroupId: 'g1', title: 'Task 1', x: 0, y: 0, width: 360, height: 260 })
+    useCanvasStore.setState({ shownGroupIds: ['g1'] })
+    render(<CanvasGroups />)
+    expect(document.querySelector('[data-canvas-group-frame="g1"]')).toBeNull()
+    expect(useCanvasStore.getState().panels).toHaveLength(1)
+    act(() => useUIStore.getState().toggleCompletedExecutions())
+    await waitFor(() => expect(document.querySelector('[data-canvas-group-frame="g1"]')).toBeTruthy())
+    expect(useCanvasStore.getState().panels).toHaveLength(1)
+  })
+
   it('waits for saved layout, opens a requested Factory after async data, and connects Groups opened through Tasks', async () => {
-    window.electronAPI.responsibilities = { snapshot: vi.fn(async () => ({ steps: [{ responsibilityId: 'r1', taskId: 't1', phase: 'coordinate' }, { responsibilityId: 'r1', taskId: 't2', phase: 'work', predecessorTaskIds: ['t1'] }] })), onChanged: vi.fn(() => vi.fn()) } as never
-    useTaskGroupStore.setState({ membership: { t1: 'g1', t2: 'g1' }, executions: { r1: 'g1' } })
+    window.electronAPI.responsibilities = { snapshot: vi.fn(async () => ({ steps: [{ responsibilityId: 'r1', executionId: 'execution', taskId: 't1', phase: 'coordinate' }, { responsibilityId: 'r1', executionId: 'execution', taskId: 't2', phase: 'work', predecessorTaskIds: ['t1'] }] })), onChanged: vi.fn(() => vi.fn()) } as never
+    useTaskGroupStore.setState({ membership: { t1: 'g1', t2: 'g1' }, executions: { execution: 'g1' } })
     useCanvasStore.setState({ isLoaded: false })
     useUIStore.getState().showResponsibilityOnCanvas('r1')
     render(<><CanvasGroups /><FactoryCanvas /></>)

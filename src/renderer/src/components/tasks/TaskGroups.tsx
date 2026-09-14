@@ -9,6 +9,7 @@ import { useTaskGroupStore } from '@/stores/task-group-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
 import { WorkspaceBadge } from '@/components/ui/WorkspaceBadge'
+import { executionStateForGroup, executionStateLabel, isFinishedExecutionState } from '@/lib/execution-groups'
 
 interface TaskGroupsProps {
   tasks: WorkfloTask[]
@@ -307,6 +308,7 @@ function NewGroupDialog({
 export function TaskGroups({ tasks, allTasks, selectedTaskId, onSelectTask, onCreateTask }: TaskGroupsProps) {
   const groups = useTaskGroupStore((s) => s.groups)
   const membership = useTaskGroupStore((s) => s.membership)
+  const executionLinks = useTaskGroupStore((s) => s.executions)
   const view = useTaskGroupStore((s) => s.view)
   const error = useTaskGroupStore((s) => s.error)
   const fetch = useTaskGroupStore((s) => s.fetch)
@@ -315,16 +317,21 @@ export function TaskGroups({ tasks, allTasks, selectedTaskId, onSelectTask, onCr
   const setCreationGroup = useTaskGroupStore((s) => s.setCreationGroup)
   const projectId = useUIStore((s) => s.mastermindProjectId)
   const workspaceDataLoaded = useUIStore((s) => s.mastermindSnapshotLoaded)
+  const executions = useUIStore((s) => s.mastermindExecutions)
+  const showCompletedExecutions = useUIStore((s) => s.showCompletedExecutions)
+  const toggleCompletedExecutions = useUIStore((s) => s.toggleCompletedExecutions)
   const selectTask = useTaskStore((s) => s.selectTask)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [newGroupOpen, setNewGroupOpen] = useState(false)
   useEffect(() => {
     void fetch()
   }, [fetch])
-  const visibleGroups = useMemo(() => projectId && workspaceDataLoaded ? groups.filter(group => group.projectId === projectId) : groups, [groups, projectId, workspaceDataLoaded])
+  const workspaceGroups = useMemo(() => projectId && workspaceDataLoaded ? groups.filter(group => group.projectId === projectId) : groups, [groups, projectId, workspaceDataLoaded])
+  const completedExecutionGroups = useMemo(() => workspaceGroups.filter(group => isFinishedExecutionState(executionStateForGroup(group.id, executionLinks, executions))), [workspaceGroups, executionLinks, executions])
+  const visibleGroups = useMemo(() => showCompletedExecutions ? workspaceGroups : workspaceGroups.filter(group => !isFinishedExecutionState(executionStateForGroup(group.id, executionLinks, executions))), [workspaceGroups, executionLinks, executions, showCompletedExecutions])
   useEffect(() => {
-    if (projectId && workspaceDataLoaded && !['groups', 'all', 'ungrouped'].includes(view) && !visibleGroups.some(group => group.id === view)) setView('groups')
-  }, [projectId, workspaceDataLoaded, view, visibleGroups, setView])
+    if (!['groups', 'all', 'ungrouped'].includes(view) && !visibleGroups.some(group => group.id === view)) setView('groups')
+  }, [view, visibleGroups, setView])
   const openGroup = (id: string) => {
     selectTask(null)
     setSelected(new Set())
@@ -367,6 +374,7 @@ export function TaskGroups({ tasks, allTasks, selectedTaskId, onSelectTask, onCr
         <div className="flex items-center gap-2">
           <Folder className="h-4 w-4 text-primary" />
           <span className="text-sm font-semibold">Groups</span>
+          {completedExecutionGroups.length > 0 && <button type="button" aria-pressed={showCompletedExecutions} className="text-xs text-muted-foreground hover:text-foreground" onClick={toggleCompletedExecutions}>{showCompletedExecutions ? 'Hide completed executions' : `Show completed executions (${completedExecutionGroups.length})`}</button>}
           <Button size="sm" className="ml-auto" onClick={onCreateTask}>
             <Plus className="h-3.5 w-3.5" /> Task
           </Button>
@@ -377,6 +385,7 @@ export function TaskGroups({ tasks, allTasks, selectedTaskId, onSelectTask, onCr
         {visibleGroups.map((group) => {
           const groupTasks = allTasks.filter((task) => membership[task.id] === group.id)
           const attention = groupTasks.filter((task) => attentionStatuses.has(task.status)).length
+          const executionState = executionStateForGroup(group.id, executionLinks, executions)
           return (
             <button
               key={group.id}
@@ -386,6 +395,7 @@ export function TaskGroups({ tasks, allTasks, selectedTaskId, onSelectTask, onCr
               <div className="flex items-center gap-2 text-sm font-medium">
                 <Folder className="h-4 w-4" />
                 {group.name}
+                {executionState && <span className={`rounded px-1.5 py-0.5 text-[10px] ${['needs_attention', 'interrupted', 'ready_for_review'].includes(executionState) ? 'bg-amber-400/15 text-amber-500' : 'bg-primary/15 text-primary'}`}>{executionStateLabel[executionState]}</span>}
                 <WorkspaceBadge projectId={group.projectId} className="ml-auto" />
                 <span className="text-xs text-muted-foreground">{groupTasks.length}</span>
               </div>
@@ -427,6 +437,7 @@ export function TaskGroups({ tasks, allTasks, selectedTaskId, onSelectTask, onCr
       </div>
     )
   const group = groups.find((item) => item.id === view)
+  const groupExecutionState = group ? executionStateForGroup(group.id, executionLinks, executions) : undefined
   return (
     <div className="flex h-full flex-col">
       {error && (
@@ -446,6 +457,7 @@ export function TaskGroups({ tasks, allTasks, selectedTaskId, onSelectTask, onCr
           {group?.name ?? (view === 'all' ? 'All tasks' : 'Ungrouped')}
         </span>
         {group && <WorkspaceBadge projectId={group.projectId} />}
+        {groupExecutionState && <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">{executionStateLabel[groupExecutionState]}</span>}
         {group && (
           <span className="text-xs text-muted-foreground">
             {allTasks.filter((task) => membership[task.id] === group.id).length}

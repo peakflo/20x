@@ -47,7 +47,7 @@ const agreement = {
     maxSteps: { type: 'integer', minimum: 1, maximum: 100, description: 'Total reasoning assignments, including verification and source classification.' },
     deadline: { ...string, description: 'ISO timestamp after which no new assignment starts.' },
     basedOn: { ...string, description: 'Completed responsibility whose findings and checkout this follows.' },
-    groupId: { type: ['string', 'null'], description: 'Existing project Group for this execution; omit for a new Factory Group, null for Ungrouped.' },
+    groupId: { type: ['string', 'null'], description: 'Existing project Group for the first execution; omit to create an execution Group, null for Ungrouped.' },
     factoryId: { ...string, description: 'Optional exact project Factory. Its definition is snapshotted by 20x.' },
     allowedAgentIds: { type: 'array', items: string, maxItems: 20, description: 'Additional existing agents shown in the execution approval. Omit to use the saved work-agent default.' },
     schedule: { ...string, description: 'Routine cron expression. Timers run while 20x is open.' },

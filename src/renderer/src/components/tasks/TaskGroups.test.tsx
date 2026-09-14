@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { GroupControls, TaskGroups } from './TaskGroups'
 import { useTaskGroupStore } from '@/stores/task-group-store'
 import { useTaskStore } from '@/stores/task-store'
@@ -14,7 +14,7 @@ describe('GroupControls', () => {
     Object.assign(window.electronAPI, { taskGroups: { snapshot: vi.fn(async () => ({ groups: [{ id: 'group-1', name: 'Group', description: '', projectId: null, createdAt: '' }], membership: {}, executions: {} })), manage, onChanged: vi.fn(() => vi.fn()) } })
     useTaskStore.setState({ tasks: [task] })
     useTaskGroupStore.setState({ groups: [{ id: 'group-1', name: 'Group', description: '', projectId: null, createdAt: '' }], membership: {}, executions: {}, view: 'groups', canvasGroupId: null, error: null })
-    useUIStore.setState({ activeModal: null, mastermindProjectId: '', mastermindProjects: [], mastermindTaskProjects: {}, mastermindTaskAttention: {}, mastermindSnapshotLoaded: false })
+    useUIStore.setState({ activeModal: null, mastermindProjectId: '', mastermindProjects: [], mastermindTaskProjects: {}, mastermindTaskAttention: {}, mastermindExecutions: {}, showCompletedExecutions: false, mastermindSnapshotLoaded: false })
   })
   afterEach(cleanup)
 
@@ -33,6 +33,19 @@ describe('GroupControls', () => {
     expect(screen.getByText('Existing task')).toBeInTheDocument()
     expect(screen.getAllByText('Example workspace').length).toBeGreaterThan(0)
     expect(screen.getByText('Final output')).toBeInTheDocument()
+  })
+
+  it('shows execution status and hides Done execution Groups without deleting them', async () => {
+    vi.mocked(window.electronAPI.taskGroups.snapshot).mockResolvedValue({ groups: [{ id: 'group-1', name: 'Group', description: '', projectId: null, createdAt: '' }], membership: { 'task-1': 'group-1' }, executions: { execution: 'group-1' } })
+    useTaskGroupStore.setState({ executions: { execution: 'group-1' }, membership: { 'task-1': 'group-1' } })
+    useUIStore.setState({ mastermindExecutions: { execution: { id: 'execution', sequence: 1, predecessorId: null, trigger: 'test', state: 'done', startedAt: '' } }, showCompletedExecutions: false })
+    render(<TaskGroups tasks={[task]} allTasks={[task]} selectedTaskId={null} onSelectTask={vi.fn()} onCreateTask={vi.fn()} />)
+    await act(async () => {})
+    expect(screen.queryByText('Group')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('Show completed executions (1)'))
+    expect(screen.getByText('Group')).toBeInTheDocument()
+    expect(screen.getByText('Done')).toBeInTheDocument()
+    expect(useTaskGroupStore.getState().groups).toHaveLength(1)
   })
 
   it('keeps group context for task creation and manages selected tasks', async () => {

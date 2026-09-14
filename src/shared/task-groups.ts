@@ -10,6 +10,7 @@ export interface TaskGroupsSnapshot {
   groups: TaskGroup[]
   /** Effective membership, including inherited subtask and recurring-instance membership. */
   membership: Record<string, string>
+  /** Execution ID to presentation Group; null preserves an explicit Ungrouped choice. */
   executions: Record<string, string | null>
 }
 

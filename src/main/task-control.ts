@@ -137,9 +137,9 @@ export class TaskControl {
         this.db.groups.assign(tasks.map(t => t.id), group?.id ?? null)
       } else if (args.action === 'assign_execution') {
         const snapshot = this.responsibilities.snapshot(scope)
-        const execution = snapshot.responsibilities.find(r => r.id === args.responsibility_id)
-        if (!execution || (group && group.projectId !== execution.projectId)) throw new Error('Choose a saved execution in the same project as the Group.')
-        this.db.groups.assignExecution(execution.id, group?.id ?? null)
+        const responsibility = snapshot.responsibilities.find(r => r.id === args.responsibility_id)
+        if (!responsibility || (group && group.projectId !== responsibility.projectId)) throw new Error('Choose a saved execution in the same project as the Group.')
+        this.db.groups.assignExecution(responsibility.currentExecutionId ?? responsibility.executions?.at(-1)?.id ?? responsibility.id, group?.id ?? null)
         // Past tasks retain explicit human membership choices; task_ids moves them when requested.
         if (tasks.length) this.db.groups.assign(tasks.map(t => t.id), group?.id ?? null)
       } else {
@@ -424,12 +424,13 @@ export class TaskControl {
       this.task(item.id, projectId)
       if (this.db.getSetting(`workflo-completion:${item.id}`) || this.db.getSetting(`workflo-upload:${item.id}`)) throw new Error('This task has a pending Workflo command. Sync and resolve that command before completing or deleting it.')
     }
-    const owners = [...new Set([...affected.flatMap(t => {
-      const step = this.responsibilities.stepForTask(t.id)
-      return step ? [step.responsibilityId] : []
-    }), ...Object.entries(this.db.groups.snapshot().executions).filter(([, id]) => group && id === group.id).map(([id]) => id)])]
+    const affectedSteps = affected.flatMap(task => { const step = this.responsibilities.stepForTask(task.id); return step ? [step] : [] })
+    const executionIds = [...new Set([...affectedSteps.flatMap(step => step.executionId ? [step.executionId] : []), ...Object.entries(this.db.groups.snapshot().executions).filter(([, id]) => group && id === group.id).map(([id]) => id)])]
+    const owners = [...new Set([...affectedSteps.map(step => step.responsibilityId), ...executionIds.flatMap(id => { const owner = this.responsibilities.responsibilityForExecution(id); return owner ? [owner.id] : [] })])]
     const ownerSnapshot = this.responsibilities.snapshot()
     const agreements = ownerSnapshot.responsibilities.filter(r => owners.includes(r.id))
+    const cancelling = agreements.filter(r => r.agreement.kind === 'task')
+    const stopping = executionIds.filter(id => this.responsibilities.responsibilityForExecution(id)?.currentExecutionId === id)
     const retainedTasks = group ? (ownerSnapshot.steps ?? []).filter(s => owners.includes(s.responsibilityId) && !affected.some(t => t.id === s.taskId)).flatMap(s => { const task = this.db.getTask(s.taskId); return task ? [task] : [] }) : []
     let snapshot = fingerprint(affected)
     const sources = (items: TaskRecord[]) => JSON.stringify(items.map(t => t.source_id ? this.db.getTaskSource(t.source_id) : null))
@@ -453,8 +454,9 @@ export class TaskControl {
       detail: (group ? `Delete Group: ${group.name} [${group.id}].\n\n` : '') + (action === 'delete'
         ? `Delete these ${affected.length} local tasks, including subtasks and recurring instances:\n${affected.map(t => `• ${t.title} [${t.id}]`).join('\n')}\n\nTheir attachments and transcripts are deleted. Working checkouts are retained. Linked sources are not deleted and may restore tasks on sync.\n`
         : `Task: ${task.id}\nSource: ${source}\nRun source action: ${task.output_fields.find(f => f.id === 'action')?.value || PluginActionId.Complete}. Submitted output fields: ${JSON.stringify(task.output_fields)}. ${task.source_id ? 'Completion requires confirmation from this source.' : 'A Workflo connection is required to save this task under your account and confirm completion. Local agents, skills, and schedules are not transferred. Saved history and outputs remain.'}\n`) +
-        (agreements.length ? `Stop and cancel these responsibilities so they cannot schedule replacement work: ${agreements.map(r => r.agreement.title).join(', ')}. Their saved agreements and reports remain.\n` : '') +
-        (retainedTasks.length ? `Tasks from those executions outside this deletion list will be retained; their execution will also be cancelled: ${retainedTasks.map(t => `${t.title} [${t.id}]`).join(', ')}.\n` : '') +
+        (cancelling.length ? `Stop and cancel these direct Task responsibilities so they cannot schedule replacement work: ${cancelling.map(r => r.agreement.title).join(', ')}. Their saved agreements and reports remain.\n` : '') +
+        (stopping.length ? `Stop the affected current execution and require inspection before its saved Goal or Routine can continue. The parent agreement is not cancelled.\n` : '') +
+        (retainedTasks.length ? `Tasks from the same saved responsibilities outside this deletion list will be retained: ${retainedTasks.map(t => `${t.title} [${t.id}]`).join(', ')}.\n` : '') +
         (affected.some(t => t.is_recurring && !t.recurrence_parent_id) ? 'Pause future checks for the affected schedules, including if completion cannot be confirmed.\n' : '') +
         'Active agents for the affected tasks will be stopped before changing the tasks.' })
     if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, ...target }
@@ -495,7 +497,8 @@ export class TaskControl {
         return { ...item, recurrence_paused: paused.recurrence_paused, next_occurrence_at: paused.next_occurrence_at }
       })
       snapshot = fingerprint(expected)
-      for (const owner of latest) if (!group || !['completed', 'cancelled'].includes(owner.state)) await this.responsibilities.act(owner.id, owner.revision, 'cancel')
+      for (const owner of latest.filter(record => cancelling.some(candidate => candidate.id === record.id))) if (!group || !['completed', 'cancelled'].includes(owner.state)) await this.responsibilities.act(owner.id, owner.revision, 'cancel')
+      if (stopping.length) this.responsibilities.stopExecutionsForTaskControl(stopping)
     })
   }
 

@@ -6,6 +6,7 @@ import { useTaskGroupStore } from '@/stores/task-group-store'
 import { useUIStore } from '@/stores/ui-store'
 import { GroupControls } from '../tasks/TaskGroups'
 import { WorkspaceBadge } from '@/components/ui/WorkspaceBadge'
+import { executionStateForGroup, executionStateLabel, isFinishedExecutionState } from '@/lib/execution-groups'
 
 const GAP = 36
 const HEADER = 42
@@ -22,9 +23,15 @@ function layoutFor(index: number, count: number, x: number, y: number) {
 export function CanvasGroups() {
   const groups = useTaskGroupStore((s) => s.groups)
   const membership = useTaskGroupStore((s) => s.membership)
+  const executionLinks = useTaskGroupStore((s) => s.executions)
   const projectId = useUIStore((s) => s.mastermindProjectId)
   const workspaceDataLoaded = useUIStore((s) => s.mastermindSnapshotLoaded)
-  const visibleGroups = useMemo(() => projectId && workspaceDataLoaded ? groups.filter(group => group.projectId === projectId) : groups, [groups, projectId, workspaceDataLoaded])
+  const executions = useUIStore((s) => s.mastermindExecutions)
+  const showCompletedExecutions = useUIStore((s) => s.showCompletedExecutions)
+  const visibleGroups = useMemo(() => {
+    const workspaceGroups = projectId && workspaceDataLoaded ? groups.filter(group => group.projectId === projectId) : groups
+    return showCompletedExecutions ? workspaceGroups : workspaceGroups.filter(group => !isFinishedExecutionState(executionStateForGroup(group.id, executionLinks, executions)))
+  }, [groups, projectId, workspaceDataLoaded, showCompletedExecutions, executionLinks, executions])
   const canvasGroupId = useTaskGroupStore((s) => s.canvasGroupId)
   const tasks = useTaskStore((s) => s.tasks)
   const isLoaded = useCanvasStore((s) => s.isLoaded)
@@ -101,6 +108,7 @@ export function CanvasGroups() {
           <Layers className="h-3.5 w-3.5" />
           <span>{group.name}</span>
           <WorkspaceBadge projectId={group.projectId} />
+          {executionStateForGroup(group.id, executionLinks, executions) && <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px]">{executionStateLabel[executionStateForGroup(group.id, executionLinks, executions)!]}</span>}
           <span className="text-muted-foreground">{taskIds.length}</span>
           <GroupControls groupId={group.id} />
           <button type="button" aria-label={`Hide ${group.name}`} className="ml-auto text-muted-foreground hover:text-foreground" onClick={() => hideGroup(group.id)}><X className="h-3.5 w-3.5" /></button>
@@ -113,9 +121,15 @@ export function CanvasGroups() {
 export function CanvasGroupsMenu() {
   const groups = useTaskGroupStore((s) => s.groups)
   const membership = useTaskGroupStore((s) => s.membership)
+  const executionLinks = useTaskGroupStore((s) => s.executions)
   const projectId = useUIStore((s) => s.mastermindProjectId)
   const workspaceDataLoaded = useUIStore((s) => s.mastermindSnapshotLoaded)
-  const visibleGroups = projectId && workspaceDataLoaded ? groups.filter(group => group.projectId === projectId) : groups
+  const executions = useUIStore((s) => s.mastermindExecutions)
+  const showCompletedExecutions = useUIStore((s) => s.showCompletedExecutions)
+  const toggleCompletedExecutions = useUIStore((s) => s.toggleCompletedExecutions)
+  const workspaceGroups = projectId && workspaceDataLoaded ? groups.filter(group => group.projectId === projectId) : groups
+  const completed = workspaceGroups.filter(group => isFinishedExecutionState(executionStateForGroup(group.id, executionLinks, executions)))
+  const visibleGroups = showCompletedExecutions ? workspaceGroups : workspaceGroups.filter(group => !isFinishedExecutionState(executionStateForGroup(group.id, executionLinks, executions)))
   const setView = useTaskGroupStore((s) => s.setView)
   const showGroup = useCanvasStore((s) => s.showGroup)
   const shownGroupIds = useCanvasStore((s) => s.shownGroupIds)
@@ -126,9 +140,10 @@ export function CanvasGroupsMenu() {
     <button type="button" className="rounded-lg border border-border/50 bg-popover px-2 py-1 text-xs shadow" onClick={() => setMenuOpen((open) => !open)}><Layers className="mr-1 inline h-3.5 w-3.5" />Groups</button>
     {menuOpen && <div className="mt-1 w-64 rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
       <button type="button" className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted" onClick={() => { setSidebarView('tasks'); setView('groups'); setMenuOpen(false) }}>Manage groups in Tasks</button>
-      {visibleGroups.length === 0 && <p className="p-2 text-xs text-muted-foreground">No groups yet.</p>}
+      {completed.length > 0 && <button type="button" aria-pressed={showCompletedExecutions} className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-muted" onClick={toggleCompletedExecutions}>{showCompletedExecutions ? 'Hide completed executions' : `Show completed executions (${completed.length})`}</button>}
+      {visibleGroups.length === 0 && <p className="p-2 text-xs text-muted-foreground">{completed.length && !showCompletedExecutions ? 'Completed executions are hidden.' : 'No groups yet.'}</p>}
       {visibleGroups.map((group) => <div key={group.id} className="flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-muted">
-        <button type="button" className="min-w-0 flex-1 text-left" onClick={() => { showGroup(group.id, Object.entries(membership).filter(([, id]) => id === group.id).map(([taskId]) => taskId)); setMenuOpen(false) }}>{group.name} <span className="text-muted-foreground">{shownGroupIds.includes(group.id) ? 'Shown' : 'Show'}</span></button><WorkspaceBadge projectId={group.projectId} />
+        <button type="button" className="min-w-0 flex-1 text-left" onClick={() => { showGroup(group.id, Object.entries(membership).filter(([, id]) => id === group.id).map(([taskId]) => taskId)); setMenuOpen(false) }}>{group.name} {executionStateForGroup(group.id, executionLinks, executions) && <span className="text-muted-foreground">· {executionStateLabel[executionStateForGroup(group.id, executionLinks, executions)!]}</span>} <span className="text-muted-foreground">{shownGroupIds.includes(group.id) ? 'Shown' : 'Show'}</span></button><WorkspaceBadge projectId={group.projectId} />
         <GroupControls groupId={group.id} />
       </div>)}
     </div>}

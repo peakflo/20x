@@ -24,6 +24,8 @@ describe('useUIStore', () => {
       mastermindProjects: [],
       mastermindTaskProjects: {},
       mastermindTaskAttention: {},
+      mastermindExecutions: {},
+      showCompletedExecutions: false,
       mastermindSnapshotLoaded: false,
       mastermindSelectionHydrated: false
     })
@@ -47,12 +49,12 @@ describe('useUIStore', () => {
   it('shares Mastermind project selection and task ownership with workspace views', () => {
     useUIStore.getState().syncMastermindSnapshot({
       projects: [{ id: 'project', name: 'Example', root: '/example', agentId: 'agent', createdAt: '' }],
-      responsibilities: [{ id: 'work', projectId: 'project' }],
+      responsibilities: [{ id: 'work', projectId: 'project', executions: [{ id: 'execution', state: 'ready_for_review' }] }],
       steps: [{ id: 'step', taskId: 'task', responsibilityId: 'work' }],
       notices: [{ id: 'result', stepId: 'step', kind: 'result', state: 'pending' }], memory: []
     } as never)
     useUIStore.getState().setMastermindProjectId('project')
-    expect(useUIStore.getState()).toMatchObject({ mastermindProjectId: 'project', mastermindProjects: [{ id: 'project', name: 'Example' }], mastermindTaskProjects: { task: 'project' }, mastermindTaskAttention: { task: 'result' }, mastermindSnapshotLoaded: true })
+    expect(useUIStore.getState()).toMatchObject({ mastermindProjectId: 'project', mastermindProjects: [{ id: 'project', name: 'Example' }], mastermindTaskProjects: { task: 'project' }, mastermindTaskAttention: { task: 'result' }, mastermindExecutions: { execution: { id: 'execution', state: 'ready_for_review' } }, mastermindSnapshotLoaded: true })
     useUIStore.getState().syncMastermindSnapshot({
       projects: [], responsibilities: [], steps: [{ id: 'step', taskId: 'task', responsibilityId: 'work' }],
       notices: [{ id: 'result', stepId: 'step', kind: 'result', state: 'read' }], memory: []
