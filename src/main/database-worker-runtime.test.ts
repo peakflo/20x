@@ -7,9 +7,12 @@ afterEach(() => vi.restoreAllMocks())
 
 describe('task-management runtime', () => {
   it('replaces an existing Electron stdio command on macOS', () => {
-    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    // Open SQLite before impersonating macOS. better-sqlite3 resolves its native
+    // binding lazily, and a platform stub applied first makes Linux CI try to
+    // load the Darwin prebuild.
     const { db, rawDb } = createTestDb()
     try {
+      vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
       const existing = db.createMcpServer({
         name: 'task-management',
         command: '/Applications/20x.app/Contents/MacOS/20x',
