@@ -2399,7 +2399,11 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return this.getTask(id)
   }
 
-  updateTask(id: string, data: UpdateTaskData, origin?: 'workflo-server' | 'schedule-control'): TaskRecord | undefined {
+  updateTask(id: string, data: UpdateTaskData, origin?: 'workflo-server' | 'schedule-control' | 'mastermind-settlement'): TaskRecord | undefined {
+    if (origin === 'mastermind-settlement') {
+      const task = this.getTask(id)
+      if (Object.keys(data).some(key => !['status', 'resolution'].includes(key)) || (data.status !== TaskStatus.ReadyForReview && data.status !== TaskStatus.Completed) || !task || task.source !== 'mastermind' || task.source_id || task.server_managed || isWorkfloLinkedTask(this, task)) throw new Error('Only a local Mastermind execution task can be settled by Mastermind.')
+    }
     if (data.is_recurring === false && origin !== 'workflo-server' && isReusableSchedule(this.getTask(id))) throw new Error('Pause and change this schedule to separate tasks before removing recurrence.')
     if (data.recurrence_mode !== undefined) {
       recurrenceMode(data.recurrence_mode)
@@ -2420,7 +2424,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         throw new Error('This task is completed in Workflo.')
       }
     }
-    if (data.status === TaskStatus.Completed && origin !== 'workflo-server') {
+    if (data.status === TaskStatus.Completed && origin !== 'workflo-server' && origin !== 'mastermind-settlement') {
       const task = this.getTask(id)
       if (task && task.status !== TaskStatus.Completed) {
         throw new Error('Workflo must confirm completion before this task can close in 20x.')

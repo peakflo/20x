@@ -4,6 +4,7 @@ import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { useTaskWorkspaceId, WorkspaceBadge } from '@/components/ui/WorkspaceBadge'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
+import { useUIStore } from '@/stores/ui-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, RecurrencePattern, RecurrencePatternObject } from '@/types'
 
@@ -94,6 +95,7 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
   })
   const hasActiveAgent = sessionStatus != null && sessionStatus !== SessionStatus.IDLE
   const workspaceProjectId = useTaskWorkspaceId(task.id)
+  const mastermindAttention = useUIStore((s) => s.mastermindTaskAttention[task.id])
 
   // Determine status indicator color — memoized to avoid recalculation on every render
   const statusColor = useMemo(() => {
@@ -133,6 +135,9 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <div className={cn('text-sm font-medium truncate flex-1', isSubtask && 'text-xs')}>{task.title}</div>
+            {mastermindAttention && <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[10px]', mastermindAttention === 'result' ? 'bg-primary/15 text-primary' : 'bg-amber-400/15 text-amber-500')}>
+              {{ result: 'Final output', decision: 'Needs decision', approval: 'Needs approval', attention: 'Needs attention' }[mastermindAttention]}
+            </span>}
             {onToggleExpand && subtaskCount != null && subtaskCount > 0 && (
               <span
                 role="button"

@@ -23,6 +23,7 @@ describe('useUIStore', () => {
       mastermindProjectId: '',
       mastermindProjects: [],
       mastermindTaskProjects: {},
+      mastermindTaskAttention: {},
       mastermindSnapshotLoaded: false,
       mastermindSelectionHydrated: false
     })
@@ -47,11 +48,16 @@ describe('useUIStore', () => {
     useUIStore.getState().syncMastermindSnapshot({
       projects: [{ id: 'project', name: 'Example', root: '/example', agentId: 'agent', createdAt: '' }],
       responsibilities: [{ id: 'work', projectId: 'project' }],
-      steps: [{ taskId: 'task', responsibilityId: 'work' }],
-      notices: [], memory: []
+      steps: [{ id: 'step', taskId: 'task', responsibilityId: 'work' }],
+      notices: [{ id: 'result', stepId: 'step', kind: 'result', state: 'pending' }], memory: []
     } as never)
     useUIStore.getState().setMastermindProjectId('project')
-    expect(useUIStore.getState()).toMatchObject({ mastermindProjectId: 'project', mastermindProjects: [{ id: 'project', name: 'Example' }], mastermindTaskProjects: { task: 'project' }, mastermindSnapshotLoaded: true })
+    expect(useUIStore.getState()).toMatchObject({ mastermindProjectId: 'project', mastermindProjects: [{ id: 'project', name: 'Example' }], mastermindTaskProjects: { task: 'project' }, mastermindTaskAttention: { task: 'result' }, mastermindSnapshotLoaded: true })
+    useUIStore.getState().syncMastermindSnapshot({
+      projects: [], responsibilities: [], steps: [{ id: 'step', taskId: 'task', responsibilityId: 'work' }],
+      notices: [{ id: 'result', stepId: 'step', kind: 'result', state: 'read' }], memory: []
+    } as never)
+    expect(useUIStore.getState().mastermindTaskAttention).toEqual({})
     useUIStore.getState().openMastermindProject('project')
     expect(useUIStore.getState()).toMatchObject({ showOrchestrator: true, mastermindProjectId: 'project' })
   })

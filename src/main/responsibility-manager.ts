@@ -188,9 +188,55 @@ export class ResponsibilityManager {
   }
   private save(record: ResponsibilityRecord): void { record.updatedAt = now(); this.put('agreements', record); this.reconcileNotices(); this.changed() }
 
+  private syncStepTask(step: ResponsibilityStep, notices?: ResponsibilityNotice[], steps?: ResponsibilityStep[]): string | undefined {
+    const task = this.db.getTask(step.taskId)
+    if (!task || task.source !== 'mastermind' || task.source_id || task.server_managed || task.status === TaskStatus.Completed) return
+    const responsibility = this.responsibility(step.responsibilityId)
+    if (responsibility.state === 'cancelled') return
+    const openNotices = notices ?? this.all<ResponsibilityNotice>('notices').filter(n => n.stepId === step.id && isOpenNotice(n))
+    const needsReview = openNotices.some(n => n.kind !== 'result' || step.phase !== 'setup')
+    let status: TaskStatus | undefined
+    let resolution = task.resolution
+    if (needsReview || step.state === 'unknown') status = TaskStatus.ReadyForReview
+    else if (step.state === 'settled') status = TaskStatus.Completed
+    else if (step.state === 'held') {
+      const siblings = steps ?? this.all<ResponsibilityStep>('steps').filter(s => s.responsibilityId === step.responsibilityId)
+      const replacement = siblings.slice(siblings.findIndex(s => s.id === step.id) + 1).find(s => s.state !== 'held')
+      if (responsibility.state === 'taken_over' || !replacement) {
+        if (task.status === TaskStatus.AgentWorking) status = TaskStatus.ReadyForReview
+      } else {
+        status = TaskStatus.Completed
+        resolution ??= `Interrupted execution; continued in task ${replacement.taskId}.`
+      }
+    }
+    if (!status || (status === task.status && resolution === task.resolution) || (status === TaskStatus.Completed && this.agents.findSessionByTaskId(step.taskId))) return
+    this.db.updateTask(step.taskId, { status, resolution }, 'mastermind-settlement')
+    return step.taskId
+  }
+
+  private reconcileTaskPresentation(): string | undefined {
+    const steps = this.all<ResponsibilityStep>('steps')
+    const notices = new Map<string, ResponsibilityNotice[]>(), siblings = new Map<string, ResponsibilityStep[]>()
+    for (const notice of this.all<ResponsibilityNotice>('notices').filter(isOpenNotice)) if (notice.stepId) {
+      const list = notices.get(notice.stepId) ?? []; list.push(notice); notices.set(notice.stepId, list)
+    }
+    for (const step of steps) {
+      const list = siblings.get(step.responsibilityId) ?? []; list.push(step); siblings.set(step.responsibilityId, list)
+    }
+    let refreshed: string | undefined
+    for (const step of steps) refreshed = this.syncStepTask(step, notices.get(step.id) ?? [], siblings.get(step.responsibilityId) ?? []) ?? refreshed
+    return refreshed
+  }
+
+  private refreshTask(taskId?: string): void {
+    if (taskId) queueMicrotask(() => { if (this.enabled && this.db.db.open) this.changed(taskId) })
+  }
+
   private closeNotice(n: ResponsibilityNotice, state: 'answered' | 'read' | 'superseded', reason: string): void {
     n.state = state; n.resolvedAt = now(); n.resolutionReason = reason
     this.put('notices', n)
+    const step = n.stepId ? this.get<ResponsibilityStep>('steps', n.stepId) : undefined
+    this.refreshTask(step ? this.syncStepTask(step) : undefined)
     if (state === 'superseded') this.permissionWaiters.get(n.id)?.(false)
   }
 
@@ -588,7 +634,7 @@ export class ResponsibilityManager {
     const existing = this.get<ResponsibilityNotice>('notices', id)
     if (existing) return existing
     const notice: ResponsibilityNotice = { id, projectId: r.projectId, responsibilityId: r.id, stepId: step?.id ?? null, agreementRevision: r.revision, inputRevision: step?.inputRevision ?? 0, kind, title, body, state: 'pending', answer: null, recipient: null, createdAt: now() }
-    this.put('notices', notice); this.changed()
+    this.put('notices', notice); this.refreshTask(step ? this.syncStepTask(step) : undefined); this.changed()
     return notice
   }
   private block(r: ResponsibilityRecord, reason: string, step?: ResponsibilityStep): void {
@@ -929,6 +975,8 @@ export class ResponsibilityManager {
   /** Reconcile saved work even when recurrence is paused or the drawer is closed. */
   async tick(): Promise<void> {
     if (this.reconcileNotices()) this.changed()
+    const refreshedTask = this.reconcileTaskPresentation()
+    if (refreshedTask) this.changed(refreshedTask)
     if (this.all<MastermindMcpRequest>('requests').some(request => ['queued', 'delivering', 'processing'].includes(request.state))) await this.processExternalRequests()
     for (const step of this.all<ResponsibilityStep>('steps').filter(s => s.state === 'running')) {
       const live = this.agents.findSessionByTaskId(step.taskId)
@@ -1024,7 +1072,8 @@ export class ResponsibilityManager {
       if (next.eventId) { const event = this.get<SourceEvent>('events', next.eventId)!; event.handled = true; this.put('events', event) }
       this.save(r)
     })()
-    this.changed(task.id)
+    const refreshedTask = this.reconcileTaskPresentation()
+    this.changed(refreshedTask ?? task.id)
     this.launching.add(task.id)
     try {
       const workspace = r.executionWorkspace ?? this.db.getWorkspaceDir(task.id)
@@ -1185,7 +1234,7 @@ export class ResponsibilityManager {
     // Release only this settled automation-owned runtime; the transcript and files remain.
     try {
       if (step.sessionId) await this.agents.stopSession(step.sessionId, false)
-      step.state = 'settled'; this.put('steps', step); this.changed()
+      step.state = 'settled'; this.put('steps', step); this.syncStepTask(step); this.changed(step.taskId)
     } catch (error) {
       this.block(this.responsibility(r.id), `Result saved, but agent cleanup is uncertain: ${(error as Error).message}. Inspect and stop the prior agent before recovery.`, step)
     }

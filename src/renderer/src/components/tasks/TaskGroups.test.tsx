@@ -14,7 +14,7 @@ describe('GroupControls', () => {
     Object.assign(window.electronAPI, { taskGroups: { snapshot: vi.fn(async () => ({ groups: [{ id: 'group-1', name: 'Group', description: '', projectId: null, createdAt: '' }], membership: {}, executions: {} })), manage, onChanged: vi.fn(() => vi.fn()) } })
     useTaskStore.setState({ tasks: [task] })
     useTaskGroupStore.setState({ groups: [{ id: 'group-1', name: 'Group', description: '', projectId: null, createdAt: '' }], membership: {}, executions: {}, view: 'groups', canvasGroupId: null, error: null })
-    useUIStore.setState({ activeModal: null, mastermindProjectId: '', mastermindProjects: [], mastermindTaskProjects: {}, mastermindSnapshotLoaded: false })
+    useUIStore.setState({ activeModal: null, mastermindProjectId: '', mastermindProjects: [], mastermindTaskProjects: {}, mastermindTaskAttention: {}, mastermindSnapshotLoaded: false })
   })
   afterEach(cleanup)
 
@@ -24,7 +24,7 @@ describe('GroupControls', () => {
     const snapshot = { groups: [projectGroup, otherGroup], membership: { 'task-1': 'project-group' }, executions: {} }
     vi.mocked(window.electronAPI.taskGroups.snapshot).mockResolvedValue(snapshot)
     useTaskGroupStore.setState({ ...snapshot, view: 'groups', isLoaded: true })
-    useUIStore.setState({ mastermindProjectId: 'project', mastermindProjects: [{ id: 'project', name: 'Example workspace' }, { id: 'other', name: 'Other workspace' }], mastermindSnapshotLoaded: true })
+    useUIStore.setState({ mastermindProjectId: 'project', mastermindProjects: [{ id: 'project', name: 'Example workspace' }, { id: 'other', name: 'Other workspace' }], mastermindTaskAttention: { 'task-1': 'result' }, mastermindSnapshotLoaded: true })
 
     render(<TaskGroups tasks={[task]} allTasks={[task]} selectedTaskId={null} onSelectTask={vi.fn()} onCreateTask={vi.fn()} />)
     expect(await screen.findByText('Project group')).toBeInTheDocument()
@@ -32,6 +32,7 @@ describe('GroupControls', () => {
     fireEvent.click(screen.getByText('Project group'))
     expect(screen.getByText('Existing task')).toBeInTheDocument()
     expect(screen.getAllByText('Example workspace').length).toBeGreaterThan(0)
+    expect(screen.getByText('Final output')).toBeInTheDocument()
   })
 
   it('keeps group context for task creation and manages selected tasks', async () => {

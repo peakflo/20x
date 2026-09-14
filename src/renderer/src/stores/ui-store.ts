@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { TaskStatus, SettingsTab } from '@/types'
 import type { TaskPriority } from '@/types'
-import type { ResponsibilitySnapshot } from '@shared/responsibilities'
+import { isOpenNotice, type ResponsibilitySnapshot } from '@shared/responsibilities'
 
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
@@ -57,6 +57,7 @@ interface UIState {
   mastermindProjectId: string
   mastermindProjects: Array<{ id: string; name: string }>
   mastermindTaskProjects: Record<string, string>
+  mastermindTaskAttention: Record<string, 'result' | 'decision' | 'approval' | 'attention'>
   mastermindSnapshotLoaded: boolean
   mastermindSelectionHydrated: boolean
   setMastermindProjectId: (projectId: string) => void
@@ -134,18 +135,29 @@ export const useUIStore = create<UIState>((set) => ({
   mastermindProjectId: '',
   mastermindProjects: [],
   mastermindTaskProjects: {},
+  mastermindTaskAttention: {},
   mastermindSnapshotLoaded: false,
   mastermindSelectionHydrated: false,
   setMastermindProjectId: mastermindProjectId => set({ mastermindProjectId, mastermindSelectionHydrated: true }),
   hydrateMastermindProjectId: mastermindProjectId => set(state => state.mastermindSelectionHydrated ? {} : { mastermindProjectId, mastermindSelectionHydrated: true }),
   syncMastermindSnapshot: snapshot => {
     const responsibilityProjects = new Map(snapshot.responsibilities.map(record => [record.id, record.projectId]))
+    const taskByStep = new Map(snapshot.steps.map(step => [step.id, step.taskId]))
+    const priority = { result: 0, approval: 1, decision: 2, attention: 3 }
+    const mastermindTaskAttention: UIState['mastermindTaskAttention'] = {}
+    for (const notice of snapshot.notices.filter(isOpenNotice)) {
+      const taskId = notice.stepId ? taskByStep.get(notice.stepId) : undefined
+      if (!taskId) continue
+      const attention = notice.kind === 'result' ? 'result' : notice.kind === 'question' ? 'decision' : notice.kind === 'permission' ? 'approval' : 'attention'
+      if (!mastermindTaskAttention[taskId] || priority[attention] > priority[mastermindTaskAttention[taskId]]) mastermindTaskAttention[taskId] = attention
+    }
     set({
       mastermindProjects: snapshot.projects.map(({ id, name }) => ({ id, name })),
       mastermindTaskProjects: snapshot.taskProjects ?? Object.fromEntries(snapshot.steps.flatMap(step => {
         const projectId = responsibilityProjects.get(step.responsibilityId)
         return projectId ? [[step.taskId, projectId]] : []
       })),
+      mastermindTaskAttention,
       mastermindSnapshotLoaded: true
     })
   },

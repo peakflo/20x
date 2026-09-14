@@ -5,6 +5,7 @@ import { join, relative } from 'node:path'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { ResponsibilityManager, captureWork, collectSource } from './responsibility-manager'
 import { projectConversationId } from '../shared/responsibilities'
+import { TaskStatus } from '../shared/constants'
 import type { ResponsibilityAgreement, ResponsibilityStep, WorkEvidence } from '../shared/responsibilities'
 import type { AgentManager } from './agent-manager'
 import { callResponsibilityTool } from './responsibility-tools'
@@ -230,6 +231,47 @@ describe('Mastermind follow-up actions', () => {
     expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ detail: expect.stringContaining('Allow the requested command?') }))
     expect(runtime.respondToPermission).toHaveBeenCalledWith(live.sessionId, true, 'Approved', undefined, 'permission', 'native-command')
     expect(snapshot().notices.find(n => n.id === notice.id)?.state).toBe('answered')
+  })
+})
+
+describe('responsibility task presentation', () => {
+  it('keeps only the unread final result open and closes it when acknowledged', async () => {
+    const responsibility = await approve()
+    const work = snapshot().steps.find(step => step.responsibilityId === responsibility.id)!
+    await finish(work)
+    expect(db.getTask(work.taskId)?.status).toBe('completed')
+
+    const verification = snapshot().steps.find(step => step.responsibilityId === responsibility.id && step.phase === 'verify')!
+    await finish(verification)
+    const result = snapshot().notices.find(notice => notice.kind === 'result' && notice.stepId === verification.id)!
+    expect(db.getTask(verification.taskId)?.status).toBe('ready_for_review')
+    await manager.answer(result.id, 'Read')
+    expect(db.getTask(verification.taskId)?.status).toBe('completed')
+
+    db.db.prepare("UPDATE tasks SET status='ready_for_review' WHERE id=?").run(work.taskId)
+    await manager.reconcile()
+    expect(db.getTask(work.taskId)?.status).toBe('completed')
+  })
+
+  it('keeps a question visible until answered, then closes its consumed task', async () => {
+    const responsibility = await approve()
+    const work = snapshot().steps.find(step => step.responsibilityId === responsibility.id)!
+    await finish(work, 'ask', 'Which environment should I inspect?')
+    expect(db.getTask(work.taskId)?.status).toBe('ready_for_review')
+    const question = snapshot().notices.find(notice => notice.kind === 'question' && notice.stepId === work.id)!
+    await manager.answer(question.id, 'Use the local fixture.')
+    expect(db.getTask(work.taskId)?.status).toBe('completed')
+  })
+
+  it('shows an interrupted handoff until its replacement starts, then closes the old attempt', async () => {
+    const responsibility = await approve()
+    const interrupted = snapshot().steps.find(step => step.responsibilityId === responsibility.id)!
+    db.updateTask(interrupted.taskId, { status: TaskStatus.AgentWorking })
+    await manager.act(responsibility.id, responsibility.revision, 'takeover'); await manager.reconcile()
+    expect(db.getTask(interrupted.taskId)?.status).toBe('ready_for_review')
+    await manager.act(responsibility.id, responsibility.revision, 'handback'); await manager.reconcile()
+    const replacement = snapshot().steps.find(step => step.responsibilityId === responsibility.id && step.id !== interrupted.id)!
+    expect(db.getTask(interrupted.taskId)).toMatchObject({ status: 'completed', resolution: expect.stringContaining(replacement.taskId) })
   })
 })
 
@@ -1389,6 +1431,8 @@ describe('configured worker access and recurring setup', () => {
     expect(snapshot().responsibilities.find(r => r.id === prep.id)).toMatchObject({ state: 'completed', routineSetup: { proposalId: routine.id } })
     expect(db.groups.snapshot().executions[routine.id]).toBe(group.id)
     expect(db.groups.snapshot().membership[work.taskId]).toBe(group.id)
+    expect(db.getTask(work.taskId)?.status).toBe(TaskStatus.Completed)
+    expect(db.getTask(setup.taskId)?.status).toBe(TaskStatus.Completed)
     expect(routine).toMatchObject({ preparedFrom: prep.id, state: 'proposed', nextAt: null, agreement: { schedule: '*/10 * * * *', stopOnSuccess: true } })
     expect(collect).not.toHaveBeenCalled()
     await expect(manager.act(routine.id, routine.revision, 'approve')).rejects.toThrow('trial')

@@ -3,6 +3,7 @@ import RawDatabase from 'better-sqlite3'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask, makeAgent, makeSkill } from '../../test/helpers/task-fixtures'
 import { DatabaseManager as RealDatabaseManager, type DatabaseManager } from './database'
+import { TaskStatus } from '../shared/constants'
 
 let db: DatabaseManager
 
@@ -69,6 +70,14 @@ describe('Task CRUD', () => {
     const updated = db.updateTask(task.id, { title: 'Updated Title', priority: 'high' })
     expect(updated!.title).toBe('Updated Title')
     expect(updated!.priority).toBe('high')
+  })
+
+  it('lets Mastermind settle only its own local execution tasks', () => {
+    const local = db.createTask(makeTask())!
+    const execution = db.createTask(makeTask({ source: 'mastermind' }))!
+    expect(() => db.updateTask(local.id, { status: TaskStatus.Completed }, 'mastermind-settlement')).toThrow('local Mastermind execution task')
+    expect(() => db.updateTask(execution.id, { title: 'Changed' }, 'mastermind-settlement')).toThrow('local Mastermind execution task')
+    expect(db.updateTask(execution.id, { status: TaskStatus.Completed }, 'mastermind-settlement')).toMatchObject({ status: TaskStatus.Completed })
   })
 
   it('updates task resolution', () => {
