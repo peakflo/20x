@@ -104,6 +104,9 @@ const projections = new Map<string, ProjectionCache>()
 // is re-hydrated when a view comes back.
 const projectionBindings = new Map<string, number>()
 const bindingTasks = new Set<string>()
+const dirtyTranscripts = new Set<string>()
+const recoveringTranscripts = new Set<string>()
+const recoverAgain = new Set<string>()
 const outputAnalyticsByTask = new Map<string, { messageCount: number; toolNames: Set<string> }>()
 
 function getProjection(taskId: string): ProjectionCache {
@@ -121,6 +124,9 @@ export function __clearProjectionsForTest(): void {
   projections.clear()
   projectionBindings.clear()
   bindingTasks.clear()
+  dirtyTranscripts.clear()
+  recoveringTranscripts.clear()
+  recoverAgain.clear()
   outputAnalyticsByTask.clear()
 }
 
@@ -213,9 +219,12 @@ export const useAgentStore = create<AgentState>((set, get) => {
   const applyParts = (taskId: string, parts: TranscriptPartRecord[], maxRev?: number): void => {
     if (parts.length === 0 && maxRev == null) return
     const cache = getProjection(taskId)
-    for (const p of parts) cache.parts.set(p.partId, p)
+    for (const p of parts) {
+      const existing = cache.parts.get(p.partId)
+      if (!existing || p.rev >= existing.rev) cache.parts.set(p.partId, p)
+    }
     if (typeof maxRev === 'number') cache.rev = Math.max(cache.rev, maxRev)
-    commitMessages(taskId)
+    if (cache.parts.size || get().sessions.has(taskId)) commitMessages(taskId)
   }
 
   const accumulateOutputAnalytics = (taskId: string, parts: TranscriptPartRecord[]): void => {
@@ -247,22 +256,28 @@ export const useAgentStore = create<AgentState>((set, get) => {
     if (requireBinding && !projectionBindings.has(taskId)) return
     if (typeof window.electronAPI?.agentSession?.getTranscriptSnapshot !== 'function') return
     bindingTasks.add(taskId)
+    dirtyTranscripts.add(taskId)
     try {
       const snapshot = await agentSessionApi.getTranscriptSnapshot(taskId)
       // The panel may have gone off-screen while the snapshot IPC was in
       // flight. Do not repopulate the cache after its final consumer left.
       if (requireBinding && !projectionBindings.has(taskId)) return
-      if (snapshot.length === 0) return
       const maxRev = snapshot.reduce((m, p) => Math.max(m, p.rev || 0), 0)
-      // Snapshot is the authoritative full state — replace the cache.
-      projections.set(taskId, { parts: new Map(snapshot.map((p) => [p.partId, p])), rev: maxRev })
+      const parts = new Map(snapshot.map(p => [p.partId, p]))
+      // Live events can arrive between pages. Keep their newer rows and then
+      // reconcile from the snapshot cursor to cover changes behind the scan.
+      for (const [id, part] of projections.get(taskId)?.parts ?? []) {
+        if (!parts.has(id) || part.rev > parts.get(id)!.rev) parts.set(id, part)
+      }
+      projections.set(taskId, { parts, rev: maxRev })
       useArtifactStore.getState().projectTranscriptParts(taskId, snapshot)
-      commitMessages(taskId)
+      if (parts.size || get().sessions.has(taskId)) commitMessages(taskId)
     } catch (err) {
       console.error(`[agent-store] hydrateTranscript failed for task ${taskId}:`, err)
     } finally {
       bindingTasks.delete(taskId)
     }
+    if (projections.has(taskId)) await reconcileDelta(taskId)
   }
 
   // Reconcile a task against the durable projection by fetching everything
@@ -271,13 +286,24 @@ export const useAgentStore = create<AgentState>((set, get) => {
   const reconcileDelta = async (taskId: string): Promise<void> => {
     if (typeof window.electronAPI?.agentSession?.getTranscriptDelta !== 'function') return
     if (!projections.has(taskId)) return
+    if (bindingTasks.has(taskId)) return
+    if (recoveringTranscripts.has(taskId)) { recoverAgain.add(taskId); return }
+    recoveringTranscripts.add(taskId)
     try {
-      const sinceRev = getProjection(taskId).rev
-      const { parts, maxRev } = await agentSessionApi.getTranscriptDelta(taskId, sinceRev)
-      if (parts.length > 0) applyParts(taskId, parts, maxRev)
-      else if (maxRev > sinceRev) getProjection(taskId).rev = maxRev
+      do {
+        recoverAgain.delete(taskId)
+        const cache = getProjection(taskId)
+        const { parts, maxRev } = await agentSessionApi.getTranscriptDelta(taskId, cache.rev)
+        if (projections.get(taskId) !== cache) return
+        applyParts(taskId, parts, maxRev)
+      } while (recoverAgain.has(taskId))
+      dirtyTranscripts.delete(taskId)
     } catch (err) {
+      dirtyTranscripts.add(taskId)
       console.error(`[agent-store] reconcileDelta failed for task ${taskId}:`, err)
+    } finally {
+      recoveringTranscripts.delete(taskId)
+      recoverAgain.delete(taskId)
     }
   }
 
@@ -286,13 +312,16 @@ export const useAgentStore = create<AgentState>((set, get) => {
   // Transcript content: the ONLY writer of messages. Idempotent delta apply.
   onTranscriptChanged((event: TranscriptChangedEvent) => {
     if (!event?.taskId) return
+    if (event.reloadRequired && projections.has(event.taskId)) dirtyTranscripts.add(event.taskId)
     useArtifactStore.getState().projectTranscriptParts(event.taskId, event.parts || [])
     // Background agents continue writing to the durable projection, but an
     // unmounted task has no renderer consumer. Ignoring its payload here avoids
     // rebuilding every off-screen transcript in memory; bindTranscript() loads
     // the authoritative snapshot when the task becomes visible again.
     if (projections.has(event.taskId)) {
-      applyParts(event.taskId, event.parts || [], event.maxRev)
+      const recovering = dirtyTranscripts.has(event.taskId) || recoveringTranscripts.has(event.taskId)
+      applyParts(event.taskId, event.parts || [], recovering ? undefined : event.maxRev)
+      if (recovering) void reconcileDelta(event.taskId)
     }
     accumulateOutputAnalytics(event.taskId, event.parts || [])
   })

@@ -1,8 +1,9 @@
 import { guardedIpcSend } from './guarded-ipc-send'
+import { measureIpcMessage } from './ipc-message-size'
 import { updateTaskFromUser } from './session-feedback'
 import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
 import * as childProcess from 'child_process'
-import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
+import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync, openSync, writeSync, closeSync } from 'fs'
 import { join, basename, extname } from 'path'
 import { networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
@@ -496,18 +497,45 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('agentSession:getRawTranscript', async (_, taskId: string) => {
-    return await agentManager.getRawTranscriptForDebug(taskId)
+    const result = await agentManager.getRawTranscriptForDebug(taskId)
+    if (measureIpcMessage(result).reason) throw new Error('Transcript is too large to copy. Use Export transcript.')
+    return result
   })
 
   // Durable transcript snapshot: the renderer hydrates transcript state from
   // the main-process projection instead of depending on catching live events.
-  ipcMain.handle('agentSession:getTranscriptSnapshot', (_, taskId: string, sinceSeq?: number) => {
-    return agentManager.getTranscriptSnapshot(taskId, sinceSeq)
-  })
+  const transcriptPage = async (taskId: string, afterSeq = 0, sinceRev = 0, maxRev?: number) => {
+    for (const value of [afterSeq, sinceRev, maxRev ?? 0]) {
+      if (!Number.isSafeInteger(value) || value < 0) throw new Error('Invalid transcript cursor')
+    }
+    const result = await agentManager.getTranscriptDisplayPage(taskId, afterSeq, sinceRev, maxRev)
+    if (measureIpcMessage(result).reason) throw new Error('Transcript page is too large')
+    return result
+  }
+  ipcMain.handle('agentSession:getTranscriptSnapshot', (_, taskId: string, sinceSeq?: number, cursor?: { afterSeq: number; maxRev: number }) =>
+    transcriptPage(taskId, cursor?.afterSeq ?? sinceSeq ?? 0, 0, cursor?.maxRev))
 
   // Event-sourced projection: delta since a rev cursor (parts changed since then).
-  ipcMain.handle('agentSession:getTranscriptDelta', (_, taskId: string, sinceRev: number) => {
-    return agentManager.getTranscriptDelta(taskId, sinceRev)
+  ipcMain.handle('agentSession:getTranscriptDelta', (_, taskId: string, sinceRev: number, cursor?: { afterSeq: number; maxRev: number }) =>
+    transcriptPage(taskId, cursor?.afterSeq ?? 0, sinceRev, cursor?.maxRev))
+
+  ipcMain.handle('agentSession:exportTranscript', async (_, taskId: string) => {
+    await agentManager.getTranscriptDisplayPage(taskId)
+    const result = await dialog.showSaveDialog({ title: 'Export transcript', defaultPath: 'transcript.txt' })
+    if (result.canceled || !result.filePath) return false
+    const fd = openSync(result.filePath, 'w')
+    try {
+      db.exportTranscriptText(taskId, text => {
+        const bytes = typeof text === 'string' ? Buffer.from(text) : text
+        for (let offset = 0; offset < bytes.length;) {
+          const written = writeSync(fd, bytes, offset, bytes.length - offset)
+          if (!written) throw new Error('Could not write transcript')
+          offset += written
+        }
+      })
+    }
+    finally { closeSync(fd) }
+    return true
   })
 
   // Agent Config handlers

@@ -1,3 +1,5 @@
+import { collectTranscriptPages } from '../shared/transcript-pages'
+import type { TranscriptPartRecord } from '../main/database'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
@@ -125,12 +127,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:syncSkillsForTask', taskId),
     learnFromSession: (sessionId: string, message: string): Promise<{ created: string[]; updated: string[]; unchanged: string[] }> =>
       ipcRenderer.invoke('agentSession:learnFromSession', sessionId, message),
+    exportTranscript: (taskId: string): Promise<boolean> => ipcRenderer.invoke('agentSession:exportTranscript', taskId),
     getRawTranscript: (taskId: string): Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>> =>
       ipcRenderer.invoke('agentSession:getRawTranscript', taskId),
     getTranscriptSnapshot: (taskId: string, sinceSeq?: number): Promise<Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number; rev: number }>> =>
-      ipcRenderer.invoke('agentSession:getTranscriptSnapshot', taskId, sinceSeq),
+      collectTranscriptPages<TranscriptPartRecord>(cursor => ipcRenderer.invoke('agentSession:getTranscriptSnapshot', taskId, sinceSeq, cursor)).then(result => result.parts),
     getTranscriptDelta: (taskId: string, sinceRev: number): Promise<{ parts: Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number; rev: number }>; maxRev: number }> =>
-      ipcRenderer.invoke('agentSession:getTranscriptDelta', taskId, sinceRev)
+      collectTranscriptPages<TranscriptPartRecord>(cursor => ipcRenderer.invoke('agentSession:getTranscriptDelta', taskId, sinceRev, cursor))
   },
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> =>

@@ -96,3 +96,18 @@ describe('guarded desktop sends', () => {
     }
   })
 })
+
+ describe('complex transcript batches', () => {
+  it('splits at the traversal limit without losing small records', () => {
+    const send = vi.fn()
+    const parts = Array.from({ length: 11000 }, (_, i) => ({
+      taskId: 't', partId: String(i), seq: i + 1, role: 'assistant', content: 'ok',
+      createdAt: i, updatedAt: i, rev: i + 1, partType: 'text'
+    }))
+    expect(guardedIpcSend({ send }, 'transcript:changed', { taskId: 't', parts, maxRev: 11000 })).toBe(true)
+    expect(send.mock.calls.length).toBeGreaterThan(1)
+    expect(send.mock.calls.flatMap(([, data]) => data.parts)).toEqual(parts)
+    for (const [, data] of send.mock.calls) expect(measureIpcMessage(data).reason).toBeUndefined()
+    expect(send.mock.calls.at(-1)![1].maxRev).toBe(11000)
+  })
+})

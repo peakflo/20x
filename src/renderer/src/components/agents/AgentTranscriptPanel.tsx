@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, ListTodo, FileText, ArrowDown, ArrowUp, Paperclip, Search, X, Image as ImageIcon, GitPullRequest, MonitorPlay } from 'lucide-react'
+import { Download, StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, ListTodo, FileText, ArrowDown, ArrowUp, Paperclip, Search, X, Image as ImageIcon, GitPullRequest, MonitorPlay } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
@@ -823,6 +823,16 @@ export function AgentTranscriptPanel({
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([])
   const [isDragOverComposer, setIsDragOverComposer] = useState(false)
   const [debugCopyToast, setDebugCopyToast] = useState(false)
+  const [exportError, setExportError] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const exportTranscript = async (): Promise<void> => {
+    if (!taskId || exporting) return
+    setExporting(true)
+    setExportError('')
+    try { await agentSessionApi.exportTranscript(taskId) }
+    catch { setExportError('Could not export the transcript. Please try again.') }
+    finally { setExporting(false) }
+  }
   const taskArtifacts = useArtifactStore((state) => taskId ? (state.artifactsByTask[taskId] || EMPTY_ARTIFACTS) : EMPTY_ARTIFACTS)
   const selectArtifactTab = useArtifactStore((state) => state.selectTab)
   const handleOpenArtifact = useCallback((artifact: Artifact) => {
@@ -1196,6 +1206,7 @@ export function AgentTranscriptPanel({
 
   return (
     <div ref={panelRef} tabIndex={-1} className={cn('flex flex-col min-h-0 bg-background border-l border-border relative', className)}>
+      {exportError && <div role="alert" className="px-4 py-2 text-sm text-destructive">{exportError}</div>}
       {/* Debug copy toast — only visible briefly after copy */}
       {debugCopyToast && (
         <div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-card border border-border rounded-md px-3 py-1.5 text-xs text-foreground shadow-lg animate-in fade-in duration-150">
@@ -1223,6 +1234,12 @@ export function AgentTranscriptPanel({
             {getStatusLabel()}
           </span>
           <div className="flex items-center gap-1">
+            {taskId && typeof window.electronAPI?.agentSession?.exportTranscript === 'function' && (
+              <Button variant="ghost" size="sm" onClick={() => void exportTranscript()} disabled={exporting}
+                className="h-7 px-2" title="Export transcript" aria-label="Export transcript">
+                <Download className="h-3.5 w-3.5" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"

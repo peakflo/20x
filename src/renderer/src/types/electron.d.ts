@@ -115,6 +115,7 @@ export interface TranscriptPartRecord {
 
 /** Payload of the transcript:changed delta push. */
 export interface TranscriptChangedEvent {
+  reloadRequired?: boolean
   taskId: string
   parts: TranscriptPartRecord[]
   maxRev: number
@@ -262,6 +263,7 @@ interface ElectronAPI {
     syncSkills: (sessionId: string) => Promise<SkillSyncResult>
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
     learnFromSession: (sessionId: string, message: string) => Promise<SkillSyncResult>
+    exportTranscript: (taskId: string) => Promise<boolean>
     getRawTranscript: (taskId: string) => Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>>
     getTranscriptSnapshot: (taskId: string, sinceSeq?: number) => Promise<TranscriptPartRecord[]>
     getTranscriptDelta: (taskId: string, sinceRev: number) => Promise<{ parts: TranscriptPartRecord[]; maxRev: number }>

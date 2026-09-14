@@ -1,7 +1,8 @@
+import { types } from 'node:util'
 import { app, dialog, type WebContents } from 'electron'
 import { appendFileSync, existsSync, mkdirSync, renameSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { MAX_IPC_BATCH_BYTES, MAX_IPC_MESSAGE_BYTES, measureIpcMessage } from './ipc-message-size'
+import { MAX_IPC_BATCH_BYTES, MAX_IPC_MESSAGE_BYTES, MAX_IPC_VALUES, measureIpcMessage } from './ipc-message-size'
 
 let lastNoticeAt = -Infinity
 
@@ -57,21 +58,35 @@ export function guardedIpcSend(
   // Only split known event contracts. Never split arbitrary objects or strings.
   // Preflight the WHOLE batch before sending any chunk: a rejected part must not
   // advance the renderer revision past data it has not received.
-  if (size.reason === 'size' && args.length === 1 &&
+  if ((size.reason === 'size' || size.reason === 'complexity') && args.length === 1 &&
       (channel === 'transcript:changed' || channel === 'agent:output-batch')) {
-    const fullSize = measureIpcMessage([channel, ...args], MAX_IPC_BATCH_BYTES)
-    if (fullSize.reason) return reject(channel, fullSize.bytes, fullSize.reason)
-    const payload = args[0] as Record<string, unknown>
+    const payload = args[0]
+    if (!payload || typeof payload !== 'object' || types.isProxy(payload) || Object.getPrototypeOf(payload) !== Object.prototype) {
+      return reject(channel, size.bytes, 'unsupported')
+    }
     const field = channel === 'transcript:changed' ? 'parts' : 'messages'
-    const parts = payload[field]
-    if (Array.isArray(parts) && parts.length > 1) {
-      const envelope = { ...payload, [field]: [] }
-      const overhead = measureIpcMessage([channel, envelope]).bytes
+    const parts = Object.getOwnPropertyDescriptor(payload, field)?.value
+    if (Array.isArray(parts) && !types.isProxy(parts) && parts.length > 1 && parts.length <= MAX_IPC_VALUES) {
+      const envelope: Record<string, unknown> = { [field]: [] }
+      let keys = 0
+      for (const key in payload) {
+        if (!Object.hasOwn(payload, key) || key === field) continue
+        const descriptor = Object.getOwnPropertyDescriptor(payload, key)!
+        if (++keys > 1000 || !('value' in descriptor)) return reject(channel, size.bytes, 'unsupported')
+        Object.defineProperty(envelope, key, { value: descriptor.value, enumerable: true, writable: true, configurable: true })
+      }
+      const envelopeSize = measureIpcMessage([channel, envelope])
+      if (envelopeSize.reason) return reject(channel, envelopeSize.bytes, envelopeSize.reason)
+      const overhead = envelopeSize.bytes
       const chunks: unknown[][] = []
       let chunk: unknown[] = []
       let cost = overhead
       let totalCost = overhead
-      for (const part of parts) {
+      let values = envelopeSize.values
+      for (let index = 0; index < parts.length; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(parts, String(index))
+        if (!descriptor || !('value' in descriptor)) return reject(channel, totalCost, 'unsupported')
+        const part = descriptor.value
         const partSize = measureIpcMessage(part)
         // Allow for array keys and container framing, counted per part.
         const partCost = partSize.bytes + 64
@@ -79,19 +94,21 @@ export function guardedIpcSend(
         // Splitting loses object-reference deduplication between chunks. Bound
         // that expanded cost too, not only the original graph's wire estimate.
         if (totalCost > MAX_IPC_BATCH_BYTES) return reject(channel, totalCost, 'size')
-        if (partSize.reason || overhead + partCost > MAX_IPC_MESSAGE_BYTES) {
+        if (partSize.reason || overhead + partCost > MAX_IPC_MESSAGE_BYTES || envelopeSize.values + partSize.values > MAX_IPC_VALUES) {
           return reject(channel, overhead + partCost, partSize.reason || 'size')
         }
-        if (cost + partCost > MAX_IPC_MESSAGE_BYTES) {
+        if (cost + partCost > MAX_IPC_MESSAGE_BYTES || values + partSize.values > MAX_IPC_VALUES) {
           chunks.push(chunk)
           chunk = []
           cost = overhead
+          values = envelopeSize.values
         }
         chunk.push(part)
         cost += partCost
+        values += partSize.values
       }
       chunks.push(chunk)
-      record(channel, fullSize.bytes, `splitting:${chunks.length}`)
+      record(channel, totalCost, `splitting:${chunks.length}`)
       for (let index = 0; index < chunks.length; index++) {
         const message = { ...envelope, [field]: chunks[index] }
         // Do not claim the final revision until every chunk has been sent.

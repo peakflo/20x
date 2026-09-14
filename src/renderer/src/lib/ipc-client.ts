@@ -173,6 +173,8 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.learnFromSession(sessionId, message)
   },
 
+  exportTranscript: (taskId: string): Promise<boolean> => window.electronAPI.agentSession.exportTranscript(taskId),
+
   getRawTranscript: (taskId: string): Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>> => {
     return window.electronAPI.agentSession.getRawTranscript(taskId)
   },

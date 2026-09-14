@@ -4,7 +4,7 @@ import { types } from 'node:util'
 // not the wire size. Do not serialize to measure: that can cause the same crash.
 export const MAX_IPC_MESSAGE_BYTES = 8 * 1024 * 1024
 export const MAX_IPC_BATCH_BYTES = 64 * 1024 * 1024
-const MAX_VALUES = 100_000
+export const MAX_IPC_VALUES = 100_000
 const MAX_DEPTH = 64
 const arrayBufferLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')!.get!
 const sharedBufferLength = Object.getOwnPropertyDescriptor(SharedArrayBuffer.prototype, 'byteLength')!.get!
@@ -14,6 +14,7 @@ const regexpSource = Object.getOwnPropertyDescriptor(RegExp.prototype, 'source')
 
 export interface MessageSize {
   bytes: number
+  values: number
   reason?: 'size' | 'complexity' | 'unsupported'
 }
 
@@ -28,7 +29,7 @@ export function measureIpcMessage(value: unknown, limit = MAX_IPC_MESSAGE_BYTES)
   }
   const visit = (item: unknown, depth: number): void => {
     if (reason) return
-    if (++values > MAX_VALUES || depth > MAX_DEPTH) {
+    if (++values > MAX_IPC_VALUES || depth > MAX_DEPTH) {
       reason = 'complexity'
       return
     }
@@ -73,7 +74,7 @@ export function measureIpcMessage(value: unknown, limit = MAX_IPC_MESSAGE_BYTES)
       reason = 'unsupported'
       return
     }
-    if (Array.isArray(item) && item.length > MAX_VALUES) {
+    if (Array.isArray(item) && item.length > MAX_IPC_VALUES) {
       reason = 'complexity'
       return
     }
@@ -89,5 +90,5 @@ export function measureIpcMessage(value: unknown, limit = MAX_IPC_MESSAGE_BYTES)
     }
   }
   visit(value, 0)
-  return { bytes, ...(reason ? { reason } : {}) }
+  return { bytes, values, ...(reason ? { reason } : {}) }
 }
