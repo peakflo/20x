@@ -176,6 +176,21 @@ describe('Mastermind follow-up actions', () => {
     expect(snapshot().responsibilities.find(r => r.id === proposal.id)?.state).toBe('active')
   })
 
+  it('treats an execution preview retired during confirmation as already handled', async () => {
+    manager.proposeFactory(scope(), { humanInputId: input('Create a Factory.'), name: 'Review', diagram: 'review -> done', guide: 'Review and report.' })
+    manager.decideFactory(snapshot().factoryProposals![0]!.id, true)
+    const factory = snapshot().factories![0]!
+    const proposal = manager.propose(scope(), { ...agreement, factoryId: factory.id }, input('Prepare this Goal.'))
+    manager.proposeFactory(scope(), { humanInputId: input('Update the Factory.'), factoryId: factory.id, name: factory.name, diagram: 'updated', guide: 'Updated guide.' })
+    const factoryPreview = snapshot().factoryProposals![0]!
+    confirm.mockImplementationOnce(async () => { manager.decideFactory(factoryPreview.id, true); return true })
+    const result = await callResponsibilityTool(manager, manager.tokenForTask(scope().taskId)!, 'manage_responsibility', {
+      humanInputId: input('Approve the Goal.'), responsibility_id: proposal.id, action: 'approve'
+    })
+    expect(result.isError).not.toBe(true)
+    expect(JSON.stringify(result)).toContain('retired')
+  })
+
   it('never lets a model flag bypass declined Factory confirmation', async () => {
     manager.proposeFactory(scope(), { humanInputId: input('Draft a review Factory.'), name: 'Review', diagram: 'review -> done', guide: 'Review and report.' })
     const preview = snapshot().factoryProposals![0]
@@ -1047,6 +1062,28 @@ describe('Factories through the existing responsibility lifecycle', () => {
     await advance('done')
     expect(snapshot().responsibilities[0].state).toBe('completed')
     expect(snapshot().steps).toHaveLength(1)
+  })
+
+  it('retires unstarted execution previews when their Factory moves, without changing active work', async () => {
+    const factory = saveFactory()
+    const active = await approve({ ...agreement, title: 'Active execution', factoryId: factory.id })
+    const stale = manager.propose(scope(), { ...agreement, title: 'Unstarted execution', factoryId: factory.id }, input('Prepare another execution.'))
+    manager.proposeFactory(scope(), { humanInputId: input('Update the Factory.'), factoryId: factory.id, name: factory.name, diagram: 'review -> fix -> verify', guide: 'Use the revised review sequence.' })
+    manager.decideFactory(snapshot().factoryProposals![0].id, true)
+    expect(snapshot().responsibilities.find(r => r.id === active.id)).toMatchObject({ state: 'active', agreement: { factory: { guide: factory.guide } } })
+    expect(snapshot().responsibilities.some(r => r.id === stale.id)).toBe(false)
+    await expect(manager.act(stale.id, stale.revision, 'approve')).resolves.toBeUndefined()
+    const retired = JSON.parse((db.db.prepare('SELECT data FROM mastermind_agreements WHERE id=?').get(stale.id) as { data: string }).data)
+    expect(retired).toMatchObject({ state: 'cancelled', deletedAt: expect.any(String), next: null })
+  })
+
+  it('cleans a legacy stale preview when approval reaches the shared guard', async () => {
+    const factory = saveFactory()
+    const stale = manager.propose(scope(), { ...agreement, factoryId: factory.id }, input('Prepare this execution.'))
+    const preview = manager.factories.propose(project.id, 'Legacy direct update', { factoryId: factory.id, name: factory.name, diagram: 'changed', guide: 'Changed guide.' })
+    manager.factories.decide(preview.id, true)
+    await expect(manager.act(stale.id, stale.revision, 'approve')).resolves.toBeUndefined()
+    expect(snapshot().responsibilities.some(r => r.id === stale.id)).toBe(false)
   })
 
   it('exposes pending Factory previews and saves one through the confirmed Mastermind action', async () => {

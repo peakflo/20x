@@ -267,7 +267,13 @@ export class ResponsibilityManager {
 
   decideFactory(proposalId: string, approve: boolean): void {
     if (!this.enabled || typeof approve !== 'boolean') throw new Error('Factory confirmation is unavailable.')
-    this.factories.decide(proposalId, approve); this.changed()
+    const proposal = this.factories.proposals().find(p => p.id === proposalId)
+    this.factories.decide(proposalId, approve)
+    if (approve && proposal) for (const record of this.all<ResponsibilityRecord>('agreements')) {
+      if (record.deletedAt || record.state !== 'proposed' || record.agreement.factory?.id !== proposal.definition.id || !this.factoryChanged(record) || this.collectors.has(record.id) || this.unsettled(record.id).length) continue
+      this.retireProposal(record)
+    }
+    this.changed()
   }
   readFactory(scope: ResponsibilityScope, id?: string): unknown {
     const step = scope.stepId ? this.get<ResponsibilityStep>('steps', scope.stepId) : undefined
@@ -284,6 +290,16 @@ export class ResponsibilityManager {
   }
 
   private factory(r: ResponsibilityRecord): FactoryDefinition | undefined { return r.eventFactory ?? r.agreement.factory }
+  private factoryChanged(r: ResponsibilityRecord): boolean {
+    const expected = r.agreement.factory
+    if (!expected) return false
+    const current = this.factories.list(r.projectId).find(factory => factory.id === expected.id)
+    return !current || digest(current) !== digest(expected)
+  }
+  private retireProposal(r: ResponsibilityRecord): void {
+    r.deletedAt = now(); r.state = 'cancelled'; r.next = null; r.nextAt = null
+    this.save(r)
+  }
   private factoryWork(r: ResponsibilityRecord): ResponsibilityStep | undefined {
     return this.all<ResponsibilityStep>('steps').filter(s => s.responsibilityId === r.id).slice(r.factoryStartStep ?? 0).filter(s => s.phase === 'work' && s.report).at(-1)
   }
@@ -641,7 +657,10 @@ export class ResponsibilityManager {
   async act(id: string, revision: number, action: string): Promise<void> {
     let r = this.responsibility(id)
     if (action === 'resume' && r.state === 'taken_over') action = 'handback'
-    if (r.deletedAt) throw new Error('This proposal was deleted.')
+    if (r.deletedAt) {
+      if (action === 'approve' && r.state === 'cancelled' && this.factoryChanged(r)) return
+      throw new Error('This proposal was deleted.')
+    }
     if (r.revision !== revision) throw new Error('This agreement changed. Read the current version first.')
     if (action === 'trial') {
       if (r.state !== 'proposed' || !r.agreement.source) throw new Error('A proposed source is required for a trial.')
@@ -662,11 +681,14 @@ export class ResponsibilityManager {
     }
     if (action === 'approve') {
       if (r.state !== 'proposed') throw new Error('Only a proposed agreement can be approved.')
+      if (this.factoryChanged(r)) {
+        if (this.collectors.has(id) || this.unsettled(id).length) throw new Error('Wait for the source trial to finish and release its agent.')
+        this.retireProposal(r); return
+      }
       if (r.agreement.source && r.trial?.revision !== revision) throw new Error('Run and inspect the source trial before activating monitoring.')
       if (this.collectors.has(id) || this.unsettled(id).length) throw new Error('Wait for the source trial to finish and release its agent.')
       if (r.agreement.source) this.sources?.validate(r.agreement.source, r.agreement.agentId)
       if (Date.parse(r.agreement.deadline) <= Date.now()) throw new Error('The agreement expired. Revise its stop time.')
-      if (r.agreement.factory && digest(this.factories.read(r.agreement.factory.id, r.projectId)) !== digest(r.agreement.factory)) throw new Error('The Factory changed after this execution preview. Revise the agreement before starting.')
       for (const profile of r.agreement.factoryAgents ?? []) if (this.factoryAgent(profile.id).configDigest !== profile.configDigest) throw new Error('An approved agent configuration changed. Revise the agreement before starting.')
       if (r.agreement.access && digest(this.agentAccess(r.agreement.agentId, r.agreement.mode)) !== digest(r.agreement.access)) throw new Error('Agent access changed after this preview. Revise the agreement before approval.')
       r.approvedRevision = revision; r.state = 'active'

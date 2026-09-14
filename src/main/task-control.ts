@@ -267,10 +267,11 @@ export class TaskControl {
         detail: `Project: ${snapshot.projects.find(p => p.id === record.projectId)?.name ?? record.projectId}\nResponsibility: ${record.id}\nRevision: ${record.revision}\nState: ${record.state}\n\nAgreement:\n${JSON.stringify(record.agreement, null, 2)}\n\nThis action does not revise the agreement or expand its authority.` })
       if (!approved || this.shutdown.signal.aborted) return { success: false, cancelled: true, responsibilityId: record.id, action }
       const current = this.responsibilities.snapshot(projectId).responsibilities.find(r => r.id === record.id)
+      if (!current) return { success: true, responsibilityId: record.id, action, state: 'retired' }
       if (JSON.stringify(current) !== JSON.stringify(record)) throw new Error('The responsibility changed. Inspect it and confirm again.')
       await this.responsibilities.act(record.id, record.revision, action)
       const updated = this.responsibilities.snapshot(projectId).responsibilities.find(r => r.id === record.id)
-      return { success: true, responsibilityId: record.id, action, state: updated?.state }
+      return { success: true, responsibilityId: record.id, action, state: updated?.state ?? 'retired' }
     })
   }
 
