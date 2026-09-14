@@ -978,6 +978,29 @@ describe('AgentManager implicit resume behavior', () => {
     vi.clearAllMocks()
   })
 
+  it('preserves the conversation when resume fails with an active writer', async () => {
+    const task = { id: 'task-1', agent_id: 'agent-1', session_id: 'original-session' }
+    const db = {
+      getTask: vi.fn(() => task),
+      updateTask: vi.fn(),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+    const manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue({})
+    vi.spyOn(manager as any, 'resumeAdapterSession').mockRejectedValue(
+      new Error('thread-store conflict: thread original-session already has an active writer')
+    )
+    const start = vi.spyOn(manager, 'startSession')
+    const send = vi.spyOn(manager as any, 'doSendAdapterMessage')
+
+    await expect(manager.sendMessage('original-session', 'continue', 'task-1', 'agent-1'))
+      .rejects.toThrow('The existing session has been preserved')
+
+    expect(start).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
+    expect(db.updateTask).not.toHaveBeenCalled()
+    expect(task.session_id).toBe('original-session')
+  })
+
   it('does NOT push a transcript replay to the renderer when sendMessage implicitly resumes a session', async () => {
     const mockDb = {
       getTask: vi.fn(() => ({

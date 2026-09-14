@@ -4221,6 +4221,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
               }
             }
           } catch (error) {
+            // An active writer means the conversation still exists. Starting a
+            // replacement here would silently discard its context and overwrite
+            // the persisted resume anchor.
+            const resumeError = error instanceof Error ? error.message : String(error)
+            if (resumeError.includes('already has an active writer') || resumeError.includes('thread-store conflict')) {
+              throw new Error(`Cannot resume this conversation because its runtime is still active. The existing session has been preserved. Retry after the runtime has released it. ${resumeError}`)
+            }
             console.warn(`[AgentManager] Resume failed, will create new session:`, error)
           }
         }
