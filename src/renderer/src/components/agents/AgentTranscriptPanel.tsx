@@ -1013,12 +1013,18 @@ export function AgentTranscriptPanel({
   const virtualizer = useVirtualizer({
     count: transcriptItems.length,
     getScrollElement: () => scrollRef.current,
+    // Transcript rows can change indexes when adjacent tool/reasoning parts are
+    // grouped. Keep measured heights attached to the message/group itself,
+    // rather than allowing an index to inherit the previous row's height.
+    getItemKey: (index) => transcriptItems[index]?.key ?? index,
     // Realistic estimate for average message height (tool calls, markdown blocks, etc.)
     // — reduces layout thrash and improves scroll smoothness vs the previous 60px default
     estimateSize: () => 120,
     // Increased overscan to reduce blank flashes during fast scrolling
     overscan: 8,
   })
+  const virtualRows = virtualizer.getVirtualItems()
+  const virtualWindowOffset = virtualRows[0]?.start ?? 0
 
   const handleScroll = useCallback(() => {
     if (scrollRafRef.current !== null) return
@@ -1352,36 +1358,39 @@ export function AgentTranscriptPanel({
           ) : (
             <>
               <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
-                {virtualizer.getVirtualItems().map((virtualRow) => {
-                  const item = transcriptItems[virtualRow.index]
-                  return (
-                  <div
-                    key={item.key}
-                    ref={virtualizer.measureElement}
-                    data-index={virtualRow.index}
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                  >
-                    <div className="pb-2">
-                      {item.type === 'activity' ? (
-                        <MemoizedActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} artifacts={taskArtifacts} onOpenArtifact={handleOpenArtifact} />
-                      ) : (
-                        <MemoizedMessageBubble
-                          message={item.message}
-                          onAnswer={onSend}
-                          canAnswerQuestion={item.message.id === activeQuestionId}
-                          searchQuery={normalizedSearchQuery}
-                        />
-                      )}
-                    </div>
-                  </div>
-                  )
-                })}
+                {/* Position the visible window once, then let its rows stack in
+                    normal flow. If ResizeObserver has not reported a newly
+                    mounted tall message yet, its real DOM height still pushes
+                    every following row down instead of letting absolute rows
+                    paint over it. */}
+                <div
+                  data-testid="transcript-virtual-window"
+                  style={{ transform: `translateY(${virtualWindowOffset}px)` }}
+                >
+                  {virtualRows.map((virtualRow) => {
+                    const item = transcriptItems[virtualRow.index]
+                    return (
+                      <div
+                        key={item.key}
+                        ref={virtualizer.measureElement}
+                        data-index={virtualRow.index}
+                      >
+                        <div className="pb-2">
+                          {item.type === 'activity' ? (
+                            <MemoizedActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} artifacts={taskArtifacts} onOpenArtifact={handleOpenArtifact} />
+                          ) : (
+                            <MemoizedMessageBubble
+                              message={item.message}
+                              onAnswer={onSend}
+                              canAnswerQuestion={item.message.id === activeQuestionId}
+                              searchQuery={normalizedSearchQuery}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
               {status === SessionStatus.WORKING && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">

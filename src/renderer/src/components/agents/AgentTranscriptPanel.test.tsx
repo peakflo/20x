@@ -175,6 +175,41 @@ describe('AgentTranscriptPanel message layout', () => {
     expect(userMessage).toHaveClass('bg-secondary')
   })
 
+  it('stacks measured transcript rows in normal flow so a tall message cannot be overlaid', () => {
+    const { container } = render(
+      <AgentTranscriptPanel
+        messages={[
+          {
+            id: 'long-user-message',
+            role: 'user',
+            content: Array.from({ length: 40 }, (_, index) => `Long instruction line ${index + 1}`).join('\n\n'),
+            timestamp: new Date(),
+            partType: 'text'
+          },
+          {
+            id: 'agent-reply',
+            role: 'assistant',
+            content: 'Reply after the long message',
+            timestamp: new Date(),
+            partType: 'text'
+          }
+        ]}
+        status={SessionStatus.WORKING}
+        onStop={() => undefined}
+      />
+    )
+
+    const virtualWindow = screen.getByTestId('transcript-virtual-window')
+    const rows = container.querySelectorAll<HTMLElement>('[data-index]')
+
+    expect(virtualWindow).toHaveStyle({ transform: 'translateY(0px)' })
+    expect(rows).toHaveLength(2)
+    expect(rows[0].style.position).toBe('')
+    expect(rows[1].style.position).toBe('')
+    expect(rows[0].style.transform).toBe('')
+    expect(rows[1].style.transform).toBe('')
+  })
+
   it('renders tool calls as compact expandable rows without a card bubble', () => {
     render(
       <AgentTranscriptPanel
