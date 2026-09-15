@@ -737,6 +737,12 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     const task = db.getTask(taskId)
     if (!task) throw Object.assign(new Error('Task not found'), { status: 404 })
     const completeAtSource = (params as { completeAtSource?: boolean }).completeAtSource !== false
+    // A second explicit completion while feedback learning is pending cancels
+    // that learning cycle first. Without clearing its durable marker, the
+    // database protects AgentLearning and silently preserves the old status.
+    if (task.status === TaskStatus.AgentLearning) {
+      updateTaskFromUser(db, taskId, { status: TaskStatus.ReadyForReview })
+    }
     if (!task.source_id || !completeAtSource) {
       const fresh = db.updateTask(taskId, { status: TaskStatus.Completed, ...(task.source_id ? { complete_at_source: false } : {}) })
       if (fresh) {

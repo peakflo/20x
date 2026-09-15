@@ -114,6 +114,28 @@ describe('server completion', () => {
     expect(updateTaskMock).toHaveBeenCalledWith('task-1',{status:TaskStatus.Completed})
     expect(upload).not.toHaveBeenCalled();expect(executeActionMock).not.toHaveBeenCalled()
   })
+  it('stops pending learning before completing a source-less task', async () => {
+    storeState.tasks = [makeTask({status: TaskStatus.AgentLearning})]
+    render(<Harness />)
+    fireEvent.click(screen.getByText('Complete'))
+    await waitFor(() => expect(onCompleted).toHaveBeenCalled())
+    expect(updateTaskMock.mock.calls).toEqual([
+      ['task-1', {status: TaskStatus.ReadyForReview}],
+      ['task-1', {status: TaskStatus.Completed}]
+    ])
+  })
+  it('stops pending learning before asking the source to complete', async () => {
+    storeState.tasks = [makeTask({status: TaskStatus.AgentLearning, source_id: 'src-1'})]
+    render(<Harness />)
+    fireEvent.click(screen.getByText('Complete'))
+    fireEvent.click(screen.getByTestId('complete-at-source'))
+    await waitFor(() => expect(onCompleted).toHaveBeenCalled())
+    expect(updateTaskMock.mock.calls).toEqual([
+      ['task-1', {status: TaskStatus.ReadyForReview}],
+      ['task-1', {complete_at_source: true}]
+    ])
+    expect(executeActionMock).toHaveBeenCalledWith(PluginActionId.Complete, 'task-1', 'src-1')
+  })
   it('keeps a refused completion open',async()=>{
     executeActionMock.mockResolvedValue({success:false,error:'Review required'})
     storeState.tasks=[makeTask({source_id:'src-1'})];render(<Harness />);fireEvent.click(screen.getByText('Complete'))

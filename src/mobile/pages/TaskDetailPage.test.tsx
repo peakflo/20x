@@ -1,6 +1,6 @@
 import { api } from '../api/client'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, cleanup, fireEvent, waitFor, within, act } from '@testing-library/react'
 import { ArtifactType } from '@shared/artifacts'
 import { TaskDetailPage } from './TaskDetailPage'
 import { useTaskStore, type Task } from '../stores/task-store'
@@ -85,6 +85,18 @@ afterEach(() => {
 })
 
 describe('TaskDetailPage', () => {
+  it('stops a learning session when the task completes', async () => {
+    const task = makeTask({agent_id: 'agent-1', session_id: 'learning-session', status: 'agent_learning'})
+    const stop = vi.spyOn(api.sessions, 'stop').mockResolvedValue({success: true})
+    useAgentStore.getState().initSession(task.id, 'learning-session', 'agent-1')
+    useTaskStore.setState({tasks: [task], isLoading: false})
+    const view = render(<TaskDetailPage taskId="task-1" onNavigate={mockNavigate} />)
+    act(() => useTaskStore.setState({tasks: [{...task, status: 'completed'}]}))
+    await waitFor(() => expect(stop).toHaveBeenCalledWith('learning-session'))
+    view.unmount()
+    stop.mockRestore()
+  })
+
   it.each([
     ['Submit Feedback', true], ['Submit Feedback', false], ['Skip', true], ['Skip', false]
   ] as const)('%s with source completion %s', async (button, completeAtSource) => {

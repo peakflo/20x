@@ -30,6 +30,14 @@ export function useTaskCompletion({ onToast }: UseTaskCompletionOptions = {}) {
     }
     setIsBusy(true)
     try {
+      // Completing again while feedback learning is pending is an explicit
+      // request to stop learning. Moving back to review clears the durable
+      // feedback marker before the normal completion path runs; otherwise the
+      // database deliberately preserves AgentLearning and the click appears to
+      // do nothing.
+      if (task.status === TaskStatus.AgentLearning) {
+        await useTaskStore.getState().updateTask(task.id, { status: TaskStatus.ReadyForReview })
+      }
       if (!task.source_id || options?.completeAtSource === false) {
         await useTaskStore.getState().updateTask(task.id, { status: TaskStatus.Completed, ...(task.source_id ? { complete_at_source: false } : {}) })
         const completedTask = { ...task, status: TaskStatus.Completed }

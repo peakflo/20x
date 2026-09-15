@@ -169,6 +169,17 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     if (session?.sessionId) _stopSession(session.sessionId)
   }, [session?.sessionId, _stopSession])
 
+  // Match desktop behavior: once an explicit completion moves a learning task
+  // to Completed, terminate the learning session but keep its transcript.
+  const previousTaskStatusRef = useRef(task?.status)
+  useEffect(() => {
+    const previousStatus = previousTaskStatusRef.current
+    previousTaskStatusRef.current = task?.status
+    if (session?.sessionId && task?.status === TaskStatus.Completed && previousStatus !== TaskStatus.Completed) {
+      void _stopSession(session.sessionId)
+    }
+  }, [task?.status, session?.sessionId, _stopSession])
+
   const completeTaskNow = useCallback(async (t: Task, completeAtSource = true) => {
     try {
       await api.tasks.complete(t.id, completeAtSource)

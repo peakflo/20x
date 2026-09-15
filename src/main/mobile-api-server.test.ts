@@ -1,5 +1,5 @@
 import { SyncManager } from './sync-manager'
-import { finishSessionFeedback } from './session-feedback'
+import { finishSessionFeedback, updateTaskFromUser } from './session-feedback'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createHash } from 'crypto'
 import { createTestDb } from '../../test/helpers/db-test-helper'
@@ -260,6 +260,31 @@ describe('mobile-api-server: source completion action', () => {
     })
     expect(response.status).toBe(200)
     expect(executeAction).toHaveBeenCalledWith(action || 'complete', expect.objectContaining({ id: task.id }), undefined, source.id)
+    db.close()
+  })
+
+  it.each([true, false])('cancels pending learning before completing with source choice %s', async (completeAtSource) => {
+    const { db } = createTestDb()
+    const source = db.createTaskSource({ name: 'Session Feedback', plugin_id: 'notion', mcp_server_id: null })!
+    const agent = db.createAgent({name: 'Learning agent', server_url: '', config: {}, is_default: false})!
+    const task = db.createTask(makeTask({source_id: source.id, external_id: 'remote-feedback', source: 'Session Feedback'}))!
+    db.updateTask(task.id, {agent_id: agent.id})
+    updateTaskFromUser(db, task.id, {status: 'agent_learning', feedback_rating: 5, complete_at_source: completeAtSource})
+    const executeAction = vi.fn().mockResolvedValue({success: true, taskUpdate: {status: 'completed'}})
+    const sync = new SyncManager(db, {} as never, {get: () => ({executeAction})} as never)
+    const token = `learning-skip-${completeAtSource}`
+    db.createMobileSession(`learning-skip-session-${completeAtSource}`, createHash('sha256').update(token).digest('hex'), 'test-device')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const port = await startMobileApiServer(db, {} as never, {} as never,
+      21000 + Math.floor(Math.random() * 40000), sync)
+    const response = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/complete`, {
+      method: 'POST', headers: {Authorization: `Bearer ${token}`, 'Content-Type': 'application/json'},
+      body: JSON.stringify({completeAtSource})
+    })
+    expect(response.status).toBe(200)
+    expect(db.getTask(task.id)?.status).toBe('completed')
+    await finishSessionFeedback(db, sync, task.id)
+    expect(executeAction).toHaveBeenCalledTimes(completeAtSource ? 1 : 0)
     db.close()
   })
 })
