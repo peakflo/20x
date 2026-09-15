@@ -756,7 +756,11 @@ const subtaskTools: Tool[] = [
         agent_id: { type: 'string', description: 'Assign to agent' },
         repos: { type: 'array', items: { type: 'string' }, description: 'Set repository paths/URLs for this task' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
-        status: { type: 'string', enum: ['not_started', 'agent_working', 'ready_for_review'], description: 'Subtasks cannot self-complete; set ready_for_review when done so the parent task owner can verify.' },
+        status: {
+          type: 'string',
+          enum: ['not_started', 'agent_working', 'ready_for_review', 'completed'],
+          description: 'Agents may set source-less subtasks to completed. Subtasks linked to an external source must use that source\'s completion flow.'
+        },
         output_fields: {
           type: 'array',
           description: 'Define expected output fields for this task. Each field describes a piece of structured data the agent should produce.',
@@ -870,10 +874,10 @@ async function handleScopedCall(
     }
 
     case 'update_own_task': {
-      // Subtasks cannot self-complete or self-cancel — enforce ready_for_review ceiling
-      const blockedStatuses = ['completed', 'cancelled']
-      if (args.status && blockedStatuses.includes(args.status as string)) {
-        return { error: `Subtasks cannot set status to "${args.status}". Use "ready_for_review" when done.` }
+      // A scoped agent may finish its own task, but cannot cancel it.
+      // Source-aware completion policy is enforced by the shared update route.
+      if (args.status === 'cancelled') {
+        return { error: 'Subtasks cannot set status to "cancelled".' }
       }
       // Normalize legacy status value
       if (args.status === 'in_progress') args.status = 'agent_working'

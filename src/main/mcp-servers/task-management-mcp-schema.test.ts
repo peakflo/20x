@@ -157,15 +157,27 @@ describe('browser console + network schemas', () => {
   })
 })
 
-describe('subtask status ceiling', () => {
-  it('refuses a self-completion and points at ready_for_review', async () => {
+describe('subtask status writes', () => {
+  it('still refuses self-cancellation', async () => {
     const invoke = async (): Promise<unknown> => ({ ok: true })
 
-    for (const status of ['completed', 'cancelled']) {
-      const result = await callToolForScope('update_own_task', { status }, SCOPED, invoke)
-      expect(result.isError).toBe(true)
-      expect(result.content[0].text).toContain('ready_for_review')
+    const result = await callToolForScope('update_own_task', { status: 'cancelled' }, SCOPED, invoke)
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('cannot set status')
+  })
+
+  it('allows a scoped agent to complete its own task', async () => {
+    const calls: Array<{ route: string; params: Record<string, unknown> }> = []
+    const invoke = async (route: string, params: Record<string, unknown>): Promise<unknown> => {
+      calls.push({ route, params })
+      return { success: true }
     }
+
+    await callToolForScope('update_own_task', { status: 'completed' }, SCOPED, invoke)
+    expect(calls).toEqual([{
+      route: '/update_task',
+      params: { status: 'completed', task_id: SCOPED.taskId }
+    }])
   })
 })
 
