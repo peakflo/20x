@@ -122,8 +122,11 @@ describe('/update_task - triage status guard', () => {
   it('refuses direct completion even when a task is not triaging', async () => {
     const task = db.createTask(makeTask({ title: 'Normal task' }))!
     expect(task.status).toBe('not_started')
+    expect(task.source_id).toBeNull()
     const update = vi.spyOn(db, 'updateTask')
-    expect(await handleRoute(db, '/update_task', { task_id: task.id, status: 'completed' })).toEqual({ error: 'Workflo must confirm completion. Agents submit results for review.' })
+    expect(await handleRoute(db, '/update_task', { task_id: task.id, status: 'completed' })).toEqual({
+      error: 'Agents cannot mark tasks completed. Set status to ready_for_review; a user or authorized automation must confirm completion.'
+    })
     expect(update).not.toHaveBeenCalled()
     expect(db.getTask(task.id)!.status).toBe('not_started')
     expect(rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id)).toEqual({ status: 'not_started' })

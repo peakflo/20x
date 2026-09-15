@@ -168,3 +168,11 @@ describe('subtask status ceiling', () => {
     }
   })
 })
+
+describe('task completion guidance', () => {
+  it('tells full-access agents to submit completed work for review', () => {
+    const status = propertiesOf(FULL_ACCESS_SCOPE, 'update_task').status as { description?: string }
+    expect(status.description).toContain('ready_for_review')
+    expect(status.description).not.toContain('Workflo')
+  })
+})

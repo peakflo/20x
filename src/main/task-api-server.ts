@@ -429,7 +429,9 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     case '/update_task': {
-      if (params.status === 'completed') return { error: 'Workflo must confirm completion. Agents submit results for review.' }
+      if (params.status === 'completed') {
+        return { error: 'Agents cannot mark tasks completed. Set status to ready_for_review; a user or authorized automation must confirm completion.' }
+      }
       if (params.status && params.status !== 'in_progress') {
         try { db.updateTask(params.task_id as string, { status: params.status as never }) }
         catch (error) { return { error: error instanceof Error ? error.message : 'Task status refused' } }

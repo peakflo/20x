@@ -246,7 +246,11 @@ const mastermindTools: Tool[] = [
         auto_complete_without_review: { type: 'boolean', description: 'Complete the task automatically when its agent finishes, instead of leaving it for review. Needed for a task that must finish with no 20x window open.' },
         repos: { type: 'array', items: { type: 'string' }, description: 'Set repository paths/URLs for this task' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
-        status: { type: 'string', enum: ['not_started', 'triaging', 'agent_working', 'ready_for_review', 'agent_learning', 'completed'] },
+        status: {
+          type: 'string',
+          enum: ['not_started', 'triaging', 'agent_working', 'ready_for_review', 'agent_learning', 'completed'],
+          description: 'Agents cannot set completed directly; use ready_for_review when work is done so a user or authorized automation can confirm completion.'
+        },
         output_fields: {
           type: 'array',
           description: 'Define expected output fields for this task. Each field describes a piece of structured data the agent should produce.',
