@@ -1165,6 +1165,15 @@ describe('AgentManager MCP server routing', () => {
     expect(first['task-management']).toEqual(second['task-management'])
   })
 
+  it('leaves configured 20x MCP servers out when an agent uses its workspace configuration', async () => {
+    const db = makeTaskManagementDb()
+    vi.mocked(db.getAgent).mockReturnValue({ id: 'agent-1', name: 'Agent', config: { mcp_config_source: 'workspace', mcp_servers: ['task-management-id'] } } as any)
+    const manager = new AgentManager(db)
+
+    expect(await (manager as any).buildMcpServersForAdapter('agent-1')).toEqual({})
+    expect((await (manager as any).buildMcpServersForAdapter('agent-1', { includeConfiguredServers: true }))['task-management']).toBeDefined()
+  })
+
   it('omits task-management when the task API has no port, instead of offering a broken server', async () => {
     vi.mocked(getTaskApiPort).mockReturnValue(undefined as unknown as number)
     const manager = new AgentManager(makeTaskManagementDb())

@@ -43,6 +43,7 @@ export interface AgentConfigRecord {
   permission_mode?: 'ask' | 'allow'
   sandbox_mode?: 'read-only' | 'workspace-write' | 'danger-full-access'
   system_prompt?: string
+  mcp_config_source?: '20x' | 'workspace'
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]
   secret_ids?: string[]

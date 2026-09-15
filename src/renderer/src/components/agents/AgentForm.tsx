@@ -56,6 +56,9 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [mcpSelection, setMcpSelection] = useState<Map<string, string[] | undefined>>(
     () => parseMcpSelection(agent?.config.mcp_servers)
   )
+  const [mcpConfigSource, setMcpConfigSource] = useState<'20x' | 'workspace'>(
+    agent?.config.mcp_config_source ?? '20x'
+  )
   const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set())
 
   // Auth method state (Claude Code and Codex)
@@ -248,6 +251,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         sandbox_mode: codingAgent === CodingAgentType.CODEX ? sandboxMode : undefined,
         system_prompt: systemPrompt.trim() || undefined,
         max_parallel_sessions: maxParallelSessions,
+        mcp_config_source: codingAgent === CodingAgentType.CODEX ? mcpConfigSource : undefined,
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
         skill_ids: skillIds,
         secret_ids: secretIds.length > 0 ? secretIds : undefined,
@@ -678,14 +682,33 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </p>
       </div>
 
-      <div className="space-y-2">
-        <Label>MCP Servers</Label>
-        {globalMcpServers.length === 0 ? (
+      {codingAgent === CodingAgentType.CODEX && (
+        <div className="space-y-1.5">
+          <Label htmlFor="agent-mcp-config-source">MCP configuration</Label>
+          <select
+            id="agent-mcp-config-source"
+            value={mcpConfigSource}
+            onChange={(e) => setMcpConfigSource(e.target.value as '20x' | 'workspace')}
+            className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+          >
+            <option value="20x">Use 20x configuration</option>
+            <option value="workspace">Use workspace configuration</option>
+          </select>
           <p className="text-xs text-muted-foreground">
-            No MCP servers configured. Add them in Agent Settings.
+            Workspace configuration uses the MCP servers Codex loads from the selected task workspace.
           </p>
-        ) : (
-          <div className="space-y-1.5">
+        </div>
+      )}
+
+      {(codingAgent !== CodingAgentType.CODEX || mcpConfigSource === '20x') && (
+        <div className="space-y-2">
+          <Label>MCP Servers</Label>
+          {globalMcpServers.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No MCP servers configured. Add them in Agent Settings.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
             {globalMcpServers.map((server) => {
               const isChecked = mcpSelection.has(server.id)
               const hasTools = server.tools && server.tools.length > 0
@@ -744,10 +767,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
                   )}
                 </div>
               )
-            })}
-          </div>
-        )}
-      </div>
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="space-y-2">
         <Label>Skills</Label>

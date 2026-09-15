@@ -851,11 +851,17 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
   private async sessionConfigOverrides(session: AppServerSession, requested: SessionConfig): Promise<Record<string, unknown>> {
     const overrides = this.buildConfigOverrides(requested)
-    if (session.config.responsibilityRole) {
+    const configured = this.convertMcpServers(requested.mcpServers ?? {})
+    const requestedServers = session.config.responsibilityRole
+      ? Object.fromEntries(Object.entries(configured).map(([name, server]) => [name, { ...(server as Record<string, unknown>), enabled: true, default_tools_approval_mode: 'approve' }]))
+      : configured
+    if (requested.mcpConfigSource !== 'workspace') {
       const result = await this.sendRpcRequest(session, 'config/read', { includeLayers: false })
       const config = isObject(result) && isObject(result.config) ? result.config : {}
       const inherited = isObject(config.mcp_servers) ? Object.keys(config.mcp_servers) : []
-      overrides.mcp_servers = { ...Object.fromEntries(inherited.map(name => [name, { enabled: false }])), ...Object.fromEntries(Object.entries(this.convertMcpServers(requested.mcpServers ?? {})).map(([name, server]) => [name, { ...(server as Record<string, unknown>), enabled: true, default_tools_approval_mode: 'approve' }])) }
+      overrides.mcp_servers = { ...Object.fromEntries(inherited.map(name => [name, { enabled: false }])), ...requestedServers }
+    } else if (session.config.responsibilityRole) {
+      overrides.mcp_servers = requestedServers
     }
     return overrides
   }

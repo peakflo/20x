@@ -55,6 +55,8 @@ export interface SessionConfig {
   tools?: Record<string, boolean>
   promptAbort?: AbortController
   mcpServers?: Record<string, McpServerConfig>
+  /** Whether MCP servers come from 20x settings or the coding agent's workspace configuration. */
+  mcpConfigSource?: '20x' | 'workspace'
   /** Claude Code auth method: 'subscription' (OAuth/Pro/Max) or 'api_key' (pay-per-use). Defaults to 'subscription'. */
   authMethod?: 'subscription' | 'api_key'
   permissionMode?: 'ask' | 'allow'

@@ -767,14 +767,14 @@ export class AgentManager extends EventEmitter {
     if (!server || server.name === 'task-management') throw new Error('The selected agent cannot use this source connection.')
     if (servers.filter(s => s.name === server.name).length !== 1) throw new Error('Two assigned MCP connections have the same name. Give them distinct names in MCP settings.')
     if ('resource_url' in server.oauth_metadata && !await this.oauthManager?.getValidMcpServerToken(serverId)) throw new Error('Sign in to this source connection in MCP settings before monitoring it.')
-    const config = (await this.buildMcpServersForAdapter(agentId))[server.name]
+    const config = (await this.buildMcpServersForAdapter(agentId, { includeConfiguredServers: true }))[server.name]
     if (!config) throw new Error('The source connection could not be resolved.')
     return config
   }
 
-  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
+  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string; includeConfiguredServers?: boolean }): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
-    const mcpEntries = agent?.config?.mcp_servers || []
+    const mcpEntries = agent?.config?.mcp_config_source === 'workspace' && !opts?.includeConfiguredServers ? [] : agent?.config?.mcp_servers || []
     const result: Record<string, McpServerConfig> = {}
     // Ensure the task API server is ready before building MCP configs
     // (startTaskApiServer is fire-and-forget during DB init, may not be done yet)
@@ -911,6 +911,7 @@ export class AgentManager extends EventEmitter {
       reasoningEffort: agent.config?.reasoning_effort,
       systemPrompt: baseSystemPrompt + taskContext,
       mcpServers,
+      mcpConfigSource: agent.config?.mcp_config_source ?? '20x',
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
       sandboxMode: agent.config?.sandbox_mode,
@@ -1647,6 +1648,7 @@ export class AgentManager extends EventEmitter {
       reasoningEffort: agent.config?.reasoning_effort,
       systemPrompt: (agent.config?.system_prompt || '') + this.mastermindHistory(taskId) + (this.scheduleRuns?.context(taskId) || ''),
       mcpServers,
+      mcpConfigSource: agent.config?.mcp_config_source ?? '20x',
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
       sandboxMode: agent.config?.sandbox_mode,
@@ -2953,6 +2955,7 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       reasoningEffort: agent.config?.reasoning_effort,
       systemPrompt: baseSystemPrompt + taskContext,
       mcpServers,
+      mcpConfigSource: agent.config?.mcp_config_source ?? '20x',
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
       sandboxMode: agent.config?.sandbox_mode,

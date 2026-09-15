@@ -185,6 +185,7 @@ export interface AgentConfig {
   permission_mode?: AgentPermissionMode
   sandbox_mode?: AgentSandboxMode
   system_prompt?: string
+  mcp_config_source?: '20x' | 'workspace'
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]
   secret_ids?: string[]

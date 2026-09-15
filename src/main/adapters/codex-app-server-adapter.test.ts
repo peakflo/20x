@@ -159,6 +159,17 @@ describe('CodexAppServerAdapter', () => {
     expect(overrides.mcp_servers).toEqual({ external: { enabled: false }, responsibilities: { url: 'http://localhost:1234/mcp?responsibility=owned', enabled: true, default_tools_approval_mode: 'approve' } })
   })
 
+  it('keeps workspace MCP servers enabled when the agent selects workspace configuration', async () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+    const config: SessionConfig = { taskId: 'task', agentId: 'agent', workspaceDir: '/tmp', responsibilityRole: 'worker', mcpConfigSource: 'workspace', mcpServers: { responsibilities: { type: 'http', url: 'http://localhost:1234/mcp?responsibility=owned' } } }
+    session.config = config
+    const readConfig = vi.spyOn(adapter, 'sendRpcRequest')
+    const overrides = await adapter.sessionConfigOverrides(session, config)
+    expect(readConfig).not.toHaveBeenCalled()
+    expect(overrides.mcp_servers).toEqual({ responsibilities: { url: 'http://localhost:1234/mcp?responsibility=owned', enabled: true, default_tools_approval_mode: 'approve' } })
+  })
+
   it('rejects a stale approval id while another request in the same session is pending', async () => {
     const instance = new CodexAppServerAdapter(); const adapter = adapterPrivate(instance); const session = createSession()
     adapter.sessions.set('thread-1', session)
