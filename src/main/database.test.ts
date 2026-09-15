@@ -757,3 +757,37 @@ describe('transcript_parts.rev migration on a legacy DB (no rev column)', () => 
     expect(after).toBe(before)
   })
 })
+
+ describe('bounded transcript transport', () => {
+  it('pages a history and previews large fields without changing saved data', () => {
+    const content = '😀'.repeat(40000) + '\0after-null'
+    db.upsertTranscriptParts('t', Array.from({ length: 70 }, (_, i) => ({
+      id: String(i), role: 'assistant', content: i === 0 ? content : 'ok'
+    })))
+    let page = db.getTranscriptDisplayPage('t')
+    const parts = [...page.parts]
+    expect(page.hasMore).toBe(true)
+    expect(parts[0].content).toContain('Export transcript')
+    while (page.hasMore) {
+      page = db.getTranscriptDisplayPage('t', page.afterSeq, 0, page.maxRev)
+      parts.push(...page.parts)
+    }
+    expect(parts).toHaveLength(70)
+    expect(new Set(parts.map(p => p.partId)).size).toBe(70)
+    expect(db.getTranscriptParts('t')[0].content).toBe(content)
+    const chunks: Array<string | Buffer> = []
+    db.exportTranscriptText('t', text => chunks.push(text))
+    expect(Buffer.concat(chunks.map(s => typeof s === 'string' ? Buffer.from(s) : s)).toString()).toContain(content)
+    expect(Math.max(...chunks.map(s => s.length))).toBeLessThanOrEqual(32000)
+  })
+
+  it('recovers an update behind the page cursor on the next delta', () => {
+    db.upsertTranscriptParts('t', Array.from({ length: 40 }, (_, i) => ({ id: String(i), role: 'assistant', content: 'old' })))
+    const first = db.getTranscriptDisplayPage('t')
+    db.upsertTranscriptParts('t', [{ id: '0', role: 'assistant', content: 'new' }])
+    const last = db.getTranscriptDisplayPage('t', first.afterSeq, 0, first.maxRev)
+    expect(last.maxRev).toBe(first.maxRev)
+    const delta = db.getTranscriptDisplayPage('t', 0, last.maxRev)
+    expect(delta.parts.map(p => [p.partId, p.content])).toEqual([['0', 'new']])
+  })
+})

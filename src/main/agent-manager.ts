@@ -1,3 +1,5 @@
+import { guardedIpcSend } from './guarded-ipc-send'
+import { transcriptDisplayPart } from './transcript-display'
 import { finishSessionFeedback, updateTaskFromUser } from './session-feedback'
 import { serverTaskSnapshot } from './workflo-task-sync'
 import { EventEmitter } from 'events'
@@ -3442,6 +3444,11 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
     return this.db.getTranscriptParts(taskId, sinceSeq)
   }
 
+  async getTranscriptDisplayPage(taskId: string, afterSeq = 0, sinceRev = 0, maxRev?: number): Promise<ReturnType<DatabaseManager['getTranscriptDisplayPage']>> {
+    if (!this.ingestedTasks.has(taskId)) await this.backfillTranscriptProjection(taskId)
+    return this.db.getTranscriptDisplayPage(taskId, afterSeq, sinceRev, maxRev)
+  }
+
   /**
    * Delta query for the projection-cache client: parts changed since `sinceRev`,
    * plus the current maxRev. Ensures the one-time backfill has run so the first
@@ -5478,7 +5485,15 @@ Important:
   private sendTranscriptChangedNow(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>, maxRev: number): void {
     const payload = { taskId, parts, maxRev }
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('transcript:changed', payload)
+      const sent = guardedIpcSend(this.mainWindow.webContents, 'transcript:changed', {
+        ...payload, parts: parts.map(part => transcriptDisplayPart(part))
+      })
+      if (!sent) {
+        // Keep the client cursor unchanged and recover via bounded reads.
+        guardedIpcSend(this.mainWindow.webContents, 'transcript:changed', {
+          taskId, parts: [], maxRev: 0, reloadRequired: true
+        })
+      }
     }
     for (const fn of this.externalListeners) {
       try { fn('transcript:changed', payload) } catch { /* ignore */ }
@@ -5568,7 +5583,7 @@ Important:
   private sendArtifactUpdated(artifact: Artifact): void {
     const artifactPayload = { taskId: artifact.taskId, artifact }
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('artifact:updated', artifactPayload)
+      guardedIpcSend(this.mainWindow.webContents, 'artifact:updated', artifactPayload)
     }
     for (const fn of this.externalListeners) {
       try { fn('artifact:updated', artifactPayload) } catch { /* ignore */ }
@@ -5599,7 +5614,7 @@ Important:
     }
 
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send(channel, data)
+      guardedIpcSend(this.mainWindow.webContents, channel, data)
     }
     // Also notify external listeners (mobile API WebSocket)
     for (const fn of this.externalListeners) {

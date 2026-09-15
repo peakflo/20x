@@ -387,3 +387,31 @@ describe('useAgentStore', () => {
     })
   })
 })
+
+ describe('transcript recovery after a blocked event', () => {
+  it('does not advance past a missing row when a later event arrives during recovery', async () => {
+    await useAgentStore.getState().hydrateTranscript('task-1')
+    let finish!: (value: { parts: TranscriptPartRecord[]; maxRev: number }) => void
+    getDeltaMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    transcriptCb!({ taskId: 'task-1', parts: [], maxRev: 0, reloadRequired: true })
+    const missing = part({ partId: 'missing', rev: 1, content: 'preview' })
+    const later = part({ partId: 'later', rev: 2, content: 'later' })
+    fireDelta('task-1', [later], 2)
+    expect(getDeltaMock).toHaveBeenLastCalledWith('task-1', 0)
+    finish({ parts: [missing], maxRev: 1 })
+    await vi.waitFor(() => expect(getDeltaMock).toHaveBeenLastCalledWith('task-1', 1))
+    const messages = useAgentStore.getState().sessions.get('task-1')!.messages
+    expect(messages.map(m => m.content)).toEqual(['preview', 'later'])
+  })
+
+  it('keeps a newer live row when an older recovery row arrives', async () => {
+    await useAgentStore.getState().hydrateTranscript('task-1')
+    let finish!: (value: { parts: TranscriptPartRecord[]; maxRev: number }) => void
+    getDeltaMock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    transcriptCb!({ taskId: 'task-1', parts: [], maxRev: 0, reloadRequired: true })
+    fireDelta('task-1', [part({ partId: 'a', rev: 2, content: 'new' })], 2)
+    finish({ parts: [part({ partId: 'a', rev: 1, content: 'old' })], maxRev: 1 })
+    await vi.waitFor(() => expect(getDeltaMock).toHaveBeenLastCalledWith('task-1', 1))
+    expect(useAgentStore.getState().sessions.get('task-1')!.messages[0].content).toBe('new')
+  })
+})

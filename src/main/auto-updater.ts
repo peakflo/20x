@@ -1,3 +1,4 @@
+import { guardedIpcSend } from './guarded-ipc-send'
 import { autoUpdater, type Logger, type UpdateCheckResult, type UpdateInfo } from 'electron-updater'
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { appendFileSync, existsSync, mkdirSync } from 'fs'
@@ -262,7 +263,7 @@ export function getPendingVersion(): string | null {
 }
 
 function send(channel: string, data: unknown): void {
-  mainWin?.webContents?.send(channel, data)
+  guardedIpcSend(mainWin?.webContents, channel, data)
 }
 
 function isUpdateAvailable(result: UpdateCheckResult | null): boolean {

@@ -1,3 +1,4 @@
+import { guardedIpcSend } from './guarded-ipc-send'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from 'fs'
@@ -66,7 +67,7 @@ export class WorktreeManager {
 
   private sendProgress(taskId: string, repo: string, step: string, done: boolean, error?: string): void {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-      this.mainWindow.webContents.send('worktree:progress', { taskId, repo, step, done, error })
+      guardedIpcSend(this.mainWindow.webContents, 'worktree:progress', { taskId, repo, step, done, error })
     }
   }
 

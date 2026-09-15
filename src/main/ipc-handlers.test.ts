@@ -253,3 +253,24 @@ describe('db:updateTask coordinator wake-up', () => {
     expect(notifyParent).not.toHaveBeenCalled()
   })
 })
+
+ describe('bounded transcript IPC replies', () => {
+  it('passes the paging cursor and rejects unsafe reply payloads', async () => {
+    const getTranscriptDisplayPage = vi.fn().mockResolvedValue({ parts: [], maxRev: 7, afterSeq: 32, hasMore: false })
+    vi.mocked(ipcMain.handle).mockClear()
+    registerIpcHandlers(
+      {} as Parameters<typeof registerIpcHandlers>[0],
+      { getTranscriptDisplayPage } as unknown as Parameters<typeof registerIpcHandlers>[1],
+      {} as Parameters<typeof registerIpcHandlers>[2],
+      {} as Parameters<typeof registerIpcHandlers>[3],
+      {} as Parameters<typeof registerIpcHandlers>[4],
+      {} as Parameters<typeof registerIpcHandlers>[5]
+    )
+    const handler = vi.mocked(ipcMain.handle).mock.calls.find(([channel]) => channel === 'agentSession:getTranscriptDelta')![1]
+    await handler({} as Electron.IpcMainInvokeEvent, 't', 2, { afterSeq: 32, maxRev: 7 })
+    expect(getTranscriptDisplayPage).toHaveBeenCalledWith('t', 32, 2, 7)
+    await expect(handler({} as Electron.IpcMainInvokeEvent, 't', -1)).rejects.toThrow('Invalid transcript cursor')
+    getTranscriptDisplayPage.mockResolvedValue({ parts: [{ content: 'x'.repeat(5 * 1024 * 1024) }], maxRev: 8, afterSeq: 33, hasMore: false })
+    await expect(handler({} as Electron.IpcMainInvokeEvent, 't', 2)).rejects.toThrow('Transcript page is too large')
+  })
+})

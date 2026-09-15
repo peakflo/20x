@@ -1,5 +1,8 @@
 import { isWorkfloLinkedTask } from './workflo-task-sync'
 import Database from 'better-sqlite3'
+import { transcriptDisplayPart, TRANSCRIPT_FIELD_CHARS, TRANSCRIPT_PAGE_BYTES } from './transcript-display'
+import { measureIpcMessage } from './ipc-message-size'
+import type { TranscriptPage } from '../shared/transcript-pages'
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, rmSync } from 'fs'
@@ -2232,6 +2235,58 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (!this.ensureDbOpen()) return 0
     const row = this.db.prepare('SELECT COALESCE(MAX(rev), 0) AS m FROM transcript_parts WHERE task_id = ?').get(taskId) as { m: number }
     return row.m
+  }
+
+  /** Bounded display page with a fixed revision watermark. */
+  getTranscriptDisplayPage(taskId: string, afterSeq = 0, sinceRev = 0, watermark?: number): TranscriptPage<TranscriptPartRecord> {
+    const maxRev = watermark ?? this.getTranscriptMaxRev(taskId)
+    if (!this.ensureDbOpen()) return { parts: [], afterSeq, maxRev, hasMore: false }
+    // Bound values in SQL, before JSON parsing or creating a large JS string.
+    // seq is stable across updates; rev is fixed for the duration of the read.
+    const rows = this.db.prepare(`SELECT task_id, part_id, seq, role, part_type, created_at, updated_at, rev,
+      substr(content, 1, ?) AS content, substr(tool, 1, ?) AS tool, substr(payload, 1, ?) AS payload
+      FROM transcript_parts WHERE task_id = ? AND seq > ? AND rev > ? AND rev <= ?
+      ORDER BY seq ASC LIMIT 32`).all(
+      TRANSCRIPT_FIELD_CHARS + 1, TRANSCRIPT_FIELD_CHARS + 1, TRANSCRIPT_FIELD_CHARS + 1,
+      taskId, afterSeq, sinceRev, maxRev
+    ) as Array<{ task_id: string; part_id: string; seq: number; role: string; part_type: string | null;
+      content: string; tool: string | null; payload: string | null; created_at: number; updated_at: number; rev: number }>
+    const parts: TranscriptPartRecord[] = []
+    for (const row of rows) {
+      const clipped = [row.content, row.tool, row.payload].some(value => value != null && value.length > TRANSCRIPT_FIELD_CHARS)
+      const part = transcriptDisplayPart({
+        taskId: row.task_id, partId: row.part_id, seq: row.seq, role: row.role,
+        partType: row.part_type ?? undefined, content: row.content, rev: row.rev,
+        createdAt: row.created_at, updatedAt: row.updated_at,
+        tool: !clipped && row.tool ? JSON.parse(row.tool) : undefined,
+        payload: !clipped && row.payload ? JSON.parse(row.payload) : undefined
+      }, clipped)
+      if (parts.length && measureIpcMessage({ parts: [...parts, part], maxRev, afterSeq: row.seq, hasMore: true }, TRANSCRIPT_PAGE_BYTES).reason) break
+      parts.push(part)
+    }
+    const nextSeq = parts.at(-1)?.seq ?? afterSeq
+    return { parts, maxRev, afterSeq: nextSeq, hasMore: parts.length < rows.length || rows.length === 32 }
+  }
+
+  /** Stream the full saved fields in bounded strings; no transcript IPC reply. */
+  exportTranscriptText(taskId: string, write: (text: string | Buffer) => void): void {
+    if (!this.ensureDbOpen()) return
+    this.db.transaction(() => {
+      const rows = this.db.prepare('SELECT seq, part_id, role FROM transcript_parts WHERE task_id = ? ORDER BY seq').all(taskId) as Array<{ seq: number; part_id: string; role: string }>
+      for (const row of rows) {
+        write(`\n--- ${row.role} / ${row.part_id} ---\n`)
+        for (const field of ['content', 'tool', 'payload']) {
+          write(`\n${field}:\n`)
+          const read = this.db.prepare(`SELECT substr(CAST(${field} AS BLOB), ?, 32000) AS value FROM transcript_parts WHERE task_id = ? AND seq = ?`)
+          for (let offset = 1; ; offset += 32000) {
+            const value = (read.get(offset, taskId, row.seq) as { value: Buffer | null }).value
+            if (!value?.length) break
+            write(value)
+          }
+          write('\n')
+        }
+      }
+    })()
   }
 
   /** Snapshot query: ordered transcript for a task, optionally only parts after seq. */
