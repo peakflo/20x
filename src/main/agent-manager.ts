@@ -889,6 +889,7 @@ export class AgentManager extends EventEmitter {
 
     const isMastermind = isMastermindTask(taskId)
     const task = this.db.getTask(taskId)
+    const isManagedTask = !!this.responsibilities?.ownsTask(taskId)
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
@@ -899,7 +900,7 @@ export class AgentManager extends EventEmitter {
     // doSendAdapterMessage sends a bare prompt and the agent loses context.
     const baseSystemPrompt = (agent.config?.system_prompt || '') + this.mastermindHistory(taskId)
     const taskContext = task
-      ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}${ARTIFACT_WORKSPACE_INSTRUCTIONS}`
+      ? `\n\n[Task Context]\nTask: "${task.title}"${isManagedTask ? '' : `\n${task.description || ''}${ARTIFACT_WORKSPACE_INSTRUCTIONS}`}`
       : ''
 
     const config: SessionConfig = {
@@ -1616,6 +1617,7 @@ export class AgentManager extends EventEmitter {
 
     // Check if this is a triage session or subtask
     const task = this.db.getTask(taskId)
+    const isManagedTask = !!this.responsibilities?.ownsTask(taskId)
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
@@ -1801,11 +1803,13 @@ export class AgentManager extends EventEmitter {
         // Reuse the task we already fetched above instead of hitting the DB again
         const currentTask = task || this.db.getTask(taskId)
         promptText = currentTask
-          ? `Work on task: "${currentTask.title}"\n\n${currentTask.description || ''}${ARTIFACT_WORKSPACE_INSTRUCTIONS}`
+          ? isManagedTask
+            ? `Work on task: "${currentTask.title}"\n\nFollow the bounded Mastermind assignment in your system instructions.`
+            : `Work on task: "${currentTask.title}"\n\n${currentTask.description || ''}${ARTIFACT_WORKSPACE_INSTRUCTIONS}`
           : `Work on task: ${taskId}`
 
-        // Add subtask context: if this is a subtask, include parent and sibling info
-        if (currentTask?.parent_task_id) {
+        // Managed assignments already carry scoped orchestration in their system instructions.
+        if (!isManagedTask && currentTask?.parent_task_id) {
           const parentTask = this.db.getTask(currentTask.parent_task_id)
           if (parentTask) {
             promptText += `\n\n## Parent Task Context\nThis is a subtask of: "${parentTask.title}" (id: ${parentTask.id})\nParent description: ${parentTask.description || '(none)'}\nParent status: ${parentTask.status}`
@@ -1838,7 +1842,7 @@ export class AgentManager extends EventEmitter {
         }
 
         // If this task has subtasks, mention them
-        if (currentTask) {
+        if (currentTask && !isManagedTask) {
           const subtasks = this.db.getSubtasks(currentTask.id)
           if (subtasks.length > 0) {
             promptText += '\n\n## Subtasks'
@@ -1857,7 +1861,7 @@ export class AgentManager extends EventEmitter {
         }
 
         // Append output field instructions
-        if (currentTask?.output_fields && Array.isArray(currentTask.output_fields) && currentTask.output_fields.length > 0) {
+        if (!isManagedTask && currentTask?.output_fields && Array.isArray(currentTask.output_fields) && currentTask.output_fields.length > 0) {
           promptText += this.buildOutputFieldInstructions(currentTask.output_fields)
         }
 
@@ -1868,8 +1872,8 @@ export class AgentManager extends EventEmitter {
         }
       }
 
-      // Append heartbeat monitoring instructions
-      promptText += `\n\n## Heartbeat Monitoring (Optional)
+      // Managed assignments have their own lifecycle; generic heartbeat guidance conflicts with it.
+      if (!isManagedTask) promptText += `\n\n## Heartbeat Monitoring (Optional)
 
 If this task involves something that should be monitored after your work is done (e.g., a PR awaiting review, a deployment to verify, an issue to track), create a \`heartbeat.md\` file in the working directory.
 

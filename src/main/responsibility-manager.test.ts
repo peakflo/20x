@@ -649,7 +649,10 @@ describe('durable engineering responsibilities', () => {
     const follow = manager.delegate(scope(), input('Plan based on that review'), 'Plan', r.id)
     await manager.reconcile()
     expect(follow.workspace).toBe(dir)
-    expect(db.getTask(snapshot().steps[1].taskId)!.description).toContain('Evidence from work')
+    const description = db.getTask(snapshot().steps[1].taskId)!.description
+    expect(description).toContain(`"taskId": "${snapshot().steps[0].taskId}"`)
+    expect(description).toContain('Use read_responsibility_result only when an exact prior result is relevant')
+    expect(description).not.toContain('Evidence from work')
   })
 
   it('lets a human clarification renew one direct Task assignment without creating a Goal', async () => {
@@ -1270,6 +1273,22 @@ describe('Factories through the existing responsibility lifecycle', () => {
     expect(snapshot().steps).toHaveLength(1)
   })
 
+  it('keeps Factory assignments concise and loads the full guide on demand', async () => {
+    const guide = `Review each PR, then review them together. ${'Detailed reusable guidance. '.repeat(350)}`
+    const factory = saveFactory('PR regression review', guide)
+    manager.delegate(scope(), input('Review PR 1 and PR 2'), 'Review both PRs', undefined, factory.id)
+    await manager.reconcile()
+
+    const description = db.getTask(snapshot().steps[0].taskId)!.description
+    expect(description).toContain('Objective: Review PR 1 and PR 2')
+    expect(description.match(/Review PR 1 and PR 2/g)).toHaveLength(1)
+    expect(description).toContain('Read the saved Factory “PR regression review” with read_factory')
+    expect(description).toContain('AUTHORITY BOUNDARY')
+    expect(description).not.toContain('Detailed reusable guidance')
+    expect(description).not.toContain('Factory is optional guidance')
+    expect(description.length).toBeLessThan(7000)
+  })
+
   it('retires unstarted execution previews when their Factory moves, without changing active work', async () => {
     const factory = saveFactory()
     const active = await approve({ ...agreement, title: 'Active execution', factoryId: factory.id })
@@ -1685,7 +1704,7 @@ describe('Routine verified completion', () => {
     const check = snapshot().steps.at(-1)!
     const config: import('./adapters/coding-agent-adapter').SessionConfig = { taskId: check.taskId, agentId: project.agentId, workspaceDir: dir }
     manager.configureSession(config, 1234)
-    expect(config.systemPrompt).toContain(`"currentSourceSnapshot":${JSON.stringify(check.instruction)}`)
+    expect(config.systemPrompt).toContain(`"currentSourceSnapshot": ${JSON.stringify(check.instruction)}`)
     expect(config.systemPrompt).toContain(snapshot().steps[0].taskId)
     expect(config.systemPrompt).not.toContain(snapshot().steps[0].report!.summary)
     const calls = collect.mock.calls.length

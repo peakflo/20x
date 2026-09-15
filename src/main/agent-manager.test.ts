@@ -1743,6 +1743,40 @@ describe('confirmed task cleanup', () => {
   })
 })
 
+describe('managed assignment prompts', () => {
+  it('sends only a concise user prompt and keeps the bounded assignment in system instructions', async () => {
+    const db = createMockDb({ coding_agent: 'codex' }) as any
+    db.getTask.mockReturnValue({ id: 'task-1', title: 'Review both PRs', description: 'FULL MANAGED ASSIGNMENT', source: 'mastermind', repos: [] })
+    db.getTaskAttachments = vi.fn(() => [])
+    const mgr = new AgentManager(db)
+    ;(mgr as any).responsibilities = {
+      ownsTask: vi.fn(() => true),
+      configureSession: vi.fn((config: { systemPrompt?: string }) => { config.systemPrompt = `${config.systemPrompt || ''}\nFULL MANAGED ASSIGNMENT` })
+    }
+    vi.spyOn(mgr as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(mgr as any, 'writeSkillFiles').mockResolvedValue(undefined)
+    vi.spyOn(mgr as any, 'startAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const adapter = {
+      initialize: vi.fn(async () => undefined),
+      createSession: vi.fn(async (_config: unknown) => 'managed-session'),
+      sendPrompt: vi.fn(async (_sessionId: string, _parts: Array<{ text: string }>) => undefined)
+    }
+
+    await (mgr as any).startAdapterSession(adapter, 'agent-1', 'task-1', '/tmp/managed')
+
+    const config = adapter.createSession.mock.calls[0][0] as { systemPrompt: string }
+    const prompt = adapter.sendPrompt.mock.calls[0][1][0].text as string
+    expect(config.systemPrompt).toContain('FULL MANAGED ASSIGNMENT')
+    expect(prompt).toContain('Follow the bounded Mastermind assignment in your system instructions.')
+    expect(prompt).toContain('read the `AGENTS.md` file')
+    expect(prompt).not.toContain('FULL MANAGED ASSIGNMENT')
+    expect(prompt).not.toContain('[Workspace Deliverables]')
+    expect(prompt).not.toContain('create_subtask')
+    expect(prompt).not.toContain('Heartbeat Monitoring')
+  })
+})
+
 describe('AgentManager session ID re-keying redirect', () => {
   function createManagerWithSession() {
     const mockDb = {
