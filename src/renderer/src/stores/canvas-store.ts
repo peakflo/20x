@@ -240,6 +240,7 @@ interface CanvasState {
   removePanel: (id: string) => void
   removePanelsByRefId: (refId: string) => void
   updatePanel: (id: string, updates: Partial<Omit<CanvasPanelData, 'id'>>) => void
+  movePanels: (ids: string[], dx: number, dy: number) => void
   bringToFront: (id: string) => void
   clearPanels: () => void
   showGroup: (groupId: string, memberIds: string[]) => void
@@ -464,6 +465,16 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
   updatePanel: (id, updates) => {
     set((s) => ({
       panels: s.panels.map((p) => (p.id === id ? { ...p, ...updates } : p))
+    }))
+    scheduleSave()
+  },
+
+  movePanels: (ids, dx, dy) => {
+    if ((!dx && !dy) || ids.length === 0) return
+    const moved = new Set(ids)
+    if (!get().panels.some((panel) => moved.has(panel.id))) return
+    set((s) => ({
+      panels: s.panels.map((panel) => moved.has(panel.id) ? { ...panel, x: panel.x + dx, y: panel.y + dy } : panel)
     }))
     scheduleSave()
   },

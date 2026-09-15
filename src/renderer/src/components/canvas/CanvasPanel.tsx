@@ -510,6 +510,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
     <div
       ref={panelRef}
       data-canvas-panel="true"
+      data-canvas-panel-id={panel.id}
       onMouseDown={handleMouseDown}
       onMouseEnter={handlePanelMouseEnter}
       onMouseLeave={handlePanelMouseLeave}

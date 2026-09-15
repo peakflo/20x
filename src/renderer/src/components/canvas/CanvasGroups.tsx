@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Layers, X } from 'lucide-react'
-import { useCanvasStore, DEFAULT_PANEL_HEIGHT, DEFAULT_PANEL_WIDTH } from '@/stores/canvas-store'
+import { useCanvasStore, DEFAULT_PANEL_HEIGHT, DEFAULT_PANEL_WIDTH, type CanvasPanelData } from '@/stores/canvas-store'
+import { getLiveViewport } from '@/stores/canvas-live-viewport'
+import type { TaskGroup } from '@shared/task-groups'
 import { useTaskStore } from '@/stores/task-store'
 import { useTaskGroupStore } from '@/stores/task-group-store'
 import { useUIStore } from '@/stores/ui-store'
@@ -18,6 +20,119 @@ function layoutFor(index: number, count: number, x: number, y: number) {
     x: x + (index % columns) * (DEFAULT_PANEL_WIDTH + GAP),
     y: y + Math.floor(index / columns) * (DEFAULT_PANEL_HEIGHT + GAP) + HEADER,
   }
+}
+
+interface CanvasGroupFrameProps {
+  group: TaskGroup
+  taskIds: string[]
+  members: CanvasPanelData[]
+  x: number
+  y: number
+  width: number
+  height: number
+  stateLabel?: string
+}
+
+function CanvasGroupFrame({ group, taskIds, members, x, y, width, height, stateLabel }: CanvasGroupFrameProps) {
+  const hideGroup = useCanvasStore((s) => s.hideGroup)
+  const movePanels = useCanvasStore((s) => s.movePanels)
+  const frameRef = useRef<HTMLDivElement>(null)
+  const dragStart = useRef({ x: 0, y: 0, frameX: 0, frameY: 0, members: [] as CanvasPanelData[] })
+  const dragDelta = useRef({ x: 0, y: 0 })
+  const [isDragging, setIsDragging] = useState(false)
+
+  const handleDragStart = (event: React.MouseEvent) => {
+    if (event.button !== 0 || members.length === 0 || (event.target as HTMLElement).closest('button, a, input, select')) return
+    event.preventDefault()
+    event.stopPropagation()
+    dragStart.current = { x: event.clientX, y: event.clientY, frameX: x, frameY: y, members: [...members] }
+    dragDelta.current = { x: 0, y: 0 }
+    setIsDragging(true)
+  }
+
+  useEffect(() => {
+    if (!isDragging) return
+    const frame = frameRef.current
+    const panelElements = new Map(
+      Array.from(document.querySelectorAll<HTMLElement>('[data-canvas-panel-id]')).map((element) => [element.dataset.canvasPanelId, element])
+    )
+    frame?.style.setProperty('will-change', 'transform')
+    for (const member of dragStart.current.members) panelElements.get(member.id)?.style.setProperty('will-change', 'transform')
+
+    let rafId: number | null = null
+    let lastEvent: MouseEvent | null = null
+    const processMove = () => {
+      rafId = null
+      if (!lastEvent) return
+      const zoom = getLiveViewport().zoom || 1
+      const dx = (lastEvent.clientX - dragStart.current.x) / zoom
+      const dy = (lastEvent.clientY - dragStart.current.y) / zoom
+      dragDelta.current = { x: dx, y: dy }
+      const transform = `translate(${dx}px, ${dy}px)`
+      if (frame) frame.style.transform = transform
+      for (const member of dragStart.current.members) {
+        const element = panelElements.get(member.id)
+        if (element) element.style.transform = transform
+      }
+    }
+    const handleMove = (event: MouseEvent) => {
+      lastEvent = event
+      if (rafId == null) rafId = requestAnimationFrame(processMove)
+    }
+    const handleUp = () => {
+      if (rafId != null) {
+        cancelAnimationFrame(rafId)
+        processMove()
+      }
+      const { x: dx, y: dy } = dragDelta.current
+      if (frame) {
+        frame.style.transform = ''
+        frame.style.willChange = ''
+        frame.style.left = `${dragStart.current.frameX + dx}px`
+        frame.style.top = `${dragStart.current.frameY + dy}px`
+      }
+      for (const member of dragStart.current.members) {
+        const element = panelElements.get(member.id)
+        if (!element) continue
+        element.style.transform = ''
+        element.style.willChange = ''
+        element.style.left = `${member.x + dx}px`
+        element.style.top = `${member.y + dy}px`
+      }
+      movePanels(dragStart.current.members.map((member) => member.id), dx, dy)
+      setIsDragging(false)
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      if (rafId != null) cancelAnimationFrame(rafId)
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+      if (frame) {
+        frame.style.transform = ''
+        frame.style.willChange = ''
+      }
+      for (const member of dragStart.current.members) {
+        const element = panelElements.get(member.id)
+        if (element) {
+          element.style.transform = ''
+          element.style.willChange = ''
+        }
+      }
+    }
+  }, [isDragging, movePanels])
+
+  return <div ref={frameRef} data-canvas-group-frame={group.id} data-canvas-group-member-count={taskIds.length} data-dragging={isDragging || undefined} className="absolute rounded-2xl border-2 border-primary/40 bg-primary/5" style={{ left: x, top: y, width, height, zIndex: 0, pointerEvents: 'none' }}>
+    <div data-canvas-group-drag-handle={group.id} className={`flex h-10 items-center gap-2 border-b border-primary/20 px-3 text-xs font-semibold text-primary select-none ${members.length ? 'cursor-grab active:cursor-grabbing' : ''}`} style={{ pointerEvents: 'auto' }} onMouseDown={handleDragStart}>
+      <Layers className="h-3.5 w-3.5" />
+      <span>{group.name}</span>
+      <WorkspaceBadge projectId={group.projectId} />
+      {stateLabel && <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px]">{stateLabel}</span>}
+      <span className="text-muted-foreground">{taskIds.length}</span>
+      <GroupControls groupId={group.id} />
+      <button type="button" aria-label={`Hide ${group.name}`} className="ml-auto text-muted-foreground hover:text-foreground" onClick={() => hideGroup(group.id)}><X className="h-3.5 w-3.5" /></button>
+    </div>
+  </div>
 }
 
 export function CanvasGroups() {
@@ -38,7 +153,6 @@ export function CanvasGroups() {
   const panels = useCanvasStore((s) => s.panels)
   const shownGroupIds = useCanvasStore((s) => s.shownGroupIds)
   const closedGroupMemberIds = useCanvasStore((s) => s.closedGroupMemberIds)
-  const hideGroup = useCanvasStore((s) => s.hideGroup)
   const updatePanel = useCanvasStore((s) => s.updatePanel)
 
   useEffect(() => {
@@ -98,22 +212,22 @@ export function CanvasGroups() {
     const minY = members.length ? Math.min(...members.map((panel) => panel.y)) - HEADER : 0
     const maxX = members.length ? Math.max(...members.map((panel) => panel.x + panel.width)) + PAD : minX + DEFAULT_PANEL_WIDTH
     const maxY = members.length ? Math.max(...members.map((panel) => panel.y + panel.height)) + PAD : minY + 180
-    return { group, taskIds, x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+    return { group, taskIds, members, x: minX, y: minY, width: maxX - minX, height: maxY - minY }
   })
 
   return <>
-    {frames.map(({ group, taskIds, x, y, width, height }) => (
-      <div key={group.id} data-canvas-group-frame={group.id} data-canvas-group-member-count={taskIds.length} className="absolute rounded-2xl border-2 border-primary/40 bg-primary/5" style={{ left: x, top: y, width, height, zIndex: 0, pointerEvents: 'none' }}>
-        <div className="flex h-10 items-center gap-2 border-b border-primary/20 px-3 text-xs font-semibold text-primary" style={{ pointerEvents: 'auto' }}>
-          <Layers className="h-3.5 w-3.5" />
-          <span>{group.name}</span>
-          <WorkspaceBadge projectId={group.projectId} />
-          {executionStateForGroup(group.id, executionLinks, executions) && <span className="rounded bg-background/70 px-1.5 py-0.5 text-[10px]">{executionStateLabel[executionStateForGroup(group.id, executionLinks, executions)!]}</span>}
-          <span className="text-muted-foreground">{taskIds.length}</span>
-          <GroupControls groupId={group.id} />
-          <button type="button" aria-label={`Hide ${group.name}`} className="ml-auto text-muted-foreground hover:text-foreground" onClick={() => hideGroup(group.id)}><X className="h-3.5 w-3.5" /></button>
-        </div>
-      </div>
+    {frames.map(({ group, taskIds, members, x, y, width, height }) => (
+      <CanvasGroupFrame
+        key={group.id}
+        group={group}
+        taskIds={taskIds}
+        members={members}
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        stateLabel={executionStateForGroup(group.id, executionLinks, executions) ? executionStateLabel[executionStateForGroup(group.id, executionLinks, executions)!] : undefined}
+      />
     ))}
   </>
 }

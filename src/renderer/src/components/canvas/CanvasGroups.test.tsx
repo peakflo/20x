@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { CanvasGroups, CanvasGroupsMenu } from './CanvasGroups'
 import { FactoryCanvas } from '../factories/FactoryCanvas'
 import { useCanvasStore } from '@/stores/canvas-store'
@@ -26,6 +26,26 @@ describe('CanvasGroups', () => {
     expect(document.querySelector('[data-canvas-groups-menu="true"]')).toBeTruthy()
     act(() => useTaskGroupStore.setState({ membership: {} }))
     await waitFor(() => expect(document.querySelector('[data-canvas-group-frame="g1"]')?.getAttribute('data-canvas-group-member-count')).toBe('0'))
+  })
+
+  it('drags a group by moving all of its task panels together', async () => {
+    useTaskGroupStore.setState({ membership: { t1: 'g1', t2: 'g1' } })
+    useCanvasStore.getState().addPanel({ type: 'task', refId: 't1', canvasGroupId: 'g1', title: 'Task 1', x: 100, y: 150, width: 360, height: 260 })
+    useCanvasStore.getState().addPanel({ type: 'task', refId: 't2', canvasGroupId: 'g1', title: 'Task 2', x: 500, y: 150, width: 360, height: 260 })
+    useCanvasStore.setState({ shownGroupIds: ['g1'] })
+    const { container } = render(<CanvasGroups />)
+    const frame = container.querySelector('[data-canvas-group-frame="g1"]') as HTMLElement
+    const handle = container.querySelector('[data-canvas-group-drag-handle="g1"]') as HTMLElement
+
+    fireEvent.mouseDown(handle, { button: 0, clientX: 40, clientY: 50 })
+    fireEvent.mouseMove(window, { clientX: 100, clientY: 90 })
+    await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+
+    expect(frame.style.transform).toBe('translate(60px, 40px)')
+    expect(useCanvasStore.getState().panels.map(({ x, y }) => ({ x, y }))).toEqual([{ x: 100, y: 150 }, { x: 500, y: 150 }])
+
+    fireEvent.mouseUp(window)
+    expect(useCanvasStore.getState().panels.map(({ x, y }) => ({ x, y }))).toEqual([{ x: 160, y: 190 }, { x: 560, y: 190 }])
   })
 
   it('keeps closed panels closed across new members and refresh, while explicit Show reopens them', async () => {

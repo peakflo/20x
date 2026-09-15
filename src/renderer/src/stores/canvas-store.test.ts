@@ -220,6 +220,20 @@ describe('canvas-store', () => {
       expect(panel.y).toBe(0)
     })
 
+    it('moves multiple panels together', () => {
+      const first = useCanvasStore.getState().addPanel({ type: 'task', title: 'A', x: 10, y: 20, width: 400, height: 300 })
+      const second = useCanvasStore.getState().addPanel({ type: 'task', title: 'B', x: 100, y: 200, width: 400, height: 300 })
+      useCanvasStore.getState().addPanel({ type: 'task', title: 'Outside', x: 1, y: 2, width: 400, height: 300 })
+
+      useCanvasStore.getState().movePanels([first, second], 30, -5)
+
+      expect(useCanvasStore.getState().panels.map(({ x, y }) => ({ x, y }))).toEqual([
+        { x: 40, y: 15 },
+        { x: 130, y: 195 },
+        { x: 1, y: 2 },
+      ])
+    })
+
     it('should bring a panel to front', () => {
       const id1 = useCanvasStore.getState().addPanel({ type: 'task', title: 'A', x: 0, y: 0, width: 400, height: 300 })
       useCanvasStore.getState().addPanel({ type: 'task', title: 'B', x: 100, y: 100, width: 400, height: 300 })
