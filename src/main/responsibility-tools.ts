@@ -4,7 +4,7 @@ import { responsibilityControlTools, taskControlTools } from './task-control'
 import { decisionQuestionGuidance } from '../shared/responsibilities'
 
 const string = { type: 'string' }
-const title = { ...string, description: 'Short, plain-language title, around 6 words. Describe the outcome; keep internal tools, IDs, permissions and execution plans out of the title.' }
+const title = { ...string, description: 'Short title that uniquely identifies this work among similar cards. Preserve recognizable external identifiers such as repository names and PR or ticket numbers. Keep internal 20x IDs, tools, permissions and execution plans out.' }
 const summary = { ...string, maxLength: 240, description: 'One plain-language sentence for the Work card: what will happen and the intended result. Always provide this display summary; it does not replace the full request or scope. No internal tool names or IDs.' }
 const workAgent = { ...string, description: 'Omit to use the saved project work-agent default. Set only for an explicit agent choice for this request; do not copy the Mastermind conversation agent.' }
 const commandProperties = { command: { ...string, description: 'Finite executable such as git or gh; no shell. Runs only after the engineer approves its trial.' }, args: { type: 'array', items: string }, description: string }

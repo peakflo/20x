@@ -445,6 +445,19 @@ it.each(['delegate_responsibility', 'prepare_routine'])('stores a display summar
   expect(() => manager.propose(scope(), { ...agreement, summary: 'x'.repeat(241) }, humanInputId)).toThrow('240 characters')
 })
 
+it('keeps direct Task titles contextual and hides the internal work phase', async () => {
+  const title = 'Review upload-functions #10061 and peakflo-web #9602'
+  const r = manager.delegate(scope(), input('Review both linked pull requests.'), title)
+  await manager.reconcile()
+  const step = snapshot().steps.find(candidate => candidate.responsibilityId === r.id)!
+  expect(db.getTask(step.taskId)?.title).toBe(title)
+
+  const root: import('./adapters/coding-agent-adapter').SessionConfig = { taskId: projectConversationId(project.id), agentId: project.agentId, workspaceDir: dir }
+  manager.configureSession(root, 1234)
+  expect(root.systemPrompt).toContain('Preserve user-recognizable identifiers such as repository names, PR numbers, ticket keys, services or environments')
+  expect(root.systemPrompt).toContain('not “Review upload and web PRs”')
+})
+
 describe('deleting proposed and cancelled responsibilities through Mastermind', () => {
   let service: TaskControl
   let confirm: ReturnType<typeof vi.fn<ConstructorParameters<typeof TaskControl>[4]>>
