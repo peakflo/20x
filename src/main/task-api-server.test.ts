@@ -119,17 +119,28 @@ describe('/update_task - triage status guard', () => {
     expect(updatedTask.agent_id).toBe(agent!.id) // Agent assigned
   })
 
-  it('refuses direct completion even when a task is not triaging', async () => {
+  it('allows an agent to complete a source-less task directly', async () => {
     const task = db.createTask(makeTask({ title: 'Normal task' }))!
     expect(task.status).toBe('not_started')
     expect(task.source_id).toBeNull()
     const update = vi.spyOn(db, 'updateTask')
-    expect(await handleRoute(db, '/update_task', { task_id: task.id, status: 'completed' })).toEqual({
-      error: 'Agents cannot mark tasks completed. Set status to ready_for_review; a user or authorized automation must confirm completion.'
+    expect(await handleRoute(db, '/update_task', { task_id: task.id, status: 'completed' })).toMatchObject({
+      success: true,
+      task: { id: task.id, status: 'completed' }
     })
-    expect(update).not.toHaveBeenCalled()
+    expect(update).toHaveBeenCalledWith(task.id, { status: 'completed' })
+    expect(db.getTask(task.id)!.status).toBe('completed')
+    expect(rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id)).toEqual({ status: 'completed' })
+  })
+
+  it('keeps source completion behind source confirmation', async () => {
+    const source = db.createTaskSource({ name: 'Notion', plugin_id: 'notion', mcp_server_id: null })!
+    const task = db.createTask(makeTask({ title: 'Sourced task', source_id: source.id, external_id: 'page-1', source: 'Notion' }))!
+
+    expect(await handleRoute(db, '/update_task', { task_id: task.id, status: 'completed' })).toEqual({
+      error: 'The task source must confirm completion before this task can close in 20x.'
+    })
     expect(db.getTask(task.id)!.status).toBe('not_started')
-    expect(rawDb.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id)).toEqual({ status: 'not_started' })
   })
 })
 

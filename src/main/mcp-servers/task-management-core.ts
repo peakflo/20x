@@ -249,7 +249,7 @@ const mastermindTools: Tool[] = [
         status: {
           type: 'string',
           enum: ['not_started', 'triaging', 'agent_working', 'ready_for_review', 'agent_learning', 'completed'],
-          description: 'Agents cannot set completed directly; use ready_for_review when work is done so a user or authorized automation can confirm completion.'
+          description: 'Agents may set source-less tasks to completed. Tasks linked to an external source must use that source\'s completion flow.'
         },
         output_fields: {
           type: 'array',
