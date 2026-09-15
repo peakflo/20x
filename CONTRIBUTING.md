@@ -17,6 +17,8 @@ pnpm install
 pnpm dev
 ```
 
+**Windows:** Native modules require Visual Studio 2022 Build Tools. See [docs/windows-dev-setup.md](./docs/windows-dev-setup.md) for the full walkthrough (pnpm, MSVC, native rebuild, PowerShell test commands, troubleshooting).
+
 ## Project Structure
 
 ```
@@ -49,7 +51,7 @@ We use [Conventional Commits](https://www.conventionalcommits.org/):
 
 1. Fork the repo and create a branch from `main`
 2. Make your changes
-3. Run `pnpm typecheck && pnpm build && pnpm test:run`
+3. Run `pnpm typecheck && pnpm build && pnpm test:run` (on Windows PowerShell, see [docs/windows-dev-setup.md](./docs/windows-dev-setup.md) for test commands)
 4. Open a PR with a clear description of what changed and why
 5. Wait for review — at least one approval required
 
