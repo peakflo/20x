@@ -188,3 +188,35 @@ describe('task completion guidance', () => {
     expect(status.description).toContain('external source')
   })
 })
+
+describe('saved browser recording tools', () => {
+  const names = ['browser_recording_list', 'browser_recording_get', 'browser_recording_steps', 'browser_recording_snapshot']
+
+  it('always advertises reading tools for full and task scopes', () => {
+    for (const scope of [FULL_ACCESS_SCOPE, SCOPED]) {
+      for (const name of names) expect(toolByName(scope, name)).toBeDefined()
+    }
+    expect(propertiesOf(SCOPED, 'browser_recording_steps').limit).toMatchObject({ maximum: 100, minimum: 1 })
+  })
+
+  it('pins every reading tool to the caller task scope', async () => {
+    for (const name of names) {
+      const calls: Record<string, unknown>[] = []
+      await callToolForScope(name, { task_id: 'another-task' }, SCOPED, async (_route, params) => {
+        calls.push(params)
+        return { ok: true }
+      })
+      expect(calls).toEqual([{ task_id: 'task-own' }])
+    }
+  })
+
+  it('pins a main task session to its artifact task scope', async () => {
+    const calls: Record<string, unknown>[] = []
+    await callToolForScope('browser_recording_list', { task_id: 'another-task' },
+      { parentTaskId: null, taskId: null, artifactTaskId: 'owner' }, async (_route, params) => {
+        calls.push(params)
+        return { recordings: [] }
+      })
+    expect(calls).toEqual([{ task_id: 'owner' }])
+  })
+})

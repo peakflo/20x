@@ -21,6 +21,10 @@
 import { app, webContents } from 'electron'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
+import { BrowserRecordingService } from './browser-recording'
+import { buildRecordingInstallScript, buildRecordingSnapshotScript, buildRecordingTargetScript, RECORDING_PREFIX, RECORDING_REMOVE_SCRIPT, RECORDING_WORLD } from './browser-recording-scripts'
+import type { BrowserRecordingResult, BrowserRecordingSnapshot, BrowserRecordingStep } from '../shared/browser-recording'
 
 // ── Pure helpers (unit-tested without Electron) ─────────────────────────────
 
@@ -80,6 +84,14 @@ export function normalizeRef(ref: string): string {
   return ref.startsWith('@') ? ref.slice(1) : ref
 }
 
+/** Keeps useful command targets while avoiding common secret-bearing selectors. */
+export function sanitizeRecordingTarget(target: string): string {
+  const compact = target.trim().replace(/\s+/g, ' ')
+  if (/password|secret|token|auth|credit|card|cvv|cvc|ssn|otp|one.time|verification|pin/i.test(compact)) return '[sensitive selector]'
+  if (/(?:Bearer\s+)?[a-zA-Z0-9_-]{32,}/.test(compact)) return '[sensitive selector]'
+  return compact.slice(0, 160)
+}
+
 const SNAPSHOT_ELEMENT_CAP = 120
 
 /**
@@ -90,6 +102,7 @@ const SNAPSHOT_ELEMENT_CAP = 120
 export function buildSnapshotScript(): string {
   return `(() => {
   const SEL = 'a[href],button,input,select,textarea,[role=button],[role=link],[role=checkbox],[role=tab],[role=switch],[onclick],[contenteditable=true],summary';
+  const sensitive = (el) => /password|secret|token|auth|credit|card|cvv|cvc|ssn|otp|one.time|verification|pin/i.test([el.type, el.name, el.id, el.autocomplete, el.getAttribute('aria-label'), el.getAttribute('placeholder')].join(' '));
   const out = [];
   let i = 0;
   for (const el of document.querySelectorAll(SEL)) {
@@ -104,7 +117,7 @@ export function buildSnapshotScript(): string {
       ref,
       role: el.getAttribute('role') || el.tagName.toLowerCase(),
       name: (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || '').trim().replace(/\\s+/g, ' ').slice(0, 80),
-      value: ['INPUT','SELECT','TEXTAREA'].includes(el.tagName) ? String(el.value ?? '').slice(0, 60) : undefined,
+      value: ['INPUT','SELECT','TEXTAREA'].includes(el.tagName) ? (sensitive(el) || el.type === 'file' ? '[redacted]' : String(el.value ?? '').slice(0, 60)) : undefined,
       href: el.tagName === 'A' ? (el.getAttribute('href') || '').slice(0, 120) : undefined
     });
   }
@@ -436,6 +449,149 @@ export function withTimeout<T>(
 
 export class PanelBrowserBroker {
   private registry: PanelRegistry = new Map()
+  private recordingService?: BrowserRecordingService
+  private recordingNonces = new Map<string, string>()
+  private recordingQueues = new Map<string, Promise<void>>()
+  private recordingFlushWaiters = new Map<string, () => void>()
+  private recordingHooks = new Set<number>()
+  get recordings(): BrowserRecordingService {
+    return this.recordingService ??= new BrowserRecordingService(join(app.getPath('userData'), 'browser-recordings'))
+  }
+  recordingStatus(panelId: string): { recording: ReturnType<BrowserRecordingService['status']> } {
+    return { recording: this.recordings.status(panelId) ?? this.recordings.last(panelId) }
+  }
+  async startRecording(panelId: string, title?: string): Promise<BrowserRecordingResult> {
+    const panel = this.registry.get(panelId)
+    const wc = panel && this.getLiveWebContents(panel.webContentsId)
+    if (!panel || !wc) return { error: 'Browser panel is not available' }
+    try {
+      const recording = this.recordings.start(panelId, [...panel.taskIds], title)
+      this.recordingNonces.set(panelId, randomUUID())
+      this.ensureConsoleHook(panel.webContentsId, wc)
+      this.ensureRecordingHooks(wc)
+      await this.installRecorder(panelId, wc)
+      await this.recordStep(wc, { source: 'browser', action: 'recording-start', snapshotPhase: 'initial' })
+      return { ok: true, recording }
+    } catch { return { error: 'Could not start browser recording' } }
+  }
+  async stopRecording(panelId: string): Promise<BrowserRecordingResult> {
+    const panel = this.registry.get(panelId)
+    if (!panel || !this.recordingService?.status(panelId)) return { error: 'This browser is not recording' }
+    const wc = this.getLiveWebContents(panel.webContentsId)
+    try {
+      if (wc) {
+        let acknowledgeFlush: (() => void) | undefined
+        const flushQueued = new Promise<void>((resolve) => { acknowledgeFlush = resolve })
+        this.recordingFlushWaiters.set(panelId, acknowledgeFlush!)
+        const removed = await withTimeout(wc.executeJavaScriptInIsolatedWorld(RECORDING_WORLD, [{ code: RECORDING_REMOVE_SCRIPT }]).catch(() => false), 2000, false)
+        const flushConfirmed = removed ? await withTimeout(flushQueued.then(() => true), 1000, false) : false
+        if (!flushConfirmed) this.recordings.gap(panelId, 'Pending input flush could not be confirmed before Stop.')
+        this.recordingFlushWaiters.delete(panelId)
+      } else this.recordings.gap(panelId, 'The final snapshot was unavailable because the browser was closed.')
+      await this.recordingQueues.get(panelId)
+      if (wc) await this.recordStep(wc, { source: 'browser', action: 'recording-stop', snapshotPhase: 'final' })
+      await this.recordingQueues.get(panelId)
+      this.recordingNonces.delete(panelId)
+      return { ok: true, recording: this.recordings.stop(panelId, [...panel.taskIds]) }
+    } catch {
+      this.recordingFlushWaiters.delete(panelId)
+      return { error: 'Could not save browser recording' }
+    }
+  }
+  private async installRecorder(panelId: string, wc: Electron.WebContents): Promise<void> {
+    const nonce = this.recordingNonces.get(panelId)
+    if (!nonce) return
+    try {
+      const result = await withTimeout(wc.executeJavaScriptInIsolatedWorld(RECORDING_WORLD, [{ code: buildRecordingInstallScript(nonce) }]), 2000, false)
+      if (!result) this.recordings.gap(panelId, 'Document event capture could not start.')
+    } catch { this.recordings.gap(panelId, 'Document event capture could not start.') }
+  }
+  private ensureRecordingHooks(wc: Electron.WebContents): void {
+    if (this.recordingHooks.has(wc.id)) return
+    this.recordingHooks.add(wc.id)
+    wc.on('dom-ready', () => {
+      for (const [id, p] of this.registry) if (p.webContentsId === wc.id && this.recordingNonces.has(id)) {
+        this.recordings.gap(id, 'Events between navigation and document readiness are not captured.')
+        void this.installRecorder(id, wc)
+      }
+      void this.recordStep(wc, { source: 'browser', action: 'document-ready', snapshotPhase: 'document-ready' })
+    })
+    wc.on('did-navigate-in-page', () => { void this.recordStep(wc, { source: 'browser', action: 'navigation', snapshotPhase: 'after-action' }) })
+    wc.on('did-fail-load', () => { void this.recordStep(wc, { source: 'browser', action: 'navigation-failed', outcome: 'error', snapshotPhase: 'after-action' }) })
+    wc.on('destroyed', () => {
+      this.recordingHooks.delete(wc.id)
+      for (const [id, p] of this.registry) if (p.webContentsId === wc.id) this.interruptRecording(id)
+    })
+  }
+  private interruptRecording(panelId: string, message = 'Browser closed before Stop. Pending snapshots may be missing.', wc?: Electron.WebContents): void {
+    this.recordingNonces.delete(panelId)
+    this.recordingFlushWaiters.delete(panelId)
+    const panel = this.registry.get(panelId)
+    if (this.recordingService?.status(panelId)) {
+      this.recordingService.interrupt(panelId, panel ? [...panel.taskIds] : [], message)
+    }
+    if (wc && !wc.isDestroyed()) void withTimeout(wc.executeJavaScriptInIsolatedWorld(RECORDING_WORLD, [{ code: RECORDING_REMOVE_SCRIPT }]).catch(() => undefined), 2000, undefined)
+  }
+  private recordStep(wc: Electron.WebContents, step: Omit<BrowserRecordingStep, 'sequence' | 'at' | 'snapshotId'>): Promise<void> {
+    const jobs: Promise<void>[] = []
+    for (const [id, panel] of this.registry) {
+      if (panel.webContentsId !== wc.id || !this.recordingNonces.has(id)) continue
+      const recordingId = this.recordingService?.status(id)?.id
+      const pending = (this.recordingQueues.get(id) ?? Promise.resolve()).then(async () => {
+        let snapshot: Omit<BrowserRecordingSnapshot, 'id'> | null = null
+        let snapshotGap: string | undefined
+        try {
+          snapshot = await withTimeout(wc.executeJavaScriptInIsolatedWorld(RECORDING_WORLD, [{ code: buildRecordingSnapshotScript() }]), 2000, null)
+          if (!snapshot) snapshotGap = 'One or more snapshots timed out.'
+        } catch { snapshotGap = 'One or more snapshots were unavailable.' }
+        if (this.recordingService?.status(id)?.id !== recordingId) return
+        try {
+          this.recordings.append(id, { ...step, url: wc.getURL() }, snapshot || undefined)
+          if (snapshotGap && this.recordingService?.status(id)) this.recordings.gap(id, snapshotGap)
+        } catch {
+          this.interruptRecording(id, 'Recording stopped because capture data could not be written.', wc)
+        }
+      }).catch(() => { this.interruptRecording(id, 'Recording stopped because capture data could not be written.', wc) })
+      this.recordingQueues.set(id, pending)
+      jobs.push(pending)
+    }
+    return Promise.all(jobs).then(() => undefined)
+  }
+  private receiveRecordingMessage(webContentsId: number, message: string): boolean {
+    if (!message.startsWith(RECORDING_PREFIX)) return false
+    for (const [id, panel] of this.registry) {
+      const nonce = this.recordingNonces.get(id)
+      if (panel.webContentsId !== webContentsId || !nonce || !message.startsWith(RECORDING_PREFIX + nonce + ':')) continue
+      try {
+        if (message.length > 50000) throw new Error('too large')
+        const payload = JSON.parse(message.slice((RECORDING_PREFIX + nonce + ':').length))
+        if (payload.action === 'recording-flush-complete') {
+          this.recordingFlushWaiters.get(id)?.()
+          continue
+        }
+        if (!(typeof payload.action === 'string' && /^(click|input|change|submit|scroll|keydown:(Enter|Tab|Escape|ArrowUp|ArrowDown|ArrowLeft|ArrowRight))$/.test(payload.action)) || !Array.isArray(payload.snapshot?.elements)) throw new Error('invalid event')
+        const snapshot: Omit<BrowserRecordingSnapshot, 'id'> = {
+          url: String(payload.snapshot.url || ''), text: String(payload.snapshot.text || '').slice(0, 4000), truncated: !!payload.snapshot.truncated,
+          elements: payload.snapshot.elements.slice(0, 120).map((e: Record<string, unknown>) => ({ tag: String(e.tag || '').slice(0, 30), role: String(e.role || '').slice(0, 30), name: String(e.name || '').slice(0, 120), index: typeof e.index === 'number' && Number.isInteger(e.index) && e.index > 0 ? e.index : undefined, locator: typeof e.locator === 'string' ? e.locator.slice(0, 160) : undefined, inputType: typeof e.inputType === 'string' ? e.inputType.slice(0, 30) : undefined, value: typeof e.value === 'string' ? e.value.slice(0, 120) : undefined, checked: typeof e.checked === 'boolean' ? e.checked : undefined }))
+        }
+        const recordingId = this.recordingService?.status(id)?.id
+        const pending = (this.recordingQueues.get(id) ?? Promise.resolve()).then(() => {
+          if (this.recordingService?.status(id)?.id !== recordingId) return
+          try {
+            this.recordings.append(id, { source: 'human', action: payload.action, target: String(payload.target || '').slice(0, 300), url: snapshot.url, snapshotPhase: 'before-action' }, snapshot)
+          } catch {
+            this.interruptRecording(id, 'Recording stopped because capture data could not be written.', this.getLiveWebContents(webContentsId) ?? undefined)
+          }
+        }).catch(() => { this.interruptRecording(id, 'Recording stopped because capture data could not be written.', this.getLiveWebContents(webContentsId) ?? undefined) })
+        this.recordingQueues.set(id, pending)
+      } catch {
+        try { this.recordingService?.gap(id, 'One or more page events could not be saved.') } catch {
+          this.interruptRecording(id, 'Recording stopped because capture data could not be written.', this.getLiveWebContents(webContentsId) ?? undefined)
+        }
+      }
+    }
+    return true
+  }
   /**
    * Per-panel console ring buffers. Filled from the main-process
    * `console-message` event — page JS history cannot be re-read after the
@@ -462,6 +618,7 @@ export class PanelBrowserBroker {
   }
 
   unregisterPanel(panelId: string): boolean {
+    this.interruptRecording(panelId)
     this.consoleBuffers.delete(panelId)
     return this.registry.delete(panelId)
   }
@@ -481,6 +638,7 @@ export class PanelBrowserBroker {
   }
 
   stopAll(): void {
+    for (const id of this.registry.keys()) this.interruptRecording(id)
     this.registry.clear()
     this.consoleBuffers.clear()
     this.consoleHooked.clear()
@@ -525,6 +683,8 @@ export class PanelBrowserBroker {
     if (typeof (wc as { on?: unknown }).on !== 'function') return
     try {
       wc.on('console-message', (_event, level, message, line, sourceId) => {
+        const details = _event as unknown as { message?: string }
+        if (this.receiveRecordingMessage(webContentsId, String(details.message ?? message ?? ''))) return
         const entry: ConsoleEntry = {
           level: consoleLevelName(typeof level === 'number' ? level : 0),
           message: String(message ?? '').slice(0, 2000),
@@ -558,6 +718,7 @@ export class PanelBrowserBroker {
     if (!resolved.ok) return resolved
     let target = (url || '').trim()
     if (!/^https?:\/\//i.test(target)) target = 'https://' + target
+    await this.recordStep(resolved.wc, { source: 'agent', action: 'navigate', outcome: 'pending', snapshotPhase: 'before-action' })
     try {
       await resolved.wc.loadURL(target)
       return { ok: true, url: resolved.wc.getURL(), title: resolved.wc.getTitle() }
@@ -589,6 +750,7 @@ export class PanelBrowserBroker {
       }
       wc.once('did-stop-loading', done)
       wc.once('did-navigate', done)
+      void this.recordStep(wc, { source: 'agent', action: 'history-or-reload', outcome: 'pending', snapshotPhase: 'before-action' })
       fn(wc)
     })
   }
@@ -616,19 +778,19 @@ export class PanelBrowserBroker {
   }
 
   click(taskId: string, target: string, panelId?: string | null): Promise<Record<string, unknown>> {
-    return this.evalOnResolved(taskId, panelId, buildClickScript(target))
+    return this.recordAction(taskId, panelId, 'click', buildClickScript(target), target)
   }
 
   type(taskId: string, target: string, text: string, submit?: boolean, panelId?: string | null): Promise<Record<string, unknown>> {
-    return this.evalOnResolved(taskId, panelId, buildTypeScript(target, text, submit))
+    return this.recordAction(taskId, panelId, submit ? 'type-and-submit' : 'type', buildTypeScript(target, text, submit), target)
   }
 
   pressKey(taskId: string, key: string, panelId?: string | null): Promise<Record<string, unknown>> {
-    return this.evalOnResolved(taskId, panelId, buildPressScript(key))
+    return this.recordAction(taskId, panelId, resolveKeyName(key) && key.length > 1 ? `press-key:${key}` : 'press-key (character omitted)', buildPressScript(key))
   }
 
   scroll(taskId: string, direction?: string, amount?: number, target?: string, panelId?: string | null): Promise<Record<string, unknown>> {
-    return this.evalOnResolved(taskId, panelId, buildScrollScript(direction, amount, target))
+    return this.recordAction(taskId, panelId, `scroll:${['up','down','left','right'].includes(direction || '') ? direction : 'down'}:${Math.max(0, Math.min(amount || 600, 100000))}`, buildScrollScript(direction, amount, target), target)
   }
 
   get(taskId: string, what: string, panelId?: string | null): Promise<Record<string, unknown>> {
@@ -697,6 +859,21 @@ export class PanelBrowserBroker {
       budget + 5000,
       { error: `Timed out after ${budget + 5000}ms waiting for ${mode}: ${value}` }
     )
+  }
+
+  private async recordAction(taskId: string, panelId: string | null | undefined, action: string, script: string, target?: string): Promise<Record<string, unknown>> {
+    const resolved = this.resolve(taskId, panelId)
+    if (!resolved.ok) return resolved
+    let description: string | undefined
+    if (target && [...this.registry].some(([id, p]) => p.webContentsId === resolved.wc.id && this.recordingNonces.has(id))) {
+      const selector = /^@?e\d+$/.test(target) ? `[data-bx-ref="${normalizeRef(target)}"]` : target
+      description = await withTimeout(resolved.wc.executeJavaScriptInIsolatedWorld(RECORDING_WORLD, [{ code: buildRecordingTargetScript(selector) }]).catch(() => '[unknown target]'), 2000, '[unknown target]')
+    }
+    const result = await this.evalOnResolved(taskId, panelId, script)
+    const commandTarget = target ? sanitizeRecordingTarget(target) : undefined
+    const recordedTarget = commandTarget ? `${/^@?e\d+$/.test(commandTarget) ? 'ref' : 'selector'} ${commandTarget}${description ? ` | ${description}` : ''}`.slice(0, 300) : description
+    await this.recordStep(resolved.wc, { source: 'agent', action, target: recordedTarget, outcome: result.error ? 'error' : 'ok', snapshotPhase: 'after-action' })
+    return result
   }
 
   private async evalOnResolved(taskId: string, panelId: string | null | undefined, script: string): Promise<Record<string, unknown>> {

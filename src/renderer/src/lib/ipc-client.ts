@@ -788,3 +788,15 @@ export const voiceTtsApi = {
   onModelProgress: (callback: (event: { model: VoiceTtsModelState }) => void): (() => void) =>
     window.electronAPI.voice.tts.onModelProgress(callback)
 }
+
+export const browserRecordingApi = {
+  start: (panelId: string, title?: string) => window.electronAPI?.browser?.startRecording
+    ? window.electronAPI.browser.startRecording(panelId, title)
+    : Promise.resolve({ error: 'Browser recording is unavailable.' } as const),
+  stop: (panelId: string) => window.electronAPI?.browser?.stopRecording
+    ? window.electronAPI.browser.stopRecording(panelId)
+    : Promise.resolve({ error: 'Browser recording is unavailable.' } as const),
+  status: (panelId: string) => window.electronAPI?.browser?.recordingStatus
+    ? window.electronAPI.browser.recordingStatus(panelId)
+    : Promise.resolve({ recording: null }),
+}

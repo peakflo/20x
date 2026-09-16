@@ -9,6 +9,9 @@ import {
   Zap,
   ExternalLink,
 } from 'lucide-react'
+import type { BrowserRecordingManifest } from '@shared/browser-recording'
+import { browserRecordingApi } from '@/lib/ipc-client'
+import { notifyAgentsOfBrowserRecording } from '@/lib/browser-agent-notifications'
 import { useCanvasStore } from '@/stores/canvas-store'
 
 interface BrowserPanelContentProps {
@@ -62,6 +65,85 @@ export function BrowserPanelContent({
   const [isLoading, setIsLoading] = useState(false)
   const [canGoBack, setCanGoBack] = useState(false)
   const [canGoForward, setCanGoForward] = useState(false)
+
+  const [recording, setRecording] = useState<BrowserRecordingManifest | null>(null)
+  const [recordingBusy, setRecordingBusy] = useState(false)
+  const recordingLock = useRef(false)
+  const recordingStateVersion = useRef(0)
+  const [recordingNotice, setRecordingNotice] = useState<string | null>(null)
+  const [recordingError, setRecordingError] = useState(false)
+  const [retryNotification, setRetryNotification] = useState<{ recording: BrowserRecordingManifest; taskIds: string[] } | null>(null)
+
+  useEffect(() => {
+    if (!window.electronAPI?.browser?.recordingStatus) return
+    let disposed = false
+    const refresh = () => {
+      if (recordingLock.current) return
+      const version = recordingStateVersion.current
+      void browserRecordingApi.status(panelId).then(({ recording: current }) => {
+        if (disposed || recordingLock.current || version !== recordingStateVersion.current) return
+        setRecording(current?.status === 'recording' ? current : null)
+        if (current?.status === 'interrupted') {
+          setRecordingError(true)
+          setRecordingNotice('Recording stopped before completion. Saved steps remain available.')
+        }
+      }).catch(() => {})
+    }
+    refresh()
+    const timer = setInterval(refresh, 2000)
+    return () => { disposed = true; clearInterval(timer) }
+  }, [panelId])
+
+  const deliverRecording = async (saved: BrowserRecordingManifest, taskIds?: string[]) => {
+    const result = await notifyAgentsOfBrowserRecording(saved, taskIds)
+    setRetryNotification(result.failed.length ? { recording: saved, taskIds: result.failed } : null)
+    setRecordingError(result.failed.length > 0)
+    setRecordingNotice(result.failed.length
+      ? `Recording saved. Could not notify ${result.failed.length} agent(s).`
+      : `Recording saved: ${saved.stepCount} steps. ${result.notified.length ? `${result.notified.length} agent(s) notified.` : 'No task agent is connected.'}`)
+  }
+
+  const toggleRecording = async () => {
+    if (recordingLock.current) return
+    recordingLock.current = true
+    // Ignore a status request that started before this user action. Its result
+    // describes the old state and can arrive after start or stop completes.
+    recordingStateVersion.current += 1
+    setRecordingBusy(true)
+    setRecordingError(false)
+    setRecordingNotice(null)
+    try {
+      // Read links at the button click, including changes before React effects run.
+      const { panels, edges } = useCanvasStore.getState()
+      const taskIds = [...new Set(edges.filter((edge) => edge.edgeType === 'browser' &&
+        (edge.fromPanelId === panelId || edge.toPanelId === panelId)).flatMap((edge) => {
+        const otherId = edge.fromPanelId === panelId ? edge.toPanelId : edge.fromPanelId
+        const other = panels.find((panel) => panel.id === otherId)
+        return other?.type === 'task' && other.refId ? [other.refId] : []
+      }))]
+      const wcId = webviewRef.current?.getWebContentsId?.()
+      if (!wcId) throw new Error('Wait for the browser page to load.')
+      await window.electronAPI.browser.registerBrokerPanel({ panelId, webContentsId: wcId, taskIds })
+      if (recording) {
+        const result = await browserRecordingApi.stop(panelId)
+        if ('error' in result) throw new Error(result.error)
+        setRecording(null)
+        await deliverRecording(result.recording)
+      } else {
+        const title = useCanvasStore.getState().panels.find((panel) => panel.id === panelId)?.title
+        const result = await browserRecordingApi.start(panelId, title)
+        if ('error' in result) throw new Error(result.error)
+        setRecording(result.recording)
+        setRetryNotification(null)
+      }
+    } catch (error) {
+      setRecordingError(true)
+      setRecordingNotice(error instanceof Error ? error.message : 'Could not change the recording state.')
+    } finally {
+      recordingLock.current = false
+      setRecordingBusy(false)
+    }
+  }
 
   // ── Bot-detection block state ───────────────────────────────
   // When a site (e.g. Xero via Akamai) blocks the embedded webview, we show
@@ -368,6 +450,33 @@ export function BrowserPanelContent({
         onHardRefresh={handleHardRefresh}
         connectedTaskName={connectedTaskName}
       />
+
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/20 text-[11px] flex-shrink-0">
+        <button
+          type="button"
+          onClick={() => void toggleRecording()}
+          disabled={recordingBusy}
+          aria-pressed={Boolean(recording)}
+          className="rounded px-2 py-1 border border-border hover:bg-accent disabled:opacity-50"
+        >
+          {recordingBusy ? 'Please wait…' : recording ? '■ Stop recording' : '● Record'}
+        </button>
+        <span role={recordingError ? 'alert' : 'status'} className={recordingError ? 'text-destructive' : 'text-muted-foreground'}>
+          {recordingNotice || (recording ? 'Recording actions and page snapshots' : 'Record browser actions and page snapshots')}
+        </span>
+        {retryNotification && (
+          <button type="button" disabled={recordingBusy} className="underline whitespace-nowrap"
+            onClick={async () => {
+              if (recordingLock.current) return
+              recordingLock.current = true
+              setRecordingBusy(true)
+              try { await deliverRecording(retryNotification.recording, retryNotification.taskIds) }
+              finally { recordingLock.current = false; setRecordingBusy(false) }
+            }}>
+            Retry notification
+          </button>
+        )}
+      </div>
 
       {/* Bot-detection block banner */}
       {(blockedUrl || authStatus) && (

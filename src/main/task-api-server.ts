@@ -1163,6 +1163,43 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     // ── Browser-panel tools (panel-scoped broker; see panel-browser-broker.ts) ──
+    // Saved recordings remain readable after the browser panel closes.
+    case '/browser_recording_list':
+    case '/browser_recording_get':
+    case '/browser_recording_steps':
+    case '/browser_recording_snapshot': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      const paged = route === '/browser_recording_list' || route === '/browser_recording_steps'
+      const offset = params.offset === undefined ? 0 : params.offset
+      const limit = params.limit === undefined ? 50 : params.limit
+      if (paged && (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0)) {
+        return { error: 'offset must be a non-negative safe integer' }
+      }
+      if (paged && (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > 100)) {
+        return { error: 'limit must be an integer between 1 and 100' }
+      }
+      const recordingId = params.recording_id
+      const snapshotId = params.snapshot_id
+      const validId = (id: unknown): id is string => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(id)
+      if (route !== '/browser_recording_list' && !validId(recordingId)) return { error: 'A valid recording_id is required' }
+      if (route === '/browser_recording_snapshot' && !validId(snapshotId)) return { error: 'A valid snapshot_id is required' }
+      try {
+        const recordings = panelBrowserBroker.recordings
+        if (route === '/browser_recording_list') {
+          const all = recordings.list(taskId)
+          const start = offset as number
+          const end = start + (limit as number)
+          return { recordings: all.slice(start, end), total: all.length, nextOffset: end < all.length ? end : null }
+        }
+        if (route === '/browser_recording_get') return { recording: recordings.get(taskId, recordingId as string) }
+        if (route === '/browser_recording_steps') return recordings.steps(taskId, recordingId as string, offset as number, limit as number)
+        return { snapshot: recordings.snapshot(taskId, recordingId as string, snapshotId as string) }
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : 'Could not read the browser recording' }
+      }
+    }
+
     case '/browser_list_panels': {
       const taskId = typeof params.task_id === 'string' ? params.task_id : ''
       if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }

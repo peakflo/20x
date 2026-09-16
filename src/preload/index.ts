@@ -1,3 +1,4 @@
+import type { BrowserRecordingManifest } from '../shared/browser-recording'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
@@ -697,6 +698,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
   browser: {
+    startRecording: (panelId: string, title?: string): Promise<{ ok: true; recording: BrowserRecordingManifest } | { error: string }> =>
+      ipcRenderer.invoke('browser:startRecording', panelId, title),
+    stopRecording: (panelId: string): Promise<{ ok: true; recording: BrowserRecordingManifest } | { error: string }> =>
+      ipcRenderer.invoke('browser:stopRecording', panelId),
+    recordingStatus: (panelId: string): Promise<{ recording: BrowserRecordingManifest | null }> =>
+      ipcRenderer.invoke('browser:recordingStatus', panelId),
     registerBrokerPanel: (payload: { panelId: string; webContentsId: number; taskIds: string[] }): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('browser:registerBrokerPanel', payload),
     unregisterBrokerPanel: (panelId: string): Promise<{ success: boolean }> =>

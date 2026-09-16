@@ -1,12 +1,19 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
+import { rmSync } from 'fs'
 
 // The broker only touches Electron APIs inside its command methods; the pure
 // helpers under test here need nothing from it. `fromId` is configurable so
 // reload/navigation tests can hand the broker a fake WebContents.
-const electronMocks = vi.hoisted(() => ({ fromId: vi.fn((): unknown => null) }))
+const electronMocks = vi.hoisted(() => ({
+  fromId: vi.fn((): unknown => null),
+  userData: `/tmp/20x-panel-browser-broker-test-${process.pid}-${Date.now()}`,
+  getPath: vi.fn()
+}))
+electronMocks.getPath.mockReturnValue(electronMocks.userData)
+afterAll(() => rmSync(electronMocks.userData, { recursive: true, force: true }))
 
 vi.mock('electron', () => ({
-  app: {},
+  app: { getPath: electronMocks.getPath },
   webContents: { fromId: electronMocks.fromId }
 }))
 
@@ -22,12 +29,14 @@ import {
   consoleLevelName,
   filterConsoleEntries,
   normalizeRef,
+  PanelBrowserBroker,
   panelBrowserBroker,
   parseResourceTimingResult,
   parseSnapshotResult,
   pushConsoleEntry,
   resolveKeyName,
   resolvePanelForTask,
+  sanitizeRecordingTarget,
   unwrapEval,
   CONSOLE_BUFFER_CAP,
   type ConsoleEntry,
@@ -80,11 +89,22 @@ describe('normalizeRef', () => {
   })
 })
 
+describe('recording command targets', () => {
+  it('keeps ordinary selectors and masks common secret-bearing selectors', () => {
+    expect(sanitizeRecordingTarget('#save-button')).toBe('#save-button')
+    expect(sanitizeRecordingTarget('  form   button.primary  ')).toBe('form button.primary')
+    expect(sanitizeRecordingTarget('input[name="password"]')).toBe('[sensitive selector]')
+    expect(sanitizeRecordingTarget(`[data-key="${'a'.repeat(40)}"]`)).toBe('[sensitive selector]')
+  })
+})
+
 describe('snapshot script + parser round-trip', () => {
   it('script labels elements with data-bx-ref and caps output', () => {
     const script = buildSnapshotScript()
     expect(script).toContain('data-bx-ref')
     expect(script).toContain('120')
+    expect(script).toContain("'[redacted]'")
+    expect(script).toContain('sensitive(el)')
     expect(script.trim().startsWith('(() =>')).toBe(true)
   })
 
@@ -366,6 +386,87 @@ describe('broker network', () => {
       expect(wc.executeJavaScript).toHaveBeenCalledTimes(1)
     } finally {
       panelBrowserBroker.unregisterPanel('p-network')
+    }
+  })
+})
+
+describe('broker recording stop', () => {
+  it('queues the input flush and saves a final post-action snapshot before stopping', async () => {
+    type ConsoleListener = (event: unknown, level: number, message: string, line: number, sourceId: string) => void
+    let consoleListener: ConsoleListener | undefined
+    let messagePrefix = ''
+    let pageText = 'before handler'
+    const snapshot = () => ({ url: 'https://x.io/form?secret=hidden', text: pageText, truncated: false, elements: [] })
+    const wc = {
+      id: 91,
+      isDestroyed: vi.fn(() => false),
+      getURL: vi.fn(() => 'https://x.io/form?secret=hidden'),
+      getTitle: vi.fn(() => 'Form'),
+      on: vi.fn((event: string, cb: ConsoleListener) => {
+        if (event === 'console-message') consoleListener = cb
+      }),
+      executeJavaScriptInIsolatedWorld: vi.fn(async (_world: number, scripts: Array<{ code: string }>) => {
+        const code = scripts[0].code
+        const match = code.match(/__20X_RECORDING__[a-f0-9-]+:/)
+        if (match) messagePrefix = match[0]
+        if (code.includes('__recordingCleanup?.') || code.includes("typeof globalThis.__recordingCleanup")) {
+          consoleListener?.({ message: messagePrefix + JSON.stringify({ action: 'input', target: '#1 #name | input:Name', snapshot: snapshot() }) }, 1, '', 0, '')
+          pageText = 'after handler'
+          consoleListener?.({ message: messagePrefix + JSON.stringify({ action: 'recording-flush-complete' }) }, 1, '', 0, '')
+          return true
+        }
+        if (code.includes('return snapshot()')) return snapshot()
+        return true
+      })
+    }
+
+    const broker = new PanelBrowserBroker()
+    electronMocks.fromId.mockReturnValue(wc)
+    broker.registerPanel('p-record', wc.id, ['task-record'])
+    const started = await broker.startRecording('p-record')
+    expect(started).toHaveProperty('ok', true)
+    const recordingId = 'recording' in started ? started.recording.id : ''
+
+    const stopped = await broker.stopRecording('p-record')
+    expect(stopped).toHaveProperty('ok', true)
+    const rows = broker.recordings.steps('task-record', recordingId).steps
+    expect(rows.map((row) => row.action)).toEqual(['recording-start', 'input', 'recording-stop'])
+    expect(rows[1]).toMatchObject({ snapshotPhase: 'before-action', target: '#1 #name | input:Name' })
+    expect(rows[2]).toMatchObject({ snapshotPhase: 'final' })
+    const finalSnapshot = broker.recordings.snapshot('task-record', recordingId, rows[2].snapshotId!)
+    expect(finalSnapshot.text).toBe('after handler')
+    expect(finalSnapshot.url).toBe('https://x.io/form')
+  })
+
+  it('interrupts after one failed capture write and keeps the failure visible', async () => {
+    const snapshot = { url: 'https://x.io/', text: 'page', truncated: false, elements: [] }
+    const wc = {
+      id: 92,
+      isDestroyed: vi.fn(() => false),
+      getURL: vi.fn(() => 'https://x.io/'),
+      getTitle: vi.fn(() => 'Page'),
+      on: vi.fn(),
+      executeJavaScript: vi.fn(async () => JSON.stringify({ ok: true })),
+      executeJavaScriptInIsolatedWorld: vi.fn(async (_world: number, scripts: Array<{ code: string }>) =>
+        scripts[0].code.includes('return snapshot()') ? snapshot : true
+      )
+    }
+    const broker = new PanelBrowserBroker()
+    electronMocks.fromId.mockReturnValue(wc)
+    broker.registerPanel('p-write-failure', wc.id, ['task-write-failure'])
+    await broker.startRecording('p-write-failure')
+    const append = vi.spyOn(broker.recordings, 'append').mockImplementation(() => { throw new Error('disk full') })
+
+    try {
+      expect(await broker.click('task-write-failure', '#save', 'p-write-failure')).toEqual({ ok: true })
+      expect(append).toHaveBeenCalledTimes(1)
+      expect(broker.recordingStatus('p-write-failure').recording).toMatchObject({
+        status: 'interrupted',
+        gaps: expect.arrayContaining(['Recording stopped because capture data could not be written.'])
+      })
+    } finally {
+      append.mockRestore()
+      broker.unregisterPanel('p-write-failure')
     }
   })
 })

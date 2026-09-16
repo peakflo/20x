@@ -710,77 +710,17 @@ function notifyAgentOfBrowserConnection(
     return
   }
 
-  const resolveAndNotify = async () => {
-    const [{ useAgentStore }, { agentSessionApi }, { useTaskStore }] = await Promise.all([
-      import('./agent-store'),
-      import('@/lib/ipc-client'),
-      import('./task-store')
-    ])
-
-    const taskId = taskPanel.refId!
-    let session = useAgentStore.getState().getSession(taskId)
-
-    // If no active session, auto-start or resume the task
-    if (!session?.sessionId) {
-      const task = useTaskStore.getState().tasks.find((t) => t.id === taskId)
-      if (!task?.agent_id) {
-        clog('[BrowserEdge] BAIL: no agent_id on task')
-        return
-      }
-
-      const initSession = useAgentStore.getState().initSession
-      try {
-        if (task.session_id) {
-          // Do NOT clearMessageDedup here — it would wipe the hydrated durable
-          // transcript. The resume replay dedups against the hydrated history.
-          initSession(taskId, '', task.agent_id)
-          const result = await agentSessionApi.resume(task.agent_id, taskId, task.session_id)
-          if (result.ended) {
-            initSession(taskId, '', task.agent_id)
-            const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
-            initSession(taskId, sessionId, task.agent_id)
-          } else {
-            initSession(taskId, result.sessionId, task.agent_id)
-          }
-        } else {
-          initSession(taskId, '', task.agent_id)
-          const { sessionId } = await agentSessionApi.start(task.agent_id, taskId)
-          initSession(taskId, sessionId, task.agent_id)
-        }
-        session = useAgentStore.getState().getSession(taskId)
-      } catch (err) {
-        console.error('[BrowserEdge] Failed to auto-start/resume task:', err)
-        return
-      }
-    }
-
-    if (!session?.sessionId) {
-      clog('[BrowserEdge] BAIL: still no sessionId after auto-start attempt')
-      return
-    }
-
-    const browserTitle = browserPanel.title || 'Browser'
-
-    agentSessionApi
-      .send(
-        session.sessionId,
-        `[System] A browser panel "${browserTitle}" has been connected to your task on the canvas. You now control it directly.\n\n` +
-        `Use the browser_* tools (served through your task-management MCP connection):\n` +
-        `  browser_list_panels   # see the linked panel\n` +
-        `  browser_snapshot      # get @e1..@eN element refs\n` +
-        `  browser_navigate <url>\n` +
-        `  browser_click @ref / browser_type @ref <text> / browser_get url|title|text\n\n` +
-        `Refs come from browser_snapshot and stay valid until the page navigates.\n` +
-        `The user sees everything you do in real time on the canvas.`,
-        taskPanel.refId!,
-        session.agentId
-      )
-      .catch((err: unknown) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
-  }
-
-  resolveAndNotify().catch(() => {
-    // Silently ignore — can happen in test environments
-  })
+  void import('@/lib/browser-agent-notifications').then(({ sendBrowserMessage }) =>
+    sendBrowserMessage(taskPanel.refId!,
+      `[System] A browser panel "${browserPanel.title || 'Browser'}" has been connected to your task on the canvas. You now control it directly.\n\n` +
+      `Use the browser_* tools (served through your task-management MCP connection):\n` +
+      `  browser_list_panels   # see the linked panel\n` +
+      `  browser_snapshot      # get @e1..@eN element refs\n` +
+      `  browser_navigate <url>\n` +
+      `  browser_click @ref / browser_type @ref <text> / browser_get url|title|text\n\n` +
+      `Refs come from browser_snapshot and stay valid until the page navigates.\n` +
+      `The user sees everything you do in real time on the canvas.`)
+  ).catch((err) => console.error('[Canvas] Failed to notify agent of browser connection:', err))
 }
 
 // ── Terminal↔Task edge notification ──────────────────────────

@@ -2147,6 +2147,24 @@ else:
     return { success: true }
   })
 
+  ipcMain.handle('browser:startRecording', (_event, panelId: string, title?: string) => {
+    if (typeof panelId !== 'string' || !panelId.trim()) return { error: 'panelId is required' }
+    if (title !== undefined && (typeof title !== 'string' || title.length > 200)) {
+      return { error: 'title must be a string of at most 200 characters' }
+    }
+    return panelBrowserBroker.startRecording(panelId, title)
+  })
+
+  ipcMain.handle('browser:stopRecording', (_event, panelId: string) => {
+    if (typeof panelId !== 'string' || !panelId.trim()) return { error: 'panelId is required' }
+    return panelBrowserBroker.stopRecording(panelId)
+  })
+
+  ipcMain.handle('browser:recordingStatus', (_event, panelId: string) => {
+    if (typeof panelId !== 'string' || !panelId.trim()) return { recording: null }
+    return panelBrowserBroker.recordingStatus(panelId)
+  })
+
   // ── External Chrome auth flow ──────────────────────────────────────────
   // Launches the user's system Chrome with a temporary debugging port,
   // navigates to the given URL, waits for the user to log in (URL changes
