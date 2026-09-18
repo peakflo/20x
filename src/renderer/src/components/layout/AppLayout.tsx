@@ -653,6 +653,11 @@ export function AppLayout() {
         }
         return
       }
+      // J/K move the task selection in every view — through the task list in
+      // the tasks view and across the open task panels on the canvas (with
+      // nothing selected they pick the first/last task panel).
+      if (key === 'j') { e.preventDefault(); navigateVisibleTask(1); return }
+      if (key === 'k') { e.preventDefault(); navigateVisibleTask(-1); return }
       // Without a selected task panel the canvas keeps its own shortcuts and
       // the global task shortcuts stay off.
       if (sidebarView === 'canvas' && !canvasTaskId) return
@@ -674,9 +679,7 @@ export function AppLayout() {
         }
       }
 
-      if (key === 'j') { e.preventDefault(); navigateVisibleTask(1) }
-      else if (key === 'k') { e.preventDefault(); navigateVisibleTask(-1) }
-      else if (e.key === 'Enter' && !(e.target as HTMLElement | null)?.closest('button, a')) { e.preventDefault(); openSelectedTask() }
+      if (e.key === 'Enter' && !(e.target as HTMLElement | null)?.closest('button, a')) { e.preventDefault(); openSelectedTask() }
       else if (e.key === 'Escape') {
         e.preventDefault()
         if (showOrchestrator) setShowOrchestrator(false)
