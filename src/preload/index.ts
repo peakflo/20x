@@ -110,6 +110,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:stop', sessionId),
     stopByTaskId: (taskId: string): Promise<{ success: boolean; sessionId: string | null }> =>
       ipcRenderer.invoke('agentSession:stopByTaskId', taskId),
+    switchAgent: (taskId: string, newAgentId: string): Promise<{ sessionId: string }> =>
+      ipcRenderer.invoke('agentSession:switchAgent', taskId, newAgentId),
     send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>): Promise<{ success: boolean; newSessionId?: string }> =>
       ipcRenderer.invoke('agentSession:send', sessionId, message, taskId, agentId, attachments),
     sendByTaskId: (taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>): Promise<{ success: boolean; sessionId: string | null; newSessionId?: string }> =>
