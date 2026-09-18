@@ -128,7 +128,7 @@ export function findComposerElement(): HTMLTextAreaElement | null {
   for (const selector of candidates) {
     // The canvas can host several composers at once — take the first usable
     // (visible) one instead of only ever considering the first DOM match.
-    for (const el of document.querySelectorAll<HTMLTextAreaElement>(selector)) {
+    for (const el of Array.from(document.querySelectorAll<HTMLTextAreaElement>(selector))) {
       if (isUsableComposer(el)) return el
     }
   }

@@ -533,7 +533,7 @@ describe('canvas-store', () => {
 
       it('selects the first task panel when nothing is selected yet', () => {
         const first = useCanvasStore.getState().addPanel({ type: 'task', title: 'First', x: 0, y: 0, width: 400, height: 300 })
-        useCanvasStore.getState().addPanel({ type: 'note', title: 'Note', content: 'n', x: 500, y: 0, width: 300, height: 200 })
+        useCanvasStore.getState().addPanel({ type: 'transcript', title: 'Note', x: 500, y: 0, width: 300, height: 200 })
         const last = useCanvasStore.getState().addPanel({ type: 'task', title: 'Last', x: 1000, y: 0, width: 400, height: 300 })
         useCanvasStore.getState().cycleTaskPanelSelection(1)
         expect(useCanvasStore.getState().selectedPanelId).toBe(first)
@@ -552,7 +552,7 @@ describe('canvas-store', () => {
       })
 
       it('is a no-op when there are no task panels', () => {
-        useCanvasStore.getState().addPanel({ type: 'note', title: 'Note', content: 'n', x: 0, y: 0, width: 300, height: 200 })
+        useCanvasStore.getState().addPanel({ type: 'transcript', title: 'Note', x: 0, y: 0, width: 300, height: 200 })
         useCanvasStore.getState().cycleTaskPanelSelection(1)
         expect(useCanvasStore.getState().selectedPanelId).toBeNull()
       })

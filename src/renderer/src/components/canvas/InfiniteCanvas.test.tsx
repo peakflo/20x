@@ -740,9 +740,8 @@ describe('InfiniteCanvas', () => {
 
     it('keeps drawing tool shortcuts for non-task selections', () => {
       useCanvasStore.getState().addPanel({
-        type: 'note',
-        title: 'Note panel',
-        content: 'n',
+        type: 'transcript',
+        title: 'Transcript panel',
         x: 100,
         y: 100,
         width: 300,
