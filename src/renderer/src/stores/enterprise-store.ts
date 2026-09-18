@@ -39,7 +39,7 @@ interface EnterpriseState {
 
   // Actions
   login: (email: string, password: string) => Promise<void>
-  signupInBrowser: (mode?: 'register' | 'login') => Promise<void>
+  signupInBrowser: (mode?: 'register' | 'login', options?: { includeAiSubscription?: boolean }) => Promise<void>
   selectTenant: (tenantId: string) => Promise<void>
   switchOrg: () => Promise<void>
   logout: () => Promise<void>
@@ -109,10 +109,10 @@ export const useEnterpriseStore = create<EnterpriseState>((set) => ({
     }
   },
 
-  signupInBrowser: async (mode: 'register' | 'login' = 'register') => {
+  signupInBrowser: async (mode: 'register' | 'login' = 'register', options?: { includeAiSubscription?: boolean }) => {
     set({ isLoading: true, error: null })
     try {
-      const result = await enterpriseApi.signupInBrowser(mode)
+      const result = await enterpriseApi.signupInBrowser(mode, options)
       set({
         isLoading: false,
         userEmail: result.email,
