@@ -98,6 +98,10 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       complete_at_source INTEGER DEFAULT NULL,
       parent_task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       sort_order INTEGER NOT NULL DEFAULT 0,
+      heartbeat_enabled INTEGER NOT NULL DEFAULT 0,
+      heartbeat_interval_minutes INTEGER DEFAULT 30,
+      heartbeat_last_check_at TEXT DEFAULT NULL,
+      heartbeat_next_check_at TEXT DEFAULT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

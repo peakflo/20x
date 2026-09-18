@@ -287,6 +287,21 @@ export class HeartbeatScheduler {
           continue
         }
 
+        // Skip subtasks whose parent has already been completed. A subtask
+        // can sit in ready_for_review indefinitely (completing the parent
+        // does not force its children to complete — see
+        // finishSessionFeedback), so without this check its heartbeat would
+        // keep polling/spawning sessions for a task the user already
+        // considers done.
+        if (task.parent_task_id) {
+          const parentTask = this.dbManager.getTask(task.parent_task_id)
+          if (parentTask?.status === TaskStatus.Completed) {
+            console.log(`[HeartbeatScheduler] Task ${task.id}'s parent ${task.parent_task_id} is completed, disabling heartbeat`)
+            this.disableHeartbeat(task.id)
+            continue
+          }
+        }
+
         // Verify heartbeat.md still exists
         if (!this.hasHeartbeatFile(task.id)) {
           console.log(`[HeartbeatScheduler] No heartbeat.md for task ${task.id}, disabling heartbeat`)

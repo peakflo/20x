@@ -159,6 +159,19 @@ export function registerIpcHandlers(
       heartbeatScheduler.disableHeartbeat(id)
     }
 
+    // Completing a parent does not force its subtasks to complete (a subtask
+    // can stay in ready_for_review — see finishSessionFeedback), so any
+    // subtask heartbeat left enabled would otherwise keep polling/spawning
+    // sessions for a task the user already considers done. Cascade the
+    // disable immediately instead of waiting for the next scheduler tick.
+    if (heartbeatScheduler && data.status === TaskStatus.Completed && updated) {
+      for (const subtask of db.getSubtasks(id)) {
+        if (subtask.heartbeat_enabled) {
+          heartbeatScheduler.disableHeartbeat(subtask.id)
+        }
+      }
+    }
+
     // Record status change event for enterprise sync
     // Note: for completions, only emit task_completed (not both status_changed + completed)
     // to avoid double-counting in downstream aggregation

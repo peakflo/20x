@@ -170,6 +170,38 @@ describe('JSON deserialization', () => {
   })
 })
 
+describe('getHeartbeatDueTasks', () => {
+  function dueNow(task: { id: string }) {
+    db.updateTask(task.id, {
+      heartbeat_enabled: true,
+      heartbeat_next_check_at: new Date(Date.now() - 60_000).toISOString()
+    })
+  }
+
+  it('excludes a ready_for_review subtask whose parent task is completed', () => {
+    const parent = db.createTask(makeTask({ title: 'Parent', status: 'completed' }))!
+    const subtask = db.createTask(makeTask({ title: 'Subtask', status: 'ready_for_review', parent_task_id: parent.id }))!
+    dueNow(subtask)
+
+    expect(db.getHeartbeatDueTasks().map(t => t.id)).not.toContain(subtask.id)
+  })
+
+  it('includes a ready_for_review subtask whose parent task is still active', () => {
+    const parent = db.createTask(makeTask({ title: 'Parent', status: 'agent_working' }))!
+    const subtask = db.createTask(makeTask({ title: 'Subtask', status: 'ready_for_review', parent_task_id: parent.id }))!
+    dueNow(subtask)
+
+    expect(db.getHeartbeatDueTasks().map(t => t.id)).toContain(subtask.id)
+  })
+
+  it('includes a due top-level task with no parent', () => {
+    const task = db.createTask(makeTask({ title: 'Standalone', status: 'ready_for_review' }))!
+    dueNow(task)
+
+    expect(db.getHeartbeatDueTasks().map(t => t.id)).toContain(task.id)
+  })
+})
+
 describe('Agent CRUD', () => {
   it('creates and retrieves an agent', () => {
     const agent = db.createAgent(makeAgent({ name: 'My Agent' }))

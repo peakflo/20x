@@ -253,3 +253,73 @@ describe('db:updateTask coordinator wake-up', () => {
     expect(notifyParent).not.toHaveBeenCalled()
   })
 })
+
+describe('db:updateTask heartbeat cascade on parent completion', () => {
+  function setup(options: {
+    existing: Record<string, unknown>
+    updated: Record<string, unknown>
+    subtasks: Array<{ id: string; heartbeat_enabled: boolean }>
+  }) {
+    const { existing, updated, subtasks } = options
+    const disableHeartbeat = vi.fn()
+    const heartbeatScheduler = { disableHeartbeat } as unknown as Parameters<typeof registerIpcHandlers>[11]
+    const db = {
+      getTask: vi.fn(() => existing),
+      getSetting: vi.fn(() => undefined),
+      updateTask: vi.fn(() => updated),
+      getSubtasks: vi.fn(() => subtasks)
+    } as unknown as Parameters<typeof registerIpcHandlers>[0]
+
+    registerIpcHandlers(
+      db,
+      {} as Parameters<typeof registerIpcHandlers>[1],
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      undefined, // mcpToolCaller
+      undefined, // oauthManager
+      undefined, // recurrenceScheduler
+      undefined, // enterpriseAuth
+      undefined, // claudePluginManager
+      heartbeatScheduler
+    )
+
+    const handleCalls = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls as [string, (...args: unknown[]) => unknown][]
+    const updateHandler = handleCalls.filter((call) => call[0] === 'db:updateTask').pop()?.[1]
+    expect(updateHandler).toBeDefined()
+    return { disableHeartbeat, updateHandler: updateHandler! }
+  }
+
+  it('disables heartbeat on subtasks still in review when the parent is completed', () => {
+    const existing = { id: 'parent-1', status: 'ready_for_review' }
+    const updated = { ...existing, status: 'completed' }
+    const { disableHeartbeat, updateHandler } = setup({
+      existing,
+      updated,
+      subtasks: [
+        { id: 'sub-1', heartbeat_enabled: true },
+        { id: 'sub-2', heartbeat_enabled: false }
+      ]
+    })
+
+    updateHandler({}, 'parent-1', { status: 'completed' })
+
+    expect(disableHeartbeat).toHaveBeenCalledWith('sub-1')
+    expect(disableHeartbeat).not.toHaveBeenCalledWith('sub-2')
+  })
+
+  it('does not touch subtask heartbeats for a non-completion status change', () => {
+    const existing = { id: 'parent-1', status: 'not_started' }
+    const updated = { ...existing, status: 'agent_working' }
+    const { disableHeartbeat, updateHandler } = setup({
+      existing,
+      updated,
+      subtasks: [{ id: 'sub-1', heartbeat_enabled: true }]
+    })
+
+    updateHandler({}, 'parent-1', { status: 'agent_working' })
+
+    expect(disableHeartbeat).not.toHaveBeenCalled()
+  })
+})

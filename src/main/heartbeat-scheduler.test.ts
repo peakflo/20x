@@ -723,6 +723,58 @@ describe('HeartbeatScheduler', () => {
     })
   })
 
+  // ── subtask heartbeat vs. completed parent ─────────────
+
+  describe('checkHeartbeats skips subtasks whose parent is completed', () => {
+    it('disables heartbeat for a ready_for_review subtask whose parent is completed', async () => {
+      const subtask = makeTask({
+        id: 'subtask-1',
+        status: TaskStatus.ReadyForReview as TaskRecord['status'],
+        parent_task_id: 'parent-1',
+      })
+      ;(db.getHeartbeatDueTasks as ReturnType<typeof vi.fn>).mockReturnValue([subtask])
+      ;(db.getTask as ReturnType<typeof vi.fn>).mockImplementation((id: string) =>
+        id === 'parent-1' ? makeTask({ id: 'parent-1', status: TaskStatus.Completed as TaskRecord['status'] }) : subtask
+      )
+
+      const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: vi.fn().mockReturnValue(false) }
+      scheduler.start(mockWindow as unknown as import('electron').BrowserWindow)
+
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(db.updateTask).toHaveBeenCalledWith('subtask-1', {
+        heartbeat_enabled: false,
+        heartbeat_next_check_at: null,
+      })
+      expect(agent.startHeartbeatSession).not.toHaveBeenCalled()
+    })
+
+    it('keeps running heartbeat for a ready_for_review subtask whose parent is still active', async () => {
+      const subtask = makeTask({
+        id: 'subtask-1',
+        status: TaskStatus.ReadyForReview as TaskRecord['status'],
+        parent_task_id: 'parent-1',
+      })
+      ;(db.getHeartbeatDueTasks as ReturnType<typeof vi.fn>).mockReturnValue([subtask])
+      ;(db.getTask as ReturnType<typeof vi.fn>).mockImplementation((id: string) =>
+        id === 'parent-1' ? makeTask({ id: 'parent-1', status: TaskStatus.AgentWorking as TaskRecord['status'] }) : subtask
+      )
+      // Bypass the unrelated "no heartbeat.md on disk" disable path so this
+      // test isolates the parent-status check.
+      vi.spyOn(scheduler, 'hasHeartbeatFile').mockReturnValue(true)
+
+      const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: vi.fn().mockReturnValue(false) }
+      scheduler.start(mockWindow as unknown as import('electron').BrowserWindow)
+
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(db.updateTask).not.toHaveBeenCalledWith('subtask-1', {
+        heartbeat_enabled: false,
+        heartbeat_next_check_at: null,
+      })
+    })
+  })
+
   // ── resolveAgentId ─────────────────────────────────────
 
   describe('resolveAgentId', () => {

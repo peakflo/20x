@@ -2450,13 +2450,19 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   getHeartbeatDueTasks(): TaskRecord[] {
     const now = new Date().toISOString()
     const rows = this.db.prepare(`
-      SELECT * FROM tasks
-      WHERE heartbeat_enabled = 1
-        AND heartbeat_next_check_at IS NOT NULL
-        AND heartbeat_next_check_at <= ?
-        AND status != ?
-      ORDER BY heartbeat_next_check_at ASC
-    `).all(now, TaskStatus.Completed) as TaskRow[]
+      SELECT t.* FROM tasks t
+      WHERE t.heartbeat_enabled = 1
+        AND t.heartbeat_next_check_at IS NOT NULL
+        AND t.heartbeat_next_check_at <= ?
+        AND t.status != ?
+        AND (
+          t.parent_task_id IS NULL
+          OR NOT EXISTS (
+            SELECT 1 FROM tasks p WHERE p.id = t.parent_task_id AND p.status = ?
+          )
+        )
+      ORDER BY t.heartbeat_next_check_at ASC
+    `).all(now, TaskStatus.Completed, TaskStatus.Completed) as TaskRow[]
     return rows.map(deserializeTask)
   }
 
