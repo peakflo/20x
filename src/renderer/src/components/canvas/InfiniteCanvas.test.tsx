@@ -689,17 +689,22 @@ describe('InfiniteCanvas', () => {
         height: 300,
       })
 
-    it('selects a panel on mousedown and renders a thicker border', () => {
+    it('selects a panel on mousedown and renders a thicker outer border', () => {
       const id = addTaskPanel()
       const { container } = render(<InfiniteCanvas />)
       const panel = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
       expect(panel).toBeTruthy()
       expect(panel.getAttribute('data-canvas-panel-selected')).toBe('false')
+      expect(panel.className).not.toContain('outline-2')
+      // The border width itself stays untouched — the selection outline is
+      // drawn outside it, so the content inside is never resized.
       expect(panel.className).not.toContain('border-2')
       fireEvent.mouseDown(panel)
       expect(useCanvasStore.getState().selectedPanelId).toBe(id)
       expect(panel.getAttribute('data-canvas-panel-selected')).toBe('true')
-      expect(panel.className).toContain('border-2')
+      expect(panel.className).toContain('outline-2')
+      expect(panel.className).toContain('outline-blue-500/40')
+      expect(panel.className).not.toContain('border-2')
     })
 
     it('deselects the panel when clicking the canvas background', () => {

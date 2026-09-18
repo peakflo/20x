@@ -473,20 +473,20 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
 
   // ── Panel type styling ────────────────────────────────────
   const cfg = useMemo(() => {
-    const TYPE_CONFIG: Record<string, { label: string; color: string; border: string; bg: string }> = {
-      task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40', bg: 'bg-[var(--canvas-panel)]' },
-      transcript: { label: 'Transcript', color: 'bg-cyan-500/20 text-cyan-300', border: 'border-cyan-500/40', bg: 'bg-[var(--canvas-panel)]' },
-      app: { label: 'App', color: 'bg-teal-500/20 text-teal-300', border: 'border-teal-500/40', bg: 'bg-[var(--canvas-panel)]' },
-      webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40', bg: 'bg-[var(--canvas-panel)]' },
-      terminal: { label: 'Terminal', color: 'bg-violet-500/20 text-violet-300', border: 'border-violet-500/45', bg: 'bg-[var(--canvas-panel)]' },
-      browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-300', border: 'border-orange-500/40', bg: 'bg-[var(--canvas-panel)]' },
+    const TYPE_CONFIG: Record<string, { label: string; color: string; border: string; outline: string; bg: string }> = {
+      task: { label: 'Task', color: 'bg-blue-500/20 text-blue-400', border: 'border-blue-500/40', outline: 'outline-blue-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      transcript: { label: 'Transcript', color: 'bg-cyan-500/20 text-cyan-300', border: 'border-cyan-500/40', outline: 'outline-cyan-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      app: { label: 'App', color: 'bg-teal-500/20 text-teal-300', border: 'border-teal-500/40', outline: 'outline-teal-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40', outline: 'outline-cyan-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      terminal: { label: 'Terminal', color: 'bg-violet-500/20 text-violet-300', border: 'border-violet-500/45', outline: 'outline-violet-500/45', bg: 'bg-[var(--canvas-panel)]' },
+      browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-300', border: 'border-orange-500/40', outline: 'outline-orange-500/40', bg: 'bg-[var(--canvas-panel)]' },
     }
 
     if (panel.type === 'task') {
       return getCanvasTaskStatusStyle(taskStatus) ?? TYPE_CONFIG.task
     }
 
-    return TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50', bg: 'bg-[var(--canvas-panel)]' }
+    return TYPE_CONFIG[panel.type] ?? { label: 'Panel', color: 'bg-muted/30 text-muted-foreground', border: 'border-border/50', outline: 'outline-border/50', bg: 'bg-[var(--canvas-panel)]' }
   }, [panel.type, taskStatus])
 
   const pulseStyle = statusPulse
@@ -517,7 +517,12 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       onMouseDown={handleMouseDown}
       onMouseEnter={handlePanelMouseEnter}
       onMouseLeave={handlePanelMouseLeave}
-      className={`absolute rounded-xl ${isSelected ? 'border-2' : 'border'} bg-[var(--canvas-chrome)] shadow-2xl flex flex-col transition-shadow duration-150 group/panel ${cfg.border} ${
+      className={`absolute rounded-xl border bg-[var(--canvas-chrome)] shadow-2xl flex flex-col transition-shadow duration-150 group/panel ${cfg.border} ${
+        // Selection thickens the outer border with an outline — it is drawn
+        // outside the border box, so the content inside is never resized or
+        // restyled (unlike border-2, which would shrink the content box).
+        isSelected ? `outline-2 ${cfg.outline}` : ''
+      } ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
       } ${isConnectingLocal ? 'ring-2 ring-orange-500/50' : ''} ${
         isProximityTarget ? 'ring-2 ring-orange-500/60 shadow-orange-500/20 shadow-2xl' : ''
@@ -536,7 +541,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       )}
 
       {/* Inner wrapper — clips content within rounded corners */}
-      <div className={`relative z-[1] flex flex-col flex-1 min-h-0 overflow-hidden ${isSelected ? 'rounded-[10px]' : 'rounded-[11px]'}`}>
+      <div className="relative z-[1] flex flex-col flex-1 min-h-0 overflow-hidden rounded-[11px]">
       {/* Title bar — drag handle */}
       <div
         className={`flex items-center gap-2 px-3 py-2 border-b border-border/40 flex-shrink-0 cursor-grab active:cursor-grabbing group select-none ${cfg.bg}`}
