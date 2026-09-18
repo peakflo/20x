@@ -104,6 +104,7 @@ describe('InfiniteCanvas', () => {
       draggingPanelId: null,
       snapGuides: [],
       connectingFromId: null,
+      selectedPanelId: null,
       proximityEdge: null,
       liveDrag: null,
       isLoaded: true, // Skip async load in tests
@@ -673,6 +674,86 @@ describe('InfiniteCanvas', () => {
       await act(async () => {})
       const { pasteImageAt } = await import('./drawing/DrawingLayer')
       expect(vi.mocked(pasteImageAt)).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('task panel selection', () => {
+    const addTaskPanel = () =>
+      useCanvasStore.getState().addPanel({
+        type: 'task',
+        title: 'Selected Task Panel',
+        refId: 'task-123',
+        x: 100,
+        y: 100,
+        width: 400,
+        height: 300,
+      })
+
+    it('selects a panel on mousedown and renders a thicker border', () => {
+      const id = addTaskPanel()
+      const { container } = render(<InfiniteCanvas />)
+      const panel = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
+      expect(panel).toBeTruthy()
+      expect(panel.getAttribute('data-canvas-panel-selected')).toBe('false')
+      expect(panel.className).not.toContain('border-2')
+      fireEvent.mouseDown(panel)
+      expect(useCanvasStore.getState().selectedPanelId).toBe(id)
+      expect(panel.getAttribute('data-canvas-panel-selected')).toBe('true')
+      expect(panel.className).toContain('border-2')
+    })
+
+    it('deselects the panel when clicking the canvas background', () => {
+      addTaskPanel()
+      const { container } = render(<InfiniteCanvas />)
+      const panel = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
+      fireEvent.mouseDown(panel)
+      expect(useCanvasStore.getState().selectedPanelId).toBeTruthy()
+      const background = container.querySelector('[data-canvas-bg="true"]') as HTMLElement
+      expect(background).toBeTruthy()
+      fireEvent.mouseDown(background)
+      expect(useCanvasStore.getState().selectedPanelId).toBeNull()
+    })
+
+    it('deselects the panel with Escape', () => {
+      addTaskPanel()
+      const { container } = render(<InfiniteCanvas />)
+      const panel = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
+      fireEvent.mouseDown(panel)
+      expect(useCanvasStore.getState().selectedPanelId).toBeTruthy()
+      fireEvent.keyDown(window, { code: 'Escape' })
+      expect(useCanvasStore.getState().selectedPanelId).toBeNull()
+    })
+
+    it('suppresses drawing tool shortcuts while a task panel is selected', () => {
+      addTaskPanel()
+      const { container } = render(<InfiniteCanvas />)
+      const panel = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
+      fireEvent.mouseDown(panel)
+      fireEvent.keyDown(window, { code: 'KeyR' })
+      // R now belongs to the task shortcuts (run) — the canvas tool must not change
+      expect(useDrawingStore.getState().activeTool).toBe('select')
+      // Once the panel is deselected the canvas tools respond again
+      fireEvent.keyDown(window, { code: 'Escape' })
+      fireEvent.keyDown(window, { code: 'KeyR' })
+      expect(useDrawingStore.getState().activeTool).toBe('rectangle')
+    })
+
+    it('keeps drawing tool shortcuts for non-task selections', () => {
+      useCanvasStore.getState().addPanel({
+        type: 'note',
+        title: 'Note panel',
+        content: 'n',
+        x: 100,
+        y: 100,
+        width: 300,
+        height: 200,
+      })
+      const { container } = render(<InfiniteCanvas />)
+      const panel = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
+      fireEvent.mouseDown(panel)
+      expect(useCanvasStore.getState().selectedPanelId).toBeTruthy()
+      fireEvent.keyDown(window, { code: 'KeyR' })
+      expect(useDrawingStore.getState().activeTool).toBe('rectangle')
     })
   })
 })

@@ -32,6 +32,7 @@ describe('canvas-store', () => {
       draggingPanelId: null,
       snapGuides: [],
       connectingFromId: null,
+      selectedPanelId: null,
       proximityEdge: null,
       liveDrag: null,
     })
@@ -459,6 +460,107 @@ describe('canvas-store', () => {
       expect(result.x).toBe(100)
       expect(result.y).toBe(200)
       expect(result.guides).toHaveLength(2)
+    })
+  })
+
+  describe('panel selection', () => {
+    it('selects and deselects a panel', () => {
+      const id = useCanvasStore.getState().addPanel({ type: 'task', title: 'Task panel', x: 0, y: 0, width: 400, height: 300 })
+      useCanvasStore.getState().setSelectedPanelId(id)
+      expect(useCanvasStore.getState().selectedPanelId).toBe(id)
+      useCanvasStore.getState().setSelectedPanelId(null)
+      expect(useCanvasStore.getState().selectedPanelId).toBeNull()
+    })
+
+    it('starts with no selection', () => {
+      expect(useCanvasStore.getState().selectedPanelId).toBeNull()
+    })
+
+    it('keeps the selection when an unrelated panel is removed', () => {
+      const keepId = useCanvasStore.getState().addPanel({ type: 'task', title: 'Keep', x: 0, y: 0, width: 400, height: 300 })
+      const dropId = useCanvasStore.getState().addPanel({ type: 'task', title: 'Drop', x: 500, y: 0, width: 400, height: 300 })
+      useCanvasStore.getState().setSelectedPanelId(keepId)
+      useCanvasStore.getState().removePanel(dropId)
+      expect(useCanvasStore.getState().selectedPanelId).toBe(keepId)
+    })
+
+    it('clears the selection when the selected panel is removed', () => {
+      const keepId = useCanvasStore.getState().addPanel({ type: 'task', title: 'Keep', x: 0, y: 0, width: 400, height: 300 })
+      const dropId = useCanvasStore.getState().addPanel({ type: 'task', title: 'Drop', x: 500, y: 0, width: 400, height: 300 })
+      useCanvasStore.getState().setSelectedPanelId(dropId)
+      useCanvasStore.getState().removePanel(dropId)
+      expect(useCanvasStore.getState().selectedPanelId).toBeNull()
+      // The unrelated selection is untouched
+      useCanvasStore.getState().setSelectedPanelId(keepId)
+      expect(useCanvasStore.getState().selectedPanelId).toBe(keepId)
+    })
+
+    it('clears the selection when all panels for a ref are removed', () => {
+      useCanvasStore.getState().addPanel({ type: 'task', title: 'Task panel', refId: 'task-1', x: 0, y: 0, width: 400, height: 300 })
+      useCanvasStore.getState().addPanel({ type: 'task', title: 'Second panel', refId: 'task-1', x: 500, y: 0, width: 400, height: 300 })
+      const panels = useCanvasStore.getState().panels
+      useCanvasStore.getState().setSelectedPanelId(panels[0].id)
+      useCanvasStore.getState().removePanelsByRefId('task-1')
+      expect(useCanvasStore.getState().selectedPanelId).toBeNull()
+    })
+
+    it('clears the selection when all panels are cleared', () => {
+      const id = useCanvasStore.getState().addPanel({ type: 'task', title: 'Task panel', x: 0, y: 0, width: 400, height: 300 })
+      useCanvasStore.getState().setSelectedPanelId(id)
+      useCanvasStore.getState().clearPanels()
+      expect(useCanvasStore.getState().selectedPanelId).toBeNull()
+    })
+
+    describe('cycleTaskPanelSelection', () => {
+      it('cycles forward through task panels only, wrapping around', () => {
+        const first = useCanvasStore.getState().addPanel({ type: 'task', title: 'First', x: 0, y: 0, width: 400, height: 300 })
+        useCanvasStore.getState().addPanel({ type: 'browser', title: 'Skipped', url: 'https://example.com', x: 500, y: 0, width: 400, height: 300 })
+        const second = useCanvasStore.getState().addPanel({ type: 'task', title: 'Second', x: 1000, y: 0, width: 400, height: 300 })
+        useCanvasStore.getState().setSelectedPanelId(first)
+        useCanvasStore.getState().cycleTaskPanelSelection(1)
+        expect(useCanvasStore.getState().selectedPanelId).toBe(second)
+        useCanvasStore.getState().cycleTaskPanelSelection(1)
+        expect(useCanvasStore.getState().selectedPanelId).toBe(first)
+      })
+
+      it('cycles backward through task panels only', () => {
+        const first = useCanvasStore.getState().addPanel({ type: 'task', title: 'First', x: 0, y: 0, width: 400, height: 300 })
+        const second = useCanvasStore.getState().addPanel({ type: 'task', title: 'Second', x: 500, y: 0, width: 400, height: 300 })
+        useCanvasStore.getState().setSelectedPanelId(first)
+        useCanvasStore.getState().cycleTaskPanelSelection(-1)
+        expect(useCanvasStore.getState().selectedPanelId).toBe(second)
+      })
+
+      it('selects the first task panel when nothing is selected yet', () => {
+        const first = useCanvasStore.getState().addPanel({ type: 'task', title: 'First', x: 0, y: 0, width: 400, height: 300 })
+        useCanvasStore.getState().addPanel({ type: 'note', title: 'Note', content: 'n', x: 500, y: 0, width: 300, height: 200 })
+        const last = useCanvasStore.getState().addPanel({ type: 'task', title: 'Last', x: 1000, y: 0, width: 400, height: 300 })
+        useCanvasStore.getState().cycleTaskPanelSelection(1)
+        expect(useCanvasStore.getState().selectedPanelId).toBe(first)
+        useCanvasStore.getState().setSelectedPanelId(null)
+        useCanvasStore.getState().cycleTaskPanelSelection(-1)
+        expect(useCanvasStore.getState().selectedPanelId).toBe(last)
+      })
+
+      it('brings the newly selected panel to the front', () => {
+        const first = useCanvasStore.getState().addPanel({ type: 'task', title: 'First', x: 0, y: 0, width: 400, height: 300 })
+        const second = useCanvasStore.getState().addPanel({ type: 'task', title: 'Second', x: 500, y: 0, width: 400, height: 300 })
+        const secondZ = useCanvasStore.getState().panels.find((p) => p.id === second)!.zIndex
+        useCanvasStore.getState().setSelectedPanelId(first)
+        useCanvasStore.getState().cycleTaskPanelSelection(1)
+        expect(useCanvasStore.getState().panels.find((p) => p.id === second)!.zIndex).toBeGreaterThan(secondZ)
+      })
+
+      it('is a no-op when there are no task panels', () => {
+        useCanvasStore.getState().addPanel({ type: 'note', title: 'Note', content: 'n', x: 0, y: 0, width: 300, height: 200 })
+        useCanvasStore.getState().cycleTaskPanelSelection(1)
+        expect(useCanvasStore.getState().selectedPanelId).toBeNull()
+      })
+
+      it('is a no-op when the canvas is empty', () => {
+        useCanvasStore.getState().cycleTaskPanelSelection(1)
+        expect(useCanvasStore.getState().selectedPanelId).toBeNull()
+      })
     })
   })
 })
