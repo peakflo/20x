@@ -104,7 +104,21 @@ export function isGlobalShortcutBlocked(event: KeyboardEvent): boolean {
     || !!document.querySelector('[role="dialog"], [role="alertdialog"]')
 }
 
+function isUsableComposer(el: HTMLTextAreaElement): boolean {
+  return !el.disabled
+    && el.offsetParent !== null
+    // Composers inside the canvas stay mounted while another view is shown
+    // (the canvas container is merely visibility:hidden) — skip those.
+    && window.getComputedStyle(el).visibility !== 'hidden'
+}
+
 export function findComposerElement(): HTMLTextAreaElement | null {
+  // On the canvas several task panels host composers at once — prefer the one
+  // inside the selected panel so 'I' and just-start-typing reach the selected
+  // task, mirroring the single-workspace tasks view.
+  const selectedPanel = document.querySelector('[data-canvas-panel-selected="true"]')
+  const preferred = selectedPanel?.querySelector<HTMLTextAreaElement>('[data-testid="transcript-composer"] textarea')
+  if (preferred && isUsableComposer(preferred)) return preferred
   const candidates = [
     '[data-testid="transcript-composer"] textarea',
     'textarea[aria-label="Kickoff instructions"]',
@@ -112,12 +126,15 @@ export function findComposerElement(): HTMLTextAreaElement | null {
     'textarea[placeholder="Add kickoff instructions…"]'
   ]
   for (const selector of candidates) {
-    const el = document.querySelector<HTMLTextAreaElement>(selector)
-    if (el && !el.disabled && el.offsetParent !== null) return el
+    // The canvas can host several composers at once — take the first usable
+    // (visible) one instead of only ever considering the first DOM match.
+    for (const el of document.querySelectorAll<HTMLTextAreaElement>(selector)) {
+      if (isUsableComposer(el)) return el
+    }
   }
   // Fallback: any visible composer textarea inside the task workspace
   const fallback = document.querySelector<HTMLTextAreaElement>('[data-voice-composer] textarea')
-  if (fallback && !fallback.disabled && fallback.offsetParent !== null) return fallback
+  if (fallback && isUsableComposer(fallback)) return fallback
   return null
 }
 
