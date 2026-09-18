@@ -23,8 +23,8 @@ export const KEYBOARD_SHORTCUT_GROUPS = [
   {
     label: 'Navigation',
     shortcuts: [
-      { keys: ['J'], label: 'Next visible task' },
-      { keys: ['K'], label: 'Previous visible task' },
+      { keys: ['J'], label: 'Next visible task (on Canvas: next task panel)' },
+      { keys: ['K'], label: 'Previous visible task (on Canvas: previous task panel)' },
       { keys: ['Enter'], label: 'Open selected task' },
       { keys: ['Esc'], label: 'Close or clear selection' },
       { keys: ['G', 'D'], label: 'Go to Dashboard' },
