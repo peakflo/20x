@@ -128,6 +128,26 @@ export function useAgentSession(taskId: string | undefined) {
     [initSession, removeSession]
   )
 
+  const switchAgent = useCallback(
+    async (tId: string, newAgentId: string) => {
+      // Pre-register so events arriving during the switch are captured via
+      // taskId fallback, same as start(). The main process stops the
+      // outgoing agent's session and seeds the new one with a recap of the
+      // existing transcript — nothing to clear here, the durable transcript
+      // projection already reflects the prior conversation.
+      initSession(tId, '', newAgentId)
+      const { sessionId } = await agentSessionApi.switchAgent(tId, newAgentId)
+      initSession(tId, sessionId, newAgentId)
+      captureAnalyticsEvent('agent_session_switched', {
+        task_id: tId,
+        agent_id: newAgentId,
+        session_id: sessionId
+      })
+      return sessionId
+    },
+    [initSession]
+  )
+
   const abort = useCallback(async () => {
     const currentSession = useAgentStore.getState().sessions.get(taskId!)
     if (!currentSession?.sessionId) return
@@ -233,7 +253,7 @@ export function useAgentSession(taskId: string | undefined) {
   // any effect/memo keyed on the whole object) see a stable identity when nothing
   // meaningful changed. All callbacks below are already useCallback-stable.
   return useMemo(
-    () => ({ session: sessionState, start, resume, abort, stop, sendMessage, approve }),
-    [sessionState, start, resume, abort, stop, sendMessage, approve]
+    () => ({ session: sessionState, start, resume, switchAgent, abort, stop, sendMessage, approve }),
+    [sessionState, start, resume, switchAgent, abort, stop, sendMessage, approve]
   )
 }

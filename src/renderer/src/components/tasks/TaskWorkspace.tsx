@@ -104,7 +104,7 @@ function TaskWorkspaceComponent({
   onOpenFullView,
   panelLayout = 'both'
 }: TaskWorkspaceProps) {
-  const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
+  const { session, start, resume, switchAgent, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
   // Per-field selectors: a selector-less useStore() subscribes to the whole
   // store, re-rendering this entire workspace on every streamed delta of every
   // task's session (agent store) or any settings change. Action identities are
@@ -486,11 +486,25 @@ function TaskWorkspaceComponent({
       // If unassigning, stop and remove session entirely
       if (!agentId && session.sessionId) {
         stop().then(() => removeSession(task.id)).catch(console.error)
+        onAssignAgent(task.id, agentId)
+        return
+      }
+
+      // Reassigning to a DIFFERENT agent while a conversation already
+      // exists (e.g. switching off a model that ran out of credits) — hand
+      // off instead of just changing the field, so the new agent picks up
+      // with a recap of what happened instead of a blank slate.
+      const hasExistingConversation = Boolean(session.sessionId || task.session_id)
+      if (agentId && task.agent_id && task.agent_id !== agentId && hasExistingConversation) {
+        switchAgent(task.id, agentId)
+          .then(() => onAssignAgent(task.id, agentId))
+          .catch(console.error)
+        return
       }
 
       onAssignAgent(task.id, agentId)
     },
-    [task, session.sessionId, stop, onAssignAgent, removeSession]
+    [task, session.sessionId, stop, switchAgent, onAssignAgent, removeSession]
   )
 
   const handleTriage = useCallback(async () => {

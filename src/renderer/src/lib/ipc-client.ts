@@ -147,6 +147,10 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.stopByTaskId(taskId)
   },
 
+  switchAgent: (taskId: string, newAgentId: string): Promise<{ sessionId: string }> => {
+    return window.electronAPI.agentSession.switchAgent(taskId, newAgentId)
+  },
+
   send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[]): Promise<{ success: boolean; newSessionId?: string }> => {
     return window.electronAPI.agentSession.send(sessionId, message, taskId, agentId, attachments)
   },
