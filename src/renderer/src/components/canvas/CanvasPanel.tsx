@@ -63,6 +63,11 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   // Only the connect button click handlers need it — not the render path.
   const setConnectingFromId = useCanvasStore((s) => s.setConnectingFromId)
   const addEdge = useCanvasStore((s) => s.addEdge)
+  // Selection: the selected panel renders a thicker border and, when it is a
+  // task panel, receives the global task-view keyboard shortcuts. Subscribed
+  // as a boolean so only the two affected panels re-render on a change.
+  const isSelected = useCanvasStore((s) => s.selectedPanelId === panel.id)
+  const setSelectedPanelId = useCanvasStore((s) => s.setSelectedPanelId)
 
   const panelRef = useRef<HTMLDivElement>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -86,6 +91,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       e.preventDefault()
       e.stopPropagation()
       bringToFront(panel.id)
+      setSelectedPanelId(panel.id)
       setIsDragging(true)
       setDraggingPanelId(panel.id)
       dragStart.current = {
@@ -96,7 +102,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       }
       dragCommit.current = { x: panel.x, y: panel.y }
     },
-    [bringToFront, panel.id, panel.x, panel.y, setDraggingPanelId]
+    [bringToFront, panel.id, panel.x, panel.y, setDraggingPanelId, setSelectedPanelId]
   )
 
   useEffect(() => {
@@ -328,8 +334,10 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
         return
       }
       bringToFront(panel.id)
+      // Clicking a panel selects it (thicker border, task shortcuts target).
+      setSelectedPanelId(panel.id)
     },
-    [bringToFront, panel.id, panel.type, addEdge, setConnectingFromId]
+    [bringToFront, panel.id, panel.type, addEdge, setConnectingFromId, setSelectedPanelId]
   )
 
   // ── Focus (zoom-to-fit this panel) ────────────────────────
@@ -505,10 +513,11 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
     <div
       ref={panelRef}
       data-canvas-panel="true"
+      data-canvas-panel-selected={isSelected ? 'true' : 'false'}
       onMouseDown={handleMouseDown}
       onMouseEnter={handlePanelMouseEnter}
       onMouseLeave={handlePanelMouseLeave}
-      className={`absolute rounded-xl border bg-[var(--canvas-chrome)] shadow-2xl flex flex-col transition-shadow duration-150 group/panel ${cfg.border} ${
+      className={`absolute rounded-xl ${isSelected ? 'border-2' : 'border'} bg-[var(--canvas-chrome)] shadow-2xl flex flex-col transition-shadow duration-150 group/panel ${cfg.border} ${
         isDragging ? 'shadow-indigo-500/10 ring-1 ring-indigo-500/30' : ''
       } ${isConnectingLocal ? 'ring-2 ring-orange-500/50' : ''} ${
         isProximityTarget ? 'ring-2 ring-orange-500/60 shadow-orange-500/20 shadow-2xl' : ''
@@ -527,7 +536,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       )}
 
       {/* Inner wrapper — clips content within rounded corners */}
-      <div className="relative z-[1] flex flex-col flex-1 min-h-0 overflow-hidden rounded-[11px]">
+      <div className={`relative z-[1] flex flex-col flex-1 min-h-0 overflow-hidden ${isSelected ? 'rounded-[10px]' : 'rounded-[11px]'}`}>
       {/* Title bar — drag handle */}
       <div
         className={`flex items-center gap-2 px-3 py-2 border-b border-border/40 flex-shrink-0 cursor-grab active:cursor-grabbing group select-none ${cfg.bg}`}
