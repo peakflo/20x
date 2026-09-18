@@ -114,6 +114,18 @@ function viewportTransform(viewport: Viewport): string {
   return `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`
 }
 
+/**
+ * Whether the currently selected canvas panel is a task panel. While a task
+ * is selected the canvas defers its own single-key shortcuts (V/R/O/L/A/T/I
+ * tool switching) to the global task-view shortcuts (R run, I composer,
+ * O/Y/V chords, …).
+ */
+function isTaskPanelSelected(): boolean {
+  const { selectedPanelId, panels } = useCanvasStore.getState()
+  if (!selectedPanelId) return false
+  return panels.find((p) => p.id === selectedPanelId)?.type === 'task'
+}
+
 interface StatusHighlight {
   id: string
   taskId: string
@@ -312,6 +324,11 @@ export function InfiniteCanvas() {
     return set
   }, [panels, viewport, containerSize])
 
+  // The selected task panel is never frozen: its TaskWorkspace must stay
+  // mounted (though possibly off-screen) so the global task shortcuts keep
+  // reaching it, exactly like the always-mounted workspace in the tasks view.
+  const selectedPanelId = useCanvasStore((s) => s.selectedPanelId)
+
   // ── Consume pending task from "Open in Canvas" button ────
   const canvasPendingTaskId = useUIStore((s) => s.canvasPendingTaskId)
   const clearCanvasPendingTask = useUIStore((s) => s.clearCanvasPendingTask)
@@ -366,10 +383,20 @@ export function InfiniteCanvas() {
 
     // Read panels from store directly to avoid stale closure
     const currentPanels = useCanvasStore.getState().panels
-    const alreadyExists = currentPanels.some(
+    const existingPanel = currentPanels.find(
       (p) => p.type === 'task' && p.refId === canvasPendingTaskId
     )
-    if (alreadyExists) return
+    if (existingPanel) {
+      // The task already has a panel (e.g. “G C” with the task selected on
+      // the canvas): bring it into view and make it the selected panel so
+      // the keyboard shortcuts target it.
+      const containerRect = containerRef.current?.getBoundingClientRect()
+      if (containerRect && containerRect.width > 10 && containerRect.height > 10) {
+        useCanvasStore.getState().focusPanel(existingPanel.id, containerRect.width, containerRect.height)
+      }
+      useCanvasStore.getState().setSelectedPanelId(existingPanel.id)
+      return
+    }
 
     // Place at center of viewport
     const container = containerRef.current
@@ -730,6 +757,11 @@ export function InfiniteCanvas() {
       if (isLeftOnCanvas) {
         const drawing = useDrawingStore.getState()
         if (drawing.selectedIds.length > 0) drawing.clearSelection()
+        // …and drops the panel selection — a click on the background is not
+        // a click on any panel.
+        if (useCanvasStore.getState().selectedPanelId) {
+          useCanvasStore.getState().setSelectedPanelId(null)
+        }
       }
 
       if (isMiddle || isLeftOnCanvas || isSpacePan) {
@@ -877,8 +909,10 @@ export function InfiniteCanvas() {
       }
 
       // Escape: cancel connecting, cancel figure creation, drop figure
-      // selection, or close context menu. (Text editing handles its own
-      // Escape while the contentEditable div is focused — isInputFocused.)
+      // selection, close the context menu and deselect the panel. (Text
+      // editing handles its own Escape while the contentEditable div is
+      // focused — isInputFocused; the panel selection also survives Escape
+      // while typing inside a panel.)
       if (e.code === 'Escape') {
         const { connectingFromId: cid } = useCanvasStore.getState()
         if (cid) {
@@ -888,6 +922,9 @@ export function InfiniteCanvas() {
         const drawing = useDrawingStore.getState()
         if (drawing.liveObject) drawing.setLiveObject(null)
         if (drawing.selectedIds.length > 0) drawing.clearSelection()
+        if (!isInputFocused && useCanvasStore.getState().selectedPanelId) {
+          useCanvasStore.getState().setSelectedPanelId(null)
+        }
         setContextMenu(null)
       }
 
@@ -917,10 +954,12 @@ export function InfiniteCanvas() {
         }
       }
 
-      // Drawing tool shortcuts: V/R/O/L/A/T/I
+      // Drawing tool shortcuts: V/R/O/L/A/T/I. Suppressed while a task panel
+      // is selected — its keys belong to the global task-view shortcuts then
+      // (R run, I composer, O/Y/V chords), same as in the tasks view.
       if (!isInputFocused && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
         const tool = TOOL_SHORTCUTS[e.code]
-        if (tool) {
+        if (tool && !isTaskPanelSelected()) {
           e.preventDefault()
           useDrawingStore.getState().setTool(tool)
         }
@@ -1007,7 +1046,7 @@ export function InfiniteCanvas() {
               key={panel.id}
               panel={panel}
               zoom={viewport.zoom}
-              frozen={!visiblePanelIds.has(panel.id)}
+              frozen={!visiblePanelIds.has(panel.id) && !(panel.type === 'task' && panel.id === selectedPanelId)}
               panelIndex={index}
               showIndex={ctrlHeld}
             />
