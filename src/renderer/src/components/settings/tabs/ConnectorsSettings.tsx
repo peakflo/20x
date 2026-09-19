@@ -24,6 +24,7 @@ import { Badge } from '@/components/ui/Badge'
 import { SettingsSection } from '../SettingsSection'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { enterpriseApi } from '@/lib/ipc-client'
+import { getWorkfloFrontendUrl } from '@/lib/workflo-url'
 
 // ── Connector catalog ──────────────────────────────────────────────────
 
@@ -101,26 +102,6 @@ interface ConnectedIntegration {
   id: string
   type: string
   name: string
-}
-
-/**
- * Derive the workflo-builder frontend URL from the API URL.
- * Mirrors the logic in main/ipc-handlers.ts.
- */
-async function getWorkfloFrontendUrl(): Promise<string> {
-  try {
-    const apiUrl = await enterpriseApi.getApiUrl()
-    const parsed = new URL(apiUrl)
-    if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-      parsed.port = '4000'
-      return parsed.origin
-    }
-    // Production: api.X.ai → app.X.ai  or  stage-api.X.ai → stage-app.X.ai
-    parsed.hostname = parsed.hostname.replace('-api.', '-app.').replace(/^api\./, 'app.')
-    return parsed.origin
-  } catch {
-    return 'https://app.peakflo.ai'
-  }
 }
 
 // ── Component ──────────────────────────────────────────────────────────

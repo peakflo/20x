@@ -1,4 +1,6 @@
-import { Loader2, AlertTriangle, Monitor, Play, Minimize2, X, AppWindow, Layers } from 'lucide-react'
+import { Loader2, AlertTriangle, Monitor, Play, Minimize2, X, AppWindow, Layers, ExternalLink } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
+import { getWorkfloFrontendUrl } from '@/lib/workflo-url'
 import { useDashboardStore } from '@/stores/dashboard-store'
 import { useUIStore } from '@/stores/ui-store'
 import type { ApplicationTab, ApplicationItem } from '@/stores/dashboard-store'
@@ -283,6 +285,50 @@ function ExpandedView() {
   )
 }
 
+/** Shown when the signed-in user has zero workflows — guide them to Workflo */
+function EmptyApplications() {
+  const presetupTemplates = useDashboardStore((s) => s.presetupTemplates)
+
+  const handleCreateFirstWorkflow = async () => {
+    try {
+      // Derive the Workflo frontend URL at click time (avoids a stale/unloaded state)
+      const url = await getWorkfloFrontendUrl()
+      // Open the Workflo workflow-builder in the user's default browser
+      await window.electronAPI.shell.openExternal(`${url}/`)
+    } catch {
+      // Best-effort, ignore failures opening the browser
+    }
+  }
+
+  return (
+    <section>
+      <h2 className="text-sm font-semibold mb-3">Launch an application</h2>
+      <div className="rounded-lg border border-dashed border-border/50 bg-card p-6 text-center space-y-3">
+        <div className="rounded-md bg-primary/10 p-2 w-fit mx-auto">
+          <AppWindow className="h-5 w-5 text-primary" />
+        </div>
+        <div className="space-y-1">
+          <p className="text-sm font-medium">No applications yet</p>
+          <p className="text-xs text-muted-foreground max-w-md mx-auto">
+            Applications are powered by workflows. Head to Workflo to build your
+            first workflow — once it exists, it will show up here as an
+            application you can launch with one click.
+          </p>
+        </div>
+        <Button size="sm" onClick={handleCreateFirstWorkflow}>
+          <ExternalLink className="h-3.5 w-3.5" />
+          Create your first workflow
+        </Button>
+        {presetupTemplates.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            Prefer a head start? Set up a ready-made template below.
+          </p>
+        )}
+      </div>
+    </section>
+  )
+}
+
 export function ApplicationsList() {
   const {
     applications,
@@ -322,8 +368,9 @@ export function ApplicationsList() {
     )
   }
 
+  // First-run: explain what applications are and how to create the first workflow
   if (applications.length === 0) {
-    return null
+    return <EmptyApplications />
   }
 
   return expandedView ? <ExpandedView /> : <CardsView />

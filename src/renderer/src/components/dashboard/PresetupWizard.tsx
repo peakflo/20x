@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { enterpriseApi } from '@/lib/ipc-client'
+import { getWorkfloFrontendUrl } from '@/lib/workflo-url'
 import type { PresetupTemplate } from '@/stores/dashboard-store'
 
 // ─── Types ────────────────────────────────────────────────────
@@ -70,19 +71,6 @@ const ICON_MAP: Record<string, React.ElementType> = {
 }
 function getIcon(name: string | null): React.ElementType {
   return (name && ICON_MAP[name]) || Package
-}
-
-// ─── Derive workflow-builder frontend URL from API URL ────────
-
-async function getWorkfloFrontendUrl(): Promise<string> {
-  const apiUrl = await enterpriseApi.getApiUrl()
-  const parsed = new URL(apiUrl)
-  if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-    parsed.port = '4000'
-  } else {
-    parsed.hostname = parsed.hostname.replace('-api.', '-app.').replace(/^api\./, 'app.')
-  }
-  return parsed.origin
 }
 
 // ─── Sub-components ───────────────────────────────────────────
