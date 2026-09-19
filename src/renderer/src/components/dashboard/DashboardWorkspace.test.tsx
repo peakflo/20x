@@ -211,13 +211,50 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText('Agent Working')).toBeDefined()
   })
 
-  it('hides applications section when no data', () => {
+  it('shows first-workflow empty state when no applications exist', () => {
     useEnterpriseStore.setState({ isAuthenticated: true })
 
     render(<DashboardWorkspace />)
-    // Applications block should not render at all when empty
-    expect(screen.queryByText(/No applications found/)).toBeNull()
-    expect(screen.queryByText('Applications')).toBeNull()
+    // Empty state explains what applications are and tells the user to create their first workflow
+    expect(screen.getByText('No applications yet')).toBeDefined()
+    expect(
+      screen.getByRole('button', { name: /create your first workflow/i })
+    ).toBeDefined()
+    // No template hint when there are no presetup templates
+    expect(screen.queryByText(/template below/i)).toBeNull()
+  })
+
+  it('mentions templates in the empty state when presetup templates exist', () => {
+    useEnterpriseStore.setState({ isAuthenticated: true })
+    useDashboardStore.setState({
+      presetupTemplates: [
+        {
+          slug: 'invoice-bot',
+          name: 'Invoice Bot',
+          description: 'Automated invoicing',
+          category: 'finance',
+          icon: 'Calculator',
+          isProvisioned: false,
+          provisionedAt: null,
+          provisionStatus: null
+        }
+      ]
+    })
+
+    render(<DashboardWorkspace />)
+    expect(screen.getByText(/template below/i)).toBeDefined()
+  })
+
+  it('CTA opens the Workflo workflow-builder in the browser', () => {
+    useEnterpriseStore.setState({ isAuthenticated: true })
+    const openExternal = window.electronAPI.shell.openExternal as unknown as ReturnType<typeof vi.fn>
+    openExternal.mockClear()
+
+    render(<DashboardWorkspace />)
+    fireEvent.click(screen.getByRole('button', { name: /create your first workflow/i }))
+
+    // ipc-client mock returns http://localhost:2000 → Workflo frontend on port 4000
+    expect(openExternal).toHaveBeenCalledWith('http://localhost:4000/')
   })
 
   it('renders application tabs when data is loaded', () => {
