@@ -245,7 +245,7 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText(/template below/i)).toBeDefined()
   })
 
-  it('CTA opens the Workflo workflow-builder in the browser', () => {
+  it('CTA opens the Workflo workflow-builder in the browser', async () => {
     useEnterpriseStore.setState({ isAuthenticated: true })
     const openExternal = window.electronAPI.shell.openExternal as unknown as ReturnType<typeof vi.fn>
     openExternal.mockClear()
@@ -253,8 +253,10 @@ describe('DashboardWorkspace', () => {
     render(<DashboardWorkspace />)
     fireEvent.click(screen.getByRole('button', { name: /create your first workflow/i }))
 
-    // ipc-client mock returns http://localhost:2000 → Workflo frontend on port 4000
-    expect(openExternal).toHaveBeenCalledWith('http://localhost:4000/')
+    // ipc-client mock returns http://localhost:2000; Workflo frontend derives to port 4000
+    await vi.waitFor(() =>
+      expect(openExternal).toHaveBeenCalledWith('http://localhost:4000/')
+    )
   })
 
   it('renders application tabs when data is loaded', () => {

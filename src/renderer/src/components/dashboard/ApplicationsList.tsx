@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { Loader2, AlertTriangle, Monitor, Play, Minimize2, X, AppWindow, Layers, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { getWorkfloFrontendUrl } from '@/lib/workflo-url'
@@ -289,21 +288,16 @@ function ExpandedView() {
 /** Shown when the signed-in user has zero workflows — guide them to Workflo */
 function EmptyApplications() {
   const presetupTemplates = useDashboardStore((s) => s.presetupTemplates)
-  const [frontendUrl, setFrontendUrl] = useState<string | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    getWorkfloFrontendUrl().then((url) => {
-      if (!cancelled) setFrontendUrl(url)
-    })
-    return () => {
-      cancelled = true
+  const handleCreateFirstWorkflow = async () => {
+    try {
+      // Derive the Workflo frontend URL at click time (avoids a stale/unloaded state)
+      const url = await getWorkfloFrontendUrl()
+      // Open the Workflo workflow-builder in the user's default browser
+      await window.electronAPI.shell.openExternal(`${url}/`)
+    } catch {
+      // Best-effort, ignore failures opening the browser
     }
-  }, [])
-
-  const handleCreateFirstWorkflow = () => {
-    // Open the Workflo workflow-builder in the user's default browser
-    window.electronAPI.shell.openExternal(`${frontendUrl ?? 'https://app.peakflo.ai'}/`)
   }
 
   return (
