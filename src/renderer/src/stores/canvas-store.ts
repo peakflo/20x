@@ -179,6 +179,24 @@ interface CanvasState {
   // Connection drawing state (transient)
   connectingFromId: string | null
 
+  /**
+   * The currently selected panel (transient, not persisted).
+   *
+   * A panel is selected by clicking it (or by cycling through task panels
+   * with J/K). The selected panel renders a thicker border, and a selected
+   * *task* panel becomes the target of the global task-view keyboard
+   * shortcuts while the canvas is open.
+   */
+  selectedPanelId: string | null
+  setSelectedPanelId: (id: string | null) => void
+  /**
+   * Move the panel selection to the next/previous task panel (J/K on the
+   * canvas — the equivalent of the task-view J/K navigation). Panels of other
+   * types are skipped. The newly selected panel is brought to the front so
+   * the selection stays visible above overlapping panels.
+   */
+  cycleTaskPanelSelection: (direction: 1 | -1) => void
+
   // Auto-connect proximity state (transient, shown during drag)
   proximityEdge: { fromId: string; toId: string } | null
 
@@ -272,6 +290,7 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
   draggingPanelId: null,
   snapGuides: [],
   connectingFromId: null,
+  selectedPanelId: null,
   proximityEdge: null,
   liveDrag: null,
   pendingViewCommand: null,
@@ -425,7 +444,11 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
   removePanel: (id) => {
     releaseBrokerPanel(id)
     get().removeEdgesForPanel(id)
-    set((s) => ({ panels: s.panels.filter((p) => p.id !== id) }))
+    set((s) => ({
+      panels: s.panels.filter((p) => p.id !== id),
+      // A removed panel can no longer hold the selection.
+      selectedPanelId: s.selectedPanelId === id ? null : s.selectedPanelId,
+    }))
     scheduleSave()
   },
 
@@ -437,7 +460,8 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
       get().removeEdgesForPanel(p.id)
     }
     set((s) => ({
-      panels: s.panels.filter((p) => p.refId !== refId)
+      panels: s.panels.filter((p) => p.refId !== refId),
+      selectedPanelId: panelsToRemove.some((p) => p.id === s.selectedPanelId) ? null : s.selectedPanelId,
     }))
     if (panelsToRemove.length > 0) {
       scheduleSave()
@@ -464,7 +488,7 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
     for (const p of get().panels) {
       releaseBrokerPanel(p.id)
     }
-    set({ panels: [], edges: [], nextZIndex: 1 })
+    set({ panels: [], edges: [], nextZIndex: 1, selectedPanelId: null })
     scheduleSave()
   },
 
@@ -489,6 +513,28 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
   clearViewCommand: () => {
     if (!get().pendingViewCommand) return
     set({ pendingViewCommand: null })
+  },
+
+  // Panel selection
+  setSelectedPanelId: (id) => {
+    // Bail out on no-op writes so re-selecting the same panel does not
+    // re-render its subscribers.
+    if (get().selectedPanelId === id) return
+    set({ selectedPanelId: id })
+  },
+
+  cycleTaskPanelSelection: (direction) => {
+    const { panels, selectedPanelId } = get()
+    const taskPanels = panels.filter((p) => p.type === 'task')
+    if (taskPanels.length === 0) return
+    const currentIndex = taskPanels.findIndex((p) => p.id === selectedPanelId)
+    const nextIndex = currentIndex < 0
+      ? (direction > 0 ? 0 : taskPanels.length - 1)
+      : (currentIndex + direction + taskPanels.length) % taskPanels.length
+    const next = taskPanels[nextIndex]
+    if (next.id !== selectedPanelId) set({ selectedPanelId: next.id })
+    // Keep the newly selected task visible above overlapping panels.
+    get().bringToFront(next.id)
   },
 
   // Edges

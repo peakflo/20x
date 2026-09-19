@@ -22,6 +22,7 @@ const DashboardWorkspace = lazy(() => import('@/components/dashboard/DashboardWo
 const OrchestratorPanel = lazy(() => import('@/components/orchestrator/OrchestratorPanel').then(m => ({ default: m.OrchestratorPanel })))
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
+import { useCanvasStore } from '@/stores/canvas-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useAgentAutoStart } from '@/hooks/use-agent-auto-start'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
@@ -86,6 +87,17 @@ export function AppLayout() {
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed)
   const toggleSidebarCollapsed = useUIStore((s) => s.toggleSidebarCollapsed)
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
+
+  // ── Canvas task selection ──
+  // Selecting a task panel on the canvas makes that task the target of the
+  // keyboard shortcuts — the same role the selected task plays in the tasks
+  // view. Derived as a scalar selector so unrelated canvas changes (panning,
+  // other panels) do not re-render the layout.
+  const canvasSelectedTaskId = useCanvasStore((s) => {
+    if (!s.selectedPanelId) return null
+    const panel = s.panels.find((p) => p.id === s.selectedPanelId)
+    return panel?.type === 'task' ? panel.refId ?? null : null
+  })
 
   // ── Command palette ──
   const [cmdOpen, setCmdOpen] = useState(false)
@@ -244,7 +256,10 @@ export function AppLayout() {
     if (dashboardPreviewTaskId) await completeTask(dashboardPreviewTaskId, { completeAtSource })
   }, [completeTask, dashboardPreviewTaskId])
 
-  const activeTaskId = dashboardPreviewTaskId || selectedTaskId || null
+  // On the canvas the selected task panel is the active task; everywhere else
+  // the dashboard preview and the tasks-view selection take precedence.
+  const canvasTaskId = sidebarView === 'canvas' ? canvasSelectedTaskId : null
+  const activeTaskId = dashboardPreviewTaskId || canvasTaskId || selectedTaskId || null
   const handleNavigateFromDashboardPreview = useCallback(
     (taskId: string) => {
       closeDashboardPreview()
@@ -292,8 +307,21 @@ export function AppLayout() {
       return
     }
     if (dashboardPreviewTaskId) handleNavigateFromDashboardPreview(activeTask.parent_task_id)
+    else if (sidebarView === 'canvas') {
+      // On the canvas, “go to parent” selects the parent's panel when it is
+      // already open and opens it on the canvas otherwise — the same way the
+      // tasks view navigates without leaving the view.
+      const { panels, setSelectedPanelId, bringToFront } = useCanvasStore.getState()
+      const parentPanel = panels.find((p) => p.type === 'task' && p.refId === activeTask.parent_task_id)
+      if (parentPanel) {
+        setSelectedPanelId(parentPanel.id)
+        bringToFront(parentPanel.id)
+      } else {
+        openTaskOnCanvas(activeTask.parent_task_id)
+      }
+    }
     else selectTask(activeTask.parent_task_id)
-  }, [activeTask, dashboardPreviewTaskId, handleNavigateFromDashboardPreview, selectTask, showToast])
+  }, [activeTask, dashboardPreviewTaskId, handleNavigateFromDashboardPreview, openTaskOnCanvas, selectTask, sidebarView, showToast])
 
   const openActiveTaskOnCanvas = useCallback(() => {
     if (!activeTaskId) {
@@ -305,8 +333,20 @@ export function AppLayout() {
 
   const selectSubtask = useCallback((taskId: string) => {
     if (dashboardPreviewTaskId) handleNavigateFromDashboardPreview(taskId)
+    else if (sidebarView === 'canvas') {
+      // On the canvas, opening a subtask selects its panel when it is already
+      // on the canvas and opens it there otherwise.
+      const { panels, setSelectedPanelId, bringToFront } = useCanvasStore.getState()
+      const subtaskPanel = panels.find((p) => p.type === 'task' && p.refId === taskId)
+      if (subtaskPanel) {
+        setSelectedPanelId(subtaskPanel.id)
+        bringToFront(subtaskPanel.id)
+      } else {
+        openTaskOnCanvas(taskId)
+      }
+    }
     else selectTask(taskId)
-  }, [dashboardPreviewTaskId, handleNavigateFromDashboardPreview, selectTask])
+  }, [dashboardPreviewTaskId, handleNavigateFromDashboardPreview, openTaskOnCanvas, selectTask, sidebarView])
 
   const runActiveHeartbeat = useCallback(async () => {
     if (!activeTaskId) {
@@ -330,6 +370,12 @@ export function AppLayout() {
   }, [activeTaskId, showToast])
 
   const navigateVisibleTask = useCallback((direction: 1 | -1) => {
+    // On the canvas, J/K moves the selection across the open task panels —
+    // the equivalent of the task-list navigation in the tasks view.
+    if (sidebarView === 'canvas') {
+      useCanvasStore.getState().cycleTaskPanelSelection(direction)
+      return
+    }
     const renderedIds = Array.from(document.querySelectorAll<HTMLElement>('[data-keyboard-task-id]'))
       .filter((element) => element.offsetParent !== null)
       .map((element) => element.dataset.keyboardTaskId)
@@ -346,7 +392,7 @@ export function AppLayout() {
     if (activeModal === 'settings') closeModal()
     setSidebarView('tasks')
     selectTask(ids[nextIndex])
-  }, [activeModal, closeModal, selectTask, selectedTaskId, setSidebarView, tasks])
+  }, [activeModal, closeModal, selectTask, selectedTaskId, setSidebarView, sidebarView, tasks])
 
   const openSelectedTask = useCallback(() => {
     if (activeTaskId) handleGoToFullView(activeTaskId)
@@ -385,9 +431,10 @@ export function AppLayout() {
 
   const deleteActiveTask = useCallback(() => {
     if (dashboardPreviewTaskId) handleDeleteDashboardPreviewTask()
+    else if (canvasTaskId) openDeleteModal(canvasTaskId)
     else if (selectedTaskId) handleDeleteSelectedTask()
     else showToast('Select a task first', true)
-  }, [dashboardPreviewTaskId, handleDeleteDashboardPreviewTask, handleDeleteSelectedTask, selectedTaskId, showToast])
+  }, [canvasTaskId, dashboardPreviewTaskId, handleDeleteDashboardPreviewTask, handleDeleteSelectedTask, openDeleteModal, selectedTaskId, showToast])
 
   const toggleTaskAudio = useCallback(() => {
     const voice = useVoiceStore.getState()
@@ -594,7 +641,11 @@ export function AppLayout() {
         return
       }
 
-      if (key === 'g' || (sidebarView !== 'canvas' && (key === 'o' || key === 'y' || key === 'v'))) {
+      // A selected canvas task makes the canvas behave like the tasks view:
+      // the single-letter task shortcuts and the o/y/v chords act on it. 'g'
+      // chords are always available.
+      const chordsAllowed = sidebarView !== 'canvas' || !!canvasTaskId
+      if (key === 'g' || (chordsAllowed && (key === 'o' || key === 'y' || key === 'v'))) {
         e.preventDefault()
         chordRef.current = {
           key: key as 'g' | 'o' | 'y' | 'v',
@@ -602,7 +653,14 @@ export function AppLayout() {
         }
         return
       }
-      if (sidebarView === 'canvas') return
+      // J/K move the task selection in every view — through the task list in
+      // the tasks view and across the open task panels on the canvas (with
+      // nothing selected they pick the first/last task panel).
+      if (key === 'j') { e.preventDefault(); navigateVisibleTask(1); return }
+      if (key === 'k') { e.preventDefault(); navigateVisibleTask(-1); return }
+      // Without a selected task panel the canvas keeps its own shortcuts and
+      // the global task shortcuts stay off.
+      if (sidebarView === 'canvas' && !canvasTaskId) return
       if (e.repeat && key !== 'j' && key !== 'k') return
 
       // Explicit composer focus (I) — before single-letter task shortcuts
@@ -621,10 +679,14 @@ export function AppLayout() {
         }
       }
 
-      if (key === 'j') { e.preventDefault(); navigateVisibleTask(1) }
-      else if (key === 'k') { e.preventDefault(); navigateVisibleTask(-1) }
-      else if (e.key === 'Enter' && !(e.target as HTMLElement | null)?.closest('button, a')) { e.preventDefault(); openSelectedTask() }
-      else if (e.key === 'Escape') { e.preventDefault(); if (showOrchestrator) setShowOrchestrator(false); else clearTaskSelection() }
+      if (e.key === 'Enter' && !(e.target as HTMLElement | null)?.closest('button, a')) { e.preventDefault(); openSelectedTask() }
+      else if (e.key === 'Escape') {
+        e.preventDefault()
+        if (showOrchestrator) setShowOrchestrator(false)
+        else if (sidebarView !== 'canvas') clearTaskSelection()
+        // On the canvas Escape is handled by InfiniteCanvas itself: it cancels
+        // connections, closes the context menu and deselects the panel.
+      }
       else if (key === 'c') { e.preventDefault(); openCreateModal() }
       else if (key === 'e') { e.preventDefault(); completeActiveTask() }
       else if (key === 'h' && e.shiftKey) { e.preventDefault(); void runActiveHeartbeat() }
@@ -640,7 +702,7 @@ export function AppLayout() {
       window.removeEventListener('keydown', onKey)
       if (chordRef.current) window.clearTimeout(chordRef.current.timer)
     }
-  }, [activeModal, activeTaskId, clearTaskSelection, closeModal, completeActiveTask, deleteActiveTask, focusComposer, focusSearch, navigateVisibleTask, nudgeActiveTask, openActiveTaskOnCanvas, openCreateModal, openParentTask, openSelectedTask, openSubtasks, runActiveHeartbeat, runTaskShortcut, setShowOrchestrator, setSidebarView, showOrchestrator, sidebarView, toggleMastermindAudio, toggleTaskAudio])
+  }, [activeModal, activeTaskId, canvasTaskId, clearTaskSelection, closeModal, completeActiveTask, deleteActiveTask, focusComposer, focusSearch, navigateVisibleTask, nudgeActiveTask, openActiveTaskOnCanvas, openCreateModal, openParentTask, openSelectedTask, openSubtasks, runActiveHeartbeat, runTaskShortcut, setShowOrchestrator, setSidebarView, showOrchestrator, sidebarView, toggleMastermindAudio, toggleTaskAudio])
 
   return (
     <>

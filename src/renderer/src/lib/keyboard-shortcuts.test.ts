@@ -88,6 +88,61 @@ describe('keyboard shortcuts', () => {
     document.body.removeChild(wrapper)
   })
 
+  it('prefers the composer inside the selected canvas panel', () => {
+    // A visible composer outside the panel — matched only if the selected
+    // panel preference fails
+    const outsideTextarea = document.createElement('textarea')
+    outsideTextarea.setAttribute('placeholder', 'Write a message...')
+    const outsideWrapper = document.createElement('div')
+    outsideWrapper.setAttribute('data-testid', 'transcript-composer')
+    outsideWrapper.appendChild(outsideTextarea)
+    document.body.appendChild(outsideWrapper)
+    Object.defineProperty(outsideTextarea, 'offsetParent', { get: () => outsideWrapper, configurable: true })
+
+    // The composer of the selected canvas panel
+    const selectedPanel = document.createElement('div')
+    selectedPanel.setAttribute('data-canvas-panel-selected', 'true')
+    const panelComposer = document.createElement('div')
+    panelComposer.setAttribute('data-testid', 'transcript-composer')
+    const panelTextarea = document.createElement('textarea')
+    panelTextarea.setAttribute('placeholder', 'Write a message...')
+    panelComposer.appendChild(panelTextarea)
+    selectedPanel.appendChild(panelComposer)
+    document.body.appendChild(selectedPanel)
+    Object.defineProperty(panelTextarea, 'offsetParent', { get: () => panelComposer, configurable: true })
+
+    expect(findComposerElement()).toBe(panelTextarea)
+
+    document.body.removeChild(outsideWrapper)
+    document.body.removeChild(selectedPanel)
+  })
+
+  it('skips hidden composers and finds the visible one', () => {
+    // A hidden composer (e.g. inside a visibility:hidden canvas) must be skipped
+    const hiddenTextarea = document.createElement('textarea')
+    hiddenTextarea.setAttribute('placeholder', 'Write a message...')
+    const hiddenWrapper = document.createElement('div')
+    hiddenWrapper.setAttribute('data-testid', 'transcript-composer')
+    hiddenWrapper.appendChild(hiddenTextarea)
+    document.body.appendChild(hiddenWrapper)
+    Object.defineProperty(hiddenTextarea, 'offsetParent', { get: () => hiddenWrapper, configurable: true })
+    hiddenTextarea.style.visibility = 'hidden'
+
+    // The visible one further down the document
+    const visibleTextarea = document.createElement('textarea')
+    visibleTextarea.setAttribute('placeholder', 'Write a message...')
+    const visibleWrapper = document.createElement('div')
+    visibleWrapper.setAttribute('data-testid', 'transcript-composer')
+    visibleWrapper.appendChild(visibleTextarea)
+    document.body.appendChild(visibleWrapper)
+    Object.defineProperty(visibleTextarea, 'offsetParent', { get: () => visibleWrapper, configurable: true })
+
+    expect(findComposerElement()).toBe(visibleTextarea)
+
+    document.body.removeChild(hiddenWrapper)
+    document.body.removeChild(visibleWrapper)
+  })
+
   it('detects printable keys for auto-focus', () => {
     expect(isPrintableKey(new KeyboardEvent('keydown', { key: 'a' }))).toBe(true)
     expect(isPrintableKey(new KeyboardEvent('keydown', { key: 'A' }))).toBe(true)
