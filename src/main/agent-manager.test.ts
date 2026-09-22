@@ -1,9 +1,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { join } from 'path'
 import { AgentManager } from './agent-manager'
 import { SessionStatus, TaskStatus } from '../shared/constants'
 import { MessagePartType, MessageRole, SessionStatusType } from './adapters/coding-agent-adapter'
 import { unregisterSecretSession } from './secret-broker'
+
+/** Path join that matches production `path.join` on this platform. */
+const p = (...parts: string[]) => join(...parts)
+/** Slash-normalize for substring assertions. */
+const asPosix = (path: string) => path.replace(/\\/g, '/')
 
 // Mock filesystem operations
 vi.mock('fs', async (importOriginal) => {
@@ -232,10 +238,10 @@ describe('AgentManager skill file paths', () => {
 
       const writes = mockedWriteFileAsync.mock.calls
       const writeFilePaths = writes.map(c => c[0] as string)
-      expect(writeFilePaths).toContain('/tmp/test-workspace/.agents/skills/task-skill/SKILL.md')
-      expect(writeFilePaths).toContain('/tmp/test-workspace/.agents/skills/shared-skill/SKILL.md')
-      expect(writeFilePaths).toContain('/tmp/test-workspace/.agents/skills/agent-skill/SKILL.md')
-      expect(writeFilePaths).not.toContain('/tmp/test-workspace/.agents/skills/unselected-skill/SKILL.md')
+      expect(writeFilePaths).toContain(p('/tmp/test-workspace', '.agents', 'skills', 'task-skill', 'SKILL.md'))
+      expect(writeFilePaths).toContain(p('/tmp/test-workspace', '.agents', 'skills', 'shared-skill', 'SKILL.md'))
+      expect(writeFilePaths).toContain(p('/tmp/test-workspace', '.agents', 'skills', 'agent-skill', 'SKILL.md'))
+      expect(writeFilePaths).not.toContain(p('/tmp/test-workspace', '.agents', 'skills', 'unselected-skill', 'SKILL.md'))
       expect((mockDb as any).getSkillsByIds).toHaveBeenCalledWith([
         'task-skill',
         'shared-skill',
@@ -243,8 +249,8 @@ describe('AgentManager skill file paths', () => {
       ])
       expect((mockDb as any).getSkills).not.toHaveBeenCalled()
 
-      const agentsMd = writes.find(c => c[0] === '/tmp/test-workspace/AGENTS.md')?.[1] as string
-      const claudeMd = writes.find(c => c[0] === '/tmp/test-workspace/CLAUDE.md')?.[1] as string
+      const agentsMd = writes.find(c => asPosix(String(c[0])) === '/tmp/test-workspace/AGENTS.md')?.[1] as string
+      const claudeMd = writes.find(c => asPosix(String(c[0])) === '/tmp/test-workspace/CLAUDE.md')?.[1] as string
       expect(agentsMd).toContain('task-skill')
       expect(agentsMd).toContain('shared-skill')
       expect(agentsMd).toContain('agent-skill')
@@ -272,12 +278,12 @@ describe('AgentManager skill file paths', () => {
       await (manager as any).writeSkillFiles('task-1', 'agent-1', '/tmp/test-workspace')
 
       const writes = mockedWriteFileAsync.mock.calls
-      expect(writes.some(c => (c[0] as string).endsWith('/SKILL.md'))).toBe(false)
+      expect(writes.some(c => asPosix(String(c[0])).endsWith('/SKILL.md'))).toBe(false)
       expect((mockDb as any).getSkills).not.toHaveBeenCalled()
       expect((mockDb as any).getSkillsByIds).not.toHaveBeenCalled()
 
-      const agentsMd = writes.find(c => c[0] === '/tmp/test-workspace/AGENTS.md')?.[1] as string
-      const claudeMd = writes.find(c => c[0] === '/tmp/test-workspace/CLAUDE.md')?.[1] as string
+      const agentsMd = writes.find(c => asPosix(String(c[0])) === '/tmp/test-workspace/AGENTS.md')?.[1] as string
+      const claudeMd = writes.find(c => asPosix(String(c[0])) === '/tmp/test-workspace/CLAUDE.md')?.[1] as string
       expect(agentsMd).toContain('No skills configured for this session.')
       expect(claudeMd).toContain('No skills are available for this session.')
     })
@@ -291,15 +297,15 @@ describe('AgentManager skill file paths', () => {
 
       // Verify SKILL.md was written under .claude/skills/ (now uses async fs/promises)
       const mkdirCalls = mockedMkdirAsync.mock.calls.map(c => c[0])
-      expect(mkdirCalls).toContainEqual('/tmp/test-workspace/.claude/skills/test-skill')
+      expect(mkdirCalls).toContainEqual(p('/tmp/test-workspace', '.claude', 'skills', 'test-skill'))
 
       const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
       expect(writeFilePaths).toContainEqual(
-        '/tmp/test-workspace/.claude/skills/test-skill/SKILL.md'
+        p('/tmp/test-workspace', '.claude', 'skills', 'test-skill', 'SKILL.md')
       )
 
       // Verify it was NOT written to .agents/skills/
-      const agentsWrites = writeFilePaths.filter(p => p.includes('.agents/skills/'))
+      const agentsWrites = writeFilePaths.filter(path => path.includes('.agents/skills/') || path.includes('.agents\\skills\\'))
       expect(agentsWrites).toHaveLength(0)
     })
 
@@ -312,11 +318,11 @@ describe('AgentManager skill file paths', () => {
 
       const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
       expect(writeFilePaths).toContainEqual(
-        '/tmp/test-workspace/.agents/skills/test-skill/SKILL.md'
+        p('/tmp/test-workspace', '.agents', 'skills', 'test-skill', 'SKILL.md')
       )
 
       // Verify it was NOT written to .claude/skills/
-      const claudeWrites = writeFilePaths.filter(p => p.includes('.claude/skills/'))
+      const claudeWrites = writeFilePaths.filter(path => path.includes('.claude/skills/') || path.includes('.claude\\skills\\'))
       expect(claudeWrites).toHaveLength(0)
     })
 
@@ -329,11 +335,11 @@ describe('AgentManager skill file paths', () => {
 
       const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
       expect(writeFilePaths).toContainEqual(
-        '/tmp/test-workspace/.agents/skills/test-skill/SKILL.md'
+        p('/tmp/test-workspace', '.agents', 'skills', 'test-skill', 'SKILL.md')
       )
 
       // Verify it was NOT written to .claude/skills/
-      const claudeWrites = writeFilePaths.filter(p => p.includes('.claude/skills/'))
+      const claudeWrites = writeFilePaths.filter(path => path.includes('.claude/skills/') || path.includes('.claude\\skills\\'))
       expect(claudeWrites).toHaveLength(0)
     })
 
@@ -346,7 +352,7 @@ describe('AgentManager skill file paths', () => {
 
       const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
       expect(writeFilePaths).toContainEqual(
-        '/tmp/test-workspace/.agents/skills/test-skill/SKILL.md'
+        p('/tmp/test-workspace', '.agents', 'skills', 'test-skill', 'SKILL.md')
       )
     })
 
@@ -390,8 +396,8 @@ describe('AgentManager skill file paths', () => {
       const writeFilePaths = mockedWriteFileAsync.mock.calls.map(c => c[0] as string)
 
       // Both files should be written to workspace root
-      expect(writeFilePaths).toContain('/tmp/test-workspace/AGENTS.md')
-      expect(writeFilePaths).toContain('/tmp/test-workspace/CLAUDE.md')
+      expect(writeFilePaths.map(asPosix)).toContain('/tmp/test-workspace/AGENTS.md')
+      expect(writeFilePaths.map(asPosix)).toContain('/tmp/test-workspace/CLAUDE.md')
 
       // Neither should be written inside .agents/
       const agentsDirWrites = writeFilePaths.filter(
@@ -422,10 +428,9 @@ describe('AgentManager skill file paths', () => {
       const skills = [makeSkillRecord({ name: 'code-testing' })]
       const result: string = (manager as any).generateClaudeMd(skills, ['org/repo'], '/tmp/ws')
 
-      // Should use .claude/skills/ paths in Quick Reference
-      expect(result).toContain('(.claude/skills/code-testing/SKILL.md)')
-      // Should use .claude/skills/ paths in Detailed Skills
-      expect(result).toContain('[.claude/skills/code-testing/SKILL.md](.claude/skills/code-testing/SKILL.md)')
+      // One index line. The skill body stays in SKILL.md and is read only when it applies.
+      expect(result).toContain('[code-testing](.claude/skills/code-testing/SKILL.md)')
+      expect(result).not.toContain('### Detailed Skills')
       // Should NOT use bare skills/ paths (old behavior)
       expect(result).not.toMatch(/\(skills\/code-testing\/SKILL\.md\)/)
       // Should NOT reference .agents/skills/
@@ -509,6 +514,21 @@ describe('AgentManager skill file paths', () => {
       expect(md).toContain('### task-management')
       expect(md).toContain('`list_tasks`')
       expect(md).toContain('### configured-server')
+    })
+
+    it('names MCP tools without copying their descriptions into either memory file', () => {
+      manager = new AgentManager(makeMcpDb())
+      const injected = {
+        'task-management': { type: 'http' as const, url: 'http://127.0.0.1:5555/mcp' }
+      }
+
+      const agentsMd: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', injected)
+      const claudeMd: string = (manager as any).generateClaudeMd([], [], '/tmp/ws', 'agent-1', injected)
+
+      for (const md of [agentsMd, claudeMd]) {
+        expect(md).toContain('`list_tasks`')
+        expect(md).not.toContain('List all tasks')
+      }
     })
 
     it('omits a configured server that is not attached to the session', () => {
@@ -641,6 +661,74 @@ describe('AgentManager skill file paths', () => {
 
       const result: string = (manager as any).getMemoryFileName('agent-1')
       expect(result).toBe('AGENTS.md')
+    })
+  })
+
+  describe('lean task context for follow-up system prompts', () => {
+    const longDescription = 'VERY_LONG_TASK_BRIEF_' + 'x'.repeat(400)
+
+    function makeTaskDb() {
+      const mockDb = createMockDb({ system_prompt: 'You are helpful.' }) as any
+      mockDb.getTask = vi.fn(() => ({
+        id: 'task-1',
+        title: 'Ship the feature',
+        description: longDescription,
+        repos: [],
+        skill_ids: [],
+        status: 'agent_working',
+        agent_id: 'agent-1',
+      }))
+      mockDb.getMcpServers = vi.fn(() => [])
+      return mockDb
+    }
+
+    it('buildTaskContextSystemPrompt lean omits the full description', () => {
+      manager = new AgentManager(makeTaskDb())
+      const lean: string = (manager as any).buildTaskContextSystemPrompt(
+        { id: 'task-1', title: 'Ship the feature', description: longDescription },
+        'lean'
+      )
+      const full: string = (manager as any).buildTaskContextSystemPrompt(
+        { id: 'task-1', title: 'Ship the feature', description: longDescription },
+        'full'
+      )
+
+      expect(lean).toContain('Task id: task-1')
+      expect(lean).toContain('Ship the feature')
+      expect(lean).toContain('get_task')
+      expect(lean).toContain('If task-management tools are available')
+      expect(lean).not.toContain(longDescription)
+      expect(lean).not.toContain('[Workspace Deliverables]')
+      expect(lean).toContain('create_artifact')
+
+      expect(full).toContain(longDescription)
+      expect(full).toContain('[Workspace Deliverables]')
+      expect(full.length).toBeGreaterThan(lean.length)
+    })
+
+    it('buildSessionConfig defaults to lean task context (no full description)', async () => {
+      manager = new AgentManager(makeTaskDb())
+      vi.mocked(getTaskApiPort).mockReturnValue(4321)
+
+      const config = await (manager as any).buildSessionConfig('agent-1', 'task-1', '/tmp/ws')
+
+      expect(config.systemPrompt).toContain('You are helpful.')
+      expect(config.systemPrompt).toContain('Task id: task-1')
+      expect(config.systemPrompt).toContain('Ship the feature')
+      expect(config.systemPrompt).not.toContain(longDescription)
+      expect(config.systemPrompt).not.toContain('[Workspace Deliverables]')
+    })
+
+    it('buildSessionConfig can still request full task context when asked', async () => {
+      manager = new AgentManager(makeTaskDb())
+      vi.mocked(getTaskApiPort).mockReturnValue(4321)
+
+      const config = await (manager as any).buildSessionConfig('agent-1', 'task-1', '/tmp/ws', {
+        taskContextMode: 'full',
+      })
+
+      expect(config.systemPrompt).toContain(longDescription)
+      expect(config.systemPrompt).toContain('[Workspace Deliverables]')
     })
   })
 })
@@ -2101,23 +2189,23 @@ describe('syncAttachmentsToWorkspace', () => {
       const path = String(p)
       if (path.includes('att-1-design.png') || path.includes('att-2-spec.pdf')) return true
       // destDir doesn't exist yet
-      if (path.endsWith('/attachments')) return false
+      if (asPosix(path).endsWith('/attachments')) return false
       return false
     })
 
     const refs = (mgr as any).syncAttachmentsToWorkspace('task-1', '/tmp/ws')
 
     // Should create the destination directory
-    expect(mockedMkdirSync).toHaveBeenCalledWith('/tmp/ws/attachments', { recursive: true })
+    expect(mockedMkdirSync).toHaveBeenCalledWith(p('/tmp/ws', 'attachments'), { recursive: true })
 
     // Should copy both files
     expect(mockedCopyFileSync).toHaveBeenCalledWith(
-      '/data/attachments/task-1/att-1-design.png',
-      '/tmp/ws/attachments/design.png'
+      p('/data/attachments/task-1', 'att-1-design.png'),
+      p('/tmp/ws', 'attachments', 'design.png')
     )
     expect(mockedCopyFileSync).toHaveBeenCalledWith(
-      '/data/attachments/task-1/att-2-spec.pdf',
-      '/tmp/ws/attachments/spec.pdf'
+      p('/data/attachments/task-1', 'att-2-spec.pdf'),
+      p('/tmp/ws', 'attachments', 'spec.pdf')
     )
 
     // Should return references
@@ -2164,7 +2252,7 @@ describe('syncAttachmentsToWorkspace', () => {
       const path = String(p)
       if (path.includes('att-1-exists.txt')) return true
       if (path.includes('att-2-missing.txt')) return false
-      if (path.endsWith('/attachments')) return true // destDir already exists
+      if (asPosix(path).endsWith('/attachments')) return true // destDir already exists
       return false
     })
 
@@ -2173,8 +2261,8 @@ describe('syncAttachmentsToWorkspace', () => {
     // Only the existing file should be copied
     expect(mockedCopyFileSync).toHaveBeenCalledTimes(1)
     expect(mockedCopyFileSync).toHaveBeenCalledWith(
-      '/data/attachments/task-1/att-1-exists.txt',
-      '/tmp/ws/attachments/exists.txt'
+      p('/data/attachments/task-1', 'att-1-exists.txt'),
+      p('/tmp/ws', 'attachments', 'exists.txt')
     )
     expect(refs).toEqual(['- attachments/exists.txt'])
   })
@@ -2189,7 +2277,7 @@ describe('buildMessageWithAttachmentContext', () => {
     const mgr = new AgentManager(createMockDb({}))
     const session = { workspaceDir: '/tmp/ws' } as { workspaceDir: string }
 
-    mockedExistsSync.mockImplementation((p: any) => String(p).includes('/tmp/ws/attachments/spec.md'))
+    mockedExistsSync.mockImplementation((path: any) => asPosix(String(path)).includes('/tmp/ws/attachments/spec.md'))
     mockedReadFileSync.mockImplementation(() => 'A'.repeat(1500))
 
     const result = (mgr as any).buildMessageWithAttachmentContext(

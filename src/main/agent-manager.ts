@@ -45,6 +45,10 @@ const ARTIFACT_WORKSPACE_INSTRUCTIONS = `
 Repository files are code and appear in the task's Changes view; do not treat ordinary source files as artifacts.
 For every standalone user-facing deliverable, first call \`create_artifact\` on the task-management MCP server. Then use \`write_artifact_file\`, \`read_artifact_file\`, and \`edit_artifact_file\` with the returned artifact_id. Multiple supporting files belong to that one artifact; mark its preview entry file with \`preview: true\`. Do not create artifact files with generic filesystem Write/Edit tools. Screenshots and pull requests are detected automatically.`
 
+/** Short reminder for follow-up / resume system prompts — full rules live in the initial user message. */
+const ARTIFACT_WORKSPACE_REMINDER =
+  '\nStandalone deliverables: if task-management is available, use create_artifact / write_artifact_file (not ordinary Write/Edit).'
+
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
 const WORKFLO_MCP_DEV_PATH = '/api/mcp/dev/mcp'
@@ -104,6 +108,11 @@ interface AgentSession {
    *  flag — a released session is always resumable from the persisted
    *  session_id, so nothing is lost. */
   lastActivityAt?: number
+  /**
+   * When task-management MCP failed to attach, lean follow-ups cannot recover
+   * the brief via get_task — keep the full description in system instead.
+   */
+  taskContextMode?: 'full' | 'lean'
 }
 
 function normalizeUrlPath(pathname: string): string {
@@ -852,7 +861,38 @@ export class AgentManager extends EventEmitter {
     }
   }
 
-  private async buildSessionConfig(agentId: string, taskId: string, workspaceDir?: string): Promise<SessionConfig> {
+  /**
+   * Task awareness appended to adapter system prompts.
+   *
+   * `full` — title + description + full artifact rules. Used only when the
+   * session may have lost the initial user brief (e.g. after compaction on
+   * resume). Prefer not to send this on every follow-up: OpenCode re-attaches
+   * `system` on every session.prompt(), so a long description is re-billed
+   * each chat.
+   *
+   * `lean` — id + title + pointers. Enough to stay oriented without replaying
+   * the brief; call get_task when the live description is needed.
+   */
+  private buildTaskContextSystemPrompt(
+    task: Pick<TaskRecord, 'id' | 'title' | 'description'>,
+    mode: 'full' | 'lean'
+  ): string {
+    if (mode === 'full') {
+      return `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}${ARTIFACT_WORKSPACE_INSTRUCTIONS}`
+    }
+    return (
+      `\n\n[Task Context]\nTask id: ${task.id}\nTitle: "${task.title}"\n` +
+      `Full brief is in earlier conversation messages. If task-management tools are available, call get_task for the live description or status.` +
+      ARTIFACT_WORKSPACE_REMINDER
+    )
+  }
+
+  private async buildSessionConfig(
+    agentId: string,
+    taskId: string,
+    workspaceDir?: string,
+    opts?: { taskContextMode?: 'full' | 'lean' | 'none' }
+  ): Promise<SessionConfig> {
     const agent = this.db.getAgent(agentId)
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`)
@@ -865,13 +905,14 @@ export class AgentManager extends EventEmitter {
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
 
-    // Build system prompt with task context so follow-up messages after idle
-    // retain awareness of what task the agent is working on. Without this,
-    // doSendAdapterMessage sends a bare prompt and the agent loses context.
+    // Follow-ups go through this helper. Keep task context lean so adapters that
+    // re-send system on every prompt (OpenCode) do not re-bill the full description.
     const baseSystemPrompt = agent.config?.system_prompt || ''
-    const taskContext = task
-      ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}${ARTIFACT_WORKSPACE_INSTRUCTIONS}`
-      : ''
+    const taskContextMode = opts?.taskContextMode ?? 'lean'
+    const taskContext =
+      task && taskContextMode !== 'none'
+        ? this.buildTaskContextSystemPrompt(task, taskContextMode === 'full' ? 'full' : 'lean')
+        : ''
 
     const config: SessionConfig = {
       agentId,
@@ -1320,6 +1361,7 @@ export class AgentManager extends EventEmitter {
       if (documentedServers.length > 0) {
         md += `## Available MCP Servers & Tools\n\n`
         md += `This session has access to the following Model Context Protocol (MCP) servers and their tools:\n\n`
+        md += `Schemas are already attached to the session. This file only names the tools.\n\n`
 
         if (hasWorkfloMcpDevServer(documentedServers)) {
           md += WORKFLO_WORKSPACE_DISCOVERY_GUIDANCE
@@ -1337,11 +1379,7 @@ export class AgentManager extends EventEmitter {
               ? mcpServer.tools.filter(t => enabledTools.includes(t.name))
               : mcpServer.tools
 
-            md += `**Available Tools (${toolsToShow.length}):**\n\n`
-            for (const tool of toolsToShow) {
-              md += `- **\`${tool.name}\`** - ${tool.description}\n`
-            }
-            md += `\n`
+            md += `**Tools (${toolsToShow.length}):** ${toolsToShow.map((tool) => `\`${tool.name}\``).join(', ')}\n\n`
           }
 
           md += `---\n\n`
@@ -1357,20 +1395,7 @@ export class AgentManager extends EventEmitter {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
           md += `## Available Secrets\n\n`
-          md += `The following secrets are automatically injected as environment variables into every shell/bash command you run.\n`
-          md += `They are managed by the user and securely provided at runtime — you MUST NOT hardcode, echo, log, or ask the user for these values.\n\n`
-          md += `### How to use\n\n`
-          md += `Reference them with \`$VAR_NAME\` in any bash command. Examples:\n\n`
-          md += `\`\`\`bash\n`
-          md += `# Connect to a database\n`
-          md += `psql "$DATABASE_URL"\n\n`
-          md += `# Use an API key in a curl request\n`
-          md += `curl -H "Authorization: Bearer $API_KEY" https://api.example.com\n\n`
-          md += `# Pass to a script\n`
-          md += `python deploy.py --token "$DEPLOY_TOKEN"\n`
-          md += `\`\`\`\n\n`
-          md += `**Important:** Secrets are ONLY available inside bash/shell commands. They are not in your process environment or accessible via tool arguments.\n\n`
-          md += `### Available secrets\n\n`
+          md += `These variables are injected into bash commands. Use \`$VAR_NAME\`. Do not hardcode, echo, log, or ask for the values. They are not available outside bash.\n\n`
           for (const secret of secrets) {
             md += `- **\`$${secret.env_var_name}\`** — ${secret.name}`
             if (secret.description) md += `: ${secret.description}`
@@ -1401,19 +1426,12 @@ export class AgentManager extends EventEmitter {
     if (skills.length === 0) {
       md += `No skills configured for this session.\n\n`
     } else {
-      md += `This session has access to ${skills.length} skill(s), sorted by confidence level:\n\n`
+      md += `${skills.length} skill(s), highest confidence first. Open a skill file only when it applies.\n\n`
 
       for (const skill of skills) {
-        const confidencePercent = (skill.confidence * 100).toFixed(0)
-        const lastUsed = skill.last_used ? new Date(skill.last_used).toISOString().split('T')[0] : 'Never'
-        const tags = skill.tags && skill.tags.length > 0 ? skill.tags.join(', ') : 'none'
-
-        md += `### [${skill.name}](.agents/skills/${skill.name}/SKILL.md)\n\n`
-        md += `**Confidence:** ${confidencePercent}% | **Uses:** ${skill.uses} | **Last Used:** ${lastUsed}\n\n`
-        md += `**Tags:** ${tags}\n\n`
-        md += `${skill.description}\n\n`
-        md += `---\n\n`
+        md += `- **[${skill.name}](.agents/skills/${skill.name}/SKILL.md)** — ${skill.description}\n`
       }
+      md += `\n`
     }
 
     return md
@@ -1441,6 +1459,7 @@ export class AgentManager extends EventEmitter {
       if (documentedServers.length > 0) {
         md += `## MCP Tools Available\n\n`
         md += `You have access to the following tools through Model Context Protocol (MCP) servers:\n\n`
+        md += `Schemas are already attached to the session. This file only names the tools.\n\n`
 
         if (hasWorkfloMcpDevServer(documentedServers)) {
           md += WORKFLO_WORKSPACE_DISCOVERY_GUIDANCE
@@ -1453,11 +1472,7 @@ export class AgentManager extends EventEmitter {
               : mcpServer.tools
 
             md += `### ${mcpServer.name} (${toolsToShow.length} tools)\n\n`
-
-            for (const tool of toolsToShow) {
-              md += `#### \`${tool.name}\`\n\n`
-              md += `${tool.description}\n\n`
-            }
+            md += `${toolsToShow.map((tool) => `\`${tool.name}\``).join(', ')}\n\n`
           }
         }
 
@@ -1473,18 +1488,7 @@ export class AgentManager extends EventEmitter {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
           md += `## Available Secrets\n\n`
-          md += `The following secrets are automatically injected as environment variables into every bash command you execute.\n`
-          md += `They are securely managed — you MUST NOT hardcode, echo, print, log, or ask the user for these values.\n\n`
-          md += `### Usage\n\n`
-          md += `Use \`$VAR_NAME\` directly in any bash command:\n\n`
-          md += `\`\`\`bash\n`
-          md += `# They are already set — just reference them\n`
-          md += `psql "$DATABASE_URL"\n`
-          md += `curl -H "Authorization: Bearer $API_KEY" https://api.example.com\n`
-          md += `python deploy.py --token "$DEPLOY_TOKEN"\n`
-          md += `\`\`\`\n\n`
-          md += `**Important:** Secrets are ONLY available inside bash/shell commands (the Bash tool). They are not accessible in your own process environment, tool arguments, or file contents.\n\n`
-          md += `### Available secrets\n\n`
+          md += `These variables are injected into bash commands. Use \`$VAR_NAME\`. Do not hardcode, echo, log, or ask for the values. They are not available outside bash.\n\n`
           for (const secret of secrets) {
             md += `- **\`$${secret.env_var_name}\`** — ${secret.name}`
             if (secret.description) md += `: ${secret.description}`
@@ -1514,40 +1518,13 @@ export class AgentManager extends EventEmitter {
     if (skills.length === 0) {
       md += `No skills are available for this session.\n\n`
     } else {
-      md += `You have access to ${skills.length} specialized skill(s). Each skill contains proven patterns and approaches from previous successful sessions.\n\n`
-      md += `### Quick Reference\n\n`
+      md += `${skills.length} skill(s), highest confidence first. Open a skill file only when it applies.\n\n`
 
       for (const skill of skills) {
-        const confidencePercent = (skill.confidence * 100).toFixed(0)
-        md += `- **[${skill.name}](.claude/skills/${skill.name}/SKILL.md)** (${confidencePercent}% confidence)\n`
-        md += `  ${skill.description}\n\n`
+        md += `- **[${skill.name}](.claude/skills/${skill.name}/SKILL.md)** — ${skill.description}\n`
       }
-
-      md += `### Detailed Skills\n\n`
-
-      for (const skill of skills) {
-        const confidencePercent = (skill.confidence * 100).toFixed(0)
-        const lastUsed = skill.last_used ? new Date(skill.last_used).toISOString().split('T')[0] : 'Never'
-
-        md += `#### ${skill.name}\n\n`
-        md += `**Path:** [.claude/skills/${skill.name}/SKILL.md](.claude/skills/${skill.name}/SKILL.md)\n\n`
-        md += `**Confidence:** ${confidencePercent}%\n\n`
-        md += `**Description:** ${skill.description}\n\n`
-        md += `**Usage Stats:** ${skill.uses} uses | Last used: ${lastUsed}\n\n`
-
-        if (skill.tags && skill.tags.length > 0) {
-          md += `**Tags:** ${skill.tags.map((t: string) => `\`${t}\``).join(', ')}\n\n`
-        }
-
-        md += `---\n\n`
-      }
+      md += `\n`
     }
-
-    md += `## Usage Notes\n\n`
-    md += `- Skills are sorted by confidence level (highest first)\n`
-    md += `- Confidence indicates how well the skill has performed in past sessions\n`
-    md += `- Higher usage count suggests more battle-tested approaches\n`
-    md += `- Check the SKILL.md files for detailed implementation guidance\n\n`
 
     return md
   }
@@ -1689,6 +1666,7 @@ export class AgentManager extends EventEmitter {
       )
       await this.writeSkillFiles(taskId, agentId, workspaceDir, attached)
     }
+    const taskContextMode: 'full' | 'lean' = attachFailures.includes('task-management') ? 'full' : 'lean'
 
     analytics()?.record('provider.session.started', {
       provider: getAgentProvider(agent),
@@ -1717,7 +1695,8 @@ export class AgentManager extends EventEmitter {
       assistantTextKeys: new Set(),
       adapter,
       isTriageSession,
-      secretSessionToken: secretToken
+      secretSessionToken: secretToken,
+      taskContextMode
     })
 
     // Store session ID in database
@@ -1835,17 +1814,7 @@ export class AgentManager extends EventEmitter {
       // Append heartbeat monitoring instructions
       promptText += `\n\n## Heartbeat Monitoring (Optional)
 
-If this task involves something that should be monitored after your work is done (e.g., a PR awaiting review, a deployment to verify, an issue to track), create a \`heartbeat.md\` file in the working directory.
-
-Example heartbeat.md:
-\`\`\`markdown
-# Heartbeat Checks
-- [ ] Check if PR https://github.com/org/repo/pull/123 has new review comments or requested changes
-- [ ] Verify CI pipeline passed on the latest commit
-- [ ] Check if linked issue #456 has new updates
-\`\`\`
-
-Only create this file when there's genuinely useful monitoring to do. Do not create it for tasks that are fully self-contained.`
+If a PR, deploy, or linked issue should be checked after this task, write \`heartbeat.md\` in the working directory as a checklist that includes the URLs. Skip it when the task is self-contained.`
 
       // Append memory file read instruction to user message
       // (user messages are more reliably followed than system prompt instructions)
@@ -2897,11 +2866,15 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
 
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
 
-    // Build system prompt with task context (survives context compaction)
+    // Rewrite the memory file before the harness reads it. A resumed session
+    // otherwise keeps the catalog written at start, and that file is reloaded
+    // on every turn, outside compaction.
+    await this.writeSkillFiles(taskId, agentId, workspaceDir, mcpServers)
+
+    // Lean task context on resume: id/title survive compaction without replaying
+    // a possibly huge description into every subsequent prompt's system field.
     const baseSystemPrompt = agent.config?.system_prompt || ''
-    const taskContext = task
-      ? `\n\n[Task Context]\nTask: "${task.title}"\n${task.description || ''}`
-      : ''
+    const taskContext = task ? this.buildTaskContextSystemPrompt(task, 'lean') : ''
 
     // Build session config
     const sessionConfig: SessionConfig = {
@@ -3014,6 +2987,34 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       throw error
     }
 
+    // Same attach-truthfulness rewrite as startAdapterSession: OpenCode may fail
+    // to re-attach MCP on resume after the memory file was already written.
+    const resumeAttachFailures = AgentManager.getAdapterMcpAttachFailures(adapter, adapterSessionId)
+    if (resumeAttachFailures.length > 0) {
+      console.error(
+        `[AgentManager] MCP servers NOT attached on resume for session ${adapterSessionId}: ${resumeAttachFailures.join(', ')} — ` +
+        `rewriting session documentation without them`
+      )
+      const attached = Object.fromEntries(
+        Object.entries(mcpServers).filter(([name]) => !resumeAttachFailures.includes(name))
+      )
+      await this.writeSkillFiles(taskId, agentId, workspaceDir, attached)
+    }
+    const resumeTaskContextMode: 'full' | 'lean' =
+      resumeAttachFailures.includes('task-management') ? 'full' : 'lean'
+    if (resumeTaskContextMode === 'full' && task) {
+      // Compaction may have dropped the initial brief, and get_task is unavailable.
+      let rebuilt = (agent.config?.system_prompt || '') + this.buildTaskContextSystemPrompt(task, 'full')
+      const secretIdsForResume = agent.config?.secret_ids
+      if (secretIdsForResume && secretIdsForResume.length > 0) {
+        const secretRecords = this.db.getSecretsByIds(secretIdsForResume)
+        if (secretRecords.length > 0) {
+          rebuilt += this.buildSecretsSystemPrompt(secretRecords)
+        }
+      }
+      sessionConfig.systemPrompt = rebuilt
+    }
+
     // Build the session's dedup state from the resumed history so adapter
     // polling won't re-emit historical parts as new streaming output. The
     // transcript itself is NOT pushed to clients here — clients render the
@@ -3061,7 +3062,8 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       assistantTextKeys: resumedAssistantTextKeys,
       adapter,
       pollingStarted: false,
-      secretSessionToken: secretToken
+      secretSessionToken: secretToken,
+      taskContextMode: resumeTaskContextMode
     })
 
     // Persist the resumed session binding and tell the renderer BEFORE any
@@ -4358,11 +4360,13 @@ Only create this file when there's genuinely useful monitoring to do. Do not cre
       }
     })
 
-    // Build session config (includes secret broker fields if agent has secrets)
+    // Build session config (includes secret broker fields if agent has secrets).
+    // Default lean; escalate to full when task-management failed to attach.
     const sessionConfig = await this.buildSessionConfig(
       session.agentId,
       session.taskId,
-      session.workspaceDir || process.cwd()
+      session.workspaceDir || process.cwd(),
+      { taskContextMode: session.taskContextMode ?? 'lean' }
     )
 
     // Send prompt via adapter
