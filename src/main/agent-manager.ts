@@ -862,18 +862,34 @@ export class AgentManager extends EventEmitter {
   }
 
   /**
-   * Task awareness appended to adapter system prompts.
+   * Task-awareness reminder appended to the outgoing follow-up *message*, not
+   * the system prompt. Two reasons this lives in message content instead:
+   *
+   * 1. Caching: `systemPrompt` should stay byte-identical for the whole
+   *    session (see buildSessionConfig) so it — and everything positioned
+   *    after it in the request — stays cache-eligible. A task-varying suffix
+   *    glued onto `system` busts that on every turn, for both adapters: on
+   *    OpenCode the server re-sends `system` on every session.prompt() call
+   *    already, so a mode-dependent suffix there was never free; on Claude
+   *    Code, `config.systemPrompt` is only read when a fresh `query()` process
+   *    spawns (first prompt, or after a restart) — an already-live session's
+   *    `sendPrompt` just enqueues the message text and never looks at
+   *    `config.systemPrompt` again, so a system-prompt-only escalation
+   *    silently never reaches an in-flight session at all.
+   * 2. Reliability: message content is what both adapters actually read on
+   *    every single turn, live process or fresh spawn. Matches the existing
+   *    convention below of putting the memory-file-read instruction in the
+   *    user message rather than system ("user messages are more reliably
+   *    followed than system prompt instructions").
    *
    * `full` — title + description + full artifact rules. Used only when the
-   * session may have lost the initial user brief (e.g. after compaction on
-   * resume). Prefer not to send this on every follow-up: OpenCode re-attaches
-   * `system` on every session.prompt(), so a long description is re-billed
-   * each chat.
+   * session may have lost the initial user brief (e.g. after compaction, or
+   * task-management MCP failed to attach so get_task can't recover it).
    *
    * `lean` — id + title + pointers. Enough to stay oriented without replaying
    * the brief; call get_task when the live description is needed.
    */
-  private buildTaskContextSystemPrompt(
+  private buildTaskContextReminder(
     task: Pick<TaskRecord, 'id' | 'title' | 'description'>,
     mode: 'full' | 'lean'
   ): string {
@@ -890,8 +906,7 @@ export class AgentManager extends EventEmitter {
   private async buildSessionConfig(
     agentId: string,
     taskId: string,
-    workspaceDir?: string,
-    opts?: { taskContextMode?: 'full' | 'lean' | 'none' }
+    workspaceDir?: string
   ): Promise<SessionConfig> {
     const agent = this.db.getAgent(agentId)
     if (!agent) {
@@ -905,14 +920,13 @@ export class AgentManager extends EventEmitter {
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
 
-    // Follow-ups go through this helper. Keep task context lean so adapters that
-    // re-send system on every prompt (OpenCode) do not re-bill the full description.
+    // systemPrompt is intentionally task-agnostic and identical every time this
+    // is called for a given agent — it must stay byte-for-byte frozen for the
+    // life of the session so it (and anything positioned after it) stays
+    // cache-eligible. Turn-specific task-context reminders are appended to the
+    // outgoing *message* instead — see buildTaskContextReminder and its call
+    // site in doSendAdapterMessage.
     const baseSystemPrompt = agent.config?.system_prompt || ''
-    const taskContextMode = opts?.taskContextMode ?? 'lean'
-    const taskContext =
-      task && taskContextMode !== 'none'
-        ? this.buildTaskContextSystemPrompt(task, taskContextMode === 'full' ? 'full' : 'lean')
-        : ''
 
     const config: SessionConfig = {
       agentId,
@@ -920,7 +934,7 @@ export class AgentManager extends EventEmitter {
       workspaceDir: workspaceDir || this.db.getWorkspaceDir(taskId),
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
-      systemPrompt: baseSystemPrompt + taskContext,
+      systemPrompt: baseSystemPrompt,
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
@@ -2871,10 +2885,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // on every turn, outside compaction.
     await this.writeSkillFiles(taskId, agentId, workspaceDir, mcpServers)
 
-    // Lean task context on resume: id/title survive compaction without replaying
-    // a possibly huge description into every subsequent prompt's system field.
+    // systemPrompt stays task-agnostic here too — same reasoning as
+    // buildSessionConfig. The next doSendAdapterMessage call appends the
+    // task-context reminder to the outgoing message instead of system.
     const baseSystemPrompt = agent.config?.system_prompt || ''
-    const taskContext = task ? this.buildTaskContextSystemPrompt(task, 'lean') : ''
 
     // Build session config
     const sessionConfig: SessionConfig = {
@@ -2883,7 +2897,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       workspaceDir,
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
-      systemPrompt: baseSystemPrompt + taskContext,
+      systemPrompt: baseSystemPrompt,
       mcpServers,
       authMethod: agent.config?.auth_method,
       permissionMode: agent.config?.permission_mode,
@@ -4356,8 +4370,15 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     })
 
     // Build session config (includes secret broker fields if agent has secrets).
+    // systemPrompt inside is task-agnostic and frozen — see buildSessionConfig.
+    const sessionConfig = await this.buildSessionConfig(
+      session.agentId,
+      session.taskId,
+      session.workspaceDir || process.cwd()
+    )
+
     // Default lean; escalate to full when task-management failed to attach.
-    // Re-checked on every send rather than trusting the value frozen at
+    // Re-checked on every send rather than trusting a value frozen at
     // start/resume: some adapters (e.g. Claude Code) only learn their real MCP
     // attach status after the session's first prompt has gone out, so the
     // escalation would otherwise never take effect for them. For adapters
@@ -4367,15 +4388,18 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const liveAttachFailures = AgentManager.getAdapterMcpAttachFailures(session.adapter, sessionId)
     const liveTaskContextMode: 'full' | 'lean' = liveAttachFailures.includes('task-management') ? 'full' : 'lean'
     session.taskContextMode = liveTaskContextMode
-    const sessionConfig = await this.buildSessionConfig(
-      session.agentId,
-      session.taskId,
-      session.workspaceDir || process.cwd(),
-      { taskContextMode: liveTaskContextMode }
-    )
 
-    // Send prompt via adapter
-    const promptText = this.buildMessageWithAttachmentContext(session, message, attachments)
+    // Send prompt via adapter. The task-context reminder is appended to the
+    // *message*, not sessionConfig.systemPrompt — see buildTaskContextReminder
+    // for why (caching: keeps systemPrompt frozen; reliability: message
+    // content is what every adapter actually reads on every turn, unlike
+    // systemPrompt which some adapters only consult when spawning a fresh
+    // process). It's appended here, not shown in the UI (userFacingMessage
+    // above), same treatment as the attachment-context block below.
+    let promptText = this.buildMessageWithAttachmentContext(session, message, attachments)
+    if (currentTask) {
+      promptText += this.buildTaskContextReminder(currentTask, liveTaskContextMode)
+    }
     const parts: MessagePart[] = [{ type: MessagePartType.TEXT, text: promptText }]
     await session.adapter.sendPrompt(sessionId, parts, sessionConfig)
     analytics()?.record('provider.turn.sent', {

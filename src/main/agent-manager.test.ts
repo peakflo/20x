@@ -664,7 +664,7 @@ describe('AgentManager skill file paths', () => {
     })
   })
 
-  describe('lean task context for follow-up system prompts', () => {
+  describe('lean task context for follow-up messages (not system prompts)', () => {
     const longDescription = 'VERY_LONG_TASK_BRIEF_' + 'x'.repeat(400)
 
     function makeTaskDb() {
@@ -682,13 +682,13 @@ describe('AgentManager skill file paths', () => {
       return mockDb
     }
 
-    it('buildTaskContextSystemPrompt lean omits the full description', () => {
+    it('buildTaskContextReminder lean omits the full description', () => {
       manager = new AgentManager(makeTaskDb())
-      const lean: string = (manager as any).buildTaskContextSystemPrompt(
+      const lean: string = (manager as any).buildTaskContextReminder(
         { id: 'task-1', title: 'Ship the feature', description: longDescription },
         'lean'
       )
-      const full: string = (manager as any).buildTaskContextSystemPrompt(
+      const full: string = (manager as any).buildTaskContextReminder(
         { id: 'task-1', title: 'Ship the feature', description: longDescription },
         'full'
       )
@@ -706,29 +706,99 @@ describe('AgentManager skill file paths', () => {
       expect(full.length).toBeGreaterThan(lean.length)
     })
 
-    it('buildSessionConfig defaults to lean task context (no full description)', async () => {
+    // buildSessionConfig's systemPrompt must stay byte-identical for the life of
+    // the session so it (and anything positioned after it) stays cache-eligible
+    // — see the doc comment on buildSessionConfig / buildTaskContextReminder.
+    // It must never vary by task, mode, or call site.
+    it('buildSessionConfig never puts task context in systemPrompt — it stays frozen to the agent config', async () => {
       manager = new AgentManager(makeTaskDb())
       vi.mocked(getTaskApiPort).mockReturnValue(4321)
 
       const config = await (manager as any).buildSessionConfig('agent-1', 'task-1', '/tmp/ws')
 
-      expect(config.systemPrompt).toContain('You are helpful.')
-      expect(config.systemPrompt).toContain('Task id: task-1')
-      expect(config.systemPrompt).toContain('Ship the feature')
+      expect(config.systemPrompt).toBe('You are helpful.')
+      expect(config.systemPrompt).not.toContain('Task id: task-1')
+      expect(config.systemPrompt).not.toContain('Ship the feature')
       expect(config.systemPrompt).not.toContain(longDescription)
       expect(config.systemPrompt).not.toContain('[Workspace Deliverables]')
     })
 
-    it('buildSessionConfig can still request full task context when asked', async () => {
-      manager = new AgentManager(makeTaskDb())
-      vi.mocked(getTaskApiPort).mockReturnValue(4321)
+    describe('doSendAdapterMessage', () => {
+      function makeSession(overrides: Record<string, unknown> = {}) {
+        return {
+          agentId: 'agent-1',
+          taskId: 'task-1',
+          status: 'idle',
+          workspaceDir: undefined,
+          adapter: {
+            sendPrompt: vi.fn(async () => undefined),
+            getStatus: vi.fn(async () => ({ type: 'working' })),
+          },
+          isTriageSession: false,
+          seenMessageIds: new Set<string>(),
+          seenPartIds: new Set<string>(),
+          partContentLengths: new Map<string, string>(),
+          assistantTextKeys: new Set<string>(),
+          ...overrides,
+        }
+      }
 
-      const config = await (manager as any).buildSessionConfig('agent-1', 'task-1', '/tmp/ws', {
-        taskContextMode: 'full',
+      it('appends the lean reminder to the outgoing message, and keeps systemPrompt frozen', async () => {
+        manager = new AgentManager(makeTaskDb())
+        vi.mocked(getTaskApiPort).mockReturnValue(4321)
+        vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+        const session = makeSession()
+        ;(manager as any).sessions.set('session-1', session)
+
+        await (manager as any).doSendAdapterMessage(session, 'session-1', 'hello')
+
+        expect(session.adapter.sendPrompt).toHaveBeenCalledOnce()
+        const [, parts, sessionConfig] = (session.adapter.sendPrompt as any).mock.calls[0] as [
+          string, Array<{ text: string }>, { systemPrompt?: string }
+        ]
+
+        // The reminder travels with the message, not the system prompt.
+        expect(parts[0].text).toContain('hello')
+        expect(parts[0].text).toContain('Task id: task-1')
+        expect(parts[0].text).toContain('get_task')
+        expect(parts[0].text).not.toContain(longDescription)
+
+        expect(sessionConfig.systemPrompt).toBe('You are helpful.')
+        expect(sessionConfig.systemPrompt).not.toContain('Task id: task-1')
+
+        expect((session as any).taskContextMode).toBe('lean')
       })
 
-      expect(config.systemPrompt).toContain(longDescription)
-      expect(config.systemPrompt).toContain('[Workspace Deliverables]')
+      it('escalates to the full reminder in the message when task-management MCP failed to attach — still without touching systemPrompt', async () => {
+        manager = new AgentManager(makeTaskDb())
+        vi.mocked(getTaskApiPort).mockReturnValue(4321)
+        vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+        const session = makeSession({
+          adapter: {
+            sendPrompt: vi.fn(async () => undefined),
+            getStatus: vi.fn(async () => ({ type: 'working' })),
+            getMcpAttachFailures: vi.fn(() => ['task-management']),
+          },
+        })
+        ;(manager as any).sessions.set('session-1', session)
+
+        await (manager as any).doSendAdapterMessage(session, 'session-1', 'hello')
+
+        const [, parts, sessionConfig] = (session.adapter.sendPrompt as any).mock.calls[0] as [
+          string, Array<{ text: string }>, { systemPrompt?: string }
+        ]
+
+        expect(parts[0].text).toContain('hello')
+        expect(parts[0].text).toContain(longDescription)
+        expect(parts[0].text).toContain('[Workspace Deliverables]')
+
+        expect(sessionConfig.systemPrompt).toBe('You are helpful.')
+        expect(sessionConfig.systemPrompt).not.toContain(longDescription)
+
+        expect((session as any).taskContextMode).toBe('full')
+      })
     })
   })
 })
