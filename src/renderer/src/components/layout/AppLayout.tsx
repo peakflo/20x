@@ -41,7 +41,7 @@ import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog'
 import { SubtaskPickerDialog } from '@/components/tasks/SubtaskPickerDialog'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
-import { dispatchTaskShortcut, findComposerElement, focusComposerInput, getNextNudgeMessage, insertIntoComposer, isGlobalShortcutBlocked, onShortcutFeedback, shouldAutoFocusComposer, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
+import { dispatchTaskShortcut, findComposerElement, focusComposerInput, getChordCommand, getNextNudgeMessage, insertIntoComposer, isGlobalShortcutBlocked, onShortcutFeedback, shouldAutoFocusComposer, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import { composerCanSubmit, MASTERMIND_COMPOSER_KEY, sendComposerMessage, setActiveComposer } from '@/lib/voice-dictation-target'
 
@@ -595,51 +595,37 @@ export function AppLayout() {
         }
         return
       }
-      // Radix dialogs prevent the Escape event after they close. Respect that
-      // marker so this listener does not also close the task behind the popup.
-      if (isGlobalShortcutBlocked(e)) return
-
       const pending = chordRef.current
-      if (pending) {
+      // A chord already started outside an input must get its second key even
+      // if focus moved to the composer in the meantime.
+      if (pending && !isGlobalShortcutBlocked(e, true)) {
         window.clearTimeout(pending.timer)
         chordRef.current = null
-        const chord = `${pending.key}${key}`
-        const views: Record<string, SidebarView> = { gd: 'dashboard', gt: 'tasks', gs: 'skills' }
-        const taskActions: Record<string, TaskShortcutAction> = {
-          od: TaskShortcutAction.OPEN_DETAILS,
-          oc: TaskShortcutAction.OPEN_CHANGES,
-          oo: TaskShortcutAction.OPEN_OUTPUT,
-          oa: TaskShortcutAction.OPEN_ARTIFACT,
-          op: TaskShortcutAction.OPEN_PR,
-          yp: TaskShortcutAction.COPY_PR_URL,
-          yb: TaskShortcutAction.COPY_PR_BRANCH
-        }
-        if (views[chord]) {
-          e.preventDefault()
+        const command = getChordCommand(pending.key, key)
+        if (command) e.preventDefault()
+        if (command?.type === 'view') {
           if (activeModal === 'settings') closeModal()
-          setSidebarView(views[chord])
-        } else if (taskActions[chord]) {
-          e.preventDefault()
-          runTaskShortcut(taskActions[chord])
-        } else if (chord === 'gc') {
-          e.preventDefault()
+          setSidebarView(command.view)
+        } else if (command?.type === 'task') {
+          runTaskShortcut(command.action)
+        } else if (command?.type === 'canvas') {
           if (activeTaskId) openActiveTaskOnCanvas()
           else setSidebarView('canvas')
-        } else if (chord === 'gp') {
-          e.preventDefault()
+        } else if (command?.type === 'parent') {
           openParentTask()
-        } else if (chord === 'os') {
-          e.preventDefault()
+        } else if (command?.type === 'subtasks') {
           openSubtasks()
-        } else if (chord === 'vt') {
-          e.preventDefault()
+        } else if (command?.type === 'taskAudio') {
           toggleTaskAudio()
-        } else if (chord === 'vm') {
-          e.preventDefault()
+        } else if (command?.type === 'mastermindAudio') {
           toggleMastermindAudio()
         }
         return
       }
+
+      // Radix dialogs prevent the Escape event after they close. Respect that
+      // marker so this listener does not also close the task behind the popup.
+      if (isGlobalShortcutBlocked(e)) return
 
       // A selected canvas task makes the canvas behave like the tasks view:
       // the single-letter task shortcuts and the o/y/v chords act on it. 'g'
@@ -668,7 +654,7 @@ export function AppLayout() {
 
       // Just start typing: any printable key that is not a defined shortcut focuses the
       // composer and inserts the character, so the first keystroke is not lost.
-      if (shouldAutoFocusComposer(e)) {
+      if (shouldAutoFocusComposer(e, !!chordRef.current)) {
         const composer = findComposerElement()
         if (composer) {
           e.preventDefault()

@@ -11,6 +11,33 @@ export enum TaskShortcutAction {
   COPY_PR_BRANCH = 'copy_pr_branch'
 }
 
+export type ChordCommand =
+  | { type: 'view'; view: 'dashboard' | 'tasks' | 'skills' }
+  | { type: 'task'; action: TaskShortcutAction }
+  | { type: 'canvas' | 'parent' | 'subtasks' | 'taskAudio' | 'mastermindAudio' }
+
+const CHORD_COMMANDS: Record<string, ChordCommand> = {
+  gd: { type: 'view', view: 'dashboard' },
+  gt: { type: 'view', view: 'tasks' },
+  gs: { type: 'view', view: 'skills' },
+  gc: { type: 'canvas' },
+  gp: { type: 'parent' },
+  od: { type: 'task', action: TaskShortcutAction.OPEN_DETAILS },
+  oc: { type: 'task', action: TaskShortcutAction.OPEN_CHANGES },
+  oo: { type: 'task', action: TaskShortcutAction.OPEN_OUTPUT },
+  oa: { type: 'task', action: TaskShortcutAction.OPEN_ARTIFACT },
+  op: { type: 'task', action: TaskShortcutAction.OPEN_PR },
+  os: { type: 'subtasks' },
+  yp: { type: 'task', action: TaskShortcutAction.COPY_PR_URL },
+  yb: { type: 'task', action: TaskShortcutAction.COPY_PR_BRANCH },
+  vt: { type: 'taskAudio' },
+  vm: { type: 'mastermindAudio' }
+}
+
+export function getChordCommand(firstKey: string, secondKey: string): ChordCommand | null {
+  return CHORD_COMMANDS[`${firstKey.toLowerCase()}${secondKey.toLowerCase()}`] ?? null
+}
+
 const TASK_SHORTCUT_EVENT = '20x:task-shortcut'
 const SHORTCUT_FEEDBACK_EVENT = '20x:shortcut-feedback'
 
@@ -95,12 +122,12 @@ export function isKeyboardInput(target: EventTarget | null): boolean {
     || !!target.closest('[contenteditable="true"], .xterm')
 }
 
-export function isGlobalShortcutBlocked(event: KeyboardEvent): boolean {
+export function isGlobalShortcutBlocked(event: KeyboardEvent, allowInputForPendingChord = false): boolean {
   return event.defaultPrevented
     || event.metaKey
     || event.ctrlKey
     || event.altKey
-    || isKeyboardInput(event.target)
+    || (!allowInputForPendingChord && isKeyboardInput(event.target))
     || !!document.querySelector('[role="dialog"], [role="alertdialog"]')
 }
 
@@ -152,7 +179,8 @@ export function isPrintableKey(event: KeyboardEvent): boolean {
 const SINGLE_KEY_SHORTCUTS = new Set(['j', 'k', 'c', 'e', 'h', 'r', 'w', '#', '?', '/', 'i'])
 const CHORD_STARTERS = new Set(['g', 'o', 'y', 'v'])
 
-export function shouldAutoFocusComposer(event: KeyboardEvent): boolean {
+export function shouldAutoFocusComposer(event: KeyboardEvent, hasPendingChord = false): boolean {
+  if (hasPendingChord) return false
   if (isGlobalShortcutBlocked(event)) return false
   if (!isPrintableKey(event)) return false
   const lower = event.key.toLowerCase()

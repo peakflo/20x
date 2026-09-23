@@ -6,7 +6,7 @@ import { clampTranscriptWidth, TaskWorkspace } from './TaskWorkspace'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { useArtifactStore } from '@/stores/artifact-store'
-import { TaskStatus } from '@/types'
+import { CodingAgentType, TaskStatus } from '@/types'
 import type { WorkfloTask, Agent } from '@/types'
 import { dispatchTaskShortcut, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
@@ -141,6 +141,17 @@ describe('clampTranscriptWidth', () => {
 })
 
 describe('TaskWorkspace keyboard actions', () => {
+  it('starts triage for an unassigned task through the R action', async () => {
+    const task = makeRendererTask({ agent_id: null })
+    const agent = makeAgent({ config: { coding_agent: CodingAgentType.CODEX, model: 'gpt-6' } })
+    vi.mocked(window.electronAPI.agentSession.start).mockResolvedValueOnce({ sessionId: 'triage-session' })
+    renderWorkspace(task, [agent])
+
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.RUN, taskId: task.id }))
+
+    await waitFor(() => expect(window.electronAPI.agentSession.start).toHaveBeenCalledWith(agent.id, task.id, undefined, undefined))
+  })
+
   it('uses Notion for both the feedback button and action description', () => {
     useTaskSourceStore.setState({sources: [{id: 'src-notion', name: 'dmitry ai tasks', plugin_id: 'notion',
       mcp_server_id: '', config: {}, list_tool: '', list_tool_args: {}, update_tool: '', update_tool_args: {},
