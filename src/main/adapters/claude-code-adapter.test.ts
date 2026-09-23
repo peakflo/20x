@@ -1210,6 +1210,110 @@ describe('ClaudeCodeAdapter background-task system messages', () => {
   })
 })
 
+describe('ClaudeCodeAdapter MCP attach-failure detection (regression)', () => {
+  /**
+   * agent-manager's lean/full task-context escalation (see agent-manager.ts
+   * buildSessionConfig / doSendAdapterMessage) relies on
+   * adapter.getMcpAttachFailures(sessionId) to know whether task-management
+   * failed to attach. Before this, only OpencodeAdapter implemented it, so
+   * Claude Code sessions could never escalate back to full context even when
+   * task-management genuinely failed to attach. These tests drive
+   * consumeStream directly with a fake queryIterator yielding the CLI's own
+   * `system/init` message (SDKSystemMessage.mcp_servers), the earliest point
+   * this adapter learns real attach status.
+   */
+  function makeInitIterator(mcpServers: Array<{ name: string; status: string }>) {
+    let called = false
+    return {
+      [Symbol.asyncIterator]() { return this },
+      async next() {
+        if (!called) {
+          called = true
+          return {
+            done: false,
+            value: { type: 'system', subtype: ClaudeSystemSubtype.INIT, uuid: 'init-1', mcp_servers: mcpServers },
+          }
+        }
+        return { done: true, value: undefined }
+      },
+    }
+  }
+
+  it('reports a configured server missing from the init message as an attach failure', async () => {
+    const adapter = new ClaudeCodeAdapter()
+    const session: any = {
+      sessionId: 's1',
+      queryIterator: makeInitIterator([{ name: 'other-server', status: 'connected' }]),
+      backgroundTasks: new Map(),
+      sawResult: false,
+      releasePrompt: null,
+      abortController: null,
+      status: 'busy',
+      messageBuffer: [],
+      messageCursor: 0,
+      streamTask: null,
+      lastError: null,
+      config: { mcpServers: { 'task-management': {}, 'other-server': {} } },
+    }
+    ;(adapter as any).sessions.set('s1', session)
+
+    await (adapter as any).consumeStream('s1', session)
+
+    expect(adapter.getMcpAttachFailures('s1')).toEqual(['task-management'])
+  })
+
+  it('reports a configured server with a non-connected status as an attach failure', async () => {
+    const adapter = new ClaudeCodeAdapter()
+    const session: any = {
+      sessionId: 's1',
+      queryIterator: makeInitIterator([{ name: 'task-management', status: 'failed' }]),
+      backgroundTasks: new Map(),
+      sawResult: false,
+      releasePrompt: null,
+      abortController: null,
+      status: 'busy',
+      messageBuffer: [],
+      messageCursor: 0,
+      streamTask: null,
+      lastError: null,
+      config: { mcpServers: { 'task-management': {} } },
+    }
+    ;(adapter as any).sessions.set('s1', session)
+
+    await (adapter as any).consumeStream('s1', session)
+
+    expect(adapter.getMcpAttachFailures('s1')).toEqual(['task-management'])
+  })
+
+  it('reports no failures when every configured server connects', async () => {
+    const adapter = new ClaudeCodeAdapter()
+    const session: any = {
+      sessionId: 's1',
+      queryIterator: makeInitIterator([{ name: 'task-management', status: 'connected' }]),
+      backgroundTasks: new Map(),
+      sawResult: false,
+      releasePrompt: null,
+      abortController: null,
+      status: 'busy',
+      messageBuffer: [],
+      messageCursor: 0,
+      streamTask: null,
+      lastError: null,
+      config: { mcpServers: { 'task-management': {} } },
+    }
+    ;(adapter as any).sessions.set('s1', session)
+
+    await (adapter as any).consumeStream('s1', session)
+
+    expect(adapter.getMcpAttachFailures('s1')).toEqual([])
+  })
+
+  it('returns an empty list for a session that never received an init message', () => {
+    const adapter = new ClaudeCodeAdapter()
+    expect(adapter.getMcpAttachFailures('never-seen')).toEqual([])
+  })
+})
+
 describe('ClaudeCodeAdapter abort classification (regression)', () => {
   /**
    * The agent SDK declares `class AbortError extends Error {}` with no `name`
