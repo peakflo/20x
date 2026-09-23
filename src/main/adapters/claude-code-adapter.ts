@@ -113,6 +113,17 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   private sessions = new Map<string, ClaudeSession>()
   private sdkLoading: Promise<void> | null = null
   private claudeExecutablePath: string | null = null
+  /**
+   * Names of MCP servers that were configured for a session but the CLI's
+   * `system/init` message (SDKSystemMessage.mcp_servers) reported as not
+   * connected. Mirrors OpencodeAdapter.getMcpAttachFailures so agent-manager's
+   * lean/full task-context escalation works the same way here. Unlike
+   * OpenCode, Claude Code only spawns the CLI (and so only learns MCP status)
+   * on the first `sendPrompt` of a session — this map is empty until that
+   * init message arrives, so the escalation can only take effect from the
+   * session's second turn onward.
+   */
+  private sessionMcpAttachFailures = new Map<string, string[]>()
 
   /**
    * Callback set by agent-manager to trigger an immediate poll cycle
@@ -1024,8 +1035,20 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
     for (const key of keysToDelete) {
       this.sessions.delete(key)
+      this.sessionMcpAttachFailures.delete(key)
       console.log(`[ClaudeCodeAdapter] Removed session key: ${key}`)
     }
+  }
+
+  /**
+   * Names of MCP servers that were configured for the session but the CLI
+   * reported as not connected in its `system/init` message. Empty until the
+   * first prompt's init message arrives (see field doc on
+   * sessionMcpAttachFailures) and empty for servers whose status we never
+   * learned (e.g. the session errored before init).
+   */
+  getMcpAttachFailures(sessionId: string): string[] {
+    return this.sessionMcpAttachFailures.get(sessionId) ?? []
   }
 
   async getAllMessages(sessionId: string, _config: SessionConfig): Promise<SessionMessage[]> {
@@ -1234,6 +1257,33 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
             // Don't delete the old sessionId yet - agent-manager needs to poll with it
             // to receive the realSessionId. The old key will be deleted by destroySession
             // or when agent-manager explicitly removes it.
+          }
+        }
+
+        // Detect MCP attach failures from the CLI's init message. Servers are
+        // only attached when the CLI process spawns (on the first prompt), so
+        // this is the earliest point this session's real attach status exists.
+        if (msg.type === 'system' && msg.subtype === ClaudeSystemSubtype.INIT) {
+          const reported = Array.isArray(msg.mcp_servers)
+            ? (msg.mcp_servers as Array<{ name?: string; status?: string }>)
+            : []
+          const statusByName = new Map(reported.map((s) => [s.name, s.status]))
+          const configuredNames = Object.keys((session.config.mcpServers as Record<string, unknown>) || {})
+          const failed = configuredNames.filter((name) => statusByName.get(name) !== 'connected')
+
+          const keysForSession = Array.from(new Set([sessionId, session.sessionId].filter(Boolean))) as string[]
+          for (const key of keysForSession) {
+            if (failed.length > 0) {
+              this.sessionMcpAttachFailures.set(key, [...failed])
+            } else {
+              this.sessionMcpAttachFailures.delete(key)
+            }
+          }
+          if (failed.length > 0) {
+            console.error(
+              `[ClaudeCodeAdapter] MCP servers NOT connected for session ${sessionId}: ${failed.join(', ')} — ` +
+              `their tools are unavailable this session`
+            )
           }
         }
 

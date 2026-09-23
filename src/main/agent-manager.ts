@@ -3000,20 +3000,15 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       )
       await this.writeSkillFiles(taskId, agentId, workspaceDir, attached)
     }
+    // NOTE: `sessionConfig` was already consumed by `adapter.resumeSession(...)`
+    // above and no adapter re-reads it afterward, so mutating its systemPrompt
+    // here would be dead code. The mechanism that actually matters is
+    // `resumeTaskContextMode`, persisted onto the stored AgentSession below —
+    // `doSendAdapterMessage` reads `session.taskContextMode` and rebuilds a
+    // fresh SessionConfig (via `buildSessionConfig`) with the full task
+    // context for every follow-up until it's cleared.
     const resumeTaskContextMode: 'full' | 'lean' =
       resumeAttachFailures.includes('task-management') ? 'full' : 'lean'
-    if (resumeTaskContextMode === 'full' && task) {
-      // Compaction may have dropped the initial brief, and get_task is unavailable.
-      let rebuilt = (agent.config?.system_prompt || '') + this.buildTaskContextSystemPrompt(task, 'full')
-      const secretIdsForResume = agent.config?.secret_ids
-      if (secretIdsForResume && secretIdsForResume.length > 0) {
-        const secretRecords = this.db.getSecretsByIds(secretIdsForResume)
-        if (secretRecords.length > 0) {
-          rebuilt += this.buildSecretsSystemPrompt(secretRecords)
-        }
-      }
-      sessionConfig.systemPrompt = rebuilt
-    }
 
     // Build the session's dedup state from the resumed history so adapter
     // polling won't re-emit historical parts as new streaming output. The
@@ -4362,11 +4357,21 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     // Build session config (includes secret broker fields if agent has secrets).
     // Default lean; escalate to full when task-management failed to attach.
+    // Re-checked on every send rather than trusting the value frozen at
+    // start/resume: some adapters (e.g. Claude Code) only learn their real MCP
+    // attach status after the session's first prompt has gone out, so the
+    // escalation would otherwise never take effect for them. For adapters
+    // whose attach status can't change turn-to-turn (or isn't reported at
+    // all), this recomputes to the same value session.taskContextMode already
+    // held, so it's a no-op there.
+    const liveAttachFailures = AgentManager.getAdapterMcpAttachFailures(session.adapter, sessionId)
+    const liveTaskContextMode: 'full' | 'lean' = liveAttachFailures.includes('task-management') ? 'full' : 'lean'
+    session.taskContextMode = liveTaskContextMode
     const sessionConfig = await this.buildSessionConfig(
       session.agentId,
       session.taskId,
       session.workspaceDir || process.cwd(),
-      { taskContextMode: session.taskContextMode ?? 'lean' }
+      { taskContextMode: liveTaskContextMode }
     )
 
     // Send prompt via adapter
