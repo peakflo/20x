@@ -57,6 +57,7 @@ export const CURSOR_MODELS: { id: string; name: string }[] = [
 export enum ClaudeModel {
   FABLE_5_1 = 'claude-fable-5-1',
   FABLE_5 = 'claude-fable-5',
+  OPUS_5_5 = 'claude-opus-5-5',
   OPUS_5 = 'claude-opus-5',
   SONNET_5 = 'claude-sonnet-5',
   OPUS_4_8 = 'claude-opus-4-8',
@@ -73,6 +74,7 @@ export enum ClaudeModel {
 export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
   { id: ClaudeModel.FABLE_5_1, name: 'Claude Fable 5.1' },
   { id: ClaudeModel.FABLE_5, name: 'Claude Fable 5' },
+  { id: ClaudeModel.OPUS_5_5, name: 'Claude Opus 5.5' },
   { id: ClaudeModel.OPUS_5, name: 'Claude Opus 5' },
   { id: ClaudeModel.SONNET_5, name: 'Claude Sonnet 5' },
   { id: ClaudeModel.OPUS_4_8, name: 'Claude Opus 4.8' },
@@ -88,6 +90,8 @@ export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
 
 export enum CodexModel {
   GPT_6_ASTRA = 'gpt-6-astra',
+  GPT_6_SOL = 'gpt-6-sol',
+  GPT_6_LUNA = 'gpt-6-luna',
   GPT_5_6_SOL = 'gpt-5.6-sol',
   GPT_5_6_TERRA = 'gpt-5.6-terra',
   GPT_5_6_LUNA = 'gpt-5.6-luna',
@@ -99,6 +103,8 @@ export enum CodexModel {
 
 export const CODEX_MODELS: { id: CodexModel; name: string }[] = [
   { id: CodexModel.GPT_6_ASTRA, name: 'GPT-6 Astra (Recommended)' },
+  { id: CodexModel.GPT_6_SOL, name: 'GPT-6 Sol' },
+  { id: CodexModel.GPT_6_LUNA, name: 'GPT-6 Luna' },
   { id: CodexModel.GPT_5_6_SOL, name: 'GPT-5.6 Sol' },
   { id: CodexModel.GPT_5_6_TERRA, name: 'GPT-5.6 Terra' },
   { id: CodexModel.GPT_5_6_LUNA, name: 'GPT-5.6 Luna' },
