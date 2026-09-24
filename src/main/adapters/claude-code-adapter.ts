@@ -161,11 +161,22 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const whichCmd = isWin ? 'where' : 'which'
       const binaryName = 'claude'
       const { stdout } = await execFileAsync(whichCmd, [binaryName])
-      let found = stdout.trim().split(/\r?\n/)[0]
+      const matches = stdout.trim().split(/\r?\n/).filter(Boolean)
+
+      // On Windows, `where claude` can list npm's extensionless POSIX shim
+      // (for git-bash/WSL) ahead of the `.cmd`/`.exe` wrapper — filesystem
+      // enumeration order, not guaranteed alphabetical. That shim isn't a
+      // native Windows executable, so spawning it directly fails with a
+      // generic "binary exists but failed to launch" error. Prefer a
+      // `.cmd`/`.exe` match when one exists; only fall back to the first
+      // line (may be the POSIX shim) if none does.
+      let found = isWin
+        ? matches.find((m) => /\.(cmd|exe)$/i.test(m)) ?? matches[0]
+        : matches[0]
 
       // On Windows, the SDK spawns the executable directly without shell,
-      // so .cmd files fail with EINVAL. Resolve .cmd → the underlying cli.js
-      // so the SDK uses `node cli.js` instead.
+      // so .cmd files fail with EINVAL. Resolve .cmd → the underlying
+      // binary/cli.js so the SDK spawns that directly instead.
       if (isWin) {
         found = await this.resolveWindowsCmdToJs(found)
       }
@@ -239,23 +250,46 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const { readFileSync, existsSync } = await import('fs')
       const { join, dirname } = await import('path')
 
-      // Try the known npm global layout first: same dir as .cmd → node_modules/@anthropic-ai/claude-code/cli.js
       const cmdDir = dirname(cmdPath)
+
+      // Modern claude-code (>=2.x) ships a native binary and its .cmd shim
+      // execs it directly — no node/cli.js involved at all. Check this
+      // layout first since it's what current installs actually use; the
+      // cli.js checks below are for the older node-based packaging.
+      const nativeExe = join(cmdDir, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')
+      if (existsSync(nativeExe)) {
+        console.log(`[ClaudeCodeAdapter] Resolved .cmd → ${nativeExe} (native binary)`)
+        return nativeExe
+      }
+
+      // Older layout: same dir as .cmd → node_modules/@anthropic-ai/claude-code/cli.js
       const cliJs = join(cmdDir, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js')
       if (existsSync(cliJs)) {
         console.log(`[ClaudeCodeAdapter] Resolved .cmd → ${cliJs}`)
         return cliJs
       }
 
-      // Parse the .cmd file to extract the JS path
+      // Parse the .cmd file directly — covers both a quoted native .exe
+      // target and the older `node ... cli.js` invocation style. npm's
+      // actual generated shims use the batch-file-directory token %~dp0
+      // (not %dp0%) — replace both forms.
       const content = readFileSync(cmdPath, 'utf8')
-      const match = content.match(/"[^"]*node(?:\.exe)?"[^"]*"([^"]+\.js)"/)
+      const resolveToken = (raw: string): string => raw.replace(/%~?dp0%?/g, cmdDir + '\\')
+
+      const exeMatch = content.match(/"([^"]+\.exe)"/)
+      if (exeMatch?.[1]) {
+        const resolvedExe = resolveToken(exeMatch[1])
+        if (existsSync(resolvedExe)) {
+          console.log(`[ClaudeCodeAdapter] Parsed .cmd → ${resolvedExe}`)
+          return resolvedExe
+        }
+      }
+
+      const jsMatch = content.match(/"[^"]*node(?:\.exe)?"[^"]*"([^"]+\.js)"/)
         || content.match(/node(?:\.exe)?\s+"([^"]+\.js)"/)
         || content.match(/node(?:\.exe)?\s+([^\s]+\.js)/)
-      if (match?.[1]) {
-        const resolvedJs = match[1].includes('%dp0%')
-          ? match[1].replace(/%dp0%/g, cmdDir + '\\')
-          : match[1]
+      if (jsMatch?.[1]) {
+        const resolvedJs = resolveToken(jsMatch[1])
         if (existsSync(resolvedJs)) {
           console.log(`[ClaudeCodeAdapter] Parsed .cmd → ${resolvedJs}`)
           return resolvedJs
