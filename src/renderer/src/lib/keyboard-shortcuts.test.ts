@@ -3,6 +3,7 @@ import {
   dispatchTaskShortcut,
   findComposerElement,
   focusComposerInput,
+  getChordCommand,
   getNextNudgeMessage,
   insertIntoComposer,
   isGlobalShortcutBlocked,
@@ -29,6 +30,22 @@ describe('keyboard shortcuts', () => {
     event.preventDefault()
 
     expect(isGlobalShortcutBlocked(event)).toBe(true)
+  })
+
+  it('lets a pending chord finish after focus moves to an input, but still respects dialogs', () => {
+    const input = document.createElement('textarea')
+    document.body.appendChild(input)
+    const secondKey = new KeyboardEvent('keydown', { key: 's', bubbles: true })
+    input.dispatchEvent(secondKey)
+    expect(isGlobalShortcutBlocked(secondKey)).toBe(true)
+    expect(isGlobalShortcutBlocked(secondKey, true)).toBe(false)
+
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    document.body.appendChild(dialog)
+    expect(isGlobalShortcutBlocked(secondKey, true)).toBe(true)
+    dialog.remove()
+    input.remove()
   })
 
   it('cycles through different Nudge messages', () => {
@@ -58,6 +75,12 @@ describe('keyboard shortcuts', () => {
       expect.objectContaining({ keys: ['G', 'C'], label: 'Open selected task on Canvas or go to Canvas' }),
       expect.objectContaining({ keys: ['Shift', 'H'], label: 'Run heartbeat now' })
     ]))
+  })
+
+  it('routes the related navigation chords', () => {
+    expect(getChordCommand('G', 'P')).toEqual({ type: 'parent' })
+    expect(getChordCommand('g', 'c')).toEqual({ type: 'canvas' })
+    expect(getChordCommand('O', 'S')).toEqual({ type: 'subtasks' })
   })
 
   it('lists the focus composer shortcuts', () => {
@@ -167,11 +190,17 @@ describe('keyboard shortcuts', () => {
     expect(shouldAutoFocusComposer(new KeyboardEvent('keydown', { key: 'j' }))).toBe(false)
     expect(shouldAutoFocusComposer(new KeyboardEvent('keydown', { key: '/' }))).toBe(false)
     expect(shouldAutoFocusComposer(new KeyboardEvent('keydown', { key: 'g' }))).toBe(false)
+    expect(shouldAutoFocusComposer(new KeyboardEvent('keydown', { key: 'r' }))).toBe(false)
+    expect(shouldAutoFocusComposer(new KeyboardEvent('keydown', { key: 'R', shiftKey: true }))).toBe(false)
     // Non-shortcut printable keys should auto-focus
     expect(shouldAutoFocusComposer(new KeyboardEvent('keydown', { key: 'a' }))).toBe(true)
     expect(shouldAutoFocusComposer(new KeyboardEvent('keydown', { key: 'z' }))).toBe(true)
     expect(shouldAutoFocusComposer(new KeyboardEvent('keydown', { key: '1' }))).toBe(true)
     expect(shouldAutoFocusComposer(new KeyboardEvent('keydown', { key: '.' }))).toBe(true)
+    // The second key of a pending chord must never enter the composer.
+    for (const key of ['p', 'c', 's']) {
+      expect(shouldAutoFocusComposer(new KeyboardEvent('keydown', { key }), true)).toBe(false)
+    }
 
     document.body.removeChild(wrapper)
   })
