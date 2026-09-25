@@ -6,17 +6,20 @@ import { useArtifactStore } from './stores/artifact-store'
 import { TaskListPage } from './pages/TaskListPage'
 import { TaskDetailPage } from './pages/TaskDetailPage'
 import { ConversationPage } from './pages/ConversationPage'
+import { ActiveSessionsPage } from './pages/ActiveSessionsPage'
 import { RepoSelectorPage } from './pages/RepoSelectorPage'
 import { TaskFormPage } from './pages/TaskFormPage'
 import { SkillSelectorPage } from './pages/SkillSelectorPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { PairPage } from './pages/PairPage'
 import { ArtifactViewerPage } from './pages/ArtifactViewerPage'
+import { BottomNav } from './components/BottomNav'
 import { getPairCodeFromUrl, hasSessionToken } from './api/auth'
 import { captureAnalyticsEvent, capturePageView } from '@/lib/analytics'
 
 export type Route =
   | { page: 'list' }
+  | { page: 'active' }
   | { page: 'detail'; taskId: string }
   | { page: 'conversation'; taskId: string }
   | { page: 'artifact'; taskId: string; artifactId: string }
@@ -25,6 +28,11 @@ export type Route =
   | { page: 'create' }
   | { page: 'edit'; taskId: string }
   | { page: 'settings' }
+
+// The three top-level tabs get the persistent bottom nav; everything else
+// (task detail, conversation, forms) is pushed on top without it, like a
+// native app's navigation stack over its tab bar.
+const TAB_PAGES = new Set(['list', 'active', 'settings'])
 
 export function App() {
   const pairCode = getPairCodeFromUrl()
@@ -140,41 +148,55 @@ export function App() {
   }
 
   return (
-    <div className="h-full flex flex-col bg-background text-foreground">
-      {/* Connection indicator */}
-      {!connected && (
-        <div className="bg-amber-500/20 text-amber-300 text-xs text-center py-1 px-2 shrink-0">
-          Connecting...
-        </div>
-      )}
+    // Centered max-width frame on wider viewports (browser tab / desktop web)
+    // instead of stretching phone-shaped layouts full-width — keeps line
+    // lengths and touch targets sane while still being one responsive SPA.
+    <div className="h-full bg-background flex items-center justify-center">
+      <div className="h-full w-full max-w-[560px] flex flex-col bg-background text-foreground sm:shadow-2xl sm:border-x sm:border-border/30">
+        {/* Connection indicator */}
+        {!connected && (
+          <div className="bg-amber-500/20 text-amber-300 text-xs text-center py-1 px-2 shrink-0">
+            Connecting...
+          </div>
+        )}
 
-      {route.page === 'list' && (
-        <TaskListPage onNavigate={navigate} />
-      )}
-      {route.page === 'detail' && (
-        <TaskDetailPage taskId={route.taskId} onNavigate={navigate} />
-      )}
-      {route.page === 'conversation' && (
-        <ConversationPage taskId={route.taskId} onNavigate={navigate} />
-      )}
-      {route.page === 'artifact' && (
-        <ArtifactViewerPage taskId={route.taskId} artifactId={route.artifactId} onNavigate={navigate} />
-      )}
-      {route.page === 'repos' && (
-        <RepoSelectorPage taskId={route.taskId} onNavigate={navigate} />
-      )}
-      {route.page === 'skills' && (
-        <SkillSelectorPage taskId={route.taskId} onNavigate={navigate} />
-      )}
-      {route.page === 'create' && (
-        <TaskFormPage onNavigate={navigate} />
-      )}
-      {route.page === 'edit' && (
-        <TaskFormPage taskId={route.taskId} onNavigate={navigate} />
-      )}
-      {route.page === 'settings' && (
-        <SettingsPage onNavigate={navigate} />
-      )}
+        <div className="flex-1 min-h-0 flex flex-col">
+          {route.page === 'list' && (
+            <TaskListPage onNavigate={navigate} />
+          )}
+          {route.page === 'active' && (
+            <ActiveSessionsPage onNavigate={navigate} />
+          )}
+          {route.page === 'detail' && (
+            <TaskDetailPage taskId={route.taskId} onNavigate={navigate} />
+          )}
+          {route.page === 'conversation' && (
+            <ConversationPage taskId={route.taskId} onNavigate={navigate} />
+          )}
+          {route.page === 'artifact' && (
+            <ArtifactViewerPage taskId={route.taskId} artifactId={route.artifactId} onNavigate={navigate} />
+          )}
+          {route.page === 'repos' && (
+            <RepoSelectorPage taskId={route.taskId} onNavigate={navigate} />
+          )}
+          {route.page === 'skills' && (
+            <SkillSelectorPage taskId={route.taskId} onNavigate={navigate} />
+          )}
+          {route.page === 'create' && (
+            <TaskFormPage onNavigate={navigate} />
+          )}
+          {route.page === 'edit' && (
+            <TaskFormPage taskId={route.taskId} onNavigate={navigate} />
+          )}
+          {route.page === 'settings' && (
+            <SettingsPage onNavigate={navigate} />
+          )}
+        </div>
+
+        {TAB_PAGES.has(route.page) && (
+          <BottomNav current={route.page as 'list' | 'active' | 'settings'} onNavigate={navigate} />
+        )}
+      </div>
     </div>
   )
 }
