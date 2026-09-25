@@ -397,13 +397,63 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     return threadId
   }
 
+  /**
+   * Kills a stale app-server process and waits for it to exit. A thread has a
+   * single writer, so a previous process for the same thread (left behind by a
+   * dropped session mapping or a failed earlier resume) must be gone before
+   * `thread/resume` can succeed.
+   */
+  private async terminateProcess(session: AppServerSession): Promise<void> {
+    const child = session.process
+    if (!child || child.exitCode !== null || child.signalCode !== null) return
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        try { child.kill('SIGKILL') } catch { /* already gone */ }
+        setTimeout(resolve, 200)
+      }, 2000)
+      child.once('exit', () => {
+        clearTimeout(timer)
+        resolve()
+      })
+      try { child.kill('SIGTERM') } catch { clearTimeout(timer); resolve() }
+    })
+  }
+
   async resumeSession(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
-    const session = await this.startAppServerProcess(config, sessionId)
-    session.threadId = sessionId
-    this.sessions.set(sessionId, session)
+    // Release any process that still owns this thread before taking it over.
+    const stale = this.sessions.get(sessionId)
+    if (stale) {
+      this.sessions.delete(sessionId)
+      await this.terminateProcess(stale)
+    }
 
-    await this.initializeAppServer(session)
+    const maxAttempts = 4
+    for (let attempt = 1; ; attempt++) {
+      const session = await this.startAppServerProcess(config, sessionId)
+      session.threadId = sessionId
+      this.sessions.set(sessionId, session)
+      try {
+        await this.initializeAppServer(session)
+        await this.resumeThread(session, sessionId, config)
+        return await this.finishResume(session, sessionId, config)
+      } catch (error) {
+        // Never leak the process we just spawned: it would keep the thread
+        // locked and make every later resume fail with "active writer".
+        if (this.sessions.get(sessionId) === session) this.sessions.delete(sessionId)
+        await this.terminateProcess(session)
+        const message = error instanceof Error ? error.message : String(error)
+        // The previous owner may still be releasing the thread (e.g. an
+        // external Codex process). Give it a moment before giving up.
+        if (message.includes('already has an active writer') && attempt < maxAttempts) {
+          await new Promise((r) => setTimeout(r, 500 * attempt))
+          continue
+        }
+        throw error
+      }
+    }
+  }
 
+  private async resumeThread(session: AppServerSession, sessionId: string, config: SessionConfig): Promise<void> {
     await this.sendRpcRequest(session, 'thread/resume', {
       threadId: sessionId,
       cwd: config.workspaceDir,
@@ -415,7 +465,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       initialTurnsPage: { limit: 50 },
       config: this.buildConfigOverrides(config)
     })
+  }
 
+  private async finishResume(session: AppServerSession, sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
     void this.logMcpServerInventory(session, sessionId, 'thread/resume')
 
     try {

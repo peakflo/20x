@@ -1402,3 +1402,33 @@ describe('CodexAppServerAdapter app-server error notifications', () => {
     }
   })
 })
+
+describe('CodexAppServerAdapter resume writer handling', () => {
+  function stubProcess() {
+    return { exitCode: null, signalCode: null, kill: vi.fn(), once: vi.fn((_e: string, cb: () => void) => setImmediate(cb)) }
+  }
+
+  it('terminates the stale process and cleans up + retries after an active-writer conflict', async () => {
+    const adapter = new CodexAppServerAdapter()
+    const priv = adapter as any
+    const stale = { ...createSession(), process: stubProcess() }
+    priv.sessions.set('thread-1', stale)
+    const fresh = [
+      { ...createSession(), process: stubProcess() },
+      { ...createSession(), process: stubProcess() }
+    ]
+    vi.spyOn(priv, 'startAppServerProcess').mockImplementation(async () => fresh.shift())
+    vi.spyOn(priv, 'initializeAppServer').mockResolvedValue(undefined)
+    const resumeThread = vi.spyOn(priv, 'resumeThread')
+      .mockRejectedValueOnce(new Error('thread 1 already has an active writer'))
+      .mockResolvedValueOnce(undefined)
+    vi.spyOn(priv, 'finishResume').mockResolvedValue([])
+    const p = adapter.resumeSession('thread-1', { workspaceDir: '/tmp' } as any)
+    await expect(p).resolves.toEqual([])
+
+    expect(stale.process.kill).toHaveBeenCalledWith('SIGTERM')
+    expect(resumeThread).toHaveBeenCalledTimes(2)
+    expect(priv.sessions.get('thread-1')).toBeDefined()
+    expect(priv.sessions.get('thread-1')).not.toBe(stale)
+  })
+})
