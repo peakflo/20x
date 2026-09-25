@@ -9,6 +9,7 @@
 import { nodeWorkerRuntime } from '../node-worker-runtime'
 import { fork, type ChildProcess } from 'child_process'
 import { EventEmitter } from 'events'
+import { unpackedAsarPath } from './voice-worker-client'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import type { VoiceTtsEngineId, VoiceTtsStatus } from '../../shared/voice-tts'
@@ -405,5 +406,5 @@ function sameRequest(a: VoiceTtsLoadRequest | null, b: VoiceTtsLoadRequest): boo
 
 /** The worker is copied next to the main bundle by `electron.vite.config.ts`. */
 export function defaultTtsWorkerScript(): string {
-  return join(__dirname, 'voice', 'voice-tts-worker.js')
+  return unpackedAsarPath(join(__dirname, 'voice', 'voice-tts-worker.js'))
 }

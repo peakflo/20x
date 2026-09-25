@@ -208,6 +208,11 @@ export class VoiceWorkerClient extends EventEmitter {
     // A process that cannot be spawned emits this. Unhandled, it is fatal.
     this.child.on('error', (err) => {
       console.error('[voice-worker] process error:', err.message)
+      this.loadedModel = null
+      this.emit('status', {
+        state: 'error',
+        message: 'The voice worker could not be started.',
+      } satisfies VoiceEngineStatus)
       this.emit('error', 'The voice worker could not be started.', 'worker_spawn')
     })
 
@@ -219,11 +224,24 @@ export class VoiceWorkerClient extends EventEmitter {
       const wasLoaded = this.loadedModel
       this.child = null
       this.loadedModel = null
+      const willRestart = code !== 0 && Boolean(wasLoaded) && this.restarts < 1
+      // A worker that dies while the engine is 'loading' or 'ready' would leave
+      // that status stale for ever: the microphone would spin (or vanish) with
+      // no way out. Report the failure unless a restart is about to reload.
+      if (!willRestart && (code !== 0 || wasLoaded)) {
+        this.emit('status', {
+          state: 'error',
+          message:
+            code === 0
+              ? 'The voice worker stopped unexpectedly.'
+              : `The voice worker stopped (code ${code}).`,
+        } satisfies VoiceEngineStatus)
+      }
       if (code === 0) return
       this.emit('error', `The voice worker stopped (code ${code}).`, 'worker_exit')
       // One automatic restart. A repeated crash leaves voice off rather than
       // spawning processes in a loop.
-      if (wasLoaded && this.restarts < 1) {
+      if (willRestart && wasLoaded) {
         this.restarts += 1
         void this.load(wasLoaded)
       }
@@ -285,7 +303,16 @@ export class VoiceWorkerClient extends EventEmitter {
   }
 }
 
+/**
+ * The worker runs under a plain system `node` on macOS, which cannot read
+ * inside `app.asar`. `out/main/voice/**` is unpacked at packaging time, so use
+ * the real file next to the archive.
+ */
+export function unpackedAsarPath(path: string): string {
+  return path.replace(/app\.asar(?=[\\/])/, 'app.asar.unpacked')
+}
+
 /** The worker is copied next to the main bundle by `electron.vite.config.ts`. */
 export function defaultWorkerScript(): string {
-  return join(__dirname, 'voice', 'voice-worker.js')
+  return unpackedAsarPath(join(__dirname, 'voice', 'voice-worker.js'))
 }
