@@ -358,3 +358,13 @@ describe.skipIf(!hasRealEngine)('a single-shot turn', () => {
     }
   }, 240_000)
 })
+
+describe('unpackedAsarPath', () => {
+  it('points the worker at the unpacked file so system node can read it', async () => {
+    const { unpackedAsarPath } = await import('./voice-worker-client')
+    expect(unpackedAsarPath('/Applications/20x.app/Contents/Resources/app.asar/out/main/voice/voice-worker.js')).toBe(
+      '/Applications/20x.app/Contents/Resources/app.asar.unpacked/out/main/voice/voice-worker.js'
+    )
+    expect(unpackedAsarPath('/dev/out/main/voice/voice-worker.js')).toBe('/dev/out/main/voice/voice-worker.js')
+  })
+})

@@ -303,7 +303,16 @@ export class VoiceWorkerClient extends EventEmitter {
   }
 }
 
+/**
+ * The worker runs under a plain system `node` on macOS, which cannot read
+ * inside `app.asar`. `out/main/voice/**` is unpacked at packaging time, so use
+ * the real file next to the archive.
+ */
+export function unpackedAsarPath(path: string): string {
+  return path.replace(/app\.asar(?=[\\/])/, 'app.asar.unpacked')
+}
+
 /** The worker is copied next to the main bundle by `electron.vite.config.ts`. */
 export function defaultWorkerScript(): string {
-  return join(__dirname, 'voice', 'voice-worker.js')
+  return unpackedAsarPath(join(__dirname, 'voice', 'voice-worker.js'))
 }
