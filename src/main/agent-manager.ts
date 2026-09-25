@@ -1,5 +1,6 @@
 import { finishSessionFeedback, updateTaskFromUser } from './session-feedback'
 import { serverTaskSnapshot } from './workflo-task-sync'
+import { buildAgentSwitchRecap } from './agent-handoff'
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
 import { join } from 'path'
@@ -1554,13 +1555,21 @@ export class AgentManager extends EventEmitter {
 
   /**
    * Starts a session using a coding agent adapter (Claude Code, etc.)
+   *
+   * @param handoffFromAgentName - Set when this session replaces a different
+   * agent mid-task (see switchAgent). Prepends a recap of the existing
+   * transcript to the initial prompt instead of starting from a blank slate,
+   * since the new adapter's own session has no memory of what came before —
+   * each coding agent backend has its own incompatible session format, so
+   * there is no native way to "resume" across a switch.
    */
   private async startAdapterSession(
     adapter: CodingAgentAdapter,
     agentId: string,
     taskId: string,
     workspaceDir?: string,
-    skipInitialPrompt?: boolean
+    skipInitialPrompt?: boolean,
+    handoffFromAgentName?: string
   ): Promise<string> {
     this.assertLocalHelpAllowed(taskId)
     // Helper: yield event loop between bursts of synchronous DB / FS calls
@@ -1834,6 +1843,16 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       // (user messages are more reliably followed than system prompt instructions)
       const memoryFileName = this.getMemoryFileName(agentId)
       promptText += `\n\nIMPORTANT: First, read the \`${memoryFileName}\` file in the working directory — it has workspace config, skills, and project context.`
+
+      // Agent handoff — prepend a recap of the existing conversation so the
+      // new agent isn't starting from a blank slate. Comes last so it reads
+      // first, right before the actual work instructions.
+      if (handoffFromAgentName) {
+        const recap = buildAgentSwitchRecap(this.db.getTranscriptParts(taskId))
+        if (recap) {
+          promptText = `## Picking up from ${handoffFromAgentName}\n\nThis task was previously being worked on by a different agent. Here is the conversation so far:\n\n${recap}\n\n---\n\n${promptText}`
+        }
+      }
 
       // Show the full prompt in the UI so the user can see the complete
       // context sent to the agent (repos, skills, secrets, heartbeat, etc.)
@@ -3138,6 +3157,54 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       throw new Error(`No adapter available for agent ${agentId}`)
     }
     return this.startAdapterSession(adapter, agentId, taskId, workspaceDir, skipInitialPrompt)
+  }
+
+  /**
+   * Switches a task to a different agent mid-conversation — e.g. Agent A (a
+   * DeepSeek model) ran out of credits and the user wants Agent B (Claude) to
+   * pick up the same task without restarting from scratch.
+   *
+   * Each coding agent backend (Claude Code, OpenCode, Codex, ...) has its own
+   * incompatible native session format, so there is no way to hand off the
+   * literal running session — instead, this stops the old agent's session if
+   * one is active, then starts a fresh session with the new agent whose first
+   * prompt is seeded with a recap of the existing transcript (see
+   * buildAgentSwitchRecap) so the new agent has full context instead of a
+   * blank slate.
+   */
+  async switchAgent(taskId: string, newAgentId: string): Promise<string> {
+    this.assertLocalHelpAllowed(taskId)
+    const task = this.db.getTask(taskId)
+    if (!task) throw new Error(`Task not found: ${taskId}`)
+
+    const newAgent = this.db.getAgent(newAgentId)
+    if (!newAgent) throw new Error(`Agent not found: ${newAgentId}`)
+
+    const previousAgentId = task.agent_id
+    const previousAgent = previousAgentId ? this.db.getAgent(previousAgentId) : undefined
+
+    if (previousAgentId === newAgentId) {
+      throw new Error(`Task is already assigned to ${newAgent.name}`)
+    }
+
+    // Stop the outgoing agent's live session, if any — its process belongs to
+    // a different backend and can't continue once we hand off.
+    await this.stopByTaskId(taskId)
+
+    const workspaceDir = this.db.getWorkspaceDir(taskId)
+    this.updateTaskFromLocalAgent(taskId, { agent_id: newAgentId })
+
+    const adapter = this.getAdapter(newAgentId)
+    if (!adapter) throw new Error(`No adapter available for agent ${newAgentId}`)
+
+    return this.startAdapterSession(
+      adapter,
+      newAgentId,
+      taskId,
+      workspaceDir,
+      false,
+      previousAgent?.name || 'a previous agent'
+    )
   }
 
   async startTask(taskId: string, opts?: { preferSubtasks?: boolean; allowTriage?: boolean }): Promise<{

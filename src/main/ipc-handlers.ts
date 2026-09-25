@@ -474,6 +474,11 @@ export function registerIpcHandlers(
     return { success: true, sessionId: result.sessionId }
   })
 
+  ipcMain.handle('agentSession:switchAgent', async (_, taskId: string, newAgentId: string) => {
+    const sessionId = await agentManager.switchAgent(taskId, newAgentId)
+    return { sessionId }
+  })
+
   ipcMain.handle(
     'agentSession:sendByTaskId',
     async (_, taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
