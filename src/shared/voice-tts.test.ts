@@ -53,6 +53,29 @@ describe('toSpokenText', () => {
     expect(toSpokenText('Edit /Users/me/notes/todo.md first.').text).toBe('Edit a file path first.')
   })
 
+  it('does not mistake a date for a file path', () => {
+    expect(toSpokenText('Paid on 09/12/2026.').text).toBe('Paid on 09/12/2026.')
+    expect(toSpokenText('Due 1/2/2026 at noon.').text).toBe('Due 1/2/2026 at noon.')
+    expect(toSpokenText('It runs 24/7/365 now.').text).toBe('It runs 24/7/365 now.')
+  })
+
+  it('keeps the full stop after a path that ends a sentence', () => {
+    expect(toSpokenText('Open src/main/voice/voice-tts.ts.').text).toBe('Open a file path.')
+    expect(toSpokenText('Open /Users/me/notes/todo.md.').text).toBe('Open a file path.')
+    expect(toSpokenText('Open C:\\Users\\me\\todo.md.').text).toBe('Open a file path.')
+  })
+
+  it('still names a path whose last segments are digits', () => {
+    expect(toSpokenText('See src/fixtures/2026/09.').text).toBe('See a file path.')
+  })
+
+  it('leaves a ratio or a slash pair alone', () => {
+    expect(toSpokenText('The split is 50/50 and the score 9/10.').text).toBe(
+      'The split is 50/50 and the score 9/10.'
+    )
+    expect(toSpokenText('Use and/or here.').text).toBe('Use and/or here.')
+  })
+
   it('strips heading, list, quote and emphasis marks', () => {
     const result = toSpokenText('## Result\n\n- **one** item\n- *two* items\n\n> a quote')
     expect(result.text).toBe('Result\n\none item\ntwo items\n\na quote')
@@ -156,6 +179,13 @@ describe('splitStreamingSentences', () => {
 
   it('treats a closing quotation mark as part of the full stop', () => {
     expect(splitStreamingSentences('He said "no."').sentences).toEqual(['He said "no."'])
+  })
+
+  it('releases a sentence that ends on a date, because the date keeps its full stop', () => {
+    const { text } = toSpokenText('Paid on 09/12/2026.')
+    const result = splitStreamingSentences(text)
+    expect(result.sentences).toEqual(['Paid on 09/12/2026.'])
+    expect(result.remainder).toBe('')
   })
 })
 
