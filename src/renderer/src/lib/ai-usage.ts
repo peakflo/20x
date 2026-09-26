@@ -23,6 +23,25 @@ const pick = (o: Record<string, unknown>, keys: string[]): unknown => {
 export function parseAiUsage(payload: unknown): AiUsage | null {
   if (!payload || typeof payload !== 'object') return null
   const root = payload as Record<string, unknown>
+  // Dedicated /usage contract: { active, usage: { usedUsd, limitUsd, percentUsed, resetAt } | null }
+  if (typeof root.active === 'boolean') {
+    const u = root.usage
+    if (!root.active || !u || typeof u !== 'object') return null
+    const { usedUsd, limitUsd, percentUsed, resetAt } = u as Record<string, unknown>
+    const used = num(usedUsd)
+    const limit = num(limitUsd)
+    let pct = num(percentUsed)
+    if (pct === null) {
+      if (used === null || limit === null || limit <= 0) return null
+      pct = (used / limit) * 100
+    }
+    return {
+      percent: Math.min(100, Math.max(0, Math.round(pct))),
+      used,
+      limit,
+      resetAt: typeof resetAt === 'string' ? resetAt : null
+    }
+  }
   const nested = [root.usage, root.currentSubscription].find((v) => v && typeof v === 'object') as
     | Record<string, unknown>
     | undefined
@@ -56,13 +75,18 @@ export const usageLevel = (percent: number): UsageLevel =>
 export async function fetchAiUsage(
   request: (method: string, path: string) => Promise<unknown>
 ): Promise<AiUsage | null> {
-  for (const path of ['/api/20x/ai-gateway/usage', '/api/20x/ai-gateway/plan']) {
-    try {
-      const usage = parseAiUsage(await request('GET', path))
-      if (usage) return usage
-    } catch {
-      // try next endpoint
+  // A valid /usage answer (even active:false or usage:null) is final: never fall back to /plan.
+  try {
+    const res = await request('GET', '/api/20x/ai-gateway/usage')
+    if (res && typeof res === 'object' && typeof (res as { active?: unknown }).active === 'boolean') {
+      return parseAiUsage(res)
     }
+  } catch {
+    // /usage missing (404) or failing: use the older /plan endpoint
   }
-  return null
+  try {
+    return parseAiUsage(await request('GET', '/api/20x/ai-gateway/plan'))
+  } catch {
+    return null
+  }
 }
