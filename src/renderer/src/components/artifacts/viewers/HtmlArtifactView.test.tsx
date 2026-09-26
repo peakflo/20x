@@ -47,4 +47,16 @@ describe('HtmlArtifactView', () => {
     expect(onMessage).toHaveBeenCalledTimes(1)
     expect(onMessage).toHaveBeenCalledWith('accepted')
   })
+
+  it('puts the CSP before any artifact text, so a decoy <head> in an attribute cannot move it', async () => {
+    const artifactApi: ArtifactApi = {
+      scan: vi.fn(),
+      read: vi.fn().mockResolvedValue({ kind: ArtifactContentKind.TEXT, content: '<html data-x="<head>"><body><p>decoy</p></body></html>' })
+    }
+    render(<HtmlArtifactView artifact={artifact} artifactApi={artifactApi} />)
+    await waitFor(() => expect(screen.getByTitle('preview.html').getAttribute('srcdoc')).toContain('<p>decoy</p>'))
+    const srcDoc = screen.getByTitle('preview.html').getAttribute('srcdoc') || ''
+    expect(srcDoc.startsWith('<!doctype html><meta http-equiv="Content-Security-Policy"')).toBe(true)
+    expect(srcDoc.indexOf('data-x=')).toBeGreaterThan(srcDoc.indexOf('Content-Security-Policy'))
+  })
 })
