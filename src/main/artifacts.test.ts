@@ -71,6 +71,7 @@ describe('task artifact files', () => {
     await writeFile(join(workspaceDir, 'outputs', 'dashboard', 'README.md'), '# Dashboard')
     await writeFile(join(workspaceDir, 'outputs', 'dashboard', 'index.html'), '<main>Dashboard</main>')
     await writeFile(join(workspaceDir, 'outputs', 'dashboard', 'styles.css'), 'main { display: grid; }')
+    await writeFile(join(workspaceDir, 'outputs', 'dashboard', 'demo.mp4'), Buffer.from([0, 1, 2, 3]))
 
     const artifacts = await scanTaskArtifacts(workspaceDir)
 
@@ -80,7 +81,7 @@ describe('task artifact files', () => {
       title: 'dashboard',
       type: ArtifactType.HTML,
       workpieceKey: 'outputs/dashboard',
-      files: ['outputs/dashboard/README.md', 'outputs/dashboard/index.html', 'outputs/dashboard/styles.css']
+      files: ['outputs/dashboard/README.md', 'outputs/dashboard/demo.mp4', 'outputs/dashboard/index.html', 'outputs/dashboard/styles.css']
     }))
   })
 
@@ -250,6 +251,7 @@ describe('task artifact files', () => {
   it('reads text and image content in renderer-safe transport forms', async () => {
     await writeFile(join(workspaceDir, 'report.md'), '# Result')
     await writeFile(join(workspaceDir, 'shot.png'), Buffer.from([0, 1, 2, 3]))
+    await writeFile(join(workspaceDir, 'demo.mp4'), Buffer.from([0, 1, 2, 3]))
 
     await expect(readTaskArtifact(workspaceDir, 'report.md')).resolves.toEqual({
       kind: ArtifactContentKind.TEXT,
@@ -260,6 +262,11 @@ describe('task artifact files', () => {
       kind: ArtifactContentKind.DATA_URL,
       content: 'data:image/png;base64,AAECAw==',
       mimeType: 'image/png'
+    })
+    await expect(readTaskArtifact(workspaceDir, 'demo.mp4')).resolves.toEqual({
+      kind: ArtifactContentKind.DATA_URL,
+      content: 'data:video/mp4;base64,AAECAw==',
+      mimeType: 'video/mp4'
     })
   })
 

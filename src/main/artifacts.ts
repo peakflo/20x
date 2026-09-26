@@ -15,6 +15,7 @@ const MAX_SCAN_DEPTH = 10
 const MAX_SCAN_FILES = 500
 const MAX_TEXT_BYTES = 1024 * 1024
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_MEDIA_BYTES = 25 * 1024 * 1024
 const REGISTRY_VERSION = 1
 const REGISTRY_DIRECTORY = '.20x'
 const REGISTRY_FILENAME = 'artifacts.json'
@@ -44,6 +45,15 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
   '.webp': 'image/webp'
 }
 const HTML_EXTENSIONS = new Set(['.htm', '.html'])
+const MEDIA_MIME_TYPES: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.ogv': 'video/ogg',
+  '.mp3': 'audio/mpeg',
+  '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg',
+  '.wav': 'audio/wav'
+}
 const TEXT_MIME_TYPES: Record<string, string> = {
   '.py': 'text/plain',
   '.sh': 'text/plain',
@@ -71,6 +81,7 @@ export function artifactTypeForPath(filePath: string): ArtifactType | null {
   if (MARKDOWN_EXTENSIONS.has(extension)) return ArtifactType.MARKDOWN
   if (extension in IMAGE_MIME_TYPES) return ArtifactType.IMAGE
   if (HTML_EXTENSIONS.has(extension)) return ArtifactType.HTML
+  if (extension in MEDIA_MIME_TYPES) return ArtifactType.FILE
   if (extension in TEXT_MIME_TYPES) return ArtifactType.FILE
   return null
 }
@@ -279,7 +290,7 @@ export async function writeRegisteredTaskArtifactFile(
   if (!target) throw new Error('Invalid artifact ID or filename')
   const bytes = input.encoding === 'base64' ? Buffer.from(input.content, 'base64') : Buffer.from(input.content, 'utf8')
   const type = artifactTypeForPath(target.relativeName)
-  const limit = type === ArtifactType.IMAGE ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES
+  const limit = type === ArtifactType.IMAGE ? MAX_IMAGE_BYTES : extname(target.relativeName).toLowerCase() in MEDIA_MIME_TYPES ? MAX_MEDIA_BYTES : MAX_TEXT_BYTES
   if (bytes.length > limit) throw new Error(`Artifact file exceeds the ${limit}-byte limit`)
 
   const record = await updateArtifactRegistry(workspaceDir, async (registry) => {
@@ -336,9 +347,10 @@ export async function readRegisteredTaskArtifactFile(
   if (!target) throw new Error('Invalid artifact ID or filename')
   const type = artifactTypeForPath(target.relativeName)
   const bytes = await readFile(target.absolutePath)
-  if (type === ArtifactType.IMAGE) {
-    if (bytes.length > MAX_IMAGE_BYTES) throw new Error('Artifact image exceeds the read limit')
-    return { content: bytes.toString('base64'), encoding: 'base64', mimeType: IMAGE_MIME_TYPES[extname(target.relativeName).toLowerCase()] }
+  const extension = extname(target.relativeName).toLowerCase()
+  if (type === ArtifactType.IMAGE || extension in MEDIA_MIME_TYPES) {
+    if (bytes.length > (type === ArtifactType.IMAGE ? MAX_IMAGE_BYTES : MAX_MEDIA_BYTES)) throw new Error('Artifact media exceeds the read limit')
+    return { content: bytes.toString('base64'), encoding: 'base64', mimeType: IMAGE_MIME_TYPES[extension] || MEDIA_MIME_TYPES[extension] }
   }
   if (bytes.length > MAX_TEXT_BYTES) throw new Error('Artifact file exceeds the read limit')
   return { content: bytes.toString('utf8'), encoding: 'utf8', mimeType: TEXT_MIME_TYPES[extname(target.relativeName).toLowerCase()] || 'text/plain' }
@@ -550,10 +562,10 @@ export async function readTaskArtifact(workspaceDir: string, artifactPath: strin
       const mimeType = 'application/octet-stream'
       return { kind: ArtifactContentKind.DATA_URL, content: `data:${mimeType};base64,${data.toString('base64')}`, mimeType }
     }
-    if (type === ArtifactType.IMAGE) {
-      if (fileStat.size > MAX_IMAGE_BYTES) return null
+    if (type === ArtifactType.IMAGE || extension in MEDIA_MIME_TYPES) {
+      if (fileStat.size > (type === ArtifactType.IMAGE ? MAX_IMAGE_BYTES : MAX_MEDIA_BYTES)) return null
       const data = await readFile(filePath)
-      const mimeType = IMAGE_MIME_TYPES[extension]
+      const mimeType = IMAGE_MIME_TYPES[extension] || MEDIA_MIME_TYPES[extension]
       return {
         kind: ArtifactContentKind.DATA_URL,
         content: `data:${mimeType};base64,${data.toString('base64')}`,
@@ -572,6 +584,7 @@ export async function readTaskArtifact(workspaceDir: string, artifactPath: strin
 
 export const ARTIFACT_FILE_LIMITS = {
   maxImageBytes: MAX_IMAGE_BYTES,
+  maxMediaBytes: MAX_MEDIA_BYTES,
   maxScanDepth: MAX_SCAN_DEPTH,
   maxScanFiles: MAX_SCAN_FILES,
   maxTextBytes: MAX_TEXT_BYTES

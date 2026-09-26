@@ -68,6 +68,29 @@ describe('ArtifactsPanel', () => {
     expect(screen.getByRole('combobox')).toHaveValue(files[0])
   })
 
+  it('loads a video referred to by a relative path in HTML', async () => {
+    const files = ['artifacts/demo/index.html', 'artifacts/demo/media/clip.mp4']
+    const artifact: Artifact = { id: 'demo', taskId: 'task-1', title: 'Demo', type: ArtifactType.HTML, path: files[0], files, updatedAt: 1, reloadTrigger: 0 }
+    const read = vi.fn(async (_task: string, path: string) => path === files[0]
+      ? { kind: ArtifactContentKind.TEXT, content: '<video controls src="media/clip.mp4"></video>', mimeType: 'text/html' }
+      : { kind: ArtifactContentKind.DATA_URL, content: 'data:video/mp4;base64,AAAA', mimeType: 'video/mp4' })
+    render(<ArtifactsPanel taskId="task-1" artifacts={[artifact]} ui={{ ...baseUi, activeTabId: 'demo' }} artifactApi={{ scan: vi.fn(), read }} hasChanges={false} hasOutput={false} onSelectTab={vi.fn()} onCloseTab={vi.fn()} onToggleOpen={vi.fn()} onToggleRail={vi.fn()} details={null} changes={null} output={null} />)
+    const frame = await screen.findByTitle('Demo')
+    await waitFor(() => expect(frame.getAttribute('srcdoc')).toContain('src="data:video/mp4;base64,AAAA"'))
+    expect(read).toHaveBeenCalledWith('task-1', files[1])
+  })
+
+  it('loads a relative image in Markdown', async () => {
+    const files = ['artifacts/demo/report.md', 'artifacts/demo/images/chart.png']
+    const artifact: Artifact = { id: 'demo', taskId: 'task-1', title: 'Report', type: ArtifactType.MARKDOWN, path: files[0], files, updatedAt: 1, reloadTrigger: 0 }
+    const read = vi.fn(async (_task: string, path: string) => path === files[0]
+      ? { kind: ArtifactContentKind.TEXT, content: '![Chart](images/chart.png)', mimeType: 'text/markdown' }
+      : { kind: ArtifactContentKind.DATA_URL, content: 'data:image/png;base64,AQID', mimeType: 'image/png' })
+    render(<ArtifactsPanel taskId="task-1" artifacts={[artifact]} ui={{ ...baseUi, activeTabId: 'demo' }} artifactApi={{ scan: vi.fn(), read }} hasChanges={false} hasOutput={false} onSelectTab={vi.fn()} onCloseTab={vi.fn()} onToggleOpen={vi.fn()} onToggleRail={vi.fn()} details={null} changes={null} output={null} />)
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Chart' })).toHaveAttribute('src', 'data:image/png;base64,AQID'))
+    expect(read).toHaveBeenCalledWith('task-1', files[1])
+  })
+
   it('mounts Changes only while the Changes tab is selected', () => {
     const props = {
       taskId: 'task-1',

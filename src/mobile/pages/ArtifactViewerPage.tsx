@@ -1,7 +1,9 @@
 import { ArtifactFileSelector } from '@/components/artifacts/ArtifactFileSelector'
 import { useArtifactNavigation } from '@/components/artifacts/use-artifact-navigation'
 import { ArtifactHtmlFrame } from '@/components/artifacts/viewers/ArtifactHtmlFrame'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { isLocalArtifactLink } from '@shared/artifact-navigation'
+import { readArtifactResource } from '@/components/artifacts/artifact-resources'
 import { Markdown } from '@/components/ui/Markdown'
 import {
   ArtifactContentKind,
@@ -49,6 +51,10 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
   const workpiece = useArtifactStore((state) => state.artifactsByTask.get(taskId)?.find((item) => item.id === artifactId))
   const navigation = useArtifactNavigation(workpiece)
   const artifact = navigation.selectedArtifact
+  const filesKey = navigation.files.join('\0')
+  const loadImage = useCallback((src: string) => isLocalArtifactLink(src)
+    ? readArtifactResource(artifact?.path || '', src, navigation.files, (path) => api.artifacts.content(taskId, path))
+    : Promise.resolve(src), [artifact?.path, filesKey, taskId])
   const hydrate = useArtifactStore((state) => state.hydrate)
   const [content, setContent] = useState<ArtifactContent | null>(null)
   const [loading, setLoading] = useState(true)
@@ -159,16 +165,20 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
         {!loading && !error && !artifact && <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Artifact not found</div>}
         {!loading && !error && artifact?.path && !content && <div className="p-6 text-sm text-muted-foreground">File preview is not available.</div>}
         {!loading && !error && artifact?.type === ArtifactType.MARKDOWN && content && (
-          <div className="mx-auto max-w-3xl p-5"><Markdown size="sm" onLinkClick={navigation.openLink}>{content.content}</Markdown></div>
+          <div className="mx-auto max-w-3xl p-5"><Markdown size="sm" onLinkClick={navigation.openLink} loadImage={loadImage}>{content.content}</Markdown></div>
         )}
         {!loading && !error && artifact?.type === ArtifactType.IMAGE && imageUrl && (
           <div className="flex min-h-full items-center justify-center p-4"><img key={artifact.reloadTrigger} src={imageUrl} alt={artifact.title} className="max-h-full max-w-full object-contain" /></div>
         )}
         {!loading && !error && artifact?.type === ArtifactType.HTML && content && (
-          <ArtifactHtmlFrame key={`${artifact.path}:${artifact.reloadTrigger}`} html={content.content} title={artifact.title} onLinkClick={navigation.openLink} />
+          <ArtifactHtmlFrame key={`${artifact.path}:${artifact.reloadTrigger}`} html={content.content} title={artifact.title} taskId={taskId} path={artifact.path || ''} files={navigation.files} readFile={api.artifacts.content} onLinkClick={navigation.openLink} />
         )}
         {!loading && !error && artifact?.type === ArtifactType.FILE && content && (
-          <pre className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs text-foreground/80">{content.kind === ArtifactContentKind.TEXT ? content.content : 'Binary file preview is not available.'}</pre>
+          content.kind === ArtifactContentKind.DATA_URL && content.mimeType?.startsWith('video/')
+            ? <video controls src={content.content} className="h-full w-full object-contain" />
+            : content.kind === ArtifactContentKind.DATA_URL && content.mimeType?.startsWith('audio/')
+              ? <audio controls src={content.content} className="w-full" />
+              : <pre className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs text-foreground/80">{content.kind === ArtifactContentKind.TEXT ? content.content : 'Binary file preview is not available.'}</pre>
         )}
         {!loading && !error && artifact?.type === ArtifactType.PR && pullRequest && (
           <MobilePullRequestDetails details={pullRequest} />
