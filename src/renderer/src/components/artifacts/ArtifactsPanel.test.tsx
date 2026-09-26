@@ -62,7 +62,9 @@ describe('ArtifactsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Copy file' }))
     await waitFor(() => expect(copyFile).toHaveBeenCalledWith('task-1', files[1]))
     fireEvent.change(screen.getByRole('combobox'), { target: { value: files[2] } })
-    const frame = await screen.findByTitle('Report') as HTMLIFrameElement
+    // The frame element is replaced when the prepared document arrives.
+    await waitFor(() => expect(screen.getByTitle('Report').getAttribute('srcdoc')).toContain('Start</a>'))
+    const frame = screen.getByTitle('Report') as HTMLIFrameElement
     act(() => window.dispatchEvent(new MessageEvent('message', { origin: 'null', source: frame.contentWindow, data: { type: 'artifact:open-file', href: 'docs/start.md' } })))
     await screen.findByRole('link', { name: 'Data' })
     expect(screen.getByRole('combobox')).toHaveValue(files[0])
@@ -75,8 +77,9 @@ describe('ArtifactsPanel', () => {
       ? { kind: ArtifactContentKind.TEXT, content: '<video controls src="media/clip.mp4"></video>', mimeType: 'text/html' }
       : { kind: ArtifactContentKind.DATA_URL, content: 'data:video/mp4;base64,AAAA', mimeType: 'video/mp4' })
     render(<ArtifactsPanel taskId="task-1" artifacts={[artifact]} ui={{ ...baseUi, activeTabId: 'demo' }} artifactApi={{ scan: vi.fn(), read }} hasChanges={false} hasOutput={false} onSelectTab={vi.fn()} onCloseTab={vi.fn()} onToggleOpen={vi.fn()} onToggleRail={vi.fn()} details={null} changes={null} output={null} />)
-    const frame = await screen.findByTitle('Demo')
-    await waitFor(() => expect(frame.getAttribute('srcdoc')).toContain('src="data:video/mp4;base64,AAAA"'))
+    await screen.findByTitle('Demo')
+    // The frame element is replaced when the prepared document arrives.
+    await waitFor(() => expect(screen.getByTitle('Demo').getAttribute('srcdoc')).toContain('src="data:video/mp4;base64,AAAA"'))
     expect(read).toHaveBeenCalledWith('task-1', files[1])
   })
 

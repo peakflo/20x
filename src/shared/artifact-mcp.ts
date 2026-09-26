@@ -41,23 +41,32 @@ export function artifactManifestAllows(patterns: readonly string[], name: string
     (pattern.endsWith('*') && name.startsWith(pattern.slice(0, -1))))
 }
 
+/** Handshake that binds the tool channel to ONE document. */
+export const ARTIFACT_BRIDGE_HANDSHAKE = 'workflo-artifact-bridge/1'
+
+/**
+ * MCP Apps view transport for the sandboxed frame. It runs before any artifact
+ * markup, makes a MessageChannel and hands one end to the host at once. All
+ * requests and replies use that port, which dies with this document, so a page
+ * the artifact navigates to cannot use the channel.
+ */
 export const ARTIFACT_MCP_SHIM = `<script>(function(){
-  var next=0,pending={};
+  var channel=new MessageChannel(),port=channel.port1,next=0,pending={};
+  parent.postMessage({type:'${ARTIFACT_BRIDGE_HANDSHAKE}'},'*',[channel.port2]);
   function send(method,params){return new Promise(function(resolve,reject){
     var id='workflo-'+(++next);pending[id]={resolve:resolve,reject:reject};
-    parent.postMessage({jsonrpc:'2.0',id:id,method:method,params:params},'*');
+    port.postMessage({jsonrpc:'2.0',id:id,method:method,params:params});
   });}
-  addEventListener('message',function(event){
-    if(event.source!==parent)return;
+  port.onmessage=function(event){
     var message=event.data;if(!message||message.jsonrpc!=='2.0')return;
     var entry=pending[message.id];if(!entry)return;delete pending[message.id];
     if(message.error)entry.reject(new Error(message.error.message||'Tool call failed'));
     else entry.resolve(message.result);
-  });
+  };
   var ready;
   window.workflo={callTool:function(name,args){
     if(!ready)ready=send('ui/initialize',{protocolVersion:'2026-01-26',appInfo:{name:'workflo-artifact',version:'1.0.0'},appCapabilities:{}}).then(function(){
-      parent.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}},'*');
+      port.postMessage({jsonrpc:'2.0',method:'ui/notifications/initialized',params:{}});
     });
     return ready.then(function(){return send('tools/call',{name:name,arguments:args||{}});});
   }};

@@ -54,7 +54,9 @@ describe('ArtifactViewerPage', () => {
     fireEvent.click(view.getByRole('button', { name: 'Copy content' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('name,value'))
     fireEvent.change(view.getByRole('combobox'), { target: { value: files[2] } })
-    const frame = await view.findByTitle('Report') as HTMLIFrameElement
+    // The frame element is replaced when the prepared document arrives.
+    await waitFor(() => expect(view.getByTitle('Report').getAttribute('srcdoc')).toContain('Start</a>'))
+    const frame = view.getByTitle('Report') as HTMLIFrameElement
     act(() => window.dispatchEvent(new MessageEvent('message', { origin: 'null', source: frame.contentWindow, data: { type: 'artifact:open-file', href: 'docs/start.md' } })))
     await view.findByRole('link', { name: 'Data' })
     expect((view.getByRole('combobox') as HTMLSelectElement).value).toBe(files[0])

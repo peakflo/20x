@@ -1,9 +1,31 @@
 import { artifactManifestAllows, artifactToolsFromHtml, isArtifactCallableTool, isArtifactWriteTool, type ArtifactMcpCall } from './artifact-mcp'
 
 const consents = new Set<string>()
+/** Session write approval is per TOOL: allowing more `workflow_execute` runs
+ * does not silently allow a different declared write tool. */
 const sessionWrites = new Set<string>()
 
+/** Messages arrive only on the MessagePort accepted from the frame's first
+ * document. NEVER REJECTS: an unexpected failure still answers the frame, so
+ * its pending call does not hang. */
 export async function handleArtifactMcpMessage(
+  html: string,
+  target: { taskId: string; path: string },
+  data: unknown,
+  reply: (message: Record<string, unknown>) => void,
+  call: (input: ArtifactMcpCall) => Promise<unknown>
+): Promise<void> {
+  const id = (data as { id?: unknown } | null)?.id
+  try {
+    await handleRequest(html, target, data, reply, call)
+  } catch {
+    if (typeof id === 'string' || typeof id === 'number') {
+      reply({ jsonrpc: '2.0', id, error: { code: -32002, message: 'Tool call failed' } })
+    }
+  }
+}
+
+async function handleRequest(
   html: string,
   target: { taskId: string; path: string },
   data: unknown,
@@ -40,11 +62,12 @@ export async function handleArtifactMcpMessage(
     consents.add(key)
   }
   const write = isArtifactWriteTool(name)
-  if (write && !sessionWrites.has(key)) {
+  const writeKey = `${key}:${name}`
+  if (write && !sessionWrites.has(writeKey)) {
     if (!window.confirm(`Run ${name} with your access?\n\n${JSON.stringify(args, null, 2)}`)) {
       deny(-32002, 'Viewer denied this call'); return
     }
-    if (window.confirm('Allow more runs from this artifact for this page session?')) sessionWrites.add(key)
+    if (window.confirm(`Allow more ${name} runs from this artifact for this page session without asking?`)) sessionWrites.add(writeKey)
   }
   try {
     const result = await call({ ...target, name, arguments: args as Record<string, unknown>, contentHash, consented: true, approved: write })
