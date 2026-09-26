@@ -70,5 +70,7 @@ export async function prepareArtifactHtml(html: string, currentPath: string, fil
   await Promise.all([...fragment.querySelectorAll<HTMLElement>('[style]')].map(async (element) => {
     element.setAttribute('style', await replaceCssUrls(element.getAttribute('style') || '', currentPath, files, read))
   }))
-  return `<html><head></head><body>${template.innerHTML}</body></html>`
+  const htmlTag = html.match(/<html\b[^>]*>/i)?.[0] || '<html>'
+  const bodyTag = html.match(/<body\b[^>]*>/i)?.[0] || '<body>'
+  return `<!doctype html>${htmlTag}<head></head>${bodyTag}${template.innerHTML}</body></html>`
 }

@@ -16,11 +16,11 @@ export function ArtifactHtmlFrame({ html, title, taskId, path, files, readFile, 
     void prepareArtifactHtml(html, path, files, (file) => readFile(taskId, file)).then((result) => {
       if (!cancelled) setPrepared(result)
     }).catch(() => {
-      if (!cancelled) setPrepared(html)
+      if (!cancelled) setPrepared('<!doctype html><html><head></head><body>Artifact preview is not available.</body></html>')
     })
     return () => { cancelled = true }
   }, [html, path, filesKey, readFile, taskId])
-  const srcDoc = useMemo(() => `${HARDENING}${prepared || ''}`, [prepared])
+  const srcDoc = useMemo(() => (prepared || '<!doctype html><html><head></head><body></body></html>').replace(/<head>/i, `<head>${HARDENING}`), [prepared])
   useLayoutEffect(() => {
     const listener = (event: MessageEvent) => {
       if (event.origin !== 'null' || !frameRef.current?.contentWindow || event.source !== frameRef.current.contentWindow) return

@@ -28,4 +28,11 @@ describe('artifact resources', () => {
     expect(await readArtifactResource(files[0], '../private.png', files, read)).toBeNull()
     expect(read).not.toHaveBeenCalled()
   })
+
+  it('keeps document and body attributes in an HTML preview', async () => {
+    const html = await prepareArtifactHtml('<!doctype html><html lang="en"><head><title>Demo</title></head><body class="report"><main>Ready</main></body></html>', files[0], files, async () => null)
+    expect(html).toContain('<html lang="en">')
+    expect(html).toContain('<body class="report">')
+    expect(html).toContain('<main>Ready</main>')
+  })
 })
