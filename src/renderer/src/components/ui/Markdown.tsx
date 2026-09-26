@@ -36,6 +36,22 @@ interface MarkdownProps {
   className?: string
   highlightQuery?: string
   onLinkClick?: (href: string) => boolean
+  loadImage?: (src: string) => Promise<string | null>
+}
+
+function MarkdownImage({ src, alt, loadImage, ...props }: React.ComponentPropsWithoutRef<'img'> & { loadImage?: (src: string) => Promise<string | null> }) {
+  const [resolved, setResolved] = useState<string | null>(loadImage ? null : src || null)
+  useLayoutEffect(() => {
+    if (!loadImage || !src) {
+      setResolved(src || null)
+      return
+    }
+    let cancelled = false
+    setResolved(null)
+    void loadImage(src).then((url) => { if (!cancelled) setResolved(url) })
+    return () => { cancelled = true }
+  }, [loadImage, src])
+  return <img alt={alt || ''} src={resolved || undefined} className="max-w-full h-auto rounded my-2" loading="lazy" {...props} />
 }
 
 // Hoisted to module scope to prevent recreation on every render
@@ -196,13 +212,15 @@ const SIZE_CLASSES = {
  * (e.g., the agent transcript) where parent scrolling would otherwise trigger
  * recreation of the components config object on every frame.
  */
-export const Markdown = memo(function Markdown({ children, size = 'sm', className, highlightQuery, onLinkClick }: MarkdownProps) {
+export const Markdown = memo(function Markdown({ children, size = 'sm', className, highlightQuery, onLinkClick, loadImage }: MarkdownProps) {
   const classes = SIZE_CLASSES[size]
   // Link behavior can change on resize, refresh, or file selection. Keep it
   // current without replacing the component types passed to ReactMarkdown:
   // replacing those types unmounts the content and redraws Mermaid diagrams.
   const linkClickRef = useRef(onLinkClick)
   useLayoutEffect(() => { linkClickRef.current = onLinkClick }, [onLinkClick])
+  const loadImageRef = useRef(loadImage)
+  useLayoutEffect(() => { loadImageRef.current = loadImage }, [loadImage])
 
   // Memoize the components config object per `size` to avoid creating a new
   // object reference on every render — ReactMarkdown does a shallow comparison.
@@ -277,7 +295,7 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
     ),
     // Images
     img: ({ alt, src, ...props }: React.ComponentPropsWithoutRef<'img'>) => (
-      <img alt={alt || ''} src={src} className="max-w-full h-auto rounded my-2" loading="lazy" {...props} />
+      <MarkdownImage alt={alt} src={src} loadImage={loadImageRef.current} {...props} />
     ),
     // Blockquotes
     blockquote: ({ children, ...props }: React.ComponentPropsWithoutRef<'blockquote'>) => (
