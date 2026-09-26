@@ -33,4 +33,4 @@ yarn-error.log*
 # TypeScript
 *.tsbuildinfo
 package-lock.json
-config.json
+config.jsonnode_modules
