@@ -129,7 +129,9 @@ export const api = {
     list: (taskId: string) =>
       get<Artifact[]>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts`),
     content: (taskId: string, path: string) =>
-      get<ArtifactContent>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/content?path=${encodeURIComponent(path)}`)
+      get<ArtifactContent>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/content?path=${encodeURIComponent(path)}`),
+    mcpCall: (input: import('@shared/artifact-mcp').ArtifactMcpCall) =>
+      post<unknown>(`/api/tasks/${encodeURIComponent(input.taskId)}/artifacts/mcp`, input)
   }
 }
 

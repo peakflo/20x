@@ -12,6 +12,7 @@ import { ImageArtifactView } from './viewers/ImageArtifactView'
 import { HtmlArtifactView } from './viewers/HtmlArtifactView'
 import { PrArtifactView } from './viewers/PrArtifactView'
 import { FileArtifactView } from './viewers/FileArtifactView'
+import { handleArtifactMcpMessage } from '@shared/artifact-mcp-host'
 
 export const ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS = 30_000
 
@@ -77,7 +78,10 @@ function ArtifactViewer({ artifact, artifactApi, refreshTrigger, onLinkClick }: 
   switch (artifact.type) {
     case ArtifactType.MARKDOWN: return <MarkdownArtifactView onLinkClick={onLinkClick} artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
     case ArtifactType.IMAGE: return <ImageArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
-    case ArtifactType.HTML: return <HtmlArtifactView onLinkClick={onLinkClick} artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
+    case ArtifactType.HTML: return <HtmlArtifactView onLinkClick={onLinkClick} artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} onMessage={(html, data, reply) => {
+      if (!artifact.path || !artifactApi.mcpCall) return
+      void handleArtifactMcpMessage(html, { taskId: artifact.taskId, path: artifact.path }, data, reply, artifactApi.mcpCall)
+    }} />
     case ArtifactType.PR: return <PrArtifactView artifact={artifact} refreshTrigger={refreshTrigger} />
     default: return <FileArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
   }

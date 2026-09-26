@@ -985,6 +985,10 @@ app.whenReady().then(async () => {
   agentManager.setManagers(githubManager, worktreeManager, gitlabManager ?? undefined)
 
   mcpToolCaller = new McpToolCaller()
+  const artifactCaller = mcpToolCaller
+  const { setMobileArtifactMcpCaller } = await import('./mobile-api-server')
+  const { callArtifactMcp } = await import('./artifact-mcp')
+  setMobileArtifactMcpCaller((input) => callArtifactMcp(db!, artifactCaller, input, 'mobile'))
   // Run task-management tools in this process instead of spawning a child that
   // would only forward them back here.
   mcpToolCaller.setTaskManagementInvoker((route, params) => handleRoute(db!, route, params))

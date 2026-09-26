@@ -115,6 +115,7 @@ export interface ArtifactCopyFileResult {
 export interface ArtifactApi {
   scan: (taskId: string) => Promise<ArtifactFileEntry[]>
   read: (taskId: string, relativePath: string) => Promise<ArtifactContent | null>
+  mcpCall?: (input: import('./artifact-mcp').ArtifactMcpCall) => Promise<unknown>
   /** Desktop only. Absent when the viewer runs outside Electron. */
   copyFile?: (taskId: string, relativePath: string) => Promise<ArtifactCopyFileResult>
 }

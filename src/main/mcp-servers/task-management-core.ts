@@ -45,7 +45,7 @@ export function isScopedSession(scope: TaskMcpScope): boolean {
 const artifactTools: Tool[] = [
   {
     name: 'create_artifact',
-    description: 'Create a durable task-scoped artifact workpiece before writing its files. Returns a stable artifact_id for subsequent file calls.',
+    description: 'Create a durable task-scoped artifact workpiece before writing its files. Returns a stable artifact_id for subsequent file calls. HTML artifacts can call workspace tools with window.workflo.callTool(name, args). Declare tools in <script type="application/json" id="mcp-app-manifest">{"tools":["workflow_list","workflow_execute"]}</script>. Example: await workflo.callTool("workflow_list", {}).',
     inputSchema: {
       type: 'object',
       properties: {
