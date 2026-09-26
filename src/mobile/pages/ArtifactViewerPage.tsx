@@ -1,6 +1,7 @@
 import { ArtifactFileSelector } from '@/components/artifacts/ArtifactFileSelector'
 import { useArtifactNavigation } from '@/components/artifacts/use-artifact-navigation'
 import { ArtifactHtmlFrame } from '@/components/artifacts/viewers/ArtifactHtmlFrame'
+import { handleArtifactMcpMessage } from '@shared/artifact-mcp-host'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Markdown } from '@/components/ui/Markdown'
 import {
@@ -165,7 +166,10 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
           <div className="flex min-h-full items-center justify-center p-4"><img key={artifact.reloadTrigger} src={imageUrl} alt={artifact.title} className="max-h-full max-w-full object-contain" /></div>
         )}
         {!loading && !error && artifact?.type === ArtifactType.HTML && content && (
-          <ArtifactHtmlFrame key={`${artifact.path}:${artifact.reloadTrigger}`} html={content.content} title={artifact.title} onLinkClick={navigation.openLink} />
+          <ArtifactHtmlFrame key={`${artifact.path}:${artifact.reloadTrigger}`} html={content.content} title={artifact.title} onLinkClick={navigation.openLink} onMessage={(data, reply) => {
+            if (!artifact.path) return
+            void handleArtifactMcpMessage(content.content, { taskId, path: artifact.path }, data, reply, api.artifacts.mcpCall)
+          }} />
         )}
         {!loading && !error && artifact?.type === ArtifactType.FILE && content && (
           <pre className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs text-foreground/80">{content.kind === ArtifactContentKind.TEXT ? content.content : 'Binary file preview is not available.'}</pre>

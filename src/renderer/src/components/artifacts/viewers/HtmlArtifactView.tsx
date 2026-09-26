@@ -4,8 +4,8 @@ import { ArtifactViewState } from './ArtifactViewState'
 import { useArtifactContent } from './use-artifact-content'
 import { ArtifactHtmlFrame } from './ArtifactHtmlFrame'
 
-export function HtmlArtifactView({ artifact, artifactApi, onMessage, onLinkClick, refreshTrigger = 0 }: { artifact: Artifact; artifactApi: ArtifactApi; onMessage?: (data: unknown) => void; onLinkClick?: (href: string) => boolean; refreshTrigger?: number }) {
+export function HtmlArtifactView({ artifact, artifactApi, onMessage, onLinkClick, refreshTrigger = 0 }: { artifact: Artifact; artifactApi: ArtifactApi; onMessage?: (html: string, data: unknown, reply: (message: Record<string, unknown>) => void) => void; onLinkClick?: (href: string) => boolean; refreshTrigger?: number }) {
   const state = useArtifactContent(artifact, artifactApi, refreshTrigger)
   const html = state.content?.kind === ArtifactContentKind.TEXT ? state.content.content : null
-  return <ArtifactViewState loading={state.loading} error={state.error} missing={html === null}><ArtifactHtmlFrame key={`${artifact.path}:${artifact.reloadTrigger}`} html={html || ''} title={artifact.title} onLinkClick={onLinkClick} onMessage={onMessage} /></ArtifactViewState>
+  return <ArtifactViewState loading={state.loading} error={state.error} missing={html === null}><ArtifactHtmlFrame key={`${artifact.path}:${artifact.reloadTrigger}`} html={html || ''} title={artifact.title} onLinkClick={onLinkClick} onMessage={(data, reply) => { if (html !== null) onMessage?.(html, data, reply) }} /></ArtifactViewState>
 }

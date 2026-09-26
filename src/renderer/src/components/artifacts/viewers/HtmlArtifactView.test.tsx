@@ -27,6 +27,8 @@ describe('HtmlArtifactView', () => {
     expect(frame).toHaveAttribute('sandbox', 'allow-scripts')
     await waitFor(() => {
       expect(frame.getAttribute('srcdoc')).toContain("default-src 'none'")
+      expect(frame.getAttribute('srcdoc')).toContain("connect-src 'none'")
+      expect(frame.getAttribute('srcdoc')).toContain('window.workflo={callTool:')
       expect(frame.getAttribute('srcdoc')).toContain('window.open=function(){return null}')
       expect(frame.getAttribute('srcdoc')).toContain('<h1>Preview</h1>')
     })
@@ -41,10 +43,10 @@ describe('HtmlArtifactView', () => {
     render(<HtmlArtifactView artifact={artifact} artifactApi={artifactApi} onMessage={onMessage} />)
     const frame = await screen.findByTitle('preview.html') as HTMLIFrameElement
 
-    window.dispatchEvent(new MessageEvent('message', { data: 'blocked', origin: 'https://example.com' }))
+    window.dispatchEvent(new MessageEvent('message', { data: 'blocked', origin: 'https://example.com', source: frame.contentWindow }))
     window.dispatchEvent(new MessageEvent('message', { data: 'accepted', origin: 'null', source: frame.contentWindow }))
     window.dispatchEvent(new MessageEvent('message', { data: 'other frame', origin: 'null' }))
     expect(onMessage).toHaveBeenCalledTimes(1)
-    expect(onMessage).toHaveBeenCalledWith('accepted')
+    expect(onMessage).toHaveBeenCalledWith('<p>Preview</p>', 'accepted', expect.any(Function))
   })
 })
