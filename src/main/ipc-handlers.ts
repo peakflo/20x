@@ -5,6 +5,8 @@ import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSy
 import { join, basename, extname } from 'path'
 import { networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
+import { callArtifactMcp } from './artifact-mcp'
+import type { ArtifactMcpCall } from '../shared/artifact-mcp'
 import WebSocket from 'ws'
 import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
 import { getPendingPin } from './mobile-api-server'
@@ -310,6 +312,11 @@ export function registerIpcHandlers(
 
   ipcMain.handle('artifacts:read', async (_, taskId: string, relativePath: string) => {
     return readTaskArtifact(db.getWorkspaceDir(taskId), relativePath)
+  })
+
+  ipcMain.handle('artifact:mcp-call', async (_, input: ArtifactMcpCall) => {
+    if (!mcpToolCaller) throw new Error('Organisation Workspace is not connected')
+    return callArtifactMcp(db, mcpToolCaller, input, 'desktop')
   })
 
   ipcMain.handle('artifacts:copyFile', async (_, taskId: string, relativePath: string): Promise<ArtifactCopyFileResult> => {

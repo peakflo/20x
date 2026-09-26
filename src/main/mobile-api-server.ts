@@ -23,6 +23,7 @@ import type { Artifact, ArtifactFileEntry } from '../shared/artifacts'
 import { MOBILE_VOICE_CAPABILITIES } from '../shared/voice'
 import { TaskStatus } from '../shared/constants'
 import { guardStream } from './child-stream-guards'
+import type { ArtifactMcpCall } from '../shared/artifact-mcp'
 
 // ── State ────────────────────────────────────────────────────
 let server: HttpServer | null = null
@@ -34,6 +35,11 @@ let gitlabRef: GitLabManager | null = null
 let syncManagerRef: SyncManager | null = null
 let pluginRegistryRef: PluginRegistry | null = null
 let notifyDesktop: ((channel: string, data: unknown) => void) | null = null
+let artifactMcpCaller: ((input: ArtifactMcpCall) => Promise<unknown>) | null = null
+
+export function setMobileArtifactMcpCaller(caller: ((input: ArtifactMcpCall) => Promise<unknown>) | null): void {
+  artifactMcpCaller = caller
+}
 let pendingPin: { pin: string; pairCodeId: string; expiresAt: number } | null = null
 
 export function getPendingPin(): { pin: string; pairCodeId: string; expiresAt: number } | null {
@@ -571,6 +577,13 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
 async function routePost(pathname: string, params: Record<string, unknown>, req?: IncomingMessage): Promise<unknown> {
   const agent = agentRef!
   const db = dbRef!
+
+  const artifactMcpMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/artifacts\/mcp$/)
+  if (artifactMcpMatch) {
+    if (!artifactMcpCaller) throw Object.assign(new Error('Organisation Workspace is not connected'), { status: 503 })
+    const input = { ...params, taskId: decodeURIComponent(artifactMcpMatch[1]) } as unknown as ArtifactMcpCall
+    return artifactMcpCaller(input)
+  }
 
   // POST /api/auth/pair/initiate — phone sends init code, server generates PIN
   if (pathname === '/api/auth/pair/initiate') {

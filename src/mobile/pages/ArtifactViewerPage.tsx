@@ -3,6 +3,7 @@ import { useArtifactNavigation } from '@/components/artifacts/use-artifact-navig
 import { ArtifactHtmlFrame } from '@/components/artifacts/viewers/ArtifactHtmlFrame'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isLocalArtifactLink } from '@shared/artifact-navigation'
+import { handleArtifactMcpMessage } from '@shared/artifact-mcp-host'
 import { readArtifactResource } from '@/components/artifacts/artifact-resources'
 import { Markdown } from '@/components/ui/Markdown'
 import {
@@ -171,7 +172,10 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
           <div className="flex min-h-full items-center justify-center p-4"><img key={artifact.reloadTrigger} src={imageUrl} alt={artifact.title} className="max-h-full max-w-full object-contain" /></div>
         )}
         {!loading && !error && artifact?.type === ArtifactType.HTML && content && (
-          <ArtifactHtmlFrame key={`${artifact.path}:${artifact.reloadTrigger}`} html={content.content} title={artifact.title} taskId={taskId} path={artifact.path || ''} files={navigation.files} readFile={api.artifacts.content} onLinkClick={navigation.openLink} />
+          <ArtifactHtmlFrame key={`${artifact.path}:${artifact.reloadTrigger}`} html={content.content} title={artifact.title} taskId={taskId} path={artifact.path || ''} files={navigation.files} readFile={api.artifacts.content} onLinkClick={navigation.openLink} onMessage={(data, reply) => {
+            if (!artifact.path) return
+            void handleArtifactMcpMessage(content.content, { taskId, path: artifact.path }, data, reply, api.artifacts.mcpCall)
+          }} />
         )}
         {!loading && !error && artifact?.type === ArtifactType.FILE && content && (
           content.kind === ArtifactContentKind.DATA_URL && content.mimeType?.startsWith('video/')

@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('artifacts:scan', taskId),
     read: (taskId: string, relativePath: string): Promise<ArtifactContent | null> =>
       ipcRenderer.invoke('artifacts:read', taskId, relativePath),
+    mcpCall: (input: import('../shared/artifact-mcp').ArtifactMcpCall): Promise<unknown> =>
+      ipcRenderer.invoke('artifact:mcp-call', input),
     copyFile: (taskId: string, relativePath: string): Promise<ArtifactCopyFileResult> =>
       ipcRenderer.invoke('artifacts:copyFile', taskId, relativePath)
   },
