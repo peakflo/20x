@@ -41,6 +41,7 @@ export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
     setPrevRunning(running)
   }, [running])
 
+  const [hovered, setHovered] = useState(false)
   const usage = override !== undefined ? override : fetched
   if (!usage) return null
 
@@ -56,15 +57,34 @@ export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
       parts.push(`Resets ${when} (${reset.toLocaleDateString()})`)
     }
   }
+  const label = parts.join(' · ')
 
   return (
-    <span className={`flex items-center gap-1.5 ${COLORS[level]}`} title={parts.join(' · ')} data-testid="ai-usage-ring">
+    <span
+      className={`relative flex items-center gap-1.5 ${COLORS[level]}`}
+      data-testid="ai-usage-ring"
+      tabIndex={0}
+      role="status"
+      aria-label={label}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
+    >
       <svg width="12" height="12" viewBox="0 0 12 12" className="-rotate-90">
         <circle cx="6" cy="6" r={r} fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="1.5" />
         <circle cx="6" cy="6" r={r} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
           strokeDasharray={c} strokeDashoffset={c * (1 - usage.percent / 100)} />
       </svg>
       {usage.percent}%
+      {hovered && (
+        <span
+          className="absolute bottom-full left-0 mb-1.5 whitespace-nowrap rounded border border-border bg-popover px-2 py-1 text-[10px] text-popover-foreground shadow-md"
+          data-testid="ai-usage-tooltip"
+        >
+          {label}
+        </span>
+      )}
     </span>
   )
 }
