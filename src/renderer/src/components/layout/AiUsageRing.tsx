@@ -48,8 +48,14 @@ export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
   const c = 2 * Math.PI * r
   const level = usageLevel(usage.percent)
   const parts = [`Peakflo AI: ${usage.percent}% used`]
-  if (usage.used !== null && usage.limit !== null) parts.push(`${usage.used.toFixed(2)} / ${usage.limit.toFixed(2)}`)
-  if (usage.resetAt) parts.push(`resets ${new Date(usage.resetAt).toLocaleDateString()}`)
+  if (usage.resetAt) {
+    const reset = new Date(usage.resetAt)
+    if (!Number.isNaN(reset.getTime())) {
+      const days = Math.ceil((reset.getTime() - Date.now()) / (24 * 60 * 60 * 1000))
+      const when = days <= 0 ? 'today' : days === 1 ? 'in 1 day' : `in ${days} days`
+      parts.push(`Resets ${when} (${reset.toLocaleDateString()})`)
+    }
+  }
 
   return (
     <span className={`flex items-center gap-1.5 ${COLORS[level]}`} title={parts.join(' · ')} data-testid="ai-usage-ring">
