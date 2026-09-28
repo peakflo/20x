@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { EnterpriseLoginModal } from './EnterpriseLoginModal'
 import { enterpriseApi, skillApi } from '@/lib/ipc-client'
+import { fetchAiUsage, type AiUsage } from '@/lib/ai-usage'
 
 interface AiGatewayStatus {
   configured: boolean
@@ -37,6 +38,7 @@ export function EnterpriseSettings() {
 
   const [showLoginModal, setShowLoginModal] = useState(false)
   const [aiGatewayStatus, setAiGatewayStatus] = useState<AiGatewayStatus | null>(null)
+  const [aiUsage, setAiUsage] = useState<AiUsage | null>(null)
   const [skillCount, setSkillCount] = useState<number | null>(null)
   const [isSyncingResources, setIsSyncingResources] = useState(false)
 
@@ -46,15 +48,22 @@ export function EnterpriseSettings() {
 
   // Fetch AI gateway status and skill count when authenticated
   useEffect(() => {
+    let cancelled = false
     if (isAuthenticated && currentTenant) {
       enterpriseApi.getAiGatewayStatus().then(setAiGatewayStatus).catch(() => {
         setAiGatewayStatus(null)
       })
+      setAiUsage(null)
+      fetchAiUsage(enterpriseApi.apiRequest).then((usage) => {
+        if (!cancelled) setAiUsage(usage)
+      })
       skillApi.getAll().then((skills) => setSkillCount(skills.length)).catch(() => {})
     } else {
       setAiGatewayStatus(null)
+      setAiUsage(null)
       setSkillCount(null)
     }
+    return () => { cancelled = true }
   }, [isAuthenticated, currentTenant])
 
   // Listen for background sync completion from main process
@@ -69,6 +78,7 @@ export function EnterpriseSettings() {
       }
       // Refresh AI gateway status and skill count after sync
       enterpriseApi.getAiGatewayStatus().then(setAiGatewayStatus).catch(() => {})
+      fetchAiUsage(enterpriseApi.apiRequest).then(setAiUsage)
       skillApi.getAll().then((skills) => setSkillCount(skills.length)).catch(() => {})
     })
     return () => unsubscribe?.()
@@ -179,7 +189,7 @@ export function EnterpriseSettings() {
               <div className="space-y-0.5">
                 <Label>AI Subscription</Label>
                 <p className="text-xs text-muted-foreground">
-                  Current plan and billing status
+                  Current plan and usage period
                 </p>
               </div>
               <div className="text-right">
@@ -206,9 +216,14 @@ export function EnterpriseSettings() {
                         {aiGatewayStatus.subscription.status}
                       </span>
                     </div>
+                    {aiUsage?.resetAt && !Number.isNaN(new Date(aiUsage.resetAt).getTime()) && (
+                      <p className="text-xs text-muted-foreground">
+                        Usage resets {new Date(aiUsage.resetAt).toLocaleDateString(undefined, { timeZone: 'UTC' })} (UTC)
+                      </p>
+                    )}
                     {aiGatewayStatus.subscription.currentPeriodEnd && (
                       <p className="text-xs text-muted-foreground">
-                        Period ends {new Date(aiGatewayStatus.subscription.currentPeriodEnd).toLocaleDateString()}
+                        Plan period ends {new Date(aiGatewayStatus.subscription.currentPeriodEnd).toLocaleDateString()}
                       </p>
                     )}
                   </div>
