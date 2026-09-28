@@ -202,6 +202,49 @@ describe('MCP endpoint over HTTP', () => {
     await Promise.all([full.close(), scoped.close()])
   })
 
+  /**
+   * A client opens `GET /mcp` to listen for server-initiated messages. This
+   * endpoint sends none, so the GET must be refused at once. When it is not, the
+   * SDK answers with an event stream that never ends, and the request holds a
+   * transport, a Server and a socket for the life of the process — one set per
+   * reconnect. The stale socket also hides the real state of a session: it stays
+   * ESTABLISHED long after the client dropped the tools.
+   */
+  it('refuses the standalone SSE stream instead of holding it open', async () => {
+    const port = await startTaskApiServer(db)
+
+    const response = await fetch(buildTaskMcpUrl(port), {
+      method: 'GET',
+      headers: { Accept: 'text/event-stream' },
+      signal: AbortSignal.timeout(5_000)
+    })
+
+    expect(response.status).toBe(405)
+    expect(response.headers.get('allow')).toBe('POST')
+    expect(response.headers.get('content-type')).not.toContain('text/event-stream')
+    // The body must be complete, not a stream that waits for ever.
+    await expect(response.text()).resolves.toContain('Method Not Allowed')
+  })
+
+  it('keeps answering after repeated reconnects, with no request left hanging', async () => {
+    const port = await startTaskApiServer(db)
+    db.createTask(makeTask({ title: 'Survivor' }))
+
+    // Every reconnect used to leak one open GET. Ten of them, then the tools must
+    // still be there and a call must still work.
+    for (let i = 0; i < 10; i++) {
+      const client = await connect(buildTaskMcpUrl(port))
+      const names = (await client.listTools()).tools.map((t) => t.name)
+      expect(names).toContain('list_tasks')
+      await client.close()
+    }
+
+    const client = await connect(buildTaskMcpUrl(port))
+    expect((await client.listTools()).tools).not.toHaveLength(0)
+    expect(textOf(await client.callTool({ name: 'list_tasks', arguments: {} }))).toContain('Survivor')
+    await client.close()
+  })
+
   it('spawns no child process', async () => {
     const count = (): number =>
       Number(execSync('ps -eo command= | grep -c "[t]ask-management-mcp" || true', { encoding: 'utf-8' }).trim())
