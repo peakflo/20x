@@ -46,10 +46,10 @@ vi.mock('./EnterpriseLoginModal', () => ({ EnterpriseLoginModal: () => null }))
 afterEach(cleanup)
 
 describe('EnterpriseSettings AI subscription', () => {
-  it('shows the usage reset separately from the billing period end', async () => {
+  it('shows the usage reset separately from the plan period end', async () => {
     render(<EnterpriseSettings />)
 
     expect(await screen.findByText(/Usage resets 10\/1\/2026 \(UTC\)/)).toBeInTheDocument()
-    expect(screen.getByText(/Billing period ends 10\/27\/2026/)).toBeInTheDocument()
+    expect(screen.getByText(/Plan period ends 10\/27\/2026/)).toBeInTheDocument()
   })
 })

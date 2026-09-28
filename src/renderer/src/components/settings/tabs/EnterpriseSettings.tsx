@@ -189,7 +189,7 @@ export function EnterpriseSettings() {
               <div className="space-y-0.5">
                 <Label>AI Subscription</Label>
                 <p className="text-xs text-muted-foreground">
-                  Current plan and billing status
+                  Current plan and usage period
                 </p>
               </div>
               <div className="text-right">
@@ -223,7 +223,7 @@ export function EnterpriseSettings() {
                     )}
                     {aiGatewayStatus.subscription.currentPeriodEnd && (
                       <p className="text-xs text-muted-foreground">
-                        Billing period ends {new Date(aiGatewayStatus.subscription.currentPeriodEnd).toLocaleDateString()}
+                        Plan period ends {new Date(aiGatewayStatus.subscription.currentPeriodEnd).toLocaleDateString()}
                       </p>
                     )}
                   </div>
