@@ -156,10 +156,39 @@ export function buildPiMcpConfigDocument(
   }
 }
 
+/**
+ * Pi can persist a tool call with an empty ID or name when a provider returns
+ * malformed tool-call data. Its OpenAI converter forwards the matching result
+ * as a `tool` message, which OpenRouter rejects when `tool_call_id` is empty.
+ * The context hook runs before every provider request, including resumed turns.
+ */
+export function sanitizePiContextMessages(messages: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const removedCallIds = new Set<string>()
+  const withoutBadCalls = messages.map((message) => {
+    if (message.role !== 'assistant' || !Array.isArray(message.content)) return message
+    const content = message.content.filter((block: Record<string, unknown>) => {
+      if (block.type !== 'toolCall') return true
+      const validId = typeof block.id === 'string' && !!block.id.trim()
+      const validName = typeof block.name === 'string' && !!block.name.trim()
+      if (validId && validName) return true
+      if (validId) removedCallIds.add(block.id as string)
+      return false
+    })
+    return content.length === message.content.length ? message : { ...message, content }
+  })
+  return withoutBadCalls.filter((message) => {
+    if (message.role !== 'toolResult') return true
+    return typeof message.toolCallId === 'string'
+      && !!message.toolCallId.trim()
+      && !removedCallIds.has(message.toolCallId)
+  })
+}
+
 const PI_PERMISSION_EXTENSION_SOURCE = `\
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const READ_ONLY_TOOLS = new Set(["read", "grep", "find", "ls"]);
+const sanitizePiContextMessages = ${sanitizePiContextMessages.toString()};
 
 function inputSummary(input: unknown): string {
   try {
@@ -170,6 +199,8 @@ function inputSummary(input: unknown): string {
 }
 
 export default function permissions(pi: ExtensionAPI) {
+  pi.on("context", async (event) => ({ messages: sanitizePiContextMessages(event.messages) }));
+
   pi.on("tool_call", async (event, ctx) => {
     if (process.env.${PI_PERMISSION_MODE_ENV} === "allow" || READ_ONLY_TOOLS.has(event.toolName)) return;
     const approved = await ctx.ui.confirm(

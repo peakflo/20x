@@ -21,6 +21,7 @@ vi.mock('../enterprise-ai-gateway', () => ({
 import {
   PiAdapter,
   buildPiMcpConfigDocument,
+  sanitizePiContextMessages,
   sanitizePiMcpServerName,
   sanitizePiSessionName,
   withProviderNameLimitHint,
@@ -571,5 +572,47 @@ describe('PiAdapter', () => {
     const hinted = withProviderNameLimitHint('Error from provider (Console): name must be at most 64 characters, got 76')
     expect(hinted).toContain('Stop and start the agent')
     expect(withProviderNameLimitHint('Provider unavailable')).toBe('Provider unavailable')
+  })
+})
+
+describe('sanitizePiContextMessages', () => {
+  it('can run from the generated Pi extension without adapter imports', () => {
+    const load = new Function(`return (${sanitizePiContextMessages.toString()})`) as () => typeof sanitizePiContextMessages
+    expect(load()([
+      { role: 'assistant', content: [{ type: 'toolCall', id: '', name: '', arguments: {} }] },
+      { role: 'toolResult', toolCallId: '', toolName: '' },
+    ])).toEqual([{ role: 'assistant', content: [] }])
+  })
+
+  it('removes the malformed call and result saved by Pi after the provider returns an empty call ID', () => {
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'Triage this task' }] },
+      { role: 'assistant', content: [
+        { type: 'text', text: 'I will inspect the task.' },
+        { type: 'toolCall', id: '', name: '', arguments: {} },
+      ] },
+      { role: 'toolResult', toolCallId: '', toolName: '', content: [{ type: 'text', text: 'Tool  not found' }] },
+    ]
+
+    expect(sanitizePiContextMessages(messages)).toEqual([
+      messages[0],
+      { role: 'assistant', content: [{ type: 'text', text: 'I will inspect the task.' }] },
+    ])
+    expect(messages[1].content).toHaveLength(2)
+  })
+
+  it('keeps valid tool calls and results while removing invalid pairs', () => {
+    const validCall = { type: 'toolCall', id: 'call_1', name: 'read', arguments: { path: 'AGENTS.md' } }
+    const messages = [
+      { role: 'assistant', content: [validCall, { type: 'toolCall', id: ' ', name: 'read', arguments: {} }, { type: 'toolCall', id: 'call_bad', name: '', arguments: {} }] },
+      { role: 'toolResult', toolCallId: 'call_1', toolName: 'read', content: [{ type: 'text', text: 'OK' }] },
+      { role: 'toolResult', toolCallId: ' ', toolName: 'read', content: [{ type: 'text', text: 'Bad' }] },
+      { role: 'toolResult', toolCallId: 'call_bad', toolName: '', content: [{ type: 'text', text: 'Bad' }] },
+    ]
+
+    expect(sanitizePiContextMessages(messages)).toEqual([
+      { role: 'assistant', content: [validCall] },
+      messages[1],
+    ])
   })
 })
