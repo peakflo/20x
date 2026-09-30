@@ -157,8 +157,8 @@ export function buildPiMcpConfigDocument(
 }
 
 /**
- * Pi can persist a tool call with an empty ID or name when a provider returns
- * malformed tool-call data. Its OpenAI converter forwards the matching result
+ * Pi can persist a tool call with an empty ID or name after parsing a model
+ * stream. Its OpenAI converter forwards the matching result
  * as a `tool` message, which OpenRouter rejects when `tool_call_id` is empty.
  * The context hook runs before every provider request, including resumed turns.
  */
