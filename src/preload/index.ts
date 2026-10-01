@@ -137,7 +137,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> =>
-      ipcRenderer.invoke('agentConfig:getProviders', serverUrl, backendType)
+      ipcRenderer.invoke('agentConfig:getProviders', serverUrl, backendType),
+    testConnection: (serverUrl?: string, backendType?: string): Promise<
+      | { success: true; providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> }
+      | { success: false; error: string }
+    > =>
+      ipcRenderer.invoke('agentConfig:testConnection', serverUrl, backendType)
   },
   onOverdueCheck: (callback: () => void): (() => void) => {
     const handler = (): void => callback()

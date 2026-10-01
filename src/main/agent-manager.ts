@@ -4860,63 +4860,101 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
   async getProviders(serverUrl?: string, directory?: string, backendType?: string): Promise<{ providers: { id: string; name: string; [key: string]: unknown }[]; default: Record<string, string> } | null> {
     try {
-      // Determine which server URL to use
-      const baseUrl = serverUrl || (() => {
-        const agents = this.db.getAgents()
-        const defaultAgent = agents.find((a) => a.is_default) || agents[0]
-        return defaultAgent?.server_url || DEFAULT_SERVER_URL
-      })()
-
-      // Identify the backend type: use the explicit parameter, fall back to default agent config
-      const resolvedBackend = backendType || (() => {
-        const agents = this.db.getAgents()
-        const defaultAgent = agents.find((a) => a.is_default) || agents[0]
-        return (defaultAgent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
-      })()
-
-      // OpenCode and Pi expose configurable providers/models.
-      if (resolvedBackend !== CodingAgentType.OPENCODE && resolvedBackend !== CodingAgentType.PI) {
-        console.log(`[AgentManager] Backend "${resolvedBackend}" does not support provider listing, skipping`)
-        return null
-      }
-
-      // Refresh the AI gateway virtual key before querying providers so the
-      // OpenCode server config includes the Peakflo provider. This handles
-      // plans activated after the initial tenant selection (same pattern as
-      // startAdapterSession). Best-effort — fall back to the cached key.
-      // Since this is user-initiated (settings UI), notify the adapter so it
-      // pushes the updated config — this is safe because the user is in settings,
-      // not actively running parallel tasks.
-      if (this.enterpriseAuth) {
-        try {
-          await this.enterpriseAuth.refreshAiGatewayVirtualKey()
-        } catch (err) {
-          console.warn('[AgentManager] AI gateway key refresh before getProviders failed (will use cached key):', err)
-        }
-      }
-
-      const adapter = this.getAdapterByType(resolvedBackend)
-      if (!adapter?.getProviders) {
-        console.log(`[AgentManager] Adapter for "${resolvedBackend}" does not support getProviders`)
-        return null
-      }
-
-      // Push updated config to the server before querying providers. This is
-      // user-initiated (settings UI) so it's safe to push even if sessions are
-      // running — the user explicitly opened settings to change config.
-      if (adapter.notifyConfigChanged) {
-        try {
-          await adapter.notifyConfigChanged()
-        } catch {
-          // notifyConfigChanged already logs; proceed with cached config
-        }
-      }
-
-      return await adapter.getProviders(baseUrl, directory)
+      return await this.fetchProviders(serverUrl, directory, backendType, false)
     } catch (error: unknown) {
       console.log('[AgentManager] Could not get providers:', error instanceof Error ? error.message : error)
       return null
     }
+  }
+
+  /**
+   * Connection check for the Settings > Agents status badge. Unlike
+   * getProviders it reports WHY the backend is unreachable (e.g. `opencode`
+   * binary not on PATH, server exited on startup) instead of collapsing every
+   * failure into null.
+   */
+  async testProvidersConnection(
+    serverUrl?: string,
+    backendType?: string
+  ): Promise<
+    | { success: true; providers: { id: string; name: string; [key: string]: unknown }[]; default: Record<string, string> }
+    | { success: false; error: string }
+  > {
+    try {
+      const result = await this.fetchProviders(serverUrl, undefined, backendType, true)
+      if (!result) {
+        return { success: false, error: 'Backend returned no provider list' }
+      }
+      return { success: true, providers: result.providers, default: result.default }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.log('[AgentManager] Provider connection check failed:', message)
+      return { success: false, error: message }
+    }
+  }
+
+  private async fetchProviders(
+    serverUrl: string | undefined,
+    directory: string | undefined,
+    backendType: string | undefined,
+    strict: boolean
+  ): Promise<{ providers: { id: string; name: string; [key: string]: unknown }[]; default: Record<string, string> } | null> {
+    // Determine which server URL to use
+    const baseUrl = serverUrl || (() => {
+      const agents = this.db.getAgents()
+      const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+      return defaultAgent?.server_url || DEFAULT_SERVER_URL
+    })()
+
+    // Identify the backend type: use the explicit parameter, fall back to default agent config
+    const resolvedBackend = backendType || (() => {
+      const agents = this.db.getAgents()
+      const defaultAgent = agents.find((a) => a.is_default) || agents[0]
+      return (defaultAgent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
+    })()
+
+    // OpenCode and Pi expose configurable providers/models.
+    if (resolvedBackend !== CodingAgentType.OPENCODE && resolvedBackend !== CodingAgentType.PI) {
+      console.log(`[AgentManager] Backend "${resolvedBackend}" does not support provider listing, skipping`)
+      return null
+    }
+
+    // Refresh the AI gateway virtual key before querying providers so the
+    // OpenCode server config includes the Peakflo provider. This handles
+    // plans activated after the initial tenant selection (same pattern as
+    // startAdapterSession). Best-effort — fall back to the cached key.
+    // Since this is user-initiated (settings UI), notify the adapter so it
+    // pushes the updated config — this is safe because the user is in settings,
+    // not actively running parallel tasks.
+    if (this.enterpriseAuth) {
+      try {
+        await this.enterpriseAuth.refreshAiGatewayVirtualKey()
+      } catch (err) {
+        console.warn('[AgentManager] AI gateway key refresh before getProviders failed (will use cached key):', err)
+      }
+    }
+
+    const adapter = this.getAdapterByType(resolvedBackend)
+    if (!adapter?.getProviders) {
+      console.log(`[AgentManager] Adapter for "${resolvedBackend}" does not support getProviders`)
+      return null
+    }
+
+    // Push updated config to the server before querying providers. This is
+    // user-initiated (settings UI) so it's safe to push even if sessions are
+    // running — the user explicitly opened settings to change config.
+    if (adapter.notifyConfigChanged) {
+      try {
+        await adapter.notifyConfigChanged()
+      } catch {
+        // notifyConfigChanged already logs; proceed with cached config
+      }
+    }
+
+    if (strict && adapter.getProvidersOrThrow) {
+      return await adapter.getProvidersOrThrow(baseUrl, directory)
+    }
+    return await adapter.getProviders(baseUrl, directory)
   }
 
   /**

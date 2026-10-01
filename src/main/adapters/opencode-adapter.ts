@@ -39,6 +39,45 @@ const quickTimeoutFetch = (req: unknown) => (globalThis as unknown as Record<str
 
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
 
+const MAX_SERVER_OUTPUT_CHARS = 600
+
+/**
+ * Turn an error from starting / querying the OpenCode server into a message a
+ * user can act on. The SDK's `createOpencode` spawns the `opencode` binary
+ * from PATH, so the common failures are: binary missing (spawn ENOENT), the
+ * process exiting during startup (port in use, bad config), or a startup
+ * timeout. Previously all of these collapsed into "No response from server".
+ */
+export function describeOpencodeServerError(error: unknown): string {
+  const err = error as (Error & { code?: string; syscall?: string; path?: string; cause?: unknown }) | undefined
+  const message = err instanceof Error ? err.message : String(error ?? 'Unknown error')
+
+  if (err?.code === 'ENOENT' && (err.syscall?.startsWith('spawn') || /spawn\s+\S*opencode/.test(message))) {
+    return 'Could not start OpenCode: the `opencode` binary was not found on PATH (spawn opencode ENOENT). ' +
+      'Install OpenCode (https://opencode.ai) or set its folder in onboarding, then restart 20x. ' +
+      `PATH used: ${process.env.PATH || '(empty)'}`
+  }
+
+  if (/^Timeout waiting for server to start/.test(message)) {
+    return `OpenCode server did not start in time (${message}). Check ~/.local/share/opencode/log for errors.`
+  }
+
+  if (/^Server exited with code/.test(message)) {
+    const trimmed = message.length > MAX_SERVER_OUTPUT_CHARS
+      ? `${message.slice(0, MAX_SERVER_OUTPUT_CHARS)}...`
+      : message
+    return `OpenCode server exited during startup: ${trimmed}`
+  }
+
+  // undici wraps network failures as "fetch failed" with the real reason in `cause`
+  const cause = err?.cause as (Error & { code?: string }) | undefined
+  if (message === 'fetch failed' && cause) {
+    return `Could not reach OpenCode server: ${cause.code ? `${cause.code} ` : ''}${cause.message || ''}`.trim()
+  }
+
+  return message
+}
+
 /** Outcome of attaching MCP servers to an OpenCode session. */
 type McpAttachResult = { attached: string[]; failed: string[] }
 
@@ -565,7 +604,32 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     providers: { id: string; name: string; models: unknown; [key: string]: unknown }[]
     default: Record<string, string>
   } | null> {
-    return this.getProvidersInner(serverUrl, directory, true)
+    try {
+      return await this.getProvidersOrThrow(serverUrl, directory)
+    } catch (error: unknown) {
+      console.log('[OpencodeAdapter] Could not get providers:', error instanceof Error ? error.message : error)
+      return null
+    }
+  }
+
+  /**
+   * Same as getProviders, but rejects with a descriptive error instead of
+   * returning null. Used by the Settings connection check so the user sees
+   * WHY the server is unreachable (e.g. `opencode` not on PATH, server exited,
+   * startup timeout) instead of a generic "No response from server".
+   */
+  async getProvidersOrThrow(
+    serverUrl?: string,
+    directory?: string
+  ): Promise<{
+    providers: { id: string; name: string; models: unknown; [key: string]: unknown }[]
+    default: Record<string, string>
+  }> {
+    try {
+      return await this.getProvidersInner(serverUrl, directory, true)
+    } catch (error: unknown) {
+      throw new Error(describeOpencodeServerError(error))
+    }
   }
 
   private async getProvidersInner(
@@ -575,64 +639,62 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   ): Promise<{
     providers: { id: string; name: string; models: unknown; [key: string]: unknown }[]
     default: Record<string, string>
-  } | null> {
-    try {
-      const client = await this.getClient(serverUrl, { quick: true })
+  }> {
+    const client = await this.getClient(serverUrl, { quick: true })
 
-      // Push the merged config if it hasn't been pushed yet. This handles the
-      // edge case where getProviders is called before any session has started
-      // (e.g. the user opens settings immediately after app launch). Once config
-      // has been pushed via ensureServerRunning, this is a no-op. Subsequent
-      // config changes go through notifyConfigChanged().
-      if (!this.configPushed) {
-        await this.pushMergedConfigToClient(client)
-      }
-
-      // Always pass a writable directory so the OpenCode server doesn't fall
-      // back to its CWD (which is read-only on macOS when launched from
-      // /Applications). Without this, fromDirectory() in the server tries to
-      // create an SQLite DB at the CWD and fails with "disk I/O error".
-      const safeDirectory = directory || homedir()
-
-      const result = await client.config.providers({
-        directory: safeDirectory
-      })
-
-      if (result.error) {
-        const errorStr = JSON.stringify(result.error)
-
-        // Detect SQLite database errors from the server (corrupted DB, stale WAL
-        // files, migration failures from opencode version upgrades).
-        // Recovery: kill the stale server, clear its DB, reset state, retry once.
-        if (allowRecovery && errorStr.includes('SQLiteError')) {
-          console.warn('[OpencodeAdapter] SQLite error from server, attempting recovery:', errorStr)
-          await this.recoverFromBrokenServer()
-          return this.getProvidersInner(serverUrl, directory, false)
-        }
-
-        console.log('[OpencodeAdapter] No providers configured on server:', errorStr)
-        return null
-      }
-
-      const data = result.data as {
-        providers?: { id: string; name: string; models: unknown; [key: string]: unknown }[]
-        default?: Record<string, string>
-      } | undefined
-
-      // Filter stale models from the enterprise AI gateway provider.
-      // The OpenCode server uses PATCH (merge semantics) for config updates,
-      // so models removed from LiteLLM persist in the server's config.
-      // We apply a client-side filter using the fresh model list from SQLite
-      // (which was just refreshed from LiteLLM by the caller in agent-manager).
-      if (data?.providers && this.db) {
-        this.filterStaleProviderModels(data.providers)
-      }
-
-      return data ? { providers: data.providers || [], default: data.default || {} } : null
-    } catch (error: unknown) {
-      console.log('[OpencodeAdapter] Could not get providers:', error instanceof Error ? error.message : error)
-      return null
+    // Push the merged config if it hasn't been pushed yet. This handles the
+    // edge case where getProviders is called before any session has started
+    // (e.g. the user opens settings immediately after app launch). Once config
+    // has been pushed via ensureServerRunning, this is a no-op. Subsequent
+    // config changes go through notifyConfigChanged().
+    if (!this.configPushed) {
+      await this.pushMergedConfigToClient(client)
     }
+
+    // Always pass a writable directory so the OpenCode server doesn't fall
+    // back to its CWD (which is read-only on macOS when launched from
+    // /Applications). Without this, fromDirectory() in the server tries to
+    // create an SQLite DB at the CWD and fails with "disk I/O error".
+    const safeDirectory = directory || homedir()
+
+    const result = await client.config.providers({
+      directory: safeDirectory
+    })
+
+    if (result.error) {
+      const errorStr = JSON.stringify(result.error)
+
+      // Detect SQLite database errors from the server (corrupted DB, stale WAL
+      // files, migration failures from opencode version upgrades).
+      // Recovery: kill the stale server, clear its DB, reset state, retry once.
+      if (allowRecovery && errorStr.includes('SQLiteError')) {
+        console.warn('[OpencodeAdapter] SQLite error from server, attempting recovery:', errorStr)
+        await this.recoverFromBrokenServer()
+        return this.getProvidersInner(serverUrl, directory, false)
+      }
+
+      console.log('[OpencodeAdapter] No providers configured on server:', errorStr)
+      throw new Error(`OpenCode server returned an error for provider listing: ${errorStr}`)
+    }
+
+    const data = result.data as {
+      providers?: { id: string; name: string; models: unknown; [key: string]: unknown }[]
+      default?: Record<string, string>
+    } | undefined
+
+    // Filter stale models from the enterprise AI gateway provider.
+    // The OpenCode server uses PATCH (merge semantics) for config updates,
+    // so models removed from LiteLLM persist in the server's config.
+    // We apply a client-side filter using the fresh model list from SQLite
+    // (which was just refreshed from LiteLLM by the caller in agent-manager).
+    if (data?.providers && this.db) {
+      this.filterStaleProviderModels(data.providers)
+    }
+
+    if (!data) {
+      throw new Error('OpenCode server returned an empty provider list response')
+    }
+    return { providers: data.providers || [], default: data.default || {} }
   }
 
   /**

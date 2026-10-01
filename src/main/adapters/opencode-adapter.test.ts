@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
-import { OpencodeAdapter } from './opencode-adapter'
+import { OpencodeAdapter, describeOpencodeServerError } from './opencode-adapter'
 import { SessionStatusType } from './coding-agent-adapter'
 import { ENTERPRISE_AI_GATEWAY_PROVIDER_ID } from '../enterprise-ai-gateway'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
@@ -7,6 +7,53 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 
 import * as enterpriseAiGateway from '../enterprise-ai-gateway'
+
+describe('describeOpencodeServerError', () => {
+  it('explains a missing opencode binary (spawn ENOENT)', () => {
+    const err = Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT', syscall: 'spawn opencode', path: 'opencode' })
+    const msg = describeOpencodeServerError(err)
+    expect(msg).toContain('`opencode` binary was not found on PATH')
+    expect(msg).toContain('spawn opencode ENOENT')
+  })
+
+  it('wraps startup timeouts and early exits', () => {
+    expect(describeOpencodeServerError(new Error('Timeout waiting for server to start after 10000ms')))
+      .toContain('did not start in time')
+    const exit = describeOpencodeServerError(new Error('Server exited with code 1\nServer output: EADDRINUSE'))
+    expect(exit).toContain('exited during startup')
+    expect(exit).toContain('EADDRINUSE')
+  })
+
+  it('unwraps undici "fetch failed" causes', () => {
+    const err = new Error('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED ::1:4096'), { code: 'ECONNREFUSED' }) })
+    expect(describeOpencodeServerError(err)).toBe('Could not reach OpenCode server: ECONNREFUSED connect ECONNREFUSED ::1:4096')
+  })
+
+  it('passes other messages through unchanged', () => {
+    expect(describeOpencodeServerError(new Error('OpenCode server not accessible at http://x:1'))).toBe('OpenCode server not accessible at http://x:1')
+  })
+})
+
+describe('OpencodeAdapter getProviders error reporting', () => {
+  it('getProviders returns null but getProvidersOrThrow surfaces the spawn error', async () => {
+    const adapter = new OpencodeAdapter()
+    const spawnErr = Object.assign(new Error('spawn opencode ENOENT'), { code: 'ENOENT', syscall: 'spawn opencode' })
+    ;(adapter as any).getClient = vi.fn().mockRejectedValue(spawnErr)
+
+    await expect(adapter.getProviders('http://localhost:4096')).resolves.toBeNull()
+    await expect(adapter.getProvidersOrThrow('http://localhost:4096')).rejects.toThrow(/not found on PATH/)
+  })
+
+  it('getProvidersOrThrow reports server-side provider errors', async () => {
+    const adapter = new OpencodeAdapter()
+    ;(adapter as any).configPushed = true
+    ;(adapter as any).getClient = vi.fn().mockResolvedValue({
+      config: { providers: vi.fn().mockResolvedValue({ error: { name: 'ConfigInvalidError' } }) }
+    })
+
+    await expect(adapter.getProvidersOrThrow('http://localhost:4096')).rejects.toThrow(/ConfigInvalidError/)
+  })
+})
 
 describe('OpencodeAdapter', () => {
   describe('runtime plugin generation', () => {

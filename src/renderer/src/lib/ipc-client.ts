@@ -189,6 +189,12 @@ export const agentSessionApi = {
 export const agentConfigApi = {
   getProviders: (serverUrl?: string, backendType?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> => {
     return window.electronAPI.agentConfig.getProviders(serverUrl, backendType)
+  },
+  testConnection: (serverUrl?: string, backendType?: string): Promise<
+    | { success: true; providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> }
+    | { success: false; error: string }
+  > => {
+    return window.electronAPI.agentConfig.testConnection(serverUrl, backendType)
   }
 }
 

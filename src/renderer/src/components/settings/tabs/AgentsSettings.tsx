@@ -73,8 +73,8 @@ export function AgentsSettings() {
 
     // Test OpenCode server connection
     try {
-      const result = await agentConfigApi.getProviders(agent.server_url, agent.config.coding_agent)
-      if (result && result.providers) {
+      const result = await agentConfigApi.testConnection(agent.server_url, agent.config.coding_agent)
+      if (result.success) {
         let modelCount = 0
         const providers = Array.isArray(result.providers) ? result.providers : []
         for (const p of providers) {
@@ -88,7 +88,7 @@ export function AgentsSettings() {
           testedAt: new Date()
         }))
       } else {
-        setConnections((prev) => new Map(prev).set(agent.id, { status: 'error', error: 'No response from server' }))
+        setConnections((prev) => new Map(prev).set(agent.id, { status: 'error', error: result.error || 'No response from server' }))
       }
     } catch (err: unknown) {
       setConnections((prev) => new Map(prev).set(agent.id, { status: 'error', error: err instanceof Error ? err.message : 'Connection failed' }))
@@ -264,7 +264,7 @@ export function AgentsSettings() {
                       ) : connection.status === 'error' ? (
                         <>
                           <WifiOff className="h-3 w-3" />
-                          <span className="truncate">{connection.error || 'Connection failed'}</span>
+                          <span className="truncate" title={connection.error || 'Connection failed'}>{connection.error || 'Connection failed'}</span>
                         </>
                       ) : null}
                     </div>

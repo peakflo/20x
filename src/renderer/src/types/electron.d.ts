@@ -269,6 +269,10 @@ interface ElectronAPI {
   }
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string) => Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null>
+    testConnection: (serverUrl?: string, backendType?: string) => Promise<
+      | { success: true; providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> }
+      | { success: false; error: string }
+    >
   }
   attachments: {
     pick: () => Promise<string[]>

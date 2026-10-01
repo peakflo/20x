@@ -271,6 +271,18 @@ export interface CodingAgentAdapter {
   } | null>
 
   /**
+   * Like getProviders, but rejects with a descriptive error instead of
+   * resolving to null, so connection checks can show the real failure reason.
+   */
+  getProvidersOrThrow?(
+    serverUrl?: string,
+    directory?: string
+  ): Promise<{
+    providers: { id: string; name: string; models: unknown; [key: string]: unknown }[]
+    default: Record<string, string>
+  }>
+
+  /**
    * Notify the adapter that provider/auth config has changed (e.g. user edited
    * agent settings, AI gateway key was rotated).  Adapters that manage a shared
    * backend server (like OpenCode) should push the updated config.

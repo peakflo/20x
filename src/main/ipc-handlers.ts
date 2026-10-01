@@ -534,6 +534,10 @@ export function registerIpcHandlers(
     return await agentManager.getProviders(serverUrl, undefined, backendType)
   })
 
+  ipcMain.handle('agentConfig:testConnection', async (_, serverUrl?: string, backendType?: string) => {
+    return await agentManager.testProvidersConnection(serverUrl, backendType)
+  })
+
 
   // MCP Server handlers
   ipcMain.handle('mcp:getAll', () => {
