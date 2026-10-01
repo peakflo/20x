@@ -1317,6 +1317,59 @@ describe('AgentManager MCP server routing', () => {
     expect(url.searchParams.get('artifact')).toBeNull()
   })
 
+  it('probes the built-in task-management server over HTTP instead of spawning its stored node command', async () => {
+    vi.mocked(getTaskApiPort).mockReturnValue(4321)
+    const { waitForTaskApiServer } = await import('./task-api-server')
+    vi.mocked(waitForTaskApiServer).mockResolvedValue(4321)
+    const { spawn } = await import('child_process')
+    const jsonResponse = (body: unknown): Response => new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    })
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const { method } = JSON.parse(String(init?.body))
+      if (method === 'initialize') return jsonResponse({ jsonrpc: '2.0', id: 1, result: {} })
+      if (method === 'tools/list') {
+        return jsonResponse({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'list_tasks', description: 'List tasks' }] } })
+      }
+      return new Response(null, { status: 202 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const manager = new AgentManager(makeTaskManagementDb())
+      const result = await manager.testMcpServer({
+        name: 'task-management',
+        type: 'local',
+        command: 'node',
+        args: ['/Applications/20x.app/Contents/Resources/app.asar.unpacked/out/main/mcp-servers/task-management-mcp.js'],
+        environment: {}
+      })
+
+      expect(spawn).not.toHaveBeenCalled()
+      expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:4321/mcp')
+      expect(result).toEqual({
+        status: 'connected',
+        toolCount: 1,
+        tools: [{ name: 'list_tasks', description: 'List tasks' }]
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('reports the built-in task-management server as failed when the Task API server is down', async () => {
+    vi.mocked(getTaskApiPort).mockReturnValue(null)
+    const { waitForTaskApiServer } = await import('./task-api-server')
+    vi.mocked(waitForTaskApiServer).mockResolvedValue(null)
+    const { spawn } = await import('child_process')
+    const manager = new AgentManager(makeTaskManagementDb())
+
+    const result = await manager.testMcpServer({ name: 'task-management', type: 'local', command: 'node', args: [] })
+
+    expect(spawn).not.toHaveBeenCalled()
+    expect(result).toEqual({ status: 'failed', error: 'Task API server is not running' })
+  })
+
   it('builds the identical config on every call, so a resume does not change it', async () => {
     vi.mocked(getTaskApiPort).mockReturnValue(4321)
     const manager = new AgentManager(makeTaskManagementDb())

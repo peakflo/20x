@@ -85,6 +85,29 @@ describe('MCP endpoint over HTTP', () => {
     await client.close()
   })
 
+  it('answers the plain JSON-RPC probe that Settings uses for its status check', async () => {
+    const port = await startTaskApiServer(db)
+    const url = buildTaskMcpUrl(port)
+    const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }
+
+    const init = await fetch(url, {
+      method: 'POST', headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'initialize',
+        params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'pf-desktop', version: '1.0.0' } }
+      })
+    })
+    expect(init.ok).toBe(true)
+    expect(init.headers.get('content-type')).toContain('application/json')
+
+    const list = await fetch(url, {
+      method: 'POST', headers,
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' })
+    })
+    const body = await list.json() as { result?: { tools?: Array<{ name: string }> } }
+    expect(body.result?.tools?.map((t) => t.name)).toContain('list_tasks')
+  })
+
   it('serves the subtask tool set to a scoped session', async () => {
     const parent = db.createTask(makeTask({ title: 'Parent' }))!
     const child = db.createTask(makeTask({ title: 'Child', parent_task_id: parent.id }))!

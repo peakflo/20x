@@ -4658,10 +4658,31 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
    * (JSON-RPC over stdio for local, HTTP POST for remote).
    */
   async testMcpServer(serverData: { name: string; type?: string; command?: string; args?: string[]; url?: string; headers?: Record<string, string>; environment?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
+    if (serverData.name === 'task-management') {
+      return this.testTaskManagementMcpServer()
+    }
     if (serverData.type === 'remote') {
       return this.testRemoteMcpServer(serverData)
     }
     return this.testLocalMcpServer(serverData)
+  }
+
+  /**
+   * Probes the built-in task-management server where agents actually reach it:
+   * the in-process HTTP endpoint (see buildTaskManagementMcpConfig).
+   *
+   * The stored row still carries a stdio command (`node task-management-mcp.js`
+   * on macOS, because the packaged app disables Electron's RunAsNode fuse).
+   * Spawning that command failed with "spawn node ENOENT" whenever no standalone
+   * Node.js was on the PATH, so Settings showed the server as broken even
+   * though no agent session ever uses that command.
+   */
+  private async testTaskManagementMcpServer(): Promise<{ status: 'connected' | 'failed'; error?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
+    const apiPort = (await waitForTaskApiServer()) ?? getTaskApiPort()
+    if (!apiPort) {
+      return { status: 'failed', error: 'Task API server is not running' }
+    }
+    return this.testRemoteMcpServer({ name: 'task-management', url: buildTaskMcpUrl(apiPort) })
   }
 
   private testLocalMcpServer(serverData: { name: string; command?: string; args?: string[]; environment?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; errorDetail?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
@@ -4683,20 +4704,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         finish({ status: 'failed', error: 'Connection timeout (30s)' })
       }, 30000)
 
-      // Inject TASK_API_URL for the built-in task-management server
-      const extraEnv: Record<string, string> = {}
-      if (serverData.name === 'task-management') {
-        const apiPort = getTaskApiPort()
-        if (apiPort) extraEnv.TASK_API_URL = `http://127.0.0.1:${apiPort}`
-      }
-
       // Spawn directly with args array (no shell quoting) to avoid Windows single-quote issues.
       // Only use shell mode for commands that need it (npx, .cmd/.bat wrappers).
       const needsShell = /^(npx|uvx|bunx)\b/.test(serverData.command!) || (process.platform === 'win32' && /\.(cmd|bat)$/i.test(serverData.command!))
       const proc = spawn(serverData.command!, serverData.args || [], {
         stdio: ['pipe', 'pipe', 'pipe'],
         ...(needsShell ? { shell: true } : {}),
-        env: { ...process.env, npm_config_yes: 'true', ...(serverData.environment || {}), ...extraEnv }
+        env: { ...process.env, npm_config_yes: 'true', ...(serverData.environment || {}) }
       })
 
       // Every pipe needs an error listener before the first write. A server that
