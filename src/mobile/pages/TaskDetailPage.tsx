@@ -977,28 +977,103 @@ function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sour
   const [comment, setComment] = useState('')
   const [completeAtSource, setCompleteAtSource] = useState(true)
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div role="dialog" aria-label={withFeedback ? 'Session feedback' : 'Complete task'} className="mx-4 w-full max-w-md rounded-xl border bg-card p-5 space-y-4">
-        <h2>{withFeedback ? 'Session feedback' : 'Complete task'}</h2>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-0 sm:p-4">
+      <div
+        role="dialog"
+        aria-label={withFeedback ? 'Session feedback' : 'Complete task'}
+        className="w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border/50 bg-card p-5 space-y-4 shadow-2xl"
+        style={{ paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom))' }}
+      >
+        <h2 className="text-base font-semibold text-foreground">{withFeedback ? 'Session feedback' : 'Complete task'}</h2>
+
         {sourceName && (
-          <div className="rounded-md border p-3 text-sm space-y-2">
-            <p>{completeAtSource ? completionDescription : 'Complete in 20x only. The source record will not change.'}</p>
+          <div className="rounded-lg border border-border/50 bg-background p-3 text-sm space-y-2.5">
+            <p className="text-muted-foreground leading-snug">
+              {completeAtSource ? completionDescription : 'Complete in 20x only. The source record will not change.'}
+            </p>
             <div className="flex gap-2">
-              <button className={`flex-1 rounded-md border px-2 py-2 ${completeAtSource ? 'border-ring bg-accent' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={completeAtSource} onClick={() => setCompleteAtSource(true)}>Close it in {sourceName}</button>
-              <button className={`flex-1 rounded-md border px-2 py-2 ${!completeAtSource ? 'border-ring bg-accent' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={!completeAtSource} onClick={() => setCompleteAtSource(false)}>I'll do it manually</button>
+              <button
+                className={cn(
+                  'flex-1 rounded-lg border px-2 py-2 text-xs font-medium transition-colors',
+                  completeAtSource ? 'border-primary/60 bg-primary/10 text-primary' : 'border-border text-muted-foreground active:bg-accent'
+                )}
+                role="radio"
+                aria-checked={completeAtSource}
+                onClick={() => setCompleteAtSource(true)}
+              >
+                Close it in {sourceName}
+              </button>
+              <button
+                className={cn(
+                  'flex-1 rounded-lg border px-2 py-2 text-xs font-medium transition-colors',
+                  !completeAtSource ? 'border-primary/60 bg-primary/10 text-primary' : 'border-border text-muted-foreground active:bg-accent'
+                )}
+                role="radio"
+                aria-checked={!completeAtSource}
+                onClick={() => setCompleteAtSource(false)}
+              >
+                I'll do it manually
+              </button>
             </div>
           </div>
         )}
-        {withFeedback && <>
-          <div className="flex gap-2">
-            {[1, 2, 3, 4, 5].map(value => <button key={value} aria-label={`Rate ${value}`} aria-pressed={rating === value} onClick={() => setRating(value)}>{value}</button>)}
-          </div>
-          <textarea aria-label="Feedback" placeholder="Optional feedback..." value={comment} onChange={event => setComment(event.target.value)} />
-        </>}
-        <div className="flex gap-3">
-          <button onClick={onCancel}>Cancel</button>
-          <button onClick={() => onSkip(completeAtSource)}>{withFeedback ? 'Skip' : 'Complete'}</button>
-          {withFeedback && <button disabled={!rating} onClick={() => onSubmit(rating, comment, completeAtSource)}>Submit Feedback</button>}
+
+        {withFeedback && (
+          <>
+            <div>
+              <p className="text-xs text-muted-foreground mb-2">How did this session go?</p>
+              <div className="flex gap-1.5">
+                {[1, 2, 3, 4, 5].map((value) => (
+                  <button
+                    key={value}
+                    aria-label={`Rate ${value}`}
+                    aria-pressed={rating === value}
+                    onClick={() => setRating(value)}
+                    className={cn(
+                      'flex-1 h-10 rounded-lg border text-sm font-semibold transition-colors',
+                      rating >= value
+                        ? 'border-amber-400/60 bg-amber-400/15 text-amber-400'
+                        : 'border-border text-muted-foreground active:bg-accent'
+                    )}
+                  >
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <textarea
+              aria-label="Feedback"
+              placeholder="Optional feedback..."
+              value={comment}
+              onChange={(event) => setComment(event.target.value)}
+              rows={3}
+              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 resize-none"
+            />
+          </>
+        )}
+
+        <div className="flex gap-2 pt-1">
+          <button
+            onClick={onCancel}
+            className="flex-1 h-10 rounded-lg border border-border text-sm font-medium text-foreground active:bg-accent transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onSkip(completeAtSource)}
+            className="flex-1 h-10 rounded-lg border border-border text-sm font-medium text-foreground active:bg-accent transition-colors"
+          >
+            {withFeedback ? 'Skip' : 'Complete'}
+          </button>
+          {withFeedback && (
+            <button
+              disabled={!rating}
+              onClick={() => onSubmit(rating, comment, completeAtSource)}
+              className="flex-1 h-10 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-40 active:opacity-80 transition-opacity"
+            >
+              Submit
+            </button>
+          )}
         </div>
       </div>
     </div>
