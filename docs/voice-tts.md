@@ -217,6 +217,13 @@ of Markdown punctuation are removed before anything is spoken. A code block is
 named — “A code block of 12 lines is in the message.” — rather than read.
 Automatic speech stops at a character limit, and the speak button reads the rest.
 
+A date written with slashes — `09/12/2026` — used to be named as a file path,
+because the path rule takes any three tokens joined by slashes and a date is
+exactly that. It took the full stop with it, so a sentence that ended on a date
+lost its terminator and was held back until the agent stopped instead of being
+read as it was written. A run of digits and slashes is now left for the voice to
+read, and a path that ends a sentence keeps its full stop.
+
 ### Every message of a turn is read, not only the last
 
 One turn can hold several messages: the agent says something, uses a tool, and
