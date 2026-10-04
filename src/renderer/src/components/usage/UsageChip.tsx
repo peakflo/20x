@@ -1,20 +1,10 @@
 import { useState, type ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import type { UsageLimitLevel } from '@shared/usage'
+import { USAGE_LEVEL_BAR, USAGE_LEVEL_TEXT } from './usage-level-style'
 
-export type UsageChipLevel = 'normal' | 'warning' | 'critical'
-
-const LEVEL_TEXT: Record<UsageChipLevel, string> = {
-  normal: 'text-muted-foreground',
-  warning: 'text-warning',
-  critical: 'text-destructive'
-}
-
-const LEVEL_BAR: Record<UsageChipLevel, string> = {
-  normal: 'bg-primary',
-  warning: 'bg-warning',
-  critical: 'bg-destructive'
-}
+export type UsageChipLevel = UsageLimitLevel
 
 interface UsageChipProps {
   /** Small icon identifying the subscription (provider logo, Peakflo AI mark). */
@@ -50,7 +40,7 @@ export function UsageChip({ icon, label, percent, level, limitReached, details, 
         type="button"
         className={cn(
           'flex items-center gap-1 rounded-sm px-0.5 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40',
-          LEVEL_TEXT[level]
+          USAGE_LEVEL_TEXT[level]
         )}
         aria-label={label}
         aria-expanded={open}
@@ -60,7 +50,7 @@ export function UsageChip({ icon, label, percent, level, limitReached, details, 
       >
         {limitReached ? <AlertTriangle className="h-2.5 w-2.5" aria-hidden /> : <span className="flex h-2.5 w-2.5 items-center justify-center" aria-hidden>{icon}</span>}
         <span className="h-1 w-5 rounded-full bg-muted overflow-hidden" aria-hidden>
-          <span className={cn('block h-full rounded-full', LEVEL_BAR[level])} style={{ width: `${used}%` }} />
+          <span className={cn('block h-full rounded-full', USAGE_LEVEL_BAR[level])} style={{ width: `${used}%` }} />
         </span>
         <span>{Math.round(used)}%</span>
       </button>

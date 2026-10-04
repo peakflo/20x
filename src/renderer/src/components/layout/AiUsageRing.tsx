@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
-import { fetchAiUsage, usageLevel, type AiUsage } from '@/lib/ai-usage'
+import { fetchAiUsage, type AiUsage } from '@/lib/ai-usage'
+import { usageLimitLevel } from '@shared/usage'
+import { USAGE_LEVEL_BAR } from '@/components/usage/usage-level-style'
 import { Logo20x } from '@/components/icons/AgentLogos'
 import { UsageChip } from '@/components/usage/UsageChip'
 
 const REFRESH_MS = 5 * 60 * 1000
-const CHIP_LEVEL = { normal: 'normal', warn: 'warning', critical: 'critical' } as const
-const BAR = { normal: 'bg-primary', warn: 'bg-warning', critical: 'bg-destructive' } as const
 
 /** Status-bar meter for Peakflo AI subscription usage (hover for details). Renders nothing without a subscription. */
 export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
@@ -47,7 +47,7 @@ export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
   const usage = override !== undefined ? override : fetched
   if (!usage) return null
 
-  const level = usageLevel(usage.percent)
+  const level = usageLimitLevel(usage.percent)
   let resetText: string | null = null
   if (usage.resetAt) {
     const reset = new Date(usage.resetAt)
@@ -64,7 +64,7 @@ export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
       icon={<Logo20x className="h-2.5 w-2.5" />}
       label={label}
       percent={usage.percent}
-      level={CHIP_LEVEL[level]}
+      level={level}
       testId="ai-usage-ring"
       detailsTestId="ai-usage-tooltip"
       details={
@@ -79,7 +79,7 @@ export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
               <span className="text-muted-foreground tabular-nums">{usage.percent}% used</span>
             </div>
             <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-              <div className={`h-full rounded-full ${BAR[level]}`} style={{ width: `${usage.percent}%` }} />
+              <div className={`h-full rounded-full ${USAGE_LEVEL_BAR[level]}`} style={{ width: `${usage.percent}%` }} />
             </div>
           </div>
           {resetText && <p className="text-[11px] text-muted-foreground">{resetText}</p>}

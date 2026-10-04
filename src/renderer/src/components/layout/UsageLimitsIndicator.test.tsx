@@ -67,7 +67,8 @@ describe('UsageLimitsIndicator', () => {
     const claudeChip = await screen.findByRole('button', { name: /Claude: 82% of weekly limit used/ })
     expect(claudeChip.querySelector('svg')).not.toBeNull()
     expect(claudeChip).toHaveTextContent('82%')
-    expect(claudeChip.className).toContain('text-warning')
+    expect(claudeChip.className).toContain('text-yellow-500')
+    expect(claudeChip.querySelector('.bg-yellow-400')).not.toBeNull()
     expect(screen.getByRole('button', { name: /Codex: 12% of 5-hour limit used, resets in 3h 0m/ })).toBeInTheDocument()
     expect(screen.queryByTestId('usage-chip-opencode')).not.toBeInTheDocument()
   })
@@ -97,7 +98,19 @@ describe('UsageLimitsIndicator', () => {
     act(() => {
       pushLimits?.({ ...codex, limitReached: true, windows: [{ ...codex.windows[0], usedPercent: 100 }] })
     })
-    await waitFor(() => expect(screen.getByRole('button', { name: /Codex: 100%/ }).className).toContain('text-destructive'))
+    await waitFor(() => expect(screen.getByRole('button', { name: /Codex: 100%/ }).className).toContain('text-red-500'))
+  })
+
+  it('keeps the bar in the primary color up to 75% and turns it red above 90%', async () => {
+    const at75 = { ...codex, windows: [{ ...codex.windows[0], usedPercent: 75 }] }
+    const at95 = { ...claude, windows: [{ ...claude.windows[0], usedPercent: 95 }, claude.windows[1]] }
+    getLimits.mockResolvedValue([at75, at95])
+    refreshLimits.mockResolvedValue({ limits: [at75, at95], refreshed: [] })
+    render(<UsageLimitsIndicator />)
+    const codexChip = await screen.findByRole('button', { name: /Codex: 75%/ })
+    expect(codexChip.querySelector('.bg-primary')).not.toBeNull()
+    const claudeChip = screen.getByRole('button', { name: /Claude: 95%/ })
+    expect(claudeChip.querySelector('.bg-red-500')).not.toBeNull()
   })
 
   it('renders nothing when no provider reports limits', async () => {

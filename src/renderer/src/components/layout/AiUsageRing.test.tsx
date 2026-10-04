@@ -34,6 +34,15 @@ describe('AiUsageRing', () => {
     expect(screen.queryByTestId('ai-usage-tooltip')).not.toBeInTheDocument()
   })
 
+  it('uses the shared colors: yellow above 75%, red above 90%', () => {
+    const { rerender } = render(<AiUsageRing usage={{ percent: 60, used: 6, limit: 10, resetAt: null }} />)
+    expect(screen.getByTestId('ai-usage-ring').querySelector('.bg-primary')).not.toBeNull()
+    rerender(<AiUsageRing usage={{ percent: 80, used: 8, limit: 10, resetAt: null }} />)
+    expect(screen.getByTestId('ai-usage-ring').querySelector('.bg-yellow-400')).not.toBeNull()
+    rerender(<AiUsageRing usage={{ percent: 92, used: 9, limit: 10, resetAt: null }} />)
+    expect(screen.getByTestId('ai-usage-ring').querySelector('.bg-red-500')).not.toBeNull()
+  })
+
   it('also shows the popover on keyboard focus', () => {
     render(<AiUsageRing usage={{ percent: 97, used: 97, limit: 100, resetAt: null }} />)
     fireEvent.focus(screen.getByRole('button', { name: /Peakflo AI/ }))

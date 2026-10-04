@@ -16,10 +16,11 @@ import {
   type UsageSummary
 } from '@shared/usage'
 
+/** Primary below 75%, yellow above 75%, red above 90% (matches desktop). */
 const LEVEL_BAR = {
   normal: 'bg-primary',
-  warning: 'bg-amber-500',
-  critical: 'bg-destructive'
+  warning: 'bg-yellow-400',
+  critical: 'bg-red-500'
 } as const
 
 function upsert(list: ProviderUsageLimits[], next: ProviderUsageLimits): ProviderUsageLimits[] {

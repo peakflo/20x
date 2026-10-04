@@ -323,10 +323,15 @@ export function formatResetIn(resetsAt: string | null | undefined, nowMs = Date.
 
 export type UsageLimitLevel = 'normal' | 'warning' | 'critical'
 
-/** Status level for a plan-limit window: warning from 75% used, critical from 90%. */
+/** Above this share of a window used, usage is shown in yellow. */
+export const USAGE_WARNING_PERCENT = 75
+/** Above this share of a window used, usage is shown in red. */
+export const USAGE_CRITICAL_PERCENT = 90
+
+/** Status level for a usage meter: yellow above 75% used, red above 90%. */
 export function usageLimitLevel(usedPercent: number): UsageLimitLevel {
-  if (usedPercent >= 90) return 'critical'
-  if (usedPercent >= 75) return 'warning'
+  if (usedPercent > USAGE_CRITICAL_PERCENT) return 'critical'
+  if (usedPercent > USAGE_WARNING_PERCENT) return 'warning'
   return 'normal'
 }
 

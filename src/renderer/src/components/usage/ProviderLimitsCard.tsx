@@ -2,6 +2,7 @@ import { AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { ProviderLogo } from './ProviderLogo'
+import { USAGE_LEVEL_BAR } from './usage-level-style'
 import {
   USAGE_PROVIDER_LABELS,
   effectiveUsedPercent,
@@ -10,12 +11,6 @@ import {
   type ProviderUsageLimits,
   type UsageLimitWindow
 } from '@shared/usage'
-
-const LEVEL_BAR: Record<ReturnType<typeof usageLimitLevel>, string> = {
-  normal: 'bg-primary',
-  warning: 'bg-warning',
-  critical: 'bg-destructive'
-}
 
 function formatPlan(planType: string | null | undefined): string | null {
   if (!planType) return null
@@ -53,7 +48,7 @@ export function LimitWindowRow({ window }: { window: UsageLimitWindow }) {
         aria-valuenow={Math.round(used)}
         aria-label={`${window.label}: ${Math.round(used)}% used`}
       >
-        <div className={cn('h-full rounded-full transition-[width]', LEVEL_BAR[level])} style={{ width: `${used}%` }} />
+        <div className={cn('h-full rounded-full transition-[width]', USAGE_LEVEL_BAR[level])} style={{ width: `${used}%` }} />
       </div>
     </div>
   )

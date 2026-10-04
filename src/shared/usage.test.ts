@@ -77,9 +77,10 @@ describe('usage helpers', () => {
   })
 
   it('classifies limit levels', () => {
-    expect(usageLimitLevel(74)).toBe('normal')
-    expect(usageLimitLevel(75)).toBe('warning')
-    expect(usageLimitLevel(90)).toBe('critical')
+    expect(usageLimitLevel(75)).toBe('normal')
+    expect(usageLimitLevel(75.5)).toBe('warning')
+    expect(usageLimitLevel(90)).toBe('warning')
+    expect(usageLimitLevel(91)).toBe('critical')
   })
 
   it('formats tokens, cost and reset times', () => {
