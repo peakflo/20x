@@ -9,7 +9,8 @@ export interface ChatInputAttachment {
 }
 
 interface ChatInputProps {
-  onSend: (message: string, options?: { attachments?: ChatInputAttachment[] }) => void
+  onSend: (message: string, options?: { attachments?: ChatInputAttachment[] }, alternate?: boolean) => void
+  sendLabel?: string
   disabled?: boolean
   placeholder?: string
   attachments?: ChatInputAttachment[]
@@ -26,6 +27,7 @@ function formatFileSize(bytes: number): string {
 
 export function ChatInput({
   onSend,
+  sendLabel,
   disabled,
   placeholder = 'Write a message...',
   attachments = [],
@@ -53,10 +55,12 @@ export function ChatInput({
     }
   }, [])
 
-  const handleSend = () => {
+  const handleSend = (alternate = false) => {
     const text = value.trim()
     if (!text || disabled) return
-    onSend(text, attachments.length > 0 ? { attachments } : undefined)
+    const options = attachments.length > 0 ? { attachments } : undefined
+    if (alternate) onSend(text, options, true)
+    else onSend(text, options)
     setValue('')
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
@@ -66,7 +70,7 @@ export function ChatInput({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      handleSend()
+      handleSend(e.metaKey || e.ctrlKey)
     }
   }
 
@@ -153,14 +157,14 @@ export function ChatInput({
           </button>
         )}
         <button
-          onClick={handleSend}
+          onClick={() => handleSend()}
           disabled={disabled || !value.trim()}
-          className="h-[32px] w-[32px] shrink-0 rounded-lg flex items-center justify-center bg-primary text-primary-foreground active:opacity-80 disabled:opacity-30 transition-colors"
-          aria-label="Send message"
+          className="h-[32px] min-w-[32px] px-2 shrink-0 rounded-lg flex items-center justify-center bg-primary text-primary-foreground active:opacity-80 disabled:opacity-30 transition-colors"
+          aria-label={sendLabel ? `${sendLabel} message` : 'Send message'}
         >
-          <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          {sendLabel || <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="m22 2-7 20-4-9-9-4z" /><path d="M22 2 11 13" />
-          </svg>
+          </svg>}
         </button>
       </div>
     </div>

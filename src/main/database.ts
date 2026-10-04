@@ -9,6 +9,7 @@ import type { ReasoningEffort } from '../shared/reasoning-effort'
 import { startTaskApiServer } from './task-api-server'
 import { UsageStore } from './usage/usage-store'
 import { contextHandoffSettingKey, isSameHarness, parseContextHandoffMarker, type ContextHandoffMarker } from './context-handoff'
+import type { QueuedMessage, QueuedMessageAttachment } from '../shared/message-queue'
 
 export interface AgentRow {
   id: string
@@ -961,7 +962,7 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  *
  * 8 → 9: tasks.complete_at_source
  */
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -1300,11 +1301,58 @@ export class DatabaseManager {
         PRIMARY KEY (task_id, part_id)
       );
       CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_seq ON transcript_parts(task_id, seq);
+      CREATE TABLE IF NOT EXISTS task_message_queue (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        attachments TEXT NOT NULL DEFAULT '[]',
+        position INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_message_queue_order ON task_message_queue(task_id, position);
       -- NOTE: the (task_id, rev) index is created in ensureTranscriptRevColumn(),
       -- NOT here. On a DB created before rev existed, CREATE TABLE IF NOT EXISTS
       -- is a no-op (no rev column), so building a rev index here would fail with
       -- no-such-column before the ALTER TABLE migration runs.
     `)
+  }
+
+  listQueuedMessages(taskId: string): QueuedMessage[] {
+    const rows = this.db.prepare('SELECT * FROM task_message_queue WHERE task_id = ? ORDER BY position, created_at, id').all(taskId) as Array<Omit<QueuedMessage, 'attachments'> & { attachments: string }>
+    return rows.map((row) => ({ ...row, attachments: JSON.parse(row.attachments) as QueuedMessageAttachment[] }))
+  }
+
+  addQueuedMessage(taskId: string, text: string, attachments: QueuedMessageAttachment[] = []): QueuedMessage {
+    if (!text.trim() && attachments.length === 0) throw new Error('Message is empty')
+    if (!this.getTask(taskId)) throw new Error('Task not found')
+    const id = createId()
+    const createdAt = new Date().toISOString()
+    const position = (this.db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM task_message_queue WHERE task_id = ?').get(taskId) as { next: number }).next
+    this.db.prepare('INSERT INTO task_message_queue (id, task_id, text, attachments, position, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, taskId, text, JSON.stringify(attachments), position, createdAt)
+    return { id, task_id: taskId, text, attachments, position, created_at: createdAt }
+  }
+
+  updateQueuedMessage(taskId: string, id: string, text: string, attachments: QueuedMessageAttachment[]): QueuedMessage {
+    if (!text.trim() && attachments.length === 0) throw new Error('Message is empty')
+    const result = this.db.prepare('UPDATE task_message_queue SET text = ?, attachments = ? WHERE task_id = ? AND id = ?').run(text, JSON.stringify(attachments), taskId, id)
+    if (!result.changes) throw new Error('Queued message not found')
+    return this.listQueuedMessages(taskId).find((item) => item.id === id)!
+  }
+
+  reorderQueuedMessages(taskId: string, ids: string[]): QueuedMessage[] {
+    const current = this.listQueuedMessages(taskId)
+    if (current.length !== ids.length || new Set(ids).size !== ids.length || current.some((item) => !ids.includes(item.id))) {
+      throw new Error('Queue order must contain every queued message exactly once')
+    }
+    this.db.transaction(() => {
+      const update = this.db.prepare('UPDATE task_message_queue SET position = ? WHERE task_id = ? AND id = ?')
+      ids.forEach((id, position) => update.run(position, taskId, id))
+    })()
+    return this.listQueuedMessages(taskId)
+  }
+
+  deleteQueuedMessage(taskId: string, id: string): boolean {
+    return this.db.prepare('DELETE FROM task_message_queue WHERE task_id = ? AND id = ?').run(taskId, id).changes > 0
   }
 
   /**

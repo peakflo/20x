@@ -145,6 +145,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getTranscriptDelta: (taskId: string, sinceRev: number): Promise<{ parts: Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number; rev: number }>; maxRev: number }> =>
       ipcRenderer.invoke('agentSession:getTranscriptDelta', taskId, sinceRev)
   },
+  messageQueue: {
+    list: (taskId: string) => ipcRenderer.invoke('messageQueue:list', taskId),
+    add: (taskId: string, text: string, attachments?: unknown[]) => ipcRenderer.invoke('messageQueue:add', taskId, text, attachments),
+    update: (taskId: string, id: string, text: string, attachments?: unknown[]) => ipcRenderer.invoke('messageQueue:update', taskId, id, text, attachments),
+    reorder: (taskId: string, ids: string[]) => ipcRenderer.invoke('messageQueue:reorder', taskId, ids),
+    delete: (taskId: string, id: string) => ipcRenderer.invoke('messageQueue:delete', taskId, id),
+    promote: (taskId: string, id: string) => ipcRenderer.invoke('messageQueue:promote', taskId, id),
+    resume: (taskId: string) => ipcRenderer.invoke('messageQueue:resume', taskId),
+    sendWhileBusy: (taskId: string, text: string, attachments: unknown[], action: 'steer' | 'queue') => ipcRenderer.invoke('messageQueue:sendWhileBusy', taskId, text, attachments, action),
+    onChanged: (callback: (event: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, data: unknown): void => callback(data)
+      ipcRenderer.on('message-queue:changed', listener)
+      return () => ipcRenderer.removeListener('message-queue:changed', listener)
+    }
+  },
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> =>
       ipcRenderer.invoke('agentConfig:getProviders', serverUrl, backendType),

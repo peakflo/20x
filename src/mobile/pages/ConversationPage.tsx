@@ -8,6 +8,9 @@ import { useSessionControls } from '../hooks/useSessionControls'
 import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '../components/MessageBubble'
 import { ArtifactCard } from '../components/ArtifactCard'
 import { ChatInput, type ChatInputAttachment } from '../components/ChatInput'
+import { MessageQueueList } from '@/components/agents/MessageQueueList'
+import { onEvent } from '../api/websocket'
+import { resolveFollowupAction, type MessageQueueSnapshot } from '@shared/message-queue'
 import { useArtifactStore } from '../stores/artifact-store'
 import { cn } from '../lib/utils'
 import { captureAnalyticsEvent } from '@/lib/analytics'
@@ -132,6 +135,28 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const [activeSearchResult, setActiveSearchResult] = useState(0)
   const [showAttachmentPicker, setShowAttachmentPicker] = useState(false)
   const [messageAttachments, setMessageAttachments] = useState<ChatInputAttachment[]>([])
+  const [messageQueue, setMessageQueue] = useState<MessageQueueSnapshot>({ messages: [], paused: false })
+  const [followupDefault, setFollowupDefault] = useState<'steer' | 'queue'>('queue')
+  const [canSteer, setCanSteer] = useState(false)
+  useEffect(() => {
+    let active = true
+    void api.messageQueue.list(taskId).then((value) => { if (active) setMessageQueue(value) })
+    void api.messageQueue.default().then((value) => { if (active) setFollowupDefault(value.action) })
+    const unsubscribe = onEvent('message-queue:changed', (payload) => {
+      const event = payload as MessageQueueSnapshot & { taskId: string }
+      if (event.taskId === taskId) setMessageQueue(event)
+    })
+    return () => { active = false; unsubscribe() }
+  }, [taskId])
+  useEffect(() => {
+    if (!task?.agent_id) { setCanSteer(false); return }
+    let active = true
+    void api.agents.get(task.agent_id).then((value) => {
+      const agent = value as { config?: { coding_agent?: string } } | null
+      if (active) setCanSteer(['claude-code', 'codex', 'pi'].includes(agent?.config?.coding_agent || ''))
+    })
+    return () => { active = false }
+  }, [task?.agent_id])
 
   // Stable empty list — a fresh `[]` per render would invalidate every memo and
   // effect keyed on `messages` while no session exists.
@@ -227,7 +252,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
 
   // Smart send handler — mirrors desktop TaskWorkspace.handleSend logic
   const handleSend = useCallback(
-    async (message: string, options?: { attachments?: ChatInputAttachment[] }) => {
+    async (message: string, options?: { attachments?: ChatInputAttachment[] }, alternate = false) => {
       // Get latest session from store, not from closure, to avoid stale closure bug
       const currentSession = useAgentStore.getState().sessions.get(taskId)
       if (!currentSession?.sessionId) return
@@ -243,6 +268,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             approved: true,
             has_message: Boolean(message)
           })
+        } else if (currentSession.status === SessionStatus.WORKING) {
+          await api.messageQueue.send(taskId, message, options?.attachments || [], resolveFollowupAction(followupDefault, canSteer, alternate))
         } else {
           // Resuming an idle session is slow. Show "starting" immediately (the
           // send request blocks until the resume completes) so the UI isn't
@@ -274,7 +301,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         endSend(taskId)
       }
     },
-    [taskId, isQuestion, activeQuestionId, initSession, beginSend, endSend]
+    [taskId, isQuestion, activeQuestionId, initSession, beginSend, endSend, followupDefault, canSteer]
   )
 
   // Handle question answer from QuestionMessage options
@@ -826,8 +853,11 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             </div>
           </div>
         )}
+        <MessageQueueList taskId={taskId} snapshot={messageQueue} actions={api.messageQueue} canSteer={canSteer && isWorking} onChange={setMessageQueue} />
+        {isWorking && !isQuestion && !canSteer && <p className="px-3 text-xs text-muted-foreground">This agent cannot steer a running turn. Messages will be queued.</p>}
         <ChatInput
           onSend={handleSend}
+          sendLabel={isWorking && !isQuestion ? (canSteer ? (followupDefault === 'steer' ? 'Steer' : 'Queue') : 'Queue') : undefined}
           disabled={!canSendInput}
           placeholder={placeholder}
           attachments={messageAttachments}

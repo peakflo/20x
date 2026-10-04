@@ -338,6 +338,10 @@ async function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathnam
 async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Promise<unknown> {
   const db = dbRef!
 
+  if (pathname === '/api/message-queue/default') return { action: db.getSetting('message_queue_default') === 'steer' ? 'steer' : 'queue' }
+  const queueGetMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/message-queue$/)
+  if (queueGetMatch) return agentRef!.getMessageQueue(queueGetMatch[1])
+
   // GET /api/tasks
   if (pathname === '/api/tasks') {
     let tasks = db.getTasks()
@@ -607,6 +611,25 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
 // ── POST routes ──────────────────────────────────────────────
 
 async function routePost(pathname: string, params: Record<string, unknown>, req?: IncomingMessage): Promise<unknown> {
+  if (pathname === '/api/message-queue/default') {
+    if (params.action !== 'steer' && params.action !== 'queue') throw Object.assign(new Error('Invalid default action'), { status: 400 })
+    dbRef!.setSetting('message_queue_default', params.action)
+    return { action: params.action }
+  }
+  const queueMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/message-queue(?:\/([^/]+))?$/)
+  if (queueMatch) {
+    const taskId = queueMatch[1]
+    const action = queueMatch[2] || 'add'
+    const agent = agentRef!
+    const attachments = Array.isArray(params.attachments) ? params.attachments as Array<{ id: string; filename: string; size: number; mime_type: string }> : []
+    if (action === 'add') return agent.addQueuedMessage(taskId, String(params.text || ''), attachments)
+    if (action === 'update') return agent.updateQueuedMessage(taskId, String(params.id), String(params.text || ''), attachments)
+    if (action === 'reorder') return agent.reorderQueuedMessages(taskId, params.ids as string[])
+    if (action === 'delete') return agent.deleteQueuedMessage(taskId, String(params.id))
+    if (action === 'promote') return agent.promoteQueuedMessage(taskId, String(params.id))
+    if (action === 'resume') return agent.resumeMessageQueue(taskId)
+    if (action === 'send') return { action: await agent.sendWhileBusy(taskId, String(params.text || ''), attachments, params.action === 'steer' ? 'steer' : 'queue') }
+  }
   const agent = agentRef!
   const db = dbRef!
 

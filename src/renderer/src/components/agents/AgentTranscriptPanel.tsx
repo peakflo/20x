@@ -6,7 +6,7 @@ import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 import { SessionStatus } from '@/stores/agent-store'
 import { serializeTranscriptForDebug, type RawTranscriptMessage } from '@/lib/serialize-transcript-debug'
-import { agentSessionApi, artifactApi, voiceApi } from '@/lib/ipc-client'
+import { agentSessionApi, artifactApi, messageQueueApi, voiceApi } from '@/lib/ipc-client'
 import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
@@ -14,6 +14,8 @@ import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
 import { SpeakMessageButton } from '@/components/voice/SpeakMessageButton'
 import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
 import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
+import { MessageQueueList } from './MessageQueueList'
+import { resolveFollowupAction, type MessageQueueSnapshot } from '@shared/message-queue'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -828,6 +830,20 @@ export function AgentTranscriptPanel({
   const [searchQuery, setSearchQuery] = useState('')
   const [activeSearchResult, setActiveSearchResult] = useState(0)
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([])
+  const [messageQueue, setMessageQueue] = useState<MessageQueueSnapshot>({ messages: [], paused: false })
+  const [followupDefault, setFollowupDefault] = useState<'steer' | 'queue'>('queue')
+  const [canSteer, setCanSteer] = useState(false)
+  useEffect(() => {
+    if (!taskId || !window.electronAPI?.messageQueue) return
+    let active = true
+    void messageQueueApi.list(taskId).then((value) => { if (active) setMessageQueue(value) })
+    void window.electronAPI.settings.get('message_queue_default').then((value) => { if (active) setFollowupDefault(value === 'steer' ? 'steer' : 'queue') })
+    if (agentId) void window.electronAPI.agents.get(agentId).then((agent) => {
+      if (active) setCanSteer(['claude-code', 'codex', 'pi'].includes(agent?.config?.coding_agent || ''))
+    })
+    const unsubscribe = messageQueueApi.onChanged((event) => { if (event.taskId === taskId) setMessageQueue(event) })
+    return () => { active = false; unsubscribe() }
+  }, [taskId, agentId])
   const [isDragOverComposer, setIsDragOverComposer] = useState(false)
   const [debugCopyToast, setDebugCopyToast] = useState(false)
   const taskArtifacts = useArtifactStore((state) => taskId ? (state.artifactsByTask[taskId] || EMPTY_ARTIFACTS) : EMPTY_ARTIFACTS)
@@ -1124,7 +1140,7 @@ export function AgentTranscriptPanel({
     }
   }
 
-  const handleSend = () => {
+  const handleSend = (alternate = false) => {
     const value = inputRef.current?.value.trim()
     if (value && onSend) {
       // Whatever answer was expected by voice is not the answer that is now
@@ -1133,7 +1149,10 @@ export function AgentTranscriptPanel({
       // straight afterwards, so the conversation loop is unaffected.
       void voiceApi.answerNotExpected(taskId)
       const attachmentsAtSend = pendingAttachments
-      const sent = onSend(value, attachmentsAtSend.length > 0 ? { attachments: attachmentsAtSend } : undefined)
+      const action = resolveFollowupAction(followupDefault, canSteer, alternate)
+      const sent = status === SessionStatus.WORKING && !activeQuestionId && taskId && window.electronAPI?.messageQueue
+        ? messageQueueApi.sendWhileBusy(taskId, value, attachmentsAtSend, action)
+        : onSend(value, attachmentsAtSend.length > 0 ? { attachments: attachmentsAtSend } : undefined)
       inputRef.current!.value = ''
       // Reset textarea height back to single row
       inputRef.current!.style.height = 'auto'
@@ -1424,6 +1443,8 @@ export function AgentTranscriptPanel({
 
       {/* Input + Footer */}
       <div className="border-t border-border shrink-0">
+        {taskId && window.electronAPI?.messageQueue && <MessageQueueList taskId={taskId} snapshot={messageQueue} actions={messageQueueApi} canSteer={canSteer && status === SessionStatus.WORKING} onChange={setMessageQueue} />}
+        {taskId && agentId && status === SessionStatus.WORKING && !activeQuestionId && !canSteer && <p className="px-4 pt-2 text-xs text-muted-foreground">This agent cannot steer a running turn. Messages will be queued.</p>}
         {onSend && (
           <div
             data-testid="transcript-composer"
@@ -1472,7 +1493,7 @@ export function AgentTranscriptPanel({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
-                    handleSend()
+                    handleSend(e.metaKey || e.ctrlKey)
                   }
                 }}
                 onInput={autoResize}
@@ -1491,8 +1512,8 @@ export function AgentTranscriptPanel({
                 <Paperclip className="h-4 w-4" />
               </Button>
             )}
-              <Button variant="default" size="icon" onClick={handleSend} className="h-[32px] w-[32px] shrink-0 rounded-lg" aria-label="Send message">
-                <Send className="h-4 w-4" />
+              <Button variant="default" size="icon" onClick={() => handleSend()} className={`h-[32px] shrink-0 rounded-lg ${status === SessionStatus.WORKING && !activeQuestionId ? 'min-w-[58px] px-2' : 'w-[32px]'}`} aria-label={status === SessionStatus.WORKING && !activeQuestionId ? (canSteer ? followupDefault : 'Queue') + ' message' : 'Send message'} title={status === SessionStatus.WORKING && !activeQuestionId ? (canSteer ? followupDefault : 'queue') + ' · Cmd/Ctrl+Enter for alternate' : 'Send message'}>
+                {status === SessionStatus.WORKING && !activeQuestionId ? <span className="text-[10px] font-semibold">{canSteer ? (followupDefault === 'steer' ? 'Steer' : 'Queue') : 'Queue'}</span> : <Send className="h-4 w-4" />}
               </Button>
             </div>
           </div>

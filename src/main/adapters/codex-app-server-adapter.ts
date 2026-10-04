@@ -522,6 +522,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
   async sendPrompt(sessionId: string, parts: MessagePart[], config: SessionConfig): Promise<void> {
     const session = this.requireSession(sessionId)
+    if (session.status === SessionStatusType.BUSY && !session.activeTurnId) {
+      throw new Error('Active Codex turn is not ready for steering')
+    }
     if (!session.threadId) {
       throw new Error(`Codex app-server session has no thread id: ${sessionId}`)
     }
@@ -555,7 +558,11 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     session.lastError = null
     session.usageLimit = null
 
-    const result = await this.sendRpcRequest(session, 'turn/start', {
+    const result = await this.sendRpcRequest(session, session.activeTurnId ? 'turn/steer' : 'turn/start', session.activeTurnId ? {
+      threadId: session.threadId,
+      expectedTurnId: session.activeTurnId,
+      input: [{ type: 'text', text: promptText }]
+    } : {
       threadId: session.threadId,
       input: [{ type: 'text', text: promptText }],
       cwd: config.workspaceDir,
@@ -572,6 +579,10 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (isObject(result)) {
       session.activeTurnId = asString(result.turnId) || asString(result.turn_id) || session.activeTurnId
     }
+  }
+
+  canSteer(sessionId: string): boolean {
+    return Boolean(this.sessions.get(sessionId)?.activeTurnId)
   }
 
   async getStatus(sessionId: string, _config: SessionConfig): Promise<SessionStatus> {

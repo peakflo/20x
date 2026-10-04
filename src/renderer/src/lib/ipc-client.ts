@@ -2,6 +2,7 @@ import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, 
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
+import type { QueuedMessageAttachment } from '@shared/message-queue'
 import type { ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type {
   MicrophonePermission,
@@ -126,6 +127,18 @@ export const agentApi = {
   delete: (id: string): Promise<boolean> => {
     return window.electronAPI.agents.delete(id)
   }
+}
+
+export const messageQueueApi = {
+  list: (taskId: string) => window.electronAPI.messageQueue.list(taskId),
+  add: (taskId: string, text: string, attachments: QueuedMessageAttachment[] = []) => window.electronAPI.messageQueue.add(taskId, text, attachments),
+  update: (taskId: string, id: string, text: string, attachments: QueuedMessageAttachment[]) => window.electronAPI.messageQueue.update(taskId, id, text, attachments),
+  reorder: (taskId: string, ids: string[]) => window.electronAPI.messageQueue.reorder(taskId, ids),
+  delete: (taskId: string, id: string) => window.electronAPI.messageQueue.delete(taskId, id),
+  promote: (taskId: string, id: string) => window.electronAPI.messageQueue.promote(taskId, id),
+  resume: (taskId: string) => window.electronAPI.messageQueue.resume(taskId),
+  sendWhileBusy: (taskId: string, text: string, attachments: QueuedMessageAttachment[], action: 'steer' | 'queue') => window.electronAPI.messageQueue.sendWhileBusy(taskId, text, attachments, action),
+  onChanged: (callback: Parameters<Window['electronAPI']['messageQueue']['onChanged']>[0]) => window.electronAPI.messageQueue.onChanged(callback)
 }
 
 export const agentSessionApi = {

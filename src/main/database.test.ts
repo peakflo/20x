@@ -15,6 +15,23 @@ beforeEach(() => {
   ;({ db } = createTestDb())
 })
 
+describe('Task message queue', () => {
+  it('persists order, edits, attachments and deletion', () => {
+    const task = db.createTask(makeTask())!
+    const attachment = { id: 'file-1', filename: 'note.txt', size: 4, mime_type: 'text/plain' }
+    const first = db.addQueuedMessage(task.id, 'first', [attachment])
+    const second = db.addQueuedMessage(task.id, 'second')
+    expect(db.listQueuedMessages(task.id).map((item) => item.id)).toEqual([first.id, second.id])
+    expect(db.listQueuedMessages(task.id)[0].attachments).toEqual([attachment])
+    db.updateQueuedMessage(task.id, second.id, 'edited', [])
+    db.reorderQueuedMessages(task.id, [second.id, first.id])
+    expect(db.listQueuedMessages(task.id).map((item) => item.text)).toEqual(['edited', 'first'])
+    expect(() => db.reorderQueuedMessages(task.id, [first.id, first.id])).toThrow()
+    expect(db.deleteQueuedMessage(task.id, second.id)).toBe(true)
+    expect(db.listQueuedMessages(task.id)).toHaveLength(1)
+  })
+})
+
 describe('Task CRUD', () => {
   it('creates and retrieves a task', () => {
     const task = db.createTask(makeTask({ title: 'Hello World' }))

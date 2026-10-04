@@ -26,6 +26,8 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage({ onNavigate }: SettingsPageProps) {
+  const [messageQueueDefault, setMessageQueueDefault] = useState<'steer' | 'queue'>('queue')
+  useEffect(() => { void api.messageQueue.default().then((value) => setMessageQueueDefault(value.action)) }, [])
   const [sources, setSources] = useState<TaskSource[]>([])
   const [plugins, setPlugins] = useState<PluginMeta[]>([])
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set())
@@ -108,6 +110,16 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
 
         <SubscriptionUsageSection />
         <PushSettings />
+
+        <div className="rounded-lg border border-border p-3">
+          <label htmlFor="mobile-followup-default" className="text-sm font-semibold">Messages while agent is working</label>
+          <p className="my-1 text-xs text-muted-foreground">Unsupported agents always queue.</p>
+          <select id="mobile-followup-default" className="w-full rounded border border-border bg-background p-2 text-sm" value={messageQueueDefault} onChange={(event) => {
+            const action = event.target.value as 'steer' | 'queue'
+            setMessageQueueDefault(action)
+            void api.messageQueue.setDefault(action)
+          }}><option value="queue">Queue</option><option value="steer">Steer</option></select>
+        </div>
 
         {/* Task Sources Section */}
         <div>

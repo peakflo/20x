@@ -502,6 +502,15 @@ export function registerIpcHandlers(
     }
   )
 
+  ipcMain.handle('messageQueue:list', (_, taskId: string) => agentManager.getMessageQueue(taskId))
+  ipcMain.handle('messageQueue:add', (_, taskId: string, text: string, attachments: Array<{ id: string; filename: string; size: number; mime_type: string }> = []) => agentManager.addQueuedMessage(taskId, text, attachments))
+  ipcMain.handle('messageQueue:update', (_, taskId: string, id: string, text: string, attachments: Array<{ id: string; filename: string; size: number; mime_type: string }> = []) => agentManager.updateQueuedMessage(taskId, id, text, attachments))
+  ipcMain.handle('messageQueue:reorder', (_, taskId: string, ids: string[]) => agentManager.reorderQueuedMessages(taskId, ids))
+  ipcMain.handle('messageQueue:delete', (_, taskId: string, id: string) => agentManager.deleteQueuedMessage(taskId, id))
+  ipcMain.handle('messageQueue:promote', (_, taskId: string, id: string) => agentManager.promoteQueuedMessage(taskId, id))
+  ipcMain.handle('messageQueue:resume', (_, taskId: string) => agentManager.resumeMessageQueue(taskId))
+  ipcMain.handle('messageQueue:sendWhileBusy', (_, taskId: string, text: string, attachments: Array<{ id: string; filename: string; size: number; mime_type: string }> = [], action: 'steer' | 'queue') => agentManager.sendWhileBusy(taskId, text, attachments, action))
+
   ipcMain.handle(
     'agentSession:send',
     async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {

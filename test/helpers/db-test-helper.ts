@@ -31,6 +31,15 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       value TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS task_message_queue (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      text TEXT NOT NULL,
+      attachments TEXT NOT NULL DEFAULT '[]',
+      position INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS mcp_servers (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,

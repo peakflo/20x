@@ -6,6 +6,7 @@
 import { getAuthToken } from './auth'
 import type { Artifact, ArtifactContent, PullRequestDetails } from '@shared/artifacts'
 import type { VoiceCapabilities } from '@shared/voice'
+import type { MessageQueueSnapshot, QueuedMessageAttachment } from '@shared/message-queue'
 import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { PushPreferences } from '@shared/push-notifications'
@@ -58,6 +59,18 @@ export const api = {
     subscribe: (subscription: PushSubscriptionJSON | null) => post<{ success: boolean }>('/api/push/subscription', { subscription }),
     preferences: (preferences: PushPreferences) => post<{ preferences: PushPreferences }>('/api/push/preferences', { preferences }),
     test: () => post<{ success: boolean }>('/api/push/test')
+  },
+  messageQueue: {
+    default: () => get<{ action: 'steer' | 'queue' }>('/api/message-queue/default'),
+    setDefault: (action: 'steer' | 'queue') => post<{ action: 'steer' | 'queue' }>('/api/message-queue/default', { action }),
+    list: (taskId: string) => get<MessageQueueSnapshot>(`/api/tasks/${encodeURIComponent(taskId)}/message-queue`),
+    add: (taskId: string, text: string, attachments: QueuedMessageAttachment[] = []) => post<MessageQueueSnapshot>(`/api/tasks/${encodeURIComponent(taskId)}/message-queue`, { text, attachments }),
+    update: (taskId: string, id: string, text: string, attachments: QueuedMessageAttachment[] = []) => post<MessageQueueSnapshot>(`/api/tasks/${encodeURIComponent(taskId)}/message-queue/update`, { id, text, attachments }),
+    reorder: (taskId: string, ids: string[]) => post<MessageQueueSnapshot>(`/api/tasks/${encodeURIComponent(taskId)}/message-queue/reorder`, { ids }),
+    delete: (taskId: string, id: string) => post<MessageQueueSnapshot>(`/api/tasks/${encodeURIComponent(taskId)}/message-queue/delete`, { id }),
+    promote: (taskId: string, id: string) => post<MessageQueueSnapshot>(`/api/tasks/${encodeURIComponent(taskId)}/message-queue/promote`, { id }),
+    resume: (taskId: string) => post<MessageQueueSnapshot>(`/api/tasks/${encodeURIComponent(taskId)}/message-queue/resume`),
+    send: (taskId: string, text: string, attachments: QueuedMessageAttachment[], action: 'steer' | 'queue') => post<{ action: 'steered' | 'queued' | 'sent' }>(`/api/tasks/${encodeURIComponent(taskId)}/message-queue/send`, { text, attachments, action })
   },
   tasks: {
     list: (params?: Record<string, string>) => {

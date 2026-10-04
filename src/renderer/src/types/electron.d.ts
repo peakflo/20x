@@ -216,6 +216,17 @@ export interface GlabCliStatus {
 }
 
 interface ElectronAPI {
+  messageQueue: {
+    list: (taskId: string) => Promise<import('@shared/message-queue').MessageQueueSnapshot>
+    add: (taskId: string, text: string, attachments?: import('@shared/message-queue').QueuedMessageAttachment[]) => Promise<import('@shared/message-queue').MessageQueueSnapshot>
+    update: (taskId: string, id: string, text: string, attachments?: import('@shared/message-queue').QueuedMessageAttachment[]) => Promise<import('@shared/message-queue').MessageQueueSnapshot>
+    reorder: (taskId: string, ids: string[]) => Promise<import('@shared/message-queue').MessageQueueSnapshot>
+    delete: (taskId: string, id: string) => Promise<import('@shared/message-queue').MessageQueueSnapshot>
+    promote: (taskId: string, id: string) => Promise<import('@shared/message-queue').MessageQueueSnapshot>
+    resume: (taskId: string) => Promise<import('@shared/message-queue').MessageQueueSnapshot>
+    sendWhileBusy: (taskId: string, text: string, attachments: import('@shared/message-queue').QueuedMessageAttachment[], action: 'steer' | 'queue') => Promise<'steered' | 'queued' | 'sent'>
+    onChanged: (callback: (event: import('@shared/message-queue').MessageQueueSnapshot & { taskId: string }) => void) => () => void
+  }
   db: {
     getTasks: () => Promise<WorkfloTask[]>
     getTask: (id: string) => Promise<WorkfloTask | undefined>

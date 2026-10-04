@@ -864,6 +864,22 @@ describe('CodexAppServerAdapter', () => {
     }))
   })
 
+  it('steers an active turn with its turn id', async () => {
+    const instance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(instance)
+    const session = createSession()
+    session.activeTurnId = 'active-turn'
+    adapter.sessions.set('thread-1', session)
+    const send = vi.fn().mockResolvedValue({})
+    adapter.sendRpcRequest = send
+    await instance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'change course' }], {
+      agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/workspace'
+    })
+    expect(send).toHaveBeenCalledWith(session, 'turn/steer', {
+      threadId: 'thread-1', expectedTurnId: 'active-turn', input: [{ type: 'text', text: 'change course' }]
+    })
+  })
+
   it('defaults missing codex sandbox mode to danger full access', async () => {
     const adapterInstance = new CodexAppServerAdapter()
     const adapter = adapterPrivate(adapterInstance)

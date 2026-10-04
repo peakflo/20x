@@ -140,6 +140,63 @@ function createMockDb(agentConfig: Record<string, unknown> = {}) {
 
 let manager: AgentManager
 
+describe('Queued follow-ups', () => {
+  it('falls back to the saved queue for an unsupported active adapter', async () => {
+    const db = createMockDb({ coding_agent: 'opencode' })
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue({ sessionId: 'session-1', session: { agentId: 'agent-1', status: 'working' } })
+    const add = vi.spyOn(manager, 'addQueuedMessage').mockReturnValue({ messages: [], paused: false })
+    const send = vi.spyOn(manager, 'sendByTaskId').mockResolvedValue({ sessionId: 'session-1' })
+    expect(await manager.sendWhileBusy('task-1', 'later', [], 'steer')).toBe('queued')
+    expect(add).toHaveBeenCalledWith('task-1', 'later', [])
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it.each(['claude-code', 'pi'])('steers an active %s turn', async (codingAgent) => {
+    const db = createMockDb({ coding_agent: codingAgent })
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue({ sessionId: 'session-1', session: { agentId: 'agent-1', status: 'working' } })
+    const send = vi.spyOn(manager, 'sendByTaskId').mockResolvedValue({ sessionId: 'session-1' })
+    expect(await manager.sendWhileBusy('task-1', 'now', [], 'steer')).toBe('steered')
+    expect(send).toHaveBeenCalledWith('task-1', 'now', [], true, false)
+  })
+
+  it('dispatches just the first queued message on idle', async () => {
+    const db = createMockDb()
+    const first = { id: 'one', task_id: 'task-1', text: 'first', attachments: [], position: 0, created_at: '' }
+    const second = { ...first, id: 'two', text: 'second', position: 1 }
+    const list = vi.fn(() => [first, second])
+    const remove = vi.fn()
+    Object.assign(db, { listQueuedMessages: list, deleteQueuedMessage: remove })
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue({ sessionId: 'session-1', session: { agentId: 'agent-1', status: 'idle' } })
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const send = vi.spyOn(manager, 'sendByTaskId').mockResolvedValue({ sessionId: 'session-1' })
+    expect(await (manager as any).dispatchNextQueuedMessage('task-1')).toBe(true)
+    expect(send).toHaveBeenCalledWith('task-1', 'first', [], true)
+    expect(remove).toHaveBeenCalledTimes(1)
+    expect(remove).toHaveBeenCalledWith('task-1', 'one')
+  })
+
+  it('holds an errored session until Resume queue is used', async () => {
+    const db = createMockDb()
+    const item = { id: 'one', task_id: 'task-1', text: 'retry', attachments: [], position: 0, created_at: '' }
+    Object.assign(db, {
+      listQueuedMessages: vi.fn(() => [item]),
+      deleteQueuedMessage: vi.fn(),
+      setSetting: vi.fn()
+    })
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue({ sessionId: 'session-1', session: { agentId: 'agent-1', status: 'error' } })
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const send = vi.spyOn(manager, 'sendByTaskId').mockResolvedValue({ sessionId: 'session-1' })
+    expect(await (manager as any).dispatchNextQueuedMessage('task-1')).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+    await manager.resumeMessageQueue('task-1')
+    expect(send).toHaveBeenCalledWith('task-1', 'retry', [], true)
+  })
+})
+
 describe('AgentManager skill file paths', () => {
   beforeEach(() => {
     vi.clearAllMocks()

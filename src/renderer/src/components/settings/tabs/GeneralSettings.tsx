@@ -25,6 +25,8 @@ function describeCleanupOutcome(cleaned: number | undefined, nodeModulesCleaned:
 }
 
 export function GeneralSettings() {
+  const [messageQueueDefault, setMessageQueueDefault] = useState<'steer' | 'queue'>('queue')
+  useEffect(() => { void settingsApi.get('message_queue_default').then((value) => setMessageQueueDefault(value === 'steer' ? 'steer' : 'queue')) }, [])
   const [setupDialogOpen, setSetupDialogOpen] = useState(false)
   const [launchAtStartup, setLaunchAtStartup] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
@@ -285,6 +287,14 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
       description="Configure general application behavior and preferences"
     >
       <div className="space-y-4">
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div><Label htmlFor="followup-default">Messages while agent is working</Label><p className="text-xs text-muted-foreground">Cmd/Ctrl+Enter uses the other action. Unsupported agents always queue.</p></div>
+          <select id="followup-default" className="rounded border border-border bg-background px-2 py-1 text-sm" value={messageQueueDefault} onChange={(event) => {
+            const action = event.target.value as 'steer' | 'queue'
+            setMessageQueueDefault(action)
+            void settingsApi.set('message_queue_default', action)
+          }}><option value="queue">Queue</option><option value="steer">Steer</option></select>
+        </div>
         <div className="flex items-center justify-between py-2 border-b border-border">
           <div className="space-y-0.5">
             <Label htmlFor="launch-startup">Launch at startup</Label>
