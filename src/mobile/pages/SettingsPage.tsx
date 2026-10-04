@@ -109,6 +109,11 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
         <SubscriptionUsageSection />
         <PushSettings />
 
+        <div className="rounded-md border border-border/30 p-3">
+          <h2 className="text-sm font-semibold">Browser sessions</h2>
+          <p className="mt-1 text-xs text-muted-foreground">Import signed-in browser sessions from Settings → Advanced in the desktop app.</p>
+        </div>
+
         {/* Task Sources Section */}
         <div>
           <div className="flex items-center justify-between mb-3">

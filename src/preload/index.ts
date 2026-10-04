@@ -1,4 +1,5 @@
 import type { BrowserRecordingManifest } from '../shared/browser-recording'
+import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '../shared/browser-session-import'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
@@ -744,6 +745,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
   },
   browser: {
+    listImportSources: (): Promise<BrowserImportSource[]> => ipcRenderer.invoke('browser:listImportSources'),
+    importSessions: (input: BrowserImportRequest): Promise<BrowserImportResult> => ipcRenderer.invoke('browser:importSessions', input),
+    clearImportedSessions: (): Promise<number> => ipcRenderer.invoke('browser:clearImportedSessions'),
     startRecording: (panelId: string, title?: string): Promise<{ ok: true; recording: BrowserRecordingManifest } | { error: string }> =>
       ipcRenderer.invoke('browser:startRecording', panelId, title),
     stopRecording: (panelId: string): Promise<{ ok: true; recording: BrowserRecordingManifest } | { error: string }> =>

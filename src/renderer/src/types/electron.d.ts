@@ -1,4 +1,5 @@
 import type { BrowserRecordingManifest } from '@shared/browser-recording'
+import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '@shared/browser-session-import'
 import type { UiCommand } from '@shared/ui-commands'
 import type {
   WorkfloTask,
@@ -524,6 +525,9 @@ interface ElectronAPI {
   onWorkspaceCleanupProgress: (callback: (event: WorkspaceCleanupProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
   browser: {
+    listImportSources: () => Promise<BrowserImportSource[]>
+    importSessions: (input: BrowserImportRequest) => Promise<BrowserImportResult>
+    clearImportedSessions: () => Promise<number>
     startRecording: (panelId: string, title?: string) => Promise<{ ok: true; recording: BrowserRecordingManifest } | { error: string }>
     stopRecording: (panelId: string) => Promise<{ ok: true; recording: BrowserRecordingManifest } | { error: string }>
     recordingStatus: (panelId: string) => Promise<{ recording: BrowserRecordingManifest | null }>

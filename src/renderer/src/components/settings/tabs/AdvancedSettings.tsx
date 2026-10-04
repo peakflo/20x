@@ -9,6 +9,7 @@ import { useSettingsStore } from '@/stores/settings-store'
 import { settingsApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
 import { WORKTREE_BRANCH_MODE_KEY, WORKTREE_BRANCH_PREFIX_KEY, WORKTREE_BRANCH_TEMPLATE_KEY, type WorktreeBranchMode } from '@shared/worktree-branch-name'
+import { BrowserSessionsSettings } from './BrowserSessionsSettings'
 
 export function AdvancedSettings() {
   const { githubOrg, ghCliStatus, setGithubOrg, checkGhCli, startGhAuth } = useSettingsStore()
@@ -98,6 +99,7 @@ export function AdvancedSettings() {
           </div>
         </div>
       </SettingsSection>
+      <BrowserSessionsSettings />
       <SettingsSection
         title="GitHub Integration"
         description="Configure GitHub CLI for repository operations and worktree management"

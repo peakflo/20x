@@ -35,6 +35,7 @@
     "@electron-toolkit/utils": "^4.0.0",
     "@modelcontextprotocol/client": "^2.2.0",
     "@modelcontextprotocol/server": "^2.2.0",
+    "@napi-rs/keyring": "^2.1.0",
     "@opencode-ai/sdk": "^1.18.33",
     "@paralleldrive/cuid2": "^2.2.2",
     "@supabase/supabase-js": "^2.98.0",
@@ -131,6 +132,7 @@
     ],
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*.node",
+      "node_modules/@napi-rs/keyring/**/*.node",
       "node_modules/cloudflared/**",
       "out/main/mcp-servers/**",
       "out/main/voice/**",

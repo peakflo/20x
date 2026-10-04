@@ -13,6 +13,8 @@ import { getPendingPin } from './mobile-api-server'
 import { sendMobilePush } from './mobile-push'
 import { setTaskApiUiState } from './task-api-server'
 import { panelBrowserBroker } from './panel-browser-broker'
+import { listBrowserImportSources, importBrowserSessions, clearImportedBrowserSessions } from './browser-session-import'
+import type { BrowserImportRequest } from '../shared/browser-session-import'
 import type { UsageSummaryQuery } from '../shared/usage'
 import { sanitizeUsageSummaryQuery } from './usage/usage-query'
 import type {
@@ -2196,6 +2198,23 @@ else:
   })
 
   // ── Browser panel broker ────────────────────────────────
+  ipcMain.handle('browser:listImportSources', () => listBrowserImportSources())
+  ipcMain.handle('browser:importSessions', async (_event, input: BrowserImportRequest) => {
+    const source = listBrowserImportSources().find(item => item.id === input?.browserId)
+    if (!source || !source.profiles.some(profile => profile.id === input.profileId)) throw new Error('Select an available browser profile')
+    const choice = await dialog.showMessageBox({
+      type: 'warning', buttons: ['Cancel', 'Import sessions'], defaultId: 0, cancelId: 0,
+      title: 'Import signed-in sessions',
+      message: `Copy cookies from ${source.name} (${input.profileId}) into the 20x browser?`,
+      detail: 'Agents using the browser can access these signed-in sites. Cookies stay on this computer. On macOS, expect a Keychain prompt for the browser Safe Storage item. Safari may require Full Disk Access.'
+    })
+    if (choice.response !== 1) return { imported: 0, skipped: 0, byDomain: {} }
+    return importBrowserSessions(input)
+  })
+  ipcMain.handle('browser:clearImportedSessions', async () => {
+    const choice = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', 'Clear imported sessions'], defaultId: 0, cancelId: 0, title: 'Clear imported sessions', message: 'Remove imported cookies from the 20x browser?' })
+    return choice.response === 1 ? clearImportedBrowserSessions() : 0
+  })
   // Canvas browser panels register themselves here so agents can drive them
   // through browser_* MCP tools. Only registered panels are addressable; the
   // main app window is never registered and there is no global debug port.
