@@ -462,7 +462,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       approvalsReviewer: 'user',
       sandbox: this.resolveSandboxMode(config),
       runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
-      initialTurnsPage: { limit: 50 },
+      // The task transcript is persisted separately. Returning every turn here
+      // can make a large thread exceed the RPC deadline before resume completes.
+      excludeTurns: true,
       config: this.buildConfigOverrides(config)
     })
   }
