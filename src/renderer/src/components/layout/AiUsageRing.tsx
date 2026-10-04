@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { fetchAiUsage, usageLevel, type AiUsage } from '@/lib/ai-usage'
-import { Sparkles } from 'lucide-react'
+import { Logo20x } from '@/components/icons/AgentLogos'
 import { UsageChip } from '@/components/usage/UsageChip'
 
 const REFRESH_MS = 5 * 60 * 1000
@@ -61,7 +61,7 @@ export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
 
   return (
     <UsageChip
-      icon={<Sparkles className="h-2.5 w-2.5" />}
+      icon={<Logo20x className="h-2.5 w-2.5" />}
       label={label}
       percent={usage.percent}
       level={CHIP_LEVEL[level]}
@@ -70,7 +70,7 @@ export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
       details={
         <div className="w-64 rounded-lg border border-border bg-card p-4 space-y-3 shadow-lg">
           <div className="flex items-center gap-2">
-            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            <Logo20x className="h-3.5 w-3.5 text-primary" />
             <span className="text-sm font-semibold text-foreground">Peakflo AI</span>
           </div>
           <div className="space-y-1.5">

@@ -35,3 +35,22 @@ export function PiLogo({ className }: { className?: string }) {
     </svg>
   )
 }
+
+/**
+ * 20x mark (rounded frame with two crosses) drawn in `currentColor`, for small
+ * inline use. Strokes are thicker than the title-bar asset so it stays legible
+ * at 10–14px.
+ */
+export function Logo20x({ className }: { className?: string }) {
+  return (
+    <svg viewBox="92 72 216 181" width="100%" height="100%" className={className} xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="104" y="84" width="192" height="157" rx="34" ry="34" fill="none" stroke="currentColor" strokeWidth="18" />
+      <g stroke="currentColor" strokeWidth="18" strokeLinecap="round">
+        <line x1="146" y1="136" x2="180" y2="170" />
+        <line x1="180" y1="136" x2="146" y2="170" />
+        <line x1="220" y1="136" x2="254" y2="170" />
+        <line x1="254" y1="136" x2="220" y2="170" />
+      </g>
+    </svg>
+  )
+}
