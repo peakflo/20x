@@ -12,6 +12,7 @@ import { ChangesPanel } from './ChangesPanel'
 import { OutputFieldsDisplay } from './OutputFieldsDisplay'
 import { TaskHeaderBar, TaskPrimaryAction } from './TaskHeaderBar'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
+import { UsageLimitRecoveryBanner } from '@/components/usage/UsageLimitRecoveryBanner'
 import { GhCliSetupDialog } from '@/components/github/GhCliSetupDialog'
 import { OrgPickerDialog } from '@/components/github/OrgPickerDialog'
 import { RepoSelectorDialog } from '@/components/github/RepoSelectorDialog'
@@ -1081,6 +1082,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const transcriptView = (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <AgentApprovalBanner request={session.pendingApproval} onApprove={handleApprove} onReject={handleReject} />
+      <UsageLimitRecoveryBanner taskId={task.id} />
       <AgentTranscriptPanel
         messages={session.messages}
         status={session.status}

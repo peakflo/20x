@@ -11,6 +11,7 @@ import {
   type UsageSummary,
   type UsageSummaryQuery
 } from '../shared/usage'
+import { USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL, type UsageLimitRecovery } from '../shared/usage-limit-recovery'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -200,7 +201,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getSummary: (query?: UsageSummaryQuery): Promise<UsageSummary | null> =>
       ipcRenderer.invoke('usage:getSummary', query),
     setCursorKeychainAccess: (enabled: boolean): Promise<UsageLimitsRefreshResult> =>
-      ipcRenderer.invoke('usage:setCursorKeychainAccess', enabled)
+      ipcRenderer.invoke('usage:setCursorKeychainAccess', enabled),
+    getLimitRecovery: (taskId: string): Promise<UsageLimitRecovery | null> =>
+      ipcRenderer.invoke('usage:getLimitRecovery', taskId),
+    setLimitRecoveryAutoResume: (taskId: string, autoResume: boolean): Promise<UsageLimitRecovery | null> =>
+      ipcRenderer.invoke('usage:setLimitRecoveryAutoResume', taskId, autoResume)
+  },
+  onUsageLimitRecoveryUpdated: (callback: (recovery: UsageLimitRecovery) => void): (() => void) => {
+    const handler = (_: unknown, data: UsageLimitRecovery): void => callback(data)
+    ipcRenderer.on(USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL, handler)
   },
   onUsageLimitsUpdated: (callback: (limits: ProviderUsageLimits) => void): (() => void) => {
     const handler = (_: unknown, data: ProviderUsageLimits): void => callback(data)

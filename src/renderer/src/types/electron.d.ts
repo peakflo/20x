@@ -506,7 +506,10 @@ interface ElectronAPI {
     refreshLimits: (options?: { force?: boolean }) => Promise<import('@shared/usage').UsageLimitsRefreshResult>
     getSummary: (query?: import('@shared/usage').UsageSummaryQuery) => Promise<import('@shared/usage').UsageSummary | null>
     setCursorKeychainAccess: (enabled: boolean) => Promise<import('@shared/usage').UsageLimitsRefreshResult>
+    getLimitRecovery: (taskId: string) => Promise<import('@shared/usage-limit-recovery').UsageLimitRecovery | null>
+    setLimitRecoveryAutoResume: (taskId: string, autoResume: boolean) => Promise<import('@shared/usage-limit-recovery').UsageLimitRecovery | null>
   }
+  onUsageLimitRecoveryUpdated: (callback: (recovery: import('@shared/usage-limit-recovery').UsageLimitRecovery) => void) => () => void
   onUsageLimitsUpdated: (callback: (limits: import('@shared/usage').ProviderUsageLimits) => void) => () => void
   onUsageRecorded: (callback: (records: import('@shared/usage').TokenUsageRecord[]) => void) => () => void
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void

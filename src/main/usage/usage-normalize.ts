@@ -570,3 +570,36 @@ export function cursorPeriodUsageToLimits(response: unknown, checkedAt: string):
       : null
   }
 }
+
+
+// ── Usage-limit stops ───────────────────────────────────────
+
+/**
+ * Reset time for a usage-limit stop: the latest reset among the exhausted
+ * windows, so the continuation only fires once every blocking window has
+ * reset. Null when nothing is known or any exhausted window lacks a reset time
+ * (resuming earlier would just hit the limit again).
+ */
+export function latestResetAt(resets: Array<string | null | undefined>): string | null {
+  if (resets.length === 0) return null
+  let latest = -Infinity
+  for (const reset of resets) {
+    const ms = reset ? Date.parse(reset) : NaN
+    if (!Number.isFinite(ms)) return null
+    latest = Math.max(latest, ms)
+  }
+  return new Date(latest).toISOString()
+}
+
+/** Codex: reset time of the windows that are fully used (≥ 100%). */
+export function exhaustedWindowsResetAt(windows: UsageLimitWindow[]): string | null {
+  const exhausted = windows.filter((window) => window.usedPercent >= 100)
+  return latestResetAt(exhausted.map((window) => window.resetsAt ?? null))
+}
+
+/** Codex `codexErrorInfo` kinds that mean the account hit a usage/rate limit. */
+export function isCodexUsageLimitCode(code: string | null | undefined): boolean {
+  if (!code) return false
+  const kind = code.split(' ')[0]
+  return kind === 'usageLimitExceeded' || kind === 'rateLimitExceeded'
+}

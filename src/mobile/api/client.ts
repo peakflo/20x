@@ -7,6 +7,7 @@ import { getAuthToken } from './auth'
 import type { Artifact, ArtifactContent, PullRequestDetails } from '@shared/artifacts'
 import type { VoiceCapabilities } from '@shared/voice'
 import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
+import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -100,6 +101,9 @@ export const api = {
   usage: {
     limits: () => get<ProviderUsageLimits[]>('/api/usage/limits'),
     refreshLimits: (force = false) => post<UsageLimitsRefreshResult>('/api/usage/limits/refresh', { force }),
+    limitRecovery: (taskId: string) => get<UsageLimitRecovery | null>(`/api/tasks/${encodeURIComponent(taskId)}/limit-recovery`),
+    setLimitRecoveryAutoResume: (taskId: string, autoResume: boolean) =>
+      post<UsageLimitRecovery | null>(`/api/tasks/${encodeURIComponent(taskId)}/limit-recovery`, { autoResume }),
     summary: (query: UsageSummaryQuery = {}) => {
       const params = new URLSearchParams()
       for (const [key, value] of Object.entries(query)) {

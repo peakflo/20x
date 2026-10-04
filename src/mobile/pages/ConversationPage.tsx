@@ -1,3 +1,4 @@
+import { UsageLimitRecoveryNotice } from '../components/UsageLimitRecoveryNotice'
 import { memo, useRef, useEffect, useCallback, useMemo, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useTaskStore } from '../stores/task-store'
@@ -545,6 +546,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           </div>
         </div>
       </div>
+
+      <UsageLimitRecoveryNotice taskId={taskId} />
 
       {isSearchOpen && (
         <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-border/50">

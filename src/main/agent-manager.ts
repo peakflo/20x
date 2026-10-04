@@ -28,6 +28,15 @@ import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
 import { UsageTracker, type UsageLimitsProbe } from './usage/usage-tracker'
 import { CURSOR_KEYCHAIN_ACCESS_SETTING } from './usage/cursor-limits'
+import { UsageLimitRecoveryScheduler, UsageLimitRecoveryStore } from './usage/usage-limit-recovery'
+import {
+  AUTO_RESUME_LIMITED_TASKS_SETTING,
+  LIMIT_RECOVERY_CONTINUE_MESSAGE,
+  USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL,
+  isAutoResumeSettingEnabled,
+  type UsageLimitRecovery
+} from '../shared/usage-limit-recovery'
+import { isUsageProvider } from '../shared/usage'
 import {
   USAGE_LIMITS_UPDATED_CHANNEL,
   USAGE_PROVIDERS,
@@ -268,6 +277,10 @@ export class AgentManager extends EventEmitter {
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
   /** Subscription usage tracker; created lazily (undefined = not yet, null = unavailable). */
   private usageTracker: UsageTracker | null | undefined = undefined
+  /** Continues tasks after a usage-limit reset; created lazily (null = unavailable). */
+  private limitRecovery: UsageLimitRecoveryScheduler | null | undefined = undefined
+  /** Tasks whose continuation is being dispatched by the recovery scheduler (not a user message). */
+  private limitRecoveryDispatching = new Set<string>()
   private worktreeManager: WorktreeManager | null = null
   private githubManager: GitHubManager | null = null
   private gitlabManager: GitLabManager | null = null
@@ -782,6 +795,8 @@ export class AgentManager extends EventEmitter {
       })
       tracker.on('limits', (limits) => {
         this.sendToRenderer(USAGE_LIMITS_UPDATED_CHANNEL, limits)
+        // Stops whose reset time was unknown can pick it up from fresh plan windows.
+        this.getLimitRecovery()?.applyLimits(limits)
       })
       this.usageTracker = tracker
     } catch (error) {
@@ -789,6 +804,77 @@ export class AgentManager extends EventEmitter {
       this.usageTracker = null
     }
     return this.usageTracker
+  }
+
+  // ── Usage-limit recovery (auto-continue after a limit reset) ──
+
+  private getLimitRecovery(): UsageLimitRecoveryScheduler | null {
+    if (this.limitRecovery !== undefined) return this.limitRecovery
+    try {
+      this.limitRecovery = new UsageLimitRecoveryScheduler({
+        store: new UsageLimitRecoveryStore(this.db.db),
+        autoResumeEnabled: () => isAutoResumeSettingEnabled(this.db.getSetting(AUTO_RESUME_LIMITED_TASKS_SETTING)),
+        getTaskState: (taskId) => {
+          const task = this.db.getTask(taskId)
+          return {
+            exists: !!task,
+            completed: task?.status === TaskStatus.Completed,
+            agentId: task?.agent_id ?? null,
+            busy: this.hasActiveSessionForTask(taskId)
+          }
+        },
+        resume: (recovery) => this.dispatchLimitContinuation(recovery),
+        emit: (recovery) => this.sendToRenderer(USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL, recovery)
+      })
+    } catch (error) {
+      console.warn('[AgentManager] Usage-limit recovery unavailable:', error)
+      this.limitRecovery = null
+    }
+    return this.limitRecovery
+  }
+
+  /** Starts the usage-limit recovery sweep (runs overdue continuations from before a restart). */
+  startUsageLimitRecovery(): void {
+    this.getLimitRecovery()?.start()
+  }
+
+  getUsageLimitRecovery(taskId: string): UsageLimitRecovery | null {
+    return this.getLimitRecovery()?.get(taskId) ?? null
+  }
+
+  setUsageLimitRecoveryAutoResume(taskId: string, autoResume: boolean): UsageLimitRecovery | null {
+    return this.getLimitRecovery()?.setAutoResume(taskId, autoResume) ?? null
+  }
+
+  private recordUsageLimitStop(taskId: string, agentId: string, sessionId: string, resetAt: string | null, message: string | undefined): void {
+    const agent = this.db.getAgent(agentId)
+    const codingAgent = agent?.config?.coding_agent
+    const recovery = this.getLimitRecovery()?.recordStop({
+      taskId,
+      agentId,
+      provider: isUsageProvider(codingAgent) ? codingAgent : null,
+      sessionId,
+      resetAt,
+      message: message ?? null
+    })
+    if (recovery) {
+      console.log(`[AgentManager] Task ${taskId} stopped on a usage limit (reset ${recovery.resetAt ?? 'unknown'}, autoResume=${recovery.autoResume})`)
+    }
+  }
+
+  private async dispatchLimitContinuation(recovery: UsageLimitRecovery): Promise<void> {
+    console.log(`[AgentManager] Usage limit reset for task ${recovery.taskId}: sending continuation`)
+    this.limitRecoveryDispatching.add(recovery.taskId)
+    try {
+      await this.sendByTaskId(recovery.taskId, LIMIT_RECOVERY_CONTINUE_MESSAGE)
+      analytics()?.record('provider.usage_limit.auto_resumed', {
+        provider: recovery.provider,
+        waitedMinutes: Math.round((Date.now() - recovery.stoppedAt) / 60_000),
+        attempt: recovery.attempts + 1
+      })
+    } finally {
+      this.limitRecoveryDispatching.delete(recovery.taskId)
+    }
   }
 
   private wireUsageTracking(adapter: CodingAgentAdapter): void {
@@ -2586,6 +2672,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
           return
         }
 
+        if (status.usageLimit) {
+          this.recordUsageLimitStop(config.taskId, config.agentId, sessionId, status.usageLimit.resetAt, status.message)
+        }
+
         // Regular error (e.g., rate limit). If the same poll already delivered
         // the provider error as a transcript part, do not inject a second copy.
         if (!this.hasMatchingErrorMessage(batchMessages, status.message)) {
@@ -4293,6 +4383,12 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     attachments?: MessageAttachmentRef[]
   ): Promise<{ newSessionId?: string }> {
     let session = this.sessions.get(sessionId)
+
+    // A message from the user takes over from any scheduled limit continuation.
+    const messageTaskId = taskId ?? session?.taskId
+    if (messageTaskId && !this.limitRecoveryDispatching.has(messageTaskId)) {
+      this.limitRecovery?.supersede(messageTaskId)
+    }
 
     // Check redirect map: session ID may have been re-keyed (temp → real)
     if (!session) {

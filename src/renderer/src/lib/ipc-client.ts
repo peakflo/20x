@@ -1,6 +1,7 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
+import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type {
   MicrophonePermission,
@@ -283,7 +284,17 @@ export const usageApi = {
   },
   setCursorKeychainAccess(enabled: boolean): Promise<UsageLimitsRefreshResult> {
     return window.electronAPI.usage.setCursorKeychainAccess(enabled)
+  },
+  getLimitRecovery(taskId: string): Promise<UsageLimitRecovery | null> {
+    return window.electronAPI.usage.getLimitRecovery(taskId)
+  },
+  setLimitRecoveryAutoResume(taskId: string, autoResume: boolean): Promise<UsageLimitRecovery | null> {
+    return window.electronAPI.usage.setLimitRecoveryAutoResume(taskId, autoResume)
   }
+}
+
+export const onUsageLimitRecoveryUpdated = (callback: (recovery: UsageLimitRecovery) => void): (() => void) => {
+  return window.electronAPI.onUsageLimitRecoveryUpdated(callback)
 }
 
 export const onUsageLimitsUpdated = (callback: (limits: ProviderUsageLimits) => void): (() => void) => {

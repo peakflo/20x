@@ -1009,6 +1009,8 @@ app.whenReady().then(async () => {
 
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
   agentManager.setSyncManager(syncManager)
+  // Continue tasks that stopped on a usage limit once it resets (incl. overdue ones from before a restart).
+  agentManager.startUsageLimitRecovery()
 
   recurrenceScheduler = new RecurrenceScheduler(db)
   heartbeatScheduler = new HeartbeatScheduler(db, agentManager)

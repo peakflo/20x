@@ -34,6 +34,7 @@ import { makeAgent, makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
 import type { CodingAgentAdapter } from './adapters/coding-agent-adapter'
 import { USAGE_LIMITS_UPDATED_CHANNEL, USAGE_RECORDED_CHANNEL } from '../shared/usage'
+import { LIMIT_RECOVERY_CONTINUE_MESSAGE, USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL } from '../shared/usage-limit-recovery'
 
 let db: DatabaseManager
 let manager: AgentManager
@@ -107,5 +108,47 @@ describe('AgentManager triage prompt', () => {
     expect(prompt).toMatch(/Among agents that fit equally well, prefer the one whose `usage_limits` shows the lowest usage/)
     expect(prompt).toContain('fit first, then the lowest current plan usage among equally suitable agents')
     expect(prompt).toContain('API-key login billed per token')
+  })
+})
+
+describe('AgentManager usage-limit recovery', () => {
+  it('records a usage-limit stop and continues the task after the reset', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-05T12:00:00Z'))
+    try {
+      const agent = db.createAgent(makeAgent({ config: { coding_agent: 'claude-code' } }))!
+      const task = db.createTask(makeTask({ title: 'Long job' }))!
+      db.updateTask(task.id, { agent_id: agent.id })
+      const send = vi.spyOn(manager, 'sendByTaskId').mockResolvedValue({ sessionId: 's1' })
+      const priv = manager as unknown as {
+        recordUsageLimitStop(taskId: string, agentId: string, sessionId: string, resetAt: string | null, message?: string): void
+        getLimitRecovery(): { sweep(): Promise<void> }
+      }
+
+      priv.recordUsageLimitStop(task.id, agent.id, 's1', '2026-10-05T14:00:00Z', "You've hit your limit")
+      expect(manager.getUsageLimitRecovery(task.id)).toMatchObject({ status: 'waiting', provider: 'claude-code', autoResume: true })
+      expect(sent.some((e) => e.channel === USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL)).toBe(true)
+
+      await priv.getLimitRecovery().sweep()
+      expect(send).not.toHaveBeenCalled()
+
+      vi.setSystemTime(new Date('2026-10-05T14:05:00Z'))
+      await priv.getLimitRecovery().sweep()
+      expect(send).toHaveBeenCalledWith(task.id, LIMIT_RECOVERY_CONTINUE_MESSAGE)
+      expect(manager.getUsageLimitRecovery(task.id)?.status).toBe('resumed')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('honours the auto-resume setting and the per-task toggle', () => {
+    const agent = db.createAgent(makeAgent({ config: { coding_agent: 'codex' } }))!
+    const task = db.createTask(makeTask())!
+    db.updateTask(task.id, { agent_id: agent.id })
+    db.setSetting('usage.autoResumeLimitedTasks', 'false')
+    const priv = manager as unknown as { recordUsageLimitStop(...args: unknown[]): void }
+    priv.recordUsageLimitStop(task.id, agent.id, 'thr', new Date(Date.now() + 3_600_000).toISOString(), 'limit')
+    expect(manager.getUsageLimitRecovery(task.id)?.autoResume).toBe(false)
+    expect(manager.setUsageLimitRecoveryAutoResume(task.id, true)?.autoResume).toBe(true)
   })
 })

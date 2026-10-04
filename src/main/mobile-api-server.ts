@@ -471,6 +471,12 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     return db.getSkills()
   }
 
+  // GET /api/tasks/:id/limit-recovery — scheduled continuation after a usage-limit stop
+  const limitRecoveryGet = pathname.match(/^\/api\/tasks\/([^/]+)\/limit-recovery$/)
+  if (limitRecoveryGet) {
+    return agentRef!.getUsageLimitRecovery(decodeURIComponent(limitRecoveryGet[1]))
+  }
+
   // GET /api/usage/limits — subscription plan limits (Claude Code, Codex)
   if (pathname === '/api/usage/limits') {
     return agentRef!.getUsageLimits()
@@ -827,6 +833,15 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
       }
     }
     return updated
+  }
+
+  // POST /api/tasks/:id/limit-recovery — { autoResume: boolean }
+  const limitRecoveryPost = pathname.match(/^\/api\/tasks\/([^/]+)\/limit-recovery$/)
+  if (limitRecoveryPost) {
+    return agent.setUsageLimitRecoveryAutoResume(
+      decodeURIComponent(limitRecoveryPost[1]),
+      (params as { autoResume?: unknown }).autoResume === true
+    )
   }
 
   // POST /api/usage/limits/refresh — re-read plan limits ({ force?: boolean })

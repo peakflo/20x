@@ -22,7 +22,7 @@ import type {
   McpServerConfig
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
-import type { AdapterUsageLimitsEvent, AdapterUsageReport } from './coding-agent-adapter'
+import type { AdapterUsageLimitsEvent, AdapterUsageReport, UsageLimitStop } from './coding-agent-adapter'
 import type { ProviderUsageLimits } from '../../shared/usage'
 import { acpUsageUpdateCostUsd, normalizeAcpPromptUsage } from '../usage/usage-normalize'
 import { probeCursorUsageLimits } from '../usage/cursor-limits'
@@ -140,6 +140,7 @@ interface AcpSession {
   codexUseApiKey: boolean  // True when Codex auth uses an API key (vs. ChatGPT subscription / CLI login)
   codexAuthSummary: string  // Human-readable auth identity used (for diagnostics, surfaced in errors)
   createdInApp: boolean  // True when this adapter created the ACP session (session/new), false on resume
+  usageLimit?: UsageLimitStop | null  // Set when the turn stopped on a usage/quota limit (reset time unknown over ACP)
   usageCostUsd: number | null  // Latest cumulative session cost from `usage_update` (USD)
 }
 
@@ -848,6 +849,7 @@ export class AcpAdapter implements CodingAgentAdapter {
 
     session.status = SessionStatusType.BUSY
     session.lastError = null  // Clear any previous error (e.g., quota limit) for recovery
+    session.usageLimit = null
     session.currentTurnId++
     session.activeTurnId = session.currentTurnId
     session.lastChunkTime = null
@@ -874,7 +876,8 @@ export class AcpAdapter implements CodingAgentAdapter {
 
     return {
       type: session.status,
-      message: session.status === 'error' ? (session.lastError || 'Process error') : undefined
+      message: session.status === 'error' ? (session.lastError || 'Process error') : undefined,
+      ...(session.status === 'error' && session.usageLimit ? { usageLimit: session.usageLimit } : {})
     }
   }
 
@@ -1400,6 +1403,10 @@ export class AcpAdapter implements CodingAgentAdapter {
     session.status = SessionStatusType.ERROR
     session.lastError = userMessage
     session.activeTurnId = null
+    if (errorInfo.errorType === 'usage_limit_exceeded' || errorInfo.errorType === 'rate_limit_exceeded') {
+      // ACP does not report when the window resets: resume manually.
+      session.usageLimit = { resetAt: null }
+    }
 
     // Push a user-friendly error event to the LIVE message buffer only.
     //

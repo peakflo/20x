@@ -1,10 +1,14 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Gauge, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { SettingsSection } from '../SettingsSection'
 import { useSubscriptionUsage } from '@/hooks/use-subscription-usage'
 import { ProviderLimitsCard } from '@/components/usage/ProviderLimitsCard'
+import { Switch } from '@/components/ui/Switch'
+import { Label } from '@/components/ui/Label'
+import { settingsApi } from '@/lib/ipc-client'
+import { AUTO_RESUME_LIMITED_TASKS_SETTING, isAutoResumeSettingEnabled } from '@shared/usage-limit-recovery'
 import {
   USAGE_PROVIDER_LABELS,
   formatTokenCount,
@@ -87,6 +91,41 @@ function DailyUsageBars({ days }: { days: UsageDayRow[] }) {
   )
 }
 
+function AutoResumeSetting() {
+  const [enabled, setEnabled] = useState(true)
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    settingsApi.get(AUTO_RESUME_LIMITED_TASKS_SETTING)
+      .then((value) => setEnabled(isAutoResumeSettingEnabled(value)))
+      .catch(() => undefined)
+      .finally(() => setLoaded(true))
+  }, [])
+
+  const handleChange = (checked: boolean): void => {
+    setEnabled(checked)
+    void settingsApi.set(AUTO_RESUME_LIMITED_TASKS_SETTING, checked ? 'true' : 'false')
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-card px-4 py-3">
+      <div className="space-y-0.5">
+        <Label htmlFor="auto-resume-limited-tasks">Continue automatically after a limit reset</Label>
+        <p className="text-xs text-muted-foreground">
+          When an agent stops because a plan limit was reached, send "Continue where you left off." once the
+          limit resets. Each task can cancel its scheduled continuation.
+        </p>
+      </div>
+      <Switch
+        id="auto-resume-limited-tasks"
+        checked={enabled}
+        onCheckedChange={handleChange}
+        disabled={!loaded}
+      />
+    </div>
+  )
+}
+
 export function UsageSettings() {
   const [period, setPeriod] = useState<UsagePeriod>('7d')
   const { limits, summary, loading, refreshing, error, refreshLimits, runLimitsAction } = useSubscriptionUsage(period)
@@ -109,6 +148,8 @@ export function UsageSettings() {
         </div>
 
         {error && <p className="text-xs text-destructive">{error}</p>}
+
+        <AutoResumeSetting />
 
         {limits.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2">

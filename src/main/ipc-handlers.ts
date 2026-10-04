@@ -533,6 +533,14 @@ export function registerIpcHandlers(
     return await agentManager.setCursorKeychainAccess(enabled === true)
   })
 
+  ipcMain.handle('usage:getLimitRecovery', (_, taskId: string) => {
+    return agentManager.getUsageLimitRecovery(taskId)
+  })
+
+  ipcMain.handle('usage:setLimitRecoveryAutoResume', (_, taskId: string, autoResume: boolean) => {
+    return agentManager.setUsageLimitRecoveryAutoResume(taskId, autoResume === true)
+  })
+
   ipcMain.handle('usage:getSummary', (_, query?: UsageSummaryQuery) => {
     return agentManager.getUsageSummary(sanitizeUsageSummaryQuery(query))
   })

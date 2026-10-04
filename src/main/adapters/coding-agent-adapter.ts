@@ -77,9 +77,19 @@ export interface SessionConfig {
   tillDone?: boolean
 }
 
+/**
+ * Set on an ERROR status when the turn stopped because a subscription usage
+ * limit was hit. `resetAt` is the ISO time the blocking window(s) reset, or
+ * null when the provider did not report it (manual resume only).
+ */
+export interface UsageLimitStop {
+  resetAt: string | null
+}
+
 export interface SessionStatus {
   type: SessionStatusType
   message?: string
+  usageLimit?: UsageLimitStop
 }
 
 export interface SessionMessage {

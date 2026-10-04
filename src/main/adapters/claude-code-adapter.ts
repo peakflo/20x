@@ -16,7 +16,7 @@ import type {
   SessionMessage,
   MessagePart,
 } from './coding-agent-adapter'
-import type { AdapterUsageLimitsEvent, AdapterUsageReport } from './coding-agent-adapter'
+import type { AdapterUsageLimitsEvent, AdapterUsageReport, UsageLimitStop } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 import { pickWindowsWhichMatch, resolveWindowsClaudeShim } from './claude-executable'
 import { homedir } from 'os'
@@ -24,6 +24,7 @@ import type { ProviderUsageLimits } from '../../shared/usage'
 import {
   claudeRateLimitInfoToUpdate,
   claudeUsageResponseToLimits,
+  latestResetAt,
   normalizeClaudeModelUsage
 } from '../usage/usage-normalize'
 
@@ -106,6 +107,16 @@ interface ClaudeSession {
    * observed here. Unlike `isResumed` this never flips after process restarts.
    */
   createdInApp?: boolean
+  /**
+   * Rate-limit windows currently rejecting requests (`rate_limit_event` with
+   * status `rejected` and no overage), keyed by window type → reset time
+   * (ISO) or null when unknown. Cleared per window when it reports allowed.
+   */
+  rejectedLimitWindows?: Map<string, string | null>
+  /** The current turn's assistant reported `error: 'rate_limit'`. */
+  sawRateLimitError?: boolean
+  /** Set when the turn stopped on a subscription usage limit. */
+  usageLimit?: UsageLimitStop | null
   /**
    * Subagent / bash tasks Claude Code is currently running in the background.
    * Claude Code backgrounds Task-tool subagents by default: the tool call returns
@@ -761,6 +772,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       session.sawResult = false
       session.status = 'busy'
       session.lastError = null
+      session.usageLimit = null
+      session.sawRateLimitError = false
       session.enqueuePrompt(promptText)
       return
     }
@@ -897,6 +910,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     session.queryIterator = query
     session.status = 'busy'
     session.lastError = null // Clear any previous error (e.g., rate limit) for recovery
+    session.usageLimit = null
+    session.sawRateLimitError = false
     if (!isFirstPrompt) {
       session.messageBuffer = [] // Clear buffer for new messages (but keep history for first prompt)
       session.messageCursor = 0
@@ -918,7 +933,11 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     }
 
     if (session.lastError) {
-      return { type: SessionStatusType.ERROR, message: session.lastError }
+      return {
+        type: SessionStatusType.ERROR,
+        message: session.lastError,
+        ...(session.usageLimit ? { usageLimit: session.usageLimit } : {})
+      }
     }
 
     // getStatus is the 2s poll path, so it is also where a stalled background
@@ -1385,7 +1404,14 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         // Subscription usage tracking. Never allowed to break the stream.
         if (msg.type === 'rate_limit_event') {
           this.reportRateLimitEvent(msg.rate_limit_info)
-        } else if (msg.type === 'result') {
+          this.trackRejectedLimitWindow(session, msg.rate_limit_info)
+        } else if (msg.type === 'assistant' && (msg as Record<string, unknown>).error === 'rate_limit') {
+          session.sawRateLimitError = true
+        }
+        if (msg.type === 'result') {
+          this.detectUsageLimitStop(session, msg)
+        }
+        if (msg.type === 'result') {
           this.reportResultUsage(sessionId, session, msg)
           if (!msg.is_error) this.maybeRefreshPlanLimits(session)
         }
@@ -1497,6 +1523,46 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         // session ID rather than --continue (which targets most-recent in dir).
         session.isResumed = true
       }
+    }
+  }
+
+  // ── Usage-limit stops ────────────────────────────────────
+
+  private trackRejectedLimitWindow(session: ClaudeSession, info: unknown): void {
+    if (!info || typeof info !== 'object') return
+    const rateLimit = info as { status?: string; rateLimitType?: string; resetsAt?: number; overageStatus?: string }
+    const type = rateLimit.rateLimitType || 'unknown'
+    const windows = session.rejectedLimitWindows ?? (session.rejectedLimitWindows = new Map())
+    const overageAllowed = rateLimit.overageStatus === 'allowed' || rateLimit.overageStatus === 'allowed_warning'
+    if (rateLimit.status === 'rejected' && !overageAllowed) {
+      const resetsAt = typeof rateLimit.resetsAt === 'number' && rateLimit.resetsAt > 0
+        ? new Date(rateLimit.resetsAt * 1000).toISOString()
+        : null
+      windows.set(type, resetsAt)
+    } else if (rateLimit.status === 'allowed' || rateLimit.status === 'allowed_warning') {
+      windows.delete(type)
+    }
+  }
+
+  /**
+   * A turn stopped on a subscription usage limit when the CLI reports
+   * `terminal_reason: 'blocking_limit'` / HTTP 429, or the turn failed while a
+   * rate-limit window was rejecting requests. The reset time comes from the
+   * rejected windows (never parsed from message text).
+   */
+  private detectUsageLimitStop(session: ClaudeSession, msg: Record<string, unknown>): void {
+    const rejected = session.rejectedLimitWindows ?? new Map<string, string | null>()
+    const blocking = msg.terminal_reason === 'blocking_limit' || msg.api_error_status === 429
+    const failedWhileLimited = msg.is_error === true && (rejected.size > 0 || session.sawRateLimitError === true)
+    if (!blocking && !failedWhileLimited) return
+    // Authentication problems are not usage limits.
+    const text = typeof msg.result === 'string' ? msg.result : ''
+    if (/authenticat|oauth|log ?in/i.test(text) && !blocking) return
+
+    session.usageLimit = { resetAt: latestResetAt(Array.from(rejected.values())) }
+    session.status = 'error'
+    if (!session.lastError) {
+      session.lastError = text || 'Claude usage limit reached'
     }
   }
 

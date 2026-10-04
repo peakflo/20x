@@ -12,7 +12,14 @@ const refreshLimits = vi.fn()
 const getSummary = vi.fn()
 const setCursorKeychainAccess = vi.fn()
 
+const settingsGet = vi.fn(async () => null as string | null)
+const settingsSet = vi.fn(async () => undefined)
+
 vi.mock('@/lib/ipc-client', () => ({
+  settingsApi: {
+    get: (...args: unknown[]) => settingsGet(...(args as [])),
+    set: (...args: unknown[]) => settingsSet(...(args as []))
+  },
   usageApi: {
     getLimits: (...args: unknown[]) => getLimits(...args),
     refreshLimits: (...args: unknown[]) => refreshLimits(...args),
@@ -151,6 +158,15 @@ describe('UsageSettings', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Allow Keychain access' }))
     await waitFor(() => expect(setCursorKeychainAccess).toHaveBeenCalledWith(true))
     expect(await screen.findByText(/12% used/)).toBeInTheDocument()
+  })
+
+  it('toggles automatic continuation after a limit reset (on by default)', async () => {
+    render(<UsageSettings />)
+    const toggle = await screen.findByRole('switch', { name: /Continue automatically after a limit reset/ })
+    await waitFor(() => expect(toggle).not.toBeDisabled())
+    expect(toggle).toBeChecked()
+    fireEvent.click(toggle)
+    expect(settingsSet).toHaveBeenCalledWith('usage.autoResumeLimitedTasks', 'false')
   })
 
   it('shows an empty state without limits or usage', async () => {
