@@ -27,6 +27,7 @@ import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, wr
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
 import { UsageTracker, type UsageLimitsProbe } from './usage/usage-tracker'
+import { CURSOR_KEYCHAIN_ACCESS_SETTING } from './usage/cursor-limits'
 import {
   USAGE_LIMITS_UPDATED_CHANNEL,
   USAGE_PROVIDERS,
@@ -791,12 +792,22 @@ export class AgentManager extends EventEmitter {
   }
 
   private wireUsageTracking(adapter: CodingAgentAdapter): void {
+    if (adapter instanceof AcpAdapter) {
+      adapter.cursorKeychainAccess = () => this.db.getSetting(CURSOR_KEYCHAIN_ACCESS_SETTING) === 'true'
+    }
     adapter.onUsage = (report) => {
       this.getUsageTracker()?.recordUsage(report)
     }
     adapter.onUsageLimits = (event) => {
       this.getUsageTracker()?.applyLimitsEvent(event)
     }
+  }
+
+  /** Lets the user allow (or revoke) reading the Cursor CLI login from the macOS Keychain. */
+  async setCursorKeychainAccess(enabled: boolean): Promise<UsageLimitsRefreshResult> {
+    this.db.setSetting(CURSOR_KEYCHAIN_ACCESS_SETTING, enabled ? 'true' : 'false')
+    this.getUsageTracker()?.clearProbeThrottle('cursor')
+    return this.refreshUsageLimits({ force: true })
   }
 
   getUsageLimits(): ProviderUsageLimits[] {
@@ -5067,6 +5078,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     }
 
     if (adapter) {
+      this.wireUsageTracking(adapter)
       this.adapters.set(backendType, adapter)
     }
     return adapter

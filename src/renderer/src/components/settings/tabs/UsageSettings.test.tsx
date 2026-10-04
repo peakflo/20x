@@ -10,12 +10,14 @@ const listeners: {
 const getLimits = vi.fn()
 const refreshLimits = vi.fn()
 const getSummary = vi.fn()
+const setCursorKeychainAccess = vi.fn()
 
 vi.mock('@/lib/ipc-client', () => ({
   usageApi: {
     getLimits: (...args: unknown[]) => getLimits(...args),
     refreshLimits: (...args: unknown[]) => refreshLimits(...args),
-    getSummary: (...args: unknown[]) => getSummary(...args)
+    getSummary: (...args: unknown[]) => getSummary(...args),
+    setCursorKeychainAccess: (...args: unknown[]) => setCursorKeychainAccess(...args)
   },
   onUsageLimitsUpdated: (cb: (limits: ProviderUsageLimits) => void) => {
     listeners.limits = cb
@@ -28,6 +30,7 @@ vi.mock('@/lib/ipc-client', () => ({
 }))
 
 import { UsageSettings } from './UsageSettings'
+import { useUsageStore } from '@/stores/usage-store'
 
 const inTwoHours = new Date(Date.now() + 2 * 60 * 60 * 1000 + 30_000).toISOString()
 
@@ -72,6 +75,7 @@ const summary: UsageSummary = {
 
 beforeEach(() => {
   cleanup()
+  useUsageStore.setState({ limits: [], loaded: false, refreshing: false, error: null })
   getLimits.mockReset().mockResolvedValue([claude, codexUnsupported])
   refreshLimits.mockReset().mockResolvedValue({ limits: [claude, codexUnsupported], refreshed: [] })
   getSummary.mockReset().mockResolvedValue(summary)
@@ -101,7 +105,7 @@ describe('UsageSettings', () => {
   it('shows token totals, per-model rows and top tasks with an estimate disclaimer', async () => {
     render(<UsageSettings />)
     expect(await screen.findByText('$3.21', { selector: 'div' })).toBeInTheDocument()
-    expect(screen.getByText('partial — Codex does not report cost')).toBeInTheDocument()
+    expect(screen.getByText('partial — some providers do not report cost')).toBeInTheDocument()
     expect(screen.getByText('claude-opus-4-7')).toBeInTheDocument()
     expect(screen.getByText('Fix login flow')).toBeInTheDocument()
     expect(screen.getByText(/subscription plans bill separately/)).toBeInTheDocument()
@@ -127,6 +131,26 @@ describe('UsageSettings', () => {
       })
     })
     expect(await screen.findByText(/77% used/)).toBeInTheDocument()
+  })
+
+  it('runs a card action such as allowing Keychain access for Cursor', async () => {
+    const cursorNeedsConsent: ProviderUsageLimits = {
+      provider: 'cursor',
+      checkedAt: new Date().toISOString(),
+      windows: [],
+      unavailable: { reason: 'unsupported', message: 'Cursor keeps its CLI login in the macOS Keychain.' },
+      action: { id: 'enable-cursor-keychain', label: 'Allow Keychain access' }
+    }
+    getLimits.mockResolvedValue([cursorNeedsConsent])
+    refreshLimits.mockResolvedValue({ limits: [cursorNeedsConsent], refreshed: [] })
+    setCursorKeychainAccess.mockResolvedValue({
+      limits: [{ ...cursorNeedsConsent, action: null, unavailable: null, windows: [{ id: 'total', kind: 'monthly', label: 'Monthly · Overall', usedPercent: 12 }] }],
+      refreshed: ['cursor']
+    })
+    render(<UsageSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Allow Keychain access' }))
+    await waitFor(() => expect(setCursorKeychainAccess).toHaveBeenCalledWith(true))
+    expect(await screen.findByText(/12% used/)).toBeInTheDocument()
   })
 
   it('shows an empty state without limits or usage', async () => {

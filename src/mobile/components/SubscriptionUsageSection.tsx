@@ -80,7 +80,7 @@ export function SubscriptionUsageSection() {
 
       {limits.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          Plan limits appear for Claude Code and Codex agents that sign in with a subscription.
+          Plan limits appear for agents that sign in with a subscription (Claude Code, Codex, Cursor, OpenCode Go).
         </p>
       ) : (
         <div className="space-y-2">

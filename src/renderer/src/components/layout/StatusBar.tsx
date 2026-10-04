@@ -5,10 +5,11 @@ import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { TaskStatus } from '@/types'
 import { isSnoozed } from '@/lib/utils'
 import { AiUsageRing } from './AiUsageRing'
+import { UsageLimitsIndicator } from './UsageLimitsIndicator'
 
 /**
  * Slim always-visible strip at the bottom of the shell: live agent + task
- * counts on the left, app version on the right. Read-only.
+ * counts on the left, subscription plan usage and app version on the right.
  */
 export function StatusBar() {
   const tasks = useTaskStore((s) => s.tasks)
@@ -52,6 +53,7 @@ export function StatusBar() {
         {active} active · {total} total
       </span>
       <div className="flex-1" />
+      <UsageLimitsIndicator />
       {version && <span className="opacity-70">v{version}</span>}
     </div>
   )

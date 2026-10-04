@@ -6,6 +6,7 @@
 import type { ReasoningEffort } from '../../shared/reasoning-effort'
 import type { ProviderUsageLimits, ProviderUsageLimitsUpdate, UsageProvider } from '../../shared/usage'
 import type { UsageBucket } from '../usage/usage-normalize'
+import type { DiscreteUsageItem } from '../usage/usage-store'
 
 export enum SessionStatusType {
   IDLE = 'idle',
@@ -126,11 +127,12 @@ export interface MessagePart {
 }
 
 /**
- * Cumulative token usage observed on a provider session. Adapters report the
- * provider's running totals as-is; the usage tracker turns them into per-turn
- * deltas against the last persisted totals for the same session.
+ * Cumulative token usage observed on a provider session (Claude Code, Codex).
+ * Adapters report the provider's running totals as-is; the usage tracker turns
+ * them into per-turn deltas against the last persisted totals for the session.
  */
-export interface AdapterUsageReport {
+export interface AdapterCumulativeUsageReport {
+  kind?: 'cumulative'
   provider: UsageProvider
   /** Provider session / thread id the totals belong to. */
   providerSessionId: string
@@ -146,6 +148,22 @@ export interface AdapterUsageReport {
   newSession: boolean
   buckets: UsageBucket[]
 }
+
+/**
+ * Discrete usage items (OpenCode / Pi assistant messages, Cursor turns). Each
+ * item carries a stable `sourceKey`; the tracker stores each key once, so
+ * adapters may safely re-report items (repeated events, history replays).
+ */
+export interface AdapterDiscreteUsageReport {
+  kind: 'discrete'
+  provider: UsageProvider
+  providerSessionId?: string
+  taskId?: string
+  agentId?: string
+  items: DiscreteUsageItem[]
+}
+
+export type AdapterUsageReport = AdapterCumulativeUsageReport | AdapterDiscreteUsageReport
 
 /** Subscription plan-limit signal from a provider runtime. */
 export type AdapterUsageLimitsEvent =

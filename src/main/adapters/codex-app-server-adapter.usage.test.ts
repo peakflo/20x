@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { CodexAppServerAdapter } from './codex-app-server-adapter'
-import { SessionStatusType, type AdapterUsageLimitsEvent, type AdapterUsageReport } from './coding-agent-adapter'
+import { SessionStatusType, type AdapterUsageLimitsEvent, type AdapterCumulativeUsageReport as AdapterUsageReport } from './coding-agent-adapter'
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
@@ -94,7 +94,7 @@ function setup(session = createSession()) {
   vi.spyOn(priv, 'sendRpcRequest').mockResolvedValue({ data: [] })
   const reports: AdapterUsageReport[] = []
   const limitEvents: AdapterUsageLimitsEvent[] = []
-  adapter.onUsage = (report) => reports.push(report)
+  adapter.onUsage = (report) => reports.push(report as AdapterUsageReport)
   adapter.onUsageLimits = (event) => limitEvents.push(event)
   return { adapter, priv, session, reports, limitEvents }
 }

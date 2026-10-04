@@ -529,6 +529,10 @@ export function registerIpcHandlers(
     return await agentManager.refreshUsageLimits({ force: options?.force === true })
   })
 
+  ipcMain.handle('usage:setCursorKeychainAccess', async (_, enabled: boolean) => {
+    return await agentManager.setCursorKeychainAccess(enabled === true)
+  })
+
   ipcMain.handle('usage:getSummary', (_, query?: UsageSummaryQuery) => {
     return agentManager.getUsageSummary(sanitizeUsageSummaryQuery(query))
   })

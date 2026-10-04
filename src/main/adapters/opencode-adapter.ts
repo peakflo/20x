@@ -3,7 +3,9 @@ import { mkdirSync, writeFileSync, rmSync, existsSync, unlinkSync, readFileSync 
 import { join, delimiter } from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
-import { buildMergedOpencodeConfig } from '../utils/opencode-config'
+import { buildMergedOpencodeConfig, readOpencodeAuth } from '../utils/opencode-config'
+import type { ProviderUsageLimits } from '../../shared/usage'
+import { normalizeOpenCodeAssistantMessage, openCodeGoUsageToLimits } from '../usage/usage-normalize'
 import { ENTERPRISE_AI_GATEWAY_PROVIDER_ID, readEnterpriseAiGatewayConfig } from '../enterprise-ai-gateway'
 import type { DatabaseManager } from '../database'
 import type {
@@ -15,6 +17,7 @@ import type {
   MessagePart
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
+import type { AdapterUsageLimitsEvent, AdapterUsageReport } from './coding-agent-adapter'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
@@ -134,6 +137,21 @@ export class OpencodeAdapter implements CodingAgentAdapter {
    *  agent-manager so the session documentation does not advertise tools that
    *  are not there. */
   private sessionMcpAttachFailures: Map<string, string[]> = new Map()
+
+  /** Set by agent-manager: receives per-message token usage. */
+  onUsage?: (report: AdapterUsageReport) => void
+  /** Set by agent-manager: receives OpenCode Go plan-limit snapshots. */
+  onUsageLimits?: (event: AdapterUsageLimitsEvent) => void
+  /**
+   * Usage attribution for sessions created/resumed here. `trackSinceMs` is 0
+   * for sessions created here (every message is ours) and the resume time for
+   * resumed sessions, so history from before the resume is never reported.
+   */
+  private usageSessions: Map<string, { taskId: string; agentId: string; trackSinceMs: number }> = new Map()
+  /** Subagent (child) session id → tracked root session id. */
+  private usageChildSessions: Map<string, string> = new Map()
+  private goLimitsRead: Promise<ProviderUsageLimits | null> | null = null
+  private lastGoLimitsReadAt = 0
 
   constructor(private db?: Pick<DatabaseManager, 'getSetting'>) {
     this.sdkLoading = this.loadSDK()
@@ -1027,6 +1045,7 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     const ocSessionId = result.data.id
     this.writeTillDoneSessionConfig(ocSessionId, config.tillDone !== false)
+    this.usageSessions.set(ocSessionId, { taskId: config.taskId, agentId: config.agentId, trackSinceMs: 0 })
     this.clients.set(ocSessionId, ocClient)
     this.promptClients.set(ocSessionId, promptClient)
     this.sessionPermissionModes.set(ocSessionId, config.permissionMode || 'ask')
@@ -1187,6 +1206,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
     this.clients.set(sessionId, ocClient)
     this.promptClients.set(sessionId, promptClient)
+    if (!this.usageSessions.has(sessionId)) {
+      this.usageSessions.set(sessionId, { taskId: config.taskId, agentId: config.agentId, trackSinceMs: Date.now() })
+    }
     this.sessionPermissionModes.set(sessionId, config.permissionMode || 'ask')
     if (config.workspaceDir) this.sessionWorkspaceDirs.set(sessionId, config.workspaceDir)
     if (config.mcpServers) this.sessionMcpConfigs.set(sessionId, config.mcpServers as Record<string, { type: string; url?: string; headers?: Record<string, string>; command?: string; args?: string[]; env?: Record<string, string> }>)
@@ -1277,6 +1299,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.executePromptWithRetry(ocClient, sessionId, parts, modelParam, config, promptAbort)
       .finally(() => {
         this.promptAborts.delete(sessionId)
+        // SSE delivers usage live; this pass catches anything a dropped event
+        // stream missed. Already-recorded messages are ignored by the tracker.
+        void this.reconcileSessionUsage(sessionId, config)
+        this.maybeRefreshGoLimits()
       })
   }
 
@@ -1761,6 +1787,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.sessionWorkspaceDirs.delete(sessionId)
     this.sessionMcpConfigs.delete(sessionId)
     this.sessionMcpAttachFailures.delete(sessionId)
+    this.usageSessions.delete(sessionId)
+    for (const [childId, rootId] of this.usageChildSessions) {
+      if (rootId === sessionId) this.usageChildSessions.delete(childId)
+    }
     this.removeTillDoneSessionConfig(sessionId)
 
     if (this.clients.size > 0) {
@@ -2427,6 +2457,124 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     }
   }
 
+  // ── Subscription usage tracking ──────────────────────────
+
+  /** Resolves a (possibly subagent) OpenCode session to the tracked root session. */
+  private resolveUsageSession(sessionId: string): string | null {
+    if (this.usageSessions.has(sessionId)) return sessionId
+    const root = this.usageChildSessions.get(sessionId)
+    return root && this.usageSessions.has(root) ? root : null
+  }
+
+  /** Subagent (task tool) sessions are children of the session that spawned them. */
+  private trackChildSession(info: unknown): void {
+    if (!info || typeof info !== 'object') return
+    const session = info as { id?: unknown; parentID?: unknown }
+    if (typeof session.id !== 'string' || typeof session.parentID !== 'string') return
+    const root = this.resolveUsageSession(session.parentID)
+    if (root) this.usageChildSessions.set(session.id, root)
+  }
+
+  /** Reports a completed assistant message (live SSE event or reconcile pass). */
+  private trackMessageUsage(info: unknown): void {
+    if (!this.onUsage) return
+    try {
+      const message = normalizeOpenCodeAssistantMessage(info)
+      if (!message) return
+      const rootId = this.resolveUsageSession(message.sessionId)
+      if (!rootId) return
+      const tracked = this.usageSessions.get(rootId)!
+      // Resumed sessions: only messages produced after the resume are ours to count.
+      if (tracked.trackSinceMs > 0 && (message.createdAt ?? 0) < tracked.trackSinceMs - 5_000) return
+      this.onUsage({
+        kind: 'discrete',
+        provider: 'opencode',
+        providerSessionId: rootId,
+        taskId: tracked.taskId,
+        agentId: tracked.agentId,
+        items: [{
+          sourceKey: message.sourceKey,
+          model: message.model,
+          usage: message.usage,
+          occurredAt: message.createdAt ?? undefined
+        }]
+      })
+    } catch (error) {
+      console.warn('[OpencodeAdapter] Failed to report token usage:', error)
+    }
+  }
+
+  private async reconcileSessionUsage(sessionId: string, config: SessionConfig): Promise<void> {
+    const client = this.clients.get(sessionId)
+    if (!client || !this.onUsage) return
+    try {
+      const result = await client.session.messages({
+        path: { id: sessionId },
+        ...(config.workspaceDir && { query: { directory: config.workspaceDir } })
+      })
+      const messages = (result as { data?: Array<{ info?: unknown }> }).data
+      if (!Array.isArray(messages)) return
+      for (const message of messages) this.trackMessageUsage(message.info)
+    } catch (error) {
+      console.warn('[OpencodeAdapter] Usage reconcile failed:', error instanceof Error ? error.message : error)
+    }
+  }
+
+  /** OpenCode Go subscription key (`opencode-go` entry in auth.json, or OPENCODE_API_KEY). */
+  private readGoApiKey(): string | null {
+    const entry = readOpencodeAuth()['opencode-go']
+    if (entry?.type === 'api' && typeof entry.key === 'string' && entry.key.trim()) return entry.key.trim()
+    const envKey = process.env.OPENCODE_API_KEY
+    return envKey && envKey.trim() ? envKey.trim() : null
+  }
+
+  /**
+   * Reads OpenCode Go plan limits. Returns null when no OpenCode Go key is
+   * configured or the key has no Go subscription — plan limits do not apply,
+   * and other OpenCode providers (including subscription-backed Anthropic /
+   * OpenAI logins) do not expose them through OpenCode.
+   */
+  async probeUsageLimits(): Promise<ProviderUsageLimits | null> {
+    if (this.goLimitsRead) return this.goLimitsRead
+    const key = this.readGoApiKey()
+    if (!key) return null
+    this.lastGoLimitsReadAt = Date.now()
+    const pending = (async (): Promise<ProviderUsageLimits | null> => {
+      const checkedAt = new Date().toISOString()
+      try {
+        const response = await fetch('https://opencode.ai/zen/go/v1/usage', {
+          headers: { Authorization: `Bearer ${key}` },
+          signal: AbortSignal.timeout(10_000)
+        })
+        // 403: a valid OpenCode Zen key without a Go subscription.
+        if (response.status === 403) return null
+        if (!response.ok) {
+          return {
+            provider: 'opencode', checkedAt, windows: [],
+            unavailable: { reason: 'probe_failed', message: `OpenCode Go usage request failed (HTTP ${response.status})` }
+          }
+        }
+        return openCodeGoUsageToLimits(await response.json(), checkedAt)
+      } catch (error) {
+        return {
+          provider: 'opencode', checkedAt, windows: [],
+          unavailable: { reason: 'probe_failed', message: error instanceof Error ? error.message : String(error) }
+        }
+      }
+    })().finally(() => { this.goLimitsRead = null })
+    this.goLimitsRead = pending
+    return pending
+  }
+
+  /** After a turn, refresh OpenCode Go limits at most every 5 minutes. */
+  private maybeRefreshGoLimits(): void {
+    if (!this.onUsageLimits || this.goLimitsRead) return
+    if (Date.now() - this.lastGoLimitsReadAt < 5 * 60 * 1000) return
+    void this.probeUsageLimits().then((limits) => {
+      if (limits) this.onUsageLimits?.({ kind: 'snapshot', limits })
+    })
+  }
+
   /**
    * Handle a single SSE event from the OpenCode server.
    * We only care about `permission.asked` events.
@@ -2441,6 +2589,12 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     // Unwrap /global/event payload envelope if present
     const inner = (event.payload || event) as Record<string, unknown>
     const type = inner.type as string | undefined
+    if (type === 'message.updated' || type === 'session.created' || type === 'session.updated') {
+      const info = ((inner.properties || inner) as Record<string, unknown>).info
+      if (type === 'message.updated') this.trackMessageUsage(info)
+      else this.trackChildSession(info)
+      return
+    }
     if (type !== 'permission.asked') return
 
     const props = (inner.properties || inner) as Record<string, unknown>

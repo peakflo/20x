@@ -198,7 +198,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     refreshLimits: (options?: { force?: boolean }): Promise<UsageLimitsRefreshResult> =>
       ipcRenderer.invoke('usage:refreshLimits', options),
     getSummary: (query?: UsageSummaryQuery): Promise<UsageSummary | null> =>
-      ipcRenderer.invoke('usage:getSummary', query)
+      ipcRenderer.invoke('usage:getSummary', query),
+    setCursorKeychainAccess: (enabled: boolean): Promise<UsageLimitsRefreshResult> =>
+      ipcRenderer.invoke('usage:setCursorKeychainAccess', enabled)
   },
   onUsageLimitsUpdated: (callback: (limits: ProviderUsageLimits) => void): (() => void) => {
     const handler = (_: unknown, data: ProviderUsageLimits): void => callback(data)

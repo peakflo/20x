@@ -29,6 +29,8 @@ import type {
   SessionStatus,
 } from './coding-agent-adapter'
 import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
+import type { AdapterUsageReport } from './coding-agent-adapter'
+import { normalizePiSessionStats } from '../usage/usage-normalize'
 
 const execFileAsync = promisify(execFile)
 const RPC_TIMEOUT_MS = 15_000
@@ -250,6 +252,10 @@ interface PiSession {
   promptMayBeCommandOnly: boolean
   closing: boolean
   mcpConfigPath?: string
+  /** True when this adapter started the Pi session (not `--session` resume). */
+  createdInApp: boolean
+  /** `provider/model` of the latest assistant message, for usage attribution. */
+  lastModel: string | null
 }
 
 interface PiUiRequest {
@@ -262,6 +268,8 @@ interface PiUiRequest {
 
 type PiMessage = {
   role?: string
+  provider?: string
+  model?: string
   content?: string | Array<Record<string, unknown>>
   timestamp?: number
   stopReason?: string
@@ -292,6 +300,8 @@ export class PiAdapter implements CodingAgentAdapter {
   private sessions = new Map<string, PiSession>()
   private piExecutablePath: string | null = null
   onDataAvailable?: (sessionId: string) => void
+  /** Set by agent-manager: receives cumulative session token usage once per turn. */
+  onUsage?: (report: AdapterUsageReport) => void
 
   constructor(private db: Pick<DatabaseManager, 'getSetting'>) {}
 
@@ -467,6 +477,8 @@ export class PiAdapter implements CodingAgentAdapter {
       promptMayBeCommandOnly: false,
       closing: false,
       mcpConfigPath,
+      createdInApp: false,
+      lastModel: null,
     }
   }
 
@@ -515,6 +527,7 @@ export class PiAdapter implements CodingAgentAdapter {
 
     const tempId = resumeId || randomUUID()
     const session = this.createSessionState(tempId, child, config, mcpConfigPath)
+    session.createdInApp = !resumeId
     this.sessions.set(tempId, session)
     this.attachProcess(session)
 
@@ -549,6 +562,8 @@ export class PiAdapter implements CodingAgentAdapter {
     const response = await this.command(session, { type: 'get_messages' })
     const messages = Array.isArray(response.data?.messages) ? response.data.messages as PiMessage[] : []
     session.allMessages = this.convertMessages(messages)
+    // Establish the usage baseline so the next turn is measured from here.
+    void this.reportSessionUsage(session)
     return session.allMessages
   }
 
@@ -660,6 +675,7 @@ export class PiAdapter implements CodingAgentAdapter {
         session.sawAgentActivity = true
         break
       case 'agent_settled': {
+        void this.reportSessionUsage(session)
         this.cancelPendingUiRequests(session, 'This request is no longer active.')
         if (session.pendingTurnError) this.settlePendingTurnError(session)
         else session.status = 'idle'
@@ -676,6 +692,9 @@ export class PiAdapter implements CodingAgentAdapter {
         break
       case 'message_end': {
         const message = event.message as PiMessage | undefined
+        if (message?.role === 'assistant' && message.model) {
+          session.lastModel = message.provider ? `${message.provider}/${message.model}` : message.model
+        }
         this.reconcileAssistantMessage(session, message)
         if (message?.role === 'assistant' && message.stopReason === 'error') {
           session.pendingTurnError = message.errorMessage || 'Pi model request failed'
@@ -954,6 +973,30 @@ export class PiAdapter implements CodingAgentAdapter {
       return { type: SessionStatusType.WAITING_APPROVAL, message: 'Pi is waiting for input' }
     }
     return { type: session.status === 'busy' ? SessionStatusType.BUSY : SessionStatusType.IDLE }
+  }
+
+  /**
+   * Pi's `get_session_stats` returns cumulative token/cost totals for the whole
+   * session file (including compaction summaries). Reported once per settled
+   * turn; the tracker stores the per-turn delta.
+   */
+  private async reportSessionUsage(session: PiSession): Promise<void> {
+    if (!this.onUsage) return
+    try {
+      const stats = await this.command(session, { type: 'get_session_stats' })
+      const bucket = normalizePiSessionStats(stats.data, session.lastModel || session.config.model || 'unknown')
+      if (!bucket) return
+      this.onUsage({
+        provider: 'pi',
+        providerSessionId: session.id,
+        taskId: session.config.taskId,
+        agentId: session.config.agentId,
+        newSession: session.createdInApp,
+        buckets: [bucket]
+      })
+    } catch (error) {
+      console.warn('[PiAdapter] Failed to read session usage:', error instanceof Error ? error.message : error)
+    }
   }
 
   private settlePendingTurnError(session: PiSession): void {

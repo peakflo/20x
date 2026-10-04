@@ -128,6 +128,41 @@ describe('UsageStore.recordCumulativeUsage', () => {
   })
 })
 
+describe('UsageStore.recordDiscreteUsage', () => {
+  const item = (sourceKey: string, partial: Partial<UsageTotals>) => ({ sourceKey, model: 'anthropic/claude-sonnet-4-5', usage: totals(partial), occurredAt: NOW })
+
+  it('stores each source key once per provider', () => {
+    const first = store.recordDiscreteUsage({
+      provider: 'opencode', sessionId: 'ses', taskId: 't1', agentId: 'a1',
+      items: [item('ses:m1', { inputTokens: 10, outputTokens: 5, costUsd: 0.01 }), item('ses:m2', { outputTokens: 3 })]
+    })
+    expect(first.map((r) => [r.model, r.outputTokens, r.costSource])).toEqual([
+      ['anthropic/claude-sonnet-4-5', 5, 'reported'],
+      ['anthropic/claude-sonnet-4-5', 3, 'unavailable']
+    ])
+    // Repeated events / reconcile passes are ignored.
+    expect(store.recordDiscreteUsage({ provider: 'opencode', items: [item('ses:m1', { inputTokens: 10, outputTokens: 5 })] })).toEqual([])
+    // The same key from another provider is a different item.
+    expect(store.recordDiscreteUsage({ provider: 'pi', items: [item('ses:m1', { outputTokens: 1 })] })).toHaveLength(1)
+  })
+
+  it('skips empty items but keeps cost-only ones', () => {
+    expect(store.recordDiscreteUsage({ provider: 'cursor', items: [item('k1', {})] })).toEqual([])
+    expect(store.recordDiscreteUsage({ provider: 'cursor', items: [item('k2', { costUsd: 0.2 })] })).toHaveLength(1)
+  })
+
+  it('adds the source_key column to tables from an earlier build', () => {
+    const legacy = new Database(':memory:')
+    legacy.exec(`CREATE TABLE token_usage_events (
+      id TEXT PRIMARY KEY, task_id TEXT, agent_id TEXT, provider TEXT NOT NULL, model TEXT NOT NULL, session_id TEXT,
+      input_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0, cost_usd REAL,
+      cost_source TEXT NOT NULL DEFAULT 'unavailable', created_at INTEGER NOT NULL)`)
+    const upgraded = new UsageStore(legacy)
+    expect(upgraded.recordDiscreteUsage({ provider: 'pi', items: [item('x', { outputTokens: 1 })] })).toHaveLength(1)
+  })
+})
+
 describe('UsageStore.getUsageSummary', () => {
   beforeEach(() => {
     raw.prepare('INSERT INTO tasks (id, title) VALUES (?, ?)').run('t1', 'Fix login')

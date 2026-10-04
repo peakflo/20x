@@ -50,6 +50,14 @@ const mockElectronAPI = {
     update: vi.fn().mockResolvedValue({}),
     delete: vi.fn().mockResolvedValue(true)
   },
+  usage: {
+    getLimits: vi.fn().mockResolvedValue([]),
+    refreshLimits: vi.fn().mockResolvedValue({ limits: [], refreshed: [] }),
+    getSummary: vi.fn().mockResolvedValue(null),
+    setCursorKeychainAccess: vi.fn().mockResolvedValue({ limits: [], refreshed: [] })
+  },
+  onUsageLimitsUpdated: vi.fn(() => () => undefined),
+  onUsageRecorded: vi.fn(() => () => undefined),
   agentSession: {
     start: vi.fn().mockResolvedValue({ sessionId: 'test-session-id' }),
     resume: vi.fn().mockResolvedValue({ sessionId: 'test-session-id' }),

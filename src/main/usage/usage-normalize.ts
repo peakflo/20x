@@ -67,6 +67,11 @@ export function isZeroUsage(totals: TokenCounts): boolean {
   return TOKEN_FIELDS.every((field) => !totals[field])
 }
 
+/** No tokens and no positive cost — nothing worth recording. */
+export function isEmptyUsage(totals: UsageTotals): boolean {
+  return isZeroUsage(totals) && !(totals.costUsd !== null && totals.costUsd > 0)
+}
+
 /**
  * Claude Agent SDK `result.modelUsage`: per-model totals for every model call
  * of the query pipeline (main loop, Task subagents, compaction, ...). These are
@@ -375,4 +380,193 @@ export function codexRateLimitsUpdatedToUpdate(params: unknown): ProviderUsageLi
   if (planType) update.planType = planType
   if ('rateLimitReachedType' in snapshot) update.limitReached = !!nonEmptyString(snapshot.rateLimitReachedType)
   return windows.length > 0 || update.planType || update.limitReached !== undefined ? update : null
+}
+
+// ── OpenCode ────────────────────────────────────────────────
+
+/** A completed OpenCode assistant message as a discrete usage item. */
+export interface OpenCodeMessageUsage {
+  /** `${sessionID}:${messageID}` — unique per message. */
+  sourceKey: string
+  sessionId: string
+  model: string
+  usage: UsageTotals
+  /** Unix ms the message was created. */
+  createdAt: number | null
+}
+
+/**
+ * OpenCode `AssistantMessage` (from `message.updated` events or
+ * `session.messages()`). `tokens` / `cost` belong to that one message and are
+ * final once `time.completed` (or `finish`) is set. `tokens.input` excludes
+ * cache reads/writes; `reasoning` is reported separately from `output`.
+ *
+ * OpenCode reports `cost: 0` for models without a known price — including
+ * subscription-backed models — so 0 means "unknown", not free.
+ */
+export function normalizeOpenCodeAssistantMessage(info: unknown): OpenCodeMessageUsage | null {
+  if (!isObject(info) || info.role !== 'assistant') return null
+  const id = nonEmptyString(info.id)
+  const sessionId = nonEmptyString(info.sessionID)
+  if (!id || !sessionId || !isObject(info.tokens)) return null
+  const time = isObject(info.time) ? info.time : {}
+  const completed = typeof time.completed === 'number' || nonEmptyString(info.finish) !== null
+  if (!completed) return null
+
+  const tokens = info.tokens
+  const cache = isObject(tokens.cache) ? tokens.cache : {}
+  const reasoning = num(tokens.reasoning)
+  const providerId = nonEmptyString(info.providerID)
+  const modelId = nonEmptyString(info.modelID)
+  const cost = typeof info.cost === 'number' && Number.isFinite(info.cost) && info.cost > 0 ? info.cost : null
+  return {
+    sourceKey: `${sessionId}:${id}`,
+    sessionId,
+    model: modelId ? (providerId ? `${providerId}/${modelId}` : modelId) : 'unknown',
+    usage: {
+      inputTokens: num(tokens.input),
+      cacheReadTokens: num(cache.read),
+      cacheWriteTokens: num(cache.write),
+      outputTokens: num(tokens.output) + reasoning,
+      reasoningTokens: reasoning,
+      costUsd: cost
+    },
+    createdAt: typeof time.created === 'number' ? time.created : null
+  }
+}
+
+/**
+ * OpenCode Go `GET https://opencode.ai/zen/go/v1/usage` response:
+ * `{ usage: { rolling|weekly|monthly: { percent: 0–100, resetsAt: ISO } } }`.
+ */
+export function openCodeGoUsageToLimits(response: unknown, checkedAt: string): ProviderUsageLimits {
+  const base: ProviderUsageLimits = { provider: 'opencode', checkedAt, planType: 'go', windows: [] }
+  const usage = isObject(response) && isObject(response.usage) ? response.usage : null
+  if (!usage) {
+    return { ...base, unavailable: { reason: 'probe_failed', message: 'OpenCode Go returned no usage data' } }
+  }
+  const definitions: Array<[string, string, UsageWindowKind, string, number | null]> = [
+    ['rolling', 'go_rolling', 'session', '5-hour', SESSION_MINS],
+    ['weekly', 'go_weekly', 'weekly', 'Weekly', WEEK_MINS],
+    ['monthly', 'go_monthly', 'monthly', 'Monthly', null]
+  ]
+  const windows: UsageLimitWindow[] = []
+  for (const [field, id, kind, label, windowDurationMins] of definitions) {
+    const raw = usage[field]
+    if (!isObject(raw) || typeof raw.percent !== 'number' || !Number.isFinite(raw.percent)) continue
+    windows.push({
+      id,
+      kind,
+      label,
+      usedPercent: clampPercent(raw.percent),
+      resetsAt: isoFromString(raw.resetsAt) ?? isoFromEpochSeconds(raw.resetsAt),
+      windowDurationMins
+    })
+  }
+  return {
+    ...base,
+    windows,
+    unavailable: windows.length === 0
+      ? { reason: 'unsupported', message: 'OpenCode Go did not report any usage windows.' }
+      : null
+  }
+}
+
+// ── Pi ──────────────────────────────────────────────────────
+
+/**
+ * Pi RPC `get_session_stats` response data → one cumulative bucket for the
+ * session. Totals cover every entry of the session file (assistant messages,
+ * compaction and branch summaries). Pi `input` already excludes cached tokens;
+ * stats carry no reasoning split. A `cost` of 0 with tokens means unknown
+ * (some provider paths do not price usage).
+ */
+export function normalizePiSessionStats(data: unknown, model: string): UsageBucket | null {
+  if (!isObject(data) || !isObject(data.tokens)) return null
+  const tokens = data.tokens
+  const cost = typeof data.cost === 'number' && Number.isFinite(data.cost) && data.cost > 0 ? data.cost : null
+  return {
+    key: 'session',
+    model: model || 'unknown',
+    totals: {
+      inputTokens: num(tokens.input),
+      cacheReadTokens: num(tokens.cacheRead),
+      cacheWriteTokens: num(tokens.cacheWrite),
+      outputTokens: num(tokens.output),
+      reasoningTokens: 0,
+      costUsd: cost
+    }
+  }
+}
+
+// ── Cursor (ACP) ────────────────────────────────────────────
+
+/**
+ * ACP `session/prompt` response `usage` (UNSTABLE in the protocol). The shipped
+ * schema documents every field as a session total ("across all turns"), so it
+ * is treated as cumulative; the tracker's delta logic also recovers if an
+ * agent restarts its counters. `inputTokens` is taken as uncached input.
+ * `costUsd` comes from the latest `usage_update.cost` (cumulative session cost).
+ */
+export function normalizeAcpPromptUsage(
+  usage: unknown,
+  model: string,
+  cumulativeCostUsd: number | null
+): UsageBucket | null {
+  if (!isObject(usage)) return null
+  const outputTokens = num(usage.outputTokens)
+  const bucket: UsageBucket = {
+    key: 'session',
+    model: model || 'unknown',
+    totals: {
+      inputTokens: num(usage.inputTokens),
+      cacheReadTokens: num(usage.cachedReadTokens),
+      cacheWriteTokens: num(usage.cachedWriteTokens),
+      outputTokens,
+      reasoningTokens: Math.min(num(usage.thoughtTokens), outputTokens),
+      costUsd: cumulativeCostUsd
+    }
+  }
+  return isZeroUsage(bucket.totals) && !(cumulativeCostUsd && cumulativeCostUsd > 0) ? null : bucket
+}
+
+/** ACP `usage_update.cost` → USD amount, or null when absent / not USD. */
+export function acpUsageUpdateCostUsd(update: unknown): number | null {
+  if (!isObject(update) || !isObject(update.cost)) return null
+  const amount = update.cost.amount
+  const currency = typeof update.cost.currency === 'string' ? update.cost.currency.trim().toUpperCase() : ''
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0) return null
+  return currency === 'USD' ? amount : null
+}
+
+/**
+ * Cursor `aiserver.v1.DashboardService/GetCurrentPeriodUsage` response:
+ * `{ billingCycleEnd?: epoch-ms (string|number), planUsage?: { totalPercentUsed?, autoPercentUsed?, apiPercentUsed? } }`.
+ */
+export function cursorPeriodUsageToLimits(response: unknown, checkedAt: string): ProviderUsageLimits {
+  const base: ProviderUsageLimits = { provider: 'cursor', checkedAt, windows: [] }
+  if (!isObject(response)) {
+    return { ...base, unavailable: { reason: 'probe_failed', message: 'Cursor returned no usage data' } }
+  }
+  const planUsage = isObject(response.planUsage) ? response.planUsage : null
+  const cycleEnd = Number(response.billingCycleEnd)
+  const resetsAt = Number.isFinite(cycleEnd) && cycleEnd > 0 ? new Date(cycleEnd).toISOString() : null
+  const definitions: Array<[string, string, string]> = [
+    ['totalPercentUsed', 'total', 'Monthly · Overall'],
+    ['autoPercentUsed', 'auto', 'Monthly · Cursor models'],
+    ['apiPercentUsed', 'api', 'Monthly · Other models']
+  ]
+  const windows: UsageLimitWindow[] = []
+  for (const [field, id, label] of planUsage ? definitions : []) {
+    const value = planUsage![field]
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue
+    windows.push({ id, kind: 'monthly', label, usedPercent: clampPercent(value), resetsAt, windowDurationMins: null })
+  }
+  return {
+    ...base,
+    windows,
+    unavailable: windows.length === 0
+      ? { reason: 'unsupported', message: 'Cursor did not report plan usage for this login.' }
+      : null
+  }
 }

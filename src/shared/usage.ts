@@ -14,17 +14,21 @@
  * a subscription bill: subscription plans bill separately.
  */
 
-export type UsageProvider = 'claude-code' | 'codex'
+/** Every coding-agent harness 20x runs. Ids match `coding_agent` on agent configs. */
+export type UsageProvider = 'claude-code' | 'codex' | 'opencode' | 'cursor' | 'pi'
 
-export const USAGE_PROVIDERS: readonly UsageProvider[] = ['claude-code', 'codex'] as const
+export const USAGE_PROVIDERS: readonly UsageProvider[] = ['claude-code', 'codex', 'opencode', 'cursor', 'pi'] as const
 
 export const USAGE_PROVIDER_LABELS: Record<UsageProvider, string> = {
   'claude-code': 'Claude Code',
-  codex: 'Codex'
+  codex: 'Codex',
+  opencode: 'OpenCode',
+  cursor: 'Cursor',
+  pi: 'Pi'
 }
 
 export function isUsageProvider(value: unknown): value is UsageProvider {
-  return value === 'claude-code' || value === 'codex'
+  return typeof value === 'string' && (USAGE_PROVIDERS as readonly string[]).includes(value)
 }
 
 // ── Plan limits ─────────────────────────────────────────────
@@ -60,6 +64,11 @@ export interface ProviderUsageLimits {
    * failed (previous windows are kept so the UI can still show them).
    */
   unavailable?: { reason: 'unsupported' | 'probe_failed'; message: string } | null
+  /**
+   * A user action that would make limits available (e.g. allowing Keychain
+   * access for the Cursor CLI login). Rendered as a button where supported.
+   */
+  action?: { id: string; label: string } | null
 }
 
 /** A partial update streamed during a turn. Windows are upserted by id. */
@@ -143,7 +152,8 @@ export function mergeUsageLimits(
     windows: sortUsageWindows(windows),
     limitReached,
     resetCreditsAvailable,
-    unavailable: null
+    unavailable: null,
+    action: null
   }
 }
 
@@ -206,7 +216,7 @@ export function totalTokens(counts: TokenCounts): number {
 }
 
 /**
- * - `reported`: the provider runtime reported the cost (e.g. Claude Code).
+ * - `reported`: the provider runtime reported the cost (Claude Code, OpenCode, Pi, Cursor when sent).
  * - `unavailable`: the provider does not report cost (e.g. Codex).
  */
 export type UsageCostSource = 'reported' | 'unavailable'

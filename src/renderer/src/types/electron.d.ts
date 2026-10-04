@@ -505,6 +505,7 @@ interface ElectronAPI {
     getLimits: () => Promise<import('@shared/usage').ProviderUsageLimits[]>
     refreshLimits: (options?: { force?: boolean }) => Promise<import('@shared/usage').UsageLimitsRefreshResult>
     getSummary: (query?: import('@shared/usage').UsageSummaryQuery) => Promise<import('@shared/usage').UsageSummary | null>
+    setCursorKeychainAccess: (enabled: boolean) => Promise<import('@shared/usage').UsageLimitsRefreshResult>
   }
   onUsageLimitsUpdated: (callback: (limits: import('@shared/usage').ProviderUsageLimits) => void) => () => void
   onUsageRecorded: (callback: (records: import('@shared/usage').TokenUsageRecord[]) => void) => () => void

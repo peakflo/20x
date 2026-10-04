@@ -3,8 +3,10 @@
  *
  * Tables (all created with IF NOT EXISTS, so no schema-version bump is needed):
  *
- * - `token_usage_events`        append-only per-turn usage, one row per model per turn.
- *                               No FK to tasks: usage history outlives deleted tasks.
+ * - `token_usage_events`        append-only usage: one row per model per turn for providers
+ *                               that report running totals, one row per message/turn for
+ *                               providers that report discrete usage (deduped by
+ *                               `source_key`). No FK to tasks: history outlives deleted tasks.
  * - `token_usage_session_totals` last cumulative totals seen per provider session +
  *                               bucket, used to turn cumulative provider figures into
  *                               per-turn deltas (survives app restarts / session resume).
@@ -23,7 +25,7 @@ import type {
 } from '../../shared/usage'
 import { isUsageProvider } from '../../shared/usage'
 import type { UsageBucket, UsageTotals } from './usage-normalize'
-import { computeUsageDelta, isZeroUsage } from './usage-normalize'
+import { computeUsageDelta, isEmptyUsage } from './usage-normalize'
 
 export const USAGE_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS token_usage_events (
@@ -40,7 +42,11 @@ export const USAGE_SCHEMA_SQL = `
     reasoning_tokens INTEGER NOT NULL DEFAULT 0,
     cost_usd REAL,
     cost_source TEXT NOT NULL DEFAULT 'unavailable',
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    -- Provider-side id of a discrete usage item (e.g. an assistant message id)
+    -- for providers that report usage per message instead of running totals.
+    -- Unique per provider so replays and repeated updates never double count.
+    source_key TEXT
   );
   CREATE INDEX IF NOT EXISTS idx_token_usage_events_created ON token_usage_events(created_at);
   CREATE INDEX IF NOT EXISTS idx_token_usage_events_task ON token_usage_events(task_id, created_at);
@@ -67,6 +73,24 @@ const SESSION_TOTALS_RETENTION_MS = 90 * 24 * 60 * 60 * 1000
 const USAGE_EVENTS_RETENTION_MS = 365 * 24 * 60 * 60 * 1000
 const DEFAULT_SUMMARY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 const TOP_TASKS_LIMIT = 10
+
+/** One discrete usage item (per-message providers: OpenCode, Pi, Cursor turns). */
+export interface DiscreteUsageItem {
+  /** Stable provider-side id, unique per provider (e.g. `${sessionId}:${messageId}`). */
+  sourceKey: string
+  model: string
+  usage: UsageTotals
+  /** Unix ms the usage happened (e.g. message completion); defaults to now. */
+  occurredAt?: number
+}
+
+export interface RecordDiscreteUsageInput {
+  provider: UsageProvider
+  sessionId?: string | null
+  taskId?: string | null
+  agentId?: string | null
+  items: DiscreteUsageItem[]
+}
 
 export interface RecordCumulativeUsageInput {
   provider: UsageProvider
@@ -175,6 +199,67 @@ function parseTotals(raw: string): UsageTotals | null {
 export class UsageStore {
   constructor(private readonly db: Database.Database) {
     this.db.exec(USAGE_SCHEMA_SQL)
+    this.ensureSourceKeyColumn()
+  }
+
+  /** Adds `source_key` to tables created by an earlier build of this feature. */
+  private ensureSourceKeyColumn(): void {
+    const columns = this.db.prepare('PRAGMA table_info(token_usage_events)').all() as Array<{ name: string }>
+    if (!columns.some((column) => column.name === 'source_key')) {
+      this.db.exec('ALTER TABLE token_usage_events ADD COLUMN source_key TEXT')
+    }
+    this.db.exec(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_token_usage_events_source ON token_usage_events(provider, source_key) WHERE source_key IS NOT NULL'
+    )
+  }
+
+  /**
+   * Records discrete usage items (one per assistant message / turn) for
+   * providers that report per-item usage. Each `sourceKey` is stored at most
+   * once per provider, so repeated events and history replays are ignored.
+   *
+   * @returns The usage events actually written.
+   */
+  recordDiscreteUsage(input: RecordDiscreteUsageInput): TokenUsageRecord[] {
+    if (input.items.length === 0) return []
+    const insert = this.db.prepare(`
+      INSERT OR IGNORE INTO token_usage_events (
+        id, task_id, agent_id, provider, model, session_id,
+        input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens,
+        cost_usd, cost_source, created_at, source_key
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    const run = this.db.transaction((): TokenUsageRecord[] => {
+      const written: TokenUsageRecord[] = []
+      for (const item of input.items) {
+        if (!item.sourceKey || isEmptyUsage(item.usage)) continue
+        const costUsd = item.usage.costUsd !== null && Number.isFinite(item.usage.costUsd) ? item.usage.costUsd : null
+        const record: TokenUsageRecord = {
+          id: createId(),
+          taskId: input.taskId ?? null,
+          agentId: input.agentId ?? null,
+          provider: input.provider,
+          model: item.model || 'unknown',
+          sessionId: input.sessionId ?? null,
+          inputTokens: Math.round(item.usage.inputTokens),
+          cacheReadTokens: Math.round(item.usage.cacheReadTokens),
+          cacheWriteTokens: Math.round(item.usage.cacheWriteTokens),
+          outputTokens: Math.round(item.usage.outputTokens),
+          reasoningTokens: Math.round(item.usage.reasoningTokens),
+          costUsd,
+          costSource: costUsd === null ? 'unavailable' : 'reported',
+          createdAt: item.occurredAt ?? Date.now()
+        }
+        const result = insert.run(
+          record.id, record.taskId, record.agentId, record.provider, record.model, record.sessionId,
+          record.inputTokens, record.cacheReadTokens, record.cacheWriteTokens, record.outputTokens, record.reasoningTokens,
+          record.costUsd, record.costSource, record.createdAt, item.sourceKey
+        )
+        if (result.changes > 0) written.push(record)
+      }
+      return written
+    })
+    return run()
   }
 
   /**
@@ -216,7 +301,7 @@ export class UsageStore {
       for (const bucket of input.buckets) {
         // Zeroed totals come from crashed/startup-error results. Persisting them
         // would make the next real reading look like a reset and double-count.
-        if (isZeroUsage(bucket.totals)) continue
+        if (isEmptyUsage(bucket.totals)) continue
 
         const previous = previousByBucket.get(bucket.key)
         upsertTotals.run(input.provider, input.sessionId, bucket.key, JSON.stringify(bucket.totals), observedAt)
@@ -225,7 +310,7 @@ export class UsageStore {
         if (!previous && !input.newSession && previousByBucket.size === 0) continue
 
         const { delta } = computeUsageDelta(previous, bucket.totals)
-        if (isZeroUsage(delta)) continue
+        if (isEmptyUsage(delta)) continue
 
         const record: TokenUsageRecord = {
           id: createId(),

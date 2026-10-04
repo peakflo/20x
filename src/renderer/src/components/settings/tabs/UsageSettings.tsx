@@ -1,21 +1,17 @@
 import { useState } from 'react'
-import { AlertTriangle, Gauge, RefreshCw } from 'lucide-react'
+import { Gauge, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { SettingsSection } from '../SettingsSection'
 import { useSubscriptionUsage } from '@/hooks/use-subscription-usage'
+import { ProviderLimitsCard } from '@/components/usage/ProviderLimitsCard'
 import {
   USAGE_PROVIDER_LABELS,
-  effectiveUsedPercent,
-  formatResetIn,
   formatTokenCount,
   formatUsd,
   totalTokens,
-  usageLimitLevel,
-  type ProviderUsageLimits,
   type UsageAggregate,
   type UsageDayRow,
-  type UsageLimitWindow,
   type UsagePeriod
 } from '@shared/usage'
 
@@ -24,100 +20,6 @@ const PERIODS: Array<{ value: UsagePeriod; label: string }> = [
   { value: '7d', label: '7 days' },
   { value: '30d', label: '30 days' }
 ]
-
-const LEVEL_BAR: Record<ReturnType<typeof usageLimitLevel>, string> = {
-  normal: 'bg-primary',
-  warning: 'bg-warning',
-  critical: 'bg-destructive'
-}
-
-function formatPlan(planType: string | null | undefined): string | null {
-  if (!planType) return null
-  return planType.charAt(0).toUpperCase() + planType.slice(1)
-}
-
-function formatCheckedAt(iso: string): string {
-  const ms = Date.parse(iso)
-  if (!Number.isFinite(ms)) return ''
-  const minutes = Math.round((Date.now() - ms) / 60_000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  return new Date(ms).toLocaleDateString()
-}
-
-function LimitWindowRow({ window }: { window: UsageLimitWindow }) {
-  const used = effectiveUsedPercent(window)
-  const level = usageLimitLevel(used)
-  const resetIn = formatResetIn(window.resetsAt)
-  return (
-    <div className="space-y-1.5" data-testid={`usage-window-${window.id}`}>
-      <div className="flex items-baseline justify-between gap-3 text-xs">
-        <span className="font-medium text-foreground">{window.label}</span>
-        <span className="text-muted-foreground tabular-nums">
-          {Math.round(used)}% used{resetIn ? ` · resets ${resetIn}` : ''}
-        </span>
-      </div>
-      <div
-        className="h-1.5 w-full rounded-full bg-muted overflow-hidden"
-        role="meter"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(used)}
-        aria-label={`${window.label}: ${Math.round(used)}% used`}
-      >
-        <div className={cn('h-full rounded-full transition-[width]', LEVEL_BAR[level])} style={{ width: `${used}%` }} />
-      </div>
-    </div>
-  )
-}
-
-function ProviderLimitsCard({ limits }: { limits: ProviderUsageLimits }) {
-  const plan = formatPlan(limits.planType)
-  const stale = limits.unavailable?.reason === 'probe_failed'
-  return (
-    <div className="rounded-lg border border-border bg-card p-4 space-y-3" data-testid={`usage-limits-${limits.provider}`}>
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-semibold text-foreground">{USAGE_PROVIDER_LABELS[limits.provider]}</span>
-          {plan && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">{plan}</span>
-          )}
-        </div>
-        <span className="text-[11px] text-muted-foreground shrink-0">Checked {formatCheckedAt(limits.checkedAt)}</span>
-      </div>
-
-      {limits.limitReached && (
-        <div className="flex items-center gap-1.5 text-xs text-destructive">
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          <span>Limit reached — requests are blocked until the window resets.</span>
-        </div>
-      )}
-
-      {limits.windows.length > 0 ? (
-        <div className="space-y-3">
-          {limits.windows.map((window) => <LimitWindowRow key={window.id} window={window} />)}
-        </div>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          {limits.unavailable?.message ?? 'No plan limits reported yet.'}
-        </p>
-      )}
-
-      {stale && limits.windows.length > 0 && (
-        <p className="text-[11px] text-muted-foreground">
-          Last refresh failed ({limits.unavailable?.message}); showing the previous reading.
-        </p>
-      )}
-      {typeof limits.resetCreditsAvailable === 'number' && limits.resetCreditsAvailable > 0 && (
-        <p className="text-[11px] text-muted-foreground">
-          {limits.resetCreditsAvailable} rate-limit reset credit{limits.resetCreditsAvailable === 1 ? '' : 's'} banked
-        </p>
-      )}
-    </div>
-  )
-}
 
 function StatTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -132,7 +34,7 @@ function StatTile({ label, value, hint }: { label: string; value: string; hint?:
 function costHint(aggregate: UsageAggregate): string | undefined {
   if (aggregate.records === 0) return undefined
   if (aggregate.unpricedRecords === aggregate.records) return 'not reported'
-  if (aggregate.unpricedRecords > 0) return 'partial — Codex does not report cost'
+  if (aggregate.unpricedRecords > 0) return 'partial — some providers do not report cost'
   return 'API-equivalent estimate'
 }
 
@@ -187,18 +89,18 @@ function DailyUsageBars({ days }: { days: UsageDayRow[] }) {
 
 export function UsageSettings() {
   const [period, setPeriod] = useState<UsagePeriod>('7d')
-  const { limits, summary, loading, refreshing, error, refreshLimits } = useSubscriptionUsage(period)
+  const { limits, summary, loading, refreshing, error, refreshLimits, runLimitsAction } = useSubscriptionUsage(period)
   const totals = summary?.totals
 
   return (
     <>
       <SettingsSection
         title="Subscription limits"
-        description="How much of each Claude Code and Codex plan window is used, as reported by the provider. Updated as agents run."
+        description="How much of each subscription plan window is used, as reported by the provider. Updated as agents run."
       >
         <div className="flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
-            Only subscription logins (Claude Pro/Max/Team, ChatGPT plans) report plan limits.
+            Only subscription logins report plan limits (Claude Pro/Max/Team, ChatGPT plans, Cursor, OpenCode Go).
           </p>
           <Button size="sm" variant="outline" onClick={() => void refreshLimits()} disabled={refreshing}>
             <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
@@ -211,7 +113,12 @@ export function UsageSettings() {
         {limits.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2">
             {limits.map((providerLimits) => (
-              <ProviderLimitsCard key={providerLimits.provider} limits={providerLimits} />
+              <ProviderLimitsCard
+                key={providerLimits.provider}
+                limits={providerLimits}
+                onAction={(actionId) => void runLimitsAction(actionId)}
+                actionPending={refreshing}
+              />
             ))}
           </div>
         ) : (
@@ -221,7 +128,7 @@ export function UsageSettings() {
               {loading || refreshing ? 'Checking plan limits…' : 'No plan limits yet'}
             </p>
             <p className="text-xs text-muted-foreground">
-              Add a Claude Code or Codex agent that signs in with a subscription, then refresh or run a task.
+              Add an agent that signs in with a subscription (Claude Code, Codex, Cursor, OpenCode Go), then refresh or run a task.
             </p>
           </div>
         )}
@@ -253,7 +160,7 @@ export function UsageSettings() {
 
         {!totals || totals.records === 0 ? (
           <p className="text-xs text-muted-foreground py-4">
-            No token usage recorded in this period. Usage is recorded for Claude Code and Codex agents as their turns complete.
+            No token usage recorded in this period. Usage is recorded for every agent harness as its turns complete.
           </p>
         ) : (
           <>

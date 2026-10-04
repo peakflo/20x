@@ -22,6 +22,10 @@ import type {
   McpServerConfig
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
+import type { AdapterUsageLimitsEvent, AdapterUsageReport } from './coding-agent-adapter'
+import type { ProviderUsageLimits } from '../../shared/usage'
+import { acpUsageUpdateCostUsd, normalizeAcpPromptUsage } from '../usage/usage-normalize'
+import { probeCursorUsageLimits } from '../usage/cursor-limits'
 
 // ACP Agent Types
 export type AcpAgentType = 'codex' | 'cursor'
@@ -135,6 +139,8 @@ interface AcpSession {
   lastError: string | null  // Last error message (e.g., quota exceeded) for status reporting
   codexUseApiKey: boolean  // True when Codex auth uses an API key (vs. ChatGPT subscription / CLI login)
   codexAuthSummary: string  // Human-readable auth identity used (for diagnostics, surfaced in errors)
+  createdInApp: boolean  // True when this adapter created the ACP session (session/new), false on resume
+  usageCostUsd: number | null  // Latest cumulative session cost from `usage_update` (USD)
 }
 
 /**
@@ -164,6 +170,66 @@ export class AcpAdapter implements CodingAgentAdapter {
 
   /** Callback set by agent-manager to trigger an immediate poll cycle */
   onDataAvailable?: (sessionId: string) => void
+
+  /** Set by agent-manager: receives cumulative session usage at each turn end (Cursor). */
+  onUsage?: (report: AdapterUsageReport) => void
+  /** Set by agent-manager: receives Cursor plan-limit snapshots. */
+  onUsageLimits?: (event: AdapterUsageLimitsEvent) => void
+  /**
+   * Set by agent-manager: whether the user allowed reading the Cursor CLI login
+   * from the macOS Keychain for plan limits.
+   */
+  cursorKeychainAccess: () => boolean = () => false
+  private limitsRead: Promise<ProviderUsageLimits | null> | null = null
+  private lastLimitsReadAt = 0
+
+  /**
+   * Cursor plan limits (current billing period). Other ACP agents do not
+   * expose plan limits, so this returns null for them.
+   */
+  async probeUsageLimits(): Promise<ProviderUsageLimits | null> {
+    if (this.agentType !== 'cursor') return null
+    if (this.limitsRead) return this.limitsRead
+    this.lastLimitsReadAt = Date.now()
+    const pending = probeCursorUsageLimits({ allowKeychain: this.cursorKeychainAccess() })
+      .finally(() => { this.limitsRead = null })
+    this.limitsRead = pending
+    return pending
+  }
+
+  /**
+   * ACP prompt responses may carry `usage` (UNSTABLE in the protocol; the
+   * shipped schema documents the fields as session totals). Combined with the
+   * cumulative cost from the latest `usage_update`, this is reported as the
+   * session's running totals; the tracker records per-turn deltas.
+   */
+  private reportPromptUsage(session: AcpSession, result: Record<string, unknown>): void {
+    if (this.agentType !== 'cursor') return
+    if (this.onUsage) {
+      try {
+        const bucket = normalizeAcpPromptUsage(result.usage, session.config.model || 'auto', session.usageCostUsd)
+        if (bucket && session.acpSessionId) {
+          this.onUsage({
+            provider: 'cursor',
+            providerSessionId: session.acpSessionId,
+            taskId: session.config.taskId,
+            agentId: session.config.agentId,
+            newSession: session.createdInApp,
+            buckets: [bucket]
+          })
+        }
+      } catch (error) {
+        console.warn(`[AcpAdapter/${this.agentType}] Failed to report token usage:`, error)
+      }
+    }
+    // Refresh plan limits after a turn at most every 5 minutes.
+    if (this.onUsageLimits && !this.limitsRead && Date.now() - this.lastLimitsReadAt >= 5 * 60 * 1000) {
+      void this.probeUsageLimits().then((limits) => {
+        // Only push readings; never pop a Keychain-consent card from a background refresh.
+        if (limits && limits.windows.length > 0) this.onUsageLimits?.({ kind: 'snapshot', limits })
+      })
+    }
+  }
 
   constructor(agentType: AcpAgentType) {
     this.agentType = agentType
@@ -460,6 +526,8 @@ export class AcpAdapter implements CodingAgentAdapter {
     const session: AcpSession = {
       sessionId,
       acpSessionId: null,
+      createdInApp: true,
+      usageCostUsd: null,
       process: acpProcess,
       stdoutBuffer: '',
       status: SessionStatusType.IDLE,
@@ -635,6 +703,8 @@ export class AcpAdapter implements CodingAgentAdapter {
     const session: AcpSession = {
       sessionId,
       acpSessionId: sessionId, // sessionId is now the Codex UUID from database
+      createdInApp: false,
+      usageCostUsd: null,
       process: acpProcess,
       stdoutBuffer: '',
       status: SessionStatusType.IDLE,
@@ -1197,6 +1267,7 @@ export class AcpAdapter implements CodingAgentAdapter {
         const result = response.result as Record<string, unknown> | undefined
         if (result?.stopReason) {
           console.log(`[AcpAdapter/${this.agentType}] Prompt completed with stopReason: ${result.stopReason}`)
+          this.reportPromptUsage(session, result)
           session.status = SessionStatusType.IDLE
           session.activeTurnId = null
           // Don't clear promptRequestId - keep it for late-arriving events
@@ -1248,6 +1319,16 @@ export class AcpAdapter implements CodingAgentAdapter {
         if (notification.method === 'session/update') {
           const params = notification.params as { update?: SessionUpdate } | undefined
           console.log(`[AcpAdapter/${this.agentType}]    sessionUpdate: ${params?.update?.sessionUpdate}`)
+        }
+      }
+
+      if (notification.method === 'session/update') {
+        const update = (notification.params as { update?: Record<string, unknown> } | undefined)?.update
+        if (update?.sessionUpdate === 'usage_update') {
+          // Context size / cumulative session cost — bookkeeping, not transcript.
+          const cost = acpUsageUpdateCostUsd(update)
+          if (cost !== null) session.usageCostUsd = cost
+          return
         }
       }
 

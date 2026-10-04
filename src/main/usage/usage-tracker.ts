@@ -57,11 +57,19 @@ export class UsageTracker extends EventEmitter {
     return super.emit(event, ...args)
   }
 
-  /** Records cumulative usage from an adapter. Returns the per-turn records written. */
+  /** Records usage from an adapter (cumulative or discrete). Returns the records written. */
   recordUsage(report: AdapterUsageReport): TokenUsageRecord[] {
     let records: TokenUsageRecord[] = []
     try {
-      records = this.store.recordCumulativeUsage({
+      records = report.kind === 'discrete'
+        ? this.store.recordDiscreteUsage({
+          provider: report.provider,
+          sessionId: report.providerSessionId || null,
+          taskId: report.taskId || null,
+          agentId: report.agentId || null,
+          items: report.items.map((item) => ({ ...item, occurredAt: item.occurredAt ?? this.now() }))
+        })
+        : this.store.recordCumulativeUsage({
         provider: report.provider,
         sessionId: report.providerSessionId,
         taskId: report.taskId || null,
@@ -85,6 +93,11 @@ export class UsageTracker extends EventEmitter {
     const merged = mergeUsageLimits(event.provider, previous, event.update, new Date(this.now()).toISOString())
     if (merged !== previous) this.commitLimits(merged)
     return merged
+  }
+
+  /** Allows the next refresh to probe `provider` immediately (e.g. after its auth settings changed). */
+  clearProbeThrottle(provider: UsageProvider): void {
+    this.lastProbeAt.delete(provider)
   }
 
   getLimits(): ProviderUsageLimits[] {

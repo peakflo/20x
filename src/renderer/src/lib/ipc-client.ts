@@ -280,6 +280,9 @@ export const usageApi = {
   },
   getSummary(query?: UsageSummaryQuery): Promise<UsageSummary | null> {
     return window.electronAPI.usage.getSummary(query)
+  },
+  setCursorKeychainAccess(enabled: boolean): Promise<UsageLimitsRefreshResult> {
+    return window.electronAPI.usage.setCursorKeychainAccess(enabled)
   }
 }
 

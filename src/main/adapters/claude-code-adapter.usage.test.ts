@@ -9,7 +9,7 @@ vi.mock('child_process', () => ({ execFile: vi.fn() }))
 vi.mock('fs', () => ({ existsSync: vi.fn(() => false) }))
 
 import { ClaudeCodeAdapter } from './claude-code-adapter'
-import type { AdapterUsageLimitsEvent, AdapterUsageReport } from './coding-agent-adapter'
+import type { AdapterUsageLimitsEvent, AdapterCumulativeUsageReport as AdapterUsageReport } from './coding-agent-adapter'
 
 function fakeQuery(messages: unknown[], usageResponse?: unknown) {
   const queue = [...messages]
@@ -45,7 +45,7 @@ function setup(messages: unknown[], opts: { createdInApp?: boolean; usageRespons
   ;(adapter as any).sessions.set('claude-session-1', session)
   const reports: AdapterUsageReport[] = []
   const limitEvents: AdapterUsageLimitsEvent[] = []
-  adapter.onUsage = (report) => reports.push(report)
+  adapter.onUsage = (report) => reports.push(report as AdapterUsageReport)
   adapter.onUsageLimits = (event) => limitEvents.push(event)
   return { adapter, session, query, reports, limitEvents }
 }
