@@ -494,7 +494,10 @@ function TaskProgressMessage({ message, searchQuery }: { message: AgentMessage; 
   )
 }
 
-function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
+// A tool row is memoized on its message identity. The activity group that holds
+// it re-renders on every new tool call (the trailing group grows), and without
+// this every earlier row in a 200-call run re-rendered each time.
+const ToolCallMessage = React.memo(function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
@@ -503,6 +506,10 @@ function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; sear
   // they only run when the tool payload actually changes, not on every render.
   const subtitle = useMemo(() => deriveToolSubtitle(tool), [tool])
   const command = useMemo(() => deriveToolCommand(tool), [tool])
+  // Expanded payloads are sanitized once per payload, not on every re-render
+  // (sanitizing scans the whole string for base64 when it is over 5 KB).
+  const input = useMemo(() => (expanded && tool.input ? sanitizeToolContent(tool.input) : ''), [expanded, tool.input])
+  const output = useMemo(() => (expanded && tool.output ? sanitizeToolContent(tool.output) : ''), [expanded, tool.output])
 
   return (
     <div className="group/tool w-full min-w-0 overflow-hidden">
@@ -529,16 +536,16 @@ function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; sear
               <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto"><HighlightedText text={command} query={searchQuery} /></pre>
             </div>
           )}
-          {tool.input && (
+          {input && (
             <div>
               <span className="text-muted-foreground">Input:</span>
-              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto"><HighlightedText text={sanitizeToolContent(tool.input)} query={searchQuery} /></pre>
+              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto"><HighlightedText text={input} query={searchQuery} /></pre>
             </div>
           )}
-          {tool.output && (
+          {output && (
             <div>
               <span className="text-muted-foreground">Output:</span>
-              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto"><HighlightedText text={sanitizeToolContent(tool.output)} query={searchQuery} /></pre>
+              <pre className="mt-0.5 text-muted-foreground whitespace-pre-wrap break-words max-h-40 overflow-y-auto"><HighlightedText text={output} query={searchQuery} /></pre>
             </div>
           )}
           {tool.error && (
@@ -551,9 +558,9 @@ function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; sear
       )}
     </div>
   )
-}
+})
 
-function ReasoningMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
+const ReasoningMessage = React.memo(function ReasoningMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const summary = message.content.split('\n').map((line) => line.trim()).find(Boolean) || 'Thinking'
 
@@ -577,7 +584,7 @@ function ReasoningMessage({ message, searchQuery }: { message: AgentMessage; sea
       )}
     </div>
   )
-}
+})
 
 function findMessageArtifact(message: AgentMessage, artifacts: Artifact[]): Artifact | undefined {
   if (!message.tool || !['success', 'succeeded', 'complete', 'completed'].includes(message.tool.status?.toLowerCase?.() || '')) return undefined

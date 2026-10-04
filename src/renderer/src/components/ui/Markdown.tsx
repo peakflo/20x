@@ -20,6 +20,7 @@ import remarkGfm from 'remark-gfm'
 import { Check, Copy } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { markIncompleteMermaidFences } from '@/lib/mermaid-fence'
+import { splitMarkdownBlocks } from '@/lib/markdown-blocks'
 import { MermaidDiagram } from './MermaidDiagram'
 
 /** Allow the default safe protocols plus our local app-attachment:// scheme */
@@ -201,6 +202,21 @@ const SIZE_CLASSES = {
   }
 }
 
+type MarkdownComponents = React.ComponentProps<typeof ReactMarkdown>['components']
+
+/** One top-level block of a long text. Finished blocks never change, so memo skips them. */
+const MarkdownBlock = memo(function MarkdownBlock({ source, components }: { source: string; components: MarkdownComponents }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={REMARK_PLUGINS}
+      urlTransform={urlTransform}
+      components={components}
+    >
+      {source}
+    </ReactMarkdown>
+  )
+})
+
 /**
  * Reusable markdown component with standardized styling.
  * - Single backticks (`) render as inline code
@@ -330,16 +346,25 @@ export const Markdown = memo(function Markdown({ children, size = 'sm', classNam
   // component on `children` changing, so an unrelated parent re-render never
   // re-scans text that has not changed.
   const content = markIncompleteMermaidFences(children)
+  // A long streamed answer is split into top-level blocks so that only the
+  // block still being written is re-parsed on each delta (see markdown-blocks).
+  const blocks = useMemo(() => splitMarkdownBlocks(content), [content])
 
   return (
     <div className={cn('markdown-content min-w-0', classes.base, className)}>
-      <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
-        urlTransform={urlTransform}
-        components={components}
-      >
-        {content}
-      </ReactMarkdown>
+      {blocks
+        ? blocks.map((block, index) => (
+          <MarkdownBlock key={index} source={block} components={components} />
+        ))
+        : (
+          <ReactMarkdown
+            remarkPlugins={REMARK_PLUGINS}
+            urlTransform={urlTransform}
+            components={components}
+          >
+            {content}
+          </ReactMarkdown>
+        )}
     </div>
   )
 })

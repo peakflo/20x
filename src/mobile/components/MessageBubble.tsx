@@ -343,7 +343,9 @@ function TaskProgressMessage({ message, searchQuery }: { message: AgentMessage; 
   )
 }
 
-function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
+// Memoized on message identity: an activity group re-renders on every new tool
+// call, and without this each earlier row re-rendered too.
+const ToolCallMessage = memo(function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const tool = message.tool!
   const isRunning = !tool.status || tool.status === 'in_progress' || tool.status === 'running' || tool.status === 'pending'
@@ -352,6 +354,9 @@ function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; sear
   // they only run when the tool payload actually changes, not on every render.
   const subtitle = useMemo(() => deriveToolSubtitle(tool), [tool])
   const command = useMemo(() => deriveToolCommand(tool), [tool])
+  // Expanded payloads are sanitized once per payload, not on every re-render.
+  const input = useMemo(() => (expanded && tool.input ? sanitizeToolContent(tool.input) : ''), [expanded, tool.input])
+  const output = useMemo(() => (expanded && tool.output ? sanitizeToolContent(tool.output) : ''), [expanded, tool.output])
 
   return (
     <div className="group/tool w-full min-w-0 overflow-hidden">
@@ -392,16 +397,16 @@ function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; sear
               <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground"><HighlightedText text={command} query={searchQuery} /></pre>
             </div>
           )}
-          {tool.input && (
+          {input && (
             <div>
               <div className="text-muted-foreground mb-0.5">Input</div>
-              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground"><HighlightedText text={sanitizeToolContent(tool.input)} query={searchQuery} /></pre>
+              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground"><HighlightedText text={input} query={searchQuery} /></pre>
             </div>
           )}
-          {tool.output && (
+          {output && (
             <div>
               <div className="text-muted-foreground mb-0.5">Output</div>
-              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground"><HighlightedText text={sanitizeToolContent(tool.output)} query={searchQuery} /></pre>
+              <pre className="overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-muted-foreground"><HighlightedText text={output} query={searchQuery} /></pre>
             </div>
           )}
           {tool.error && (
@@ -414,9 +419,9 @@ function ToolCallMessage({ message, searchQuery }: { message: AgentMessage; sear
       )}
     </div>
   )
-}
+})
 
-function ReasoningMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
+const ReasoningMessage = memo(function ReasoningMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
   const [expanded, setExpanded] = useState(false)
   const summary = message.content.split('\n').map((line) => line.trim()).find(Boolean) || 'Thinking'
 
@@ -443,7 +448,7 @@ function ReasoningMessage({ message, searchQuery }: { message: AgentMessage; sea
       )}
     </div>
   )
-}
+})
 
 // Memoized with an element-wise comparator: the `messages` array is rebuilt
 // (new identity) on every transcript delta, but the message objects themselves

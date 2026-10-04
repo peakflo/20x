@@ -672,6 +672,17 @@ describe('Durable transcript — timestamp provenance', () => {
 })
 
 describe('Durable transcript — rev cursor + delta (event-sourced)', () => {
+  it('answers the global max rev and the snapshot order from indexes, not table scans', () => {
+    // Every streamed write batch reads MAX(rev) across all tasks; without an
+    // index that is a scan of the whole transcript table.
+    const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db
+    const plan = (sql: string): string => (rawDb.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as Array<{ detail: string }>)
+      .map((row) => row.detail).join(' | ')
+    expect(plan('SELECT COALESCE(MAX(rev), 0) AS m FROM transcript_parts')).toContain('idx_transcript_parts_rev')
+    expect(plan("SELECT * FROM transcript_parts WHERE task_id = 't1' ORDER BY created_at ASC, seq ASC"))
+      .not.toContain('TEMP B-TREE')
+  })
+
   it('assigns a global monotonic rev on insert and bumps it on content update', () => {
     const r1 = db.upsertTranscriptParts('t1', [{ id: 'a', role: 'user', content: 'hi' }])
     const r2 = db.upsertTranscriptParts('t1', [{ id: 'b', role: 'assistant', content: 'yo' }])

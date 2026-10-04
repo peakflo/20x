@@ -270,7 +270,7 @@ describe('useAgentStore', () => {
       expect(useAgentStore.getState().sessions.get('task-1')?.messages).toEqual([])
     })
 
-    it('rehydrates the authoritative transcript when a released view mounts again', async () => {
+    it('catches a released transcript up on background output when it mounts again', async () => {
       getSnapshotMock.mockResolvedValueOnce([part({ partId: 'p1', content: 'first view', rev: 1 })])
       const release = useAgentStore.getState().bindTranscript('task-1')
       await vi.waitFor(() => {
@@ -278,10 +278,11 @@ describe('useAgentStore', () => {
       })
       release()
 
-      getSnapshotMock.mockResolvedValueOnce([
-        part({ partId: 'p1', content: 'first view', rev: 1 }),
-        part({ partId: 'p2', content: 'background output', rev: 2 })
-      ])
+      // Output produced while the view was unmounted is only in the durable projection.
+      getDeltaMock.mockResolvedValueOnce({
+        parts: [part({ partId: 'p2', content: 'background output', rev: 2 })],
+        maxRev: 2
+      })
       const releaseAgain = useAgentStore.getState().bindTranscript('task-1')
       await vi.waitFor(() => {
         expect(useAgentStore.getState().sessions.get('task-1')?.messages.map((message) => message.id)).toEqual([
@@ -290,6 +291,51 @@ describe('useAgentStore', () => {
         ])
       })
       releaseAgain()
+    })
+
+    it('switching back to a recently viewed task renders without re-downloading its snapshot', async () => {
+      getSnapshotMock.mockResolvedValueOnce([part({ partId: 'p1', content: 'task one', rev: 1 })])
+      const releaseFirst = useAgentStore.getState().bindTranscript('task-1')
+      await vi.waitFor(() => {
+        expect(useAgentStore.getState().sessions.get('task-1')?.messages).toHaveLength(1)
+      })
+      releaseFirst()
+
+      getSnapshotMock.mockClear()
+      getSnapshotMock.mockResolvedValueOnce([part({ partId: 'other', content: 'task two', rev: 2 })])
+      const releaseOther = useAgentStore.getState().bindTranscript('task-2')
+      await vi.waitFor(() => {
+        expect(useAgentStore.getState().sessions.get('task-2')?.messages).toHaveLength(1)
+      })
+      releaseOther()
+
+      getSnapshotMock.mockClear()
+      const releaseBack = useAgentStore.getState().bindTranscript('task-1')
+      // Rendered synchronously from the retained projection, before any IPC resolves.
+      expect(useAgentStore.getState().sessions.get('task-1')?.messages.map((m) => m.id)).toEqual(['p1'])
+      expect(getSnapshotMock).not.toHaveBeenCalled()
+      releaseBack()
+    })
+
+    it('does not retain more than the most recent transcripts after release', async () => {
+      for (const taskId of ['t-a', 't-b', 't-c', 't-d']) {
+        getSnapshotMock.mockResolvedValueOnce([part({ partId: `${taskId}-p`, content: taskId, rev: 1 })])
+        const release = useAgentStore.getState().bindTranscript(taskId)
+        await vi.waitFor(() => {
+          expect(useAgentStore.getState().sessions.get(taskId)?.messages).toHaveLength(1)
+        })
+        release()
+      }
+
+      // Oldest released transcript (t-a) was evicted, so it must be re-downloaded.
+      getSnapshotMock.mockClear()
+      getSnapshotMock.mockResolvedValueOnce([part({ partId: 't-a-p', content: 't-a', rev: 1 })])
+      const releaseA = useAgentStore.getState().bindTranscript('t-a')
+      expect(getSnapshotMock.mock.calls.map((call) => call[0])).toEqual(['t-a'])
+      await vi.waitFor(() => {
+        expect(useAgentStore.getState().sessions.get('t-a')?.messages).toHaveLength(1)
+      })
+      releaseA()
     })
   })
 

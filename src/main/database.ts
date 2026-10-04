@@ -1026,6 +1026,13 @@ export class DatabaseManager {
       // the column exists on a legacy DB. Idempotent + safe on a fresh DB, where
       // the column is declared in the CREATE TABLE and this simply adds the index.
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_rev ON transcript_parts(task_id, rev)`)
+      // Global max rev, read on every streamed write batch
+      // (`upsertTranscriptParts`). Without this index MAX(rev) over the whole
+      // table is a linear scan, so write cost grows with every task's history.
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_transcript_parts_rev ON transcript_parts(rev)`)
+      // Snapshot read order (created_at, seq) per task. Lets the snapshot query
+      // stream rows in order instead of sorting the task's whole history.
+      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_created ON transcript_parts(task_id, created_at, seq)`)
     } catch (err) {
       console.error('[Database] ensureTranscriptRevColumn failed:', err)
     }

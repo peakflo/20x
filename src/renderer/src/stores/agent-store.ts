@@ -98,6 +98,13 @@ interface ProjectionCache {
 }
 
 const projections = new Map<string, ProjectionCache>()
+// The last few tasks whose transcript was released by its final view, most
+// recent last. Releasing keeps memory bounded, but switching straight back to a
+// task used to re-download and re-derive its whole transcript. Keeping a few
+// projections lets that switch render immediately; a rev-based delta then
+// catches up on anything that changed while the task was not visible.
+const RECENT_PROJECTION_LIMIT = 3
+const recentProjections = new Map<string, ProjectionCache>()
 // Number of mounted transcript views per task. Canvas panels can be kept in the
 // workspace indefinitely, but their full transcript only belongs in renderer
 // memory while at least one view is actually mounted. The durable DB projection
@@ -114,11 +121,27 @@ function getProjection(taskId: string): ProjectionCache {
 
 function resetProjection(taskId: string): void {
   projections.delete(taskId)
+  recentProjections.delete(taskId)
+}
+
+/** Keep a released task's projection as a recent entry (evicting the oldest). */
+function rememberReleasedProjection(taskId: string): void {
+  const cache = projections.get(taskId)
+  projections.delete(taskId)
+  recentProjections.delete(taskId)
+  if (!cache) return
+  recentProjections.set(taskId, cache)
+  while (recentProjections.size > RECENT_PROJECTION_LIMIT) {
+    const oldest = recentProjections.keys().next().value
+    if (oldest === undefined) break
+    recentProjections.delete(oldest)
+  }
 }
 
 /** Test-only: clear all projection caches between tests. */
 export function __clearProjectionsForTest(): void {
   projections.clear()
+  recentProjections.clear()
   projectionBindings.clear()
   bindingTasks.clear()
   outputAnalyticsByTask.clear()
@@ -461,7 +484,19 @@ export const useAgentStore = create<AgentState>((set, get) => {
     bindTranscript: (taskId) => {
       const previousCount = projectionBindings.get(taskId) ?? 0
       projectionBindings.set(taskId, previousCount + 1)
-      if (previousCount === 0) void hydrateTranscript(taskId, true)
+      if (previousCount === 0) {
+        const recent = recentProjections.get(taskId)
+        if (recent) {
+          // Switching back: show the last known transcript at once, then fetch
+          // only the parts that changed since its rev (background output).
+          recentProjections.delete(taskId)
+          projections.set(taskId, recent)
+          commitMessages(taskId)
+          void reconcileDelta(taskId)
+        } else {
+          void hydrateTranscript(taskId, true)
+        }
+      }
 
       let released = false
       return () => {
@@ -475,7 +510,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
         }
 
         projectionBindings.delete(taskId)
-        resetProjection(taskId)
+        rememberReleasedProjection(taskId)
         set((state) => {
           const session = state.sessions.get(taskId)
           if (!session || session.messages.length === 0) return state

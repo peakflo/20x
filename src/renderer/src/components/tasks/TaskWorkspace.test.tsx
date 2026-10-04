@@ -3,7 +3,7 @@ import { useTaskSourceStore } from '@/stores/task-source-store'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, fireEvent, screen, waitFor, cleanup } from '@testing-library/react'
 import { clampTranscriptWidth, TaskWorkspace } from './TaskWorkspace'
-import { useAgentStore, SessionStatus } from '@/stores/agent-store'
+import { useAgentStore, SessionStatus, __clearProjectionsForTest } from '@/stores/agent-store'
 import { useSettingsStore } from '@/stores/settings-store'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { CodingAgentType, TaskStatus } from '@/types'
@@ -112,6 +112,9 @@ afterEach(() => {
 
 beforeEach(() => {
   useTaskSourceStore.setState({sources: []})
+  // Transcript projections are module state; a projection retained from an
+  // earlier test would otherwise overwrite the messages set up here.
+  __clearProjectionsForTest()
   useAgentStore.setState({
     agents: [],
     isLoading: false,

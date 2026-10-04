@@ -240,6 +240,8 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     );
     CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_seq ON transcript_parts(task_id, seq);
     CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_rev ON transcript_parts(task_id, rev);
+    CREATE INDEX IF NOT EXISTS idx_transcript_parts_rev ON transcript_parts(rev);
+    CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_created ON transcript_parts(task_id, created_at, seq);
   `)
 
   const manager = new DatabaseManager()
