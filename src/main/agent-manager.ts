@@ -26,6 +26,17 @@ import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
+import { UsageTracker, type UsageLimitsProbe } from './usage/usage-tracker'
+import {
+  USAGE_LIMITS_UPDATED_CHANNEL,
+  USAGE_PROVIDERS,
+  USAGE_RECORDED_CHANNEL,
+  type ProviderUsageLimits,
+  type UsageLimitsRefreshResult,
+  type UsageProvider,
+  type UsageSummary,
+  type UsageSummaryQuery
+} from '../shared/usage'
 import { inspectTaskArtifact } from './artifacts'
 import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
 import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../shared/system-authority'
@@ -254,6 +265,8 @@ export class AgentManager extends EventEmitter {
   private db: DatabaseManager
   private mainWindow: BrowserWindow | null = null
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
+  /** Subscription usage tracker; created lazily (undefined = not yet, null = unavailable). */
+  private usageTracker: UsageTracker | null | undefined = undefined
   private worktreeManager: WorktreeManager | null = null
   private githubManager: GitHubManager | null = null
   private gitlabManager: GitLabManager | null = null
@@ -738,9 +751,84 @@ export class AgentManager extends EventEmitter {
         return null
     }
 
+    this.wireUsageTracking(adapter)
     this.adapters.set(backendType, adapter)
     console.log('[AgentManager] Cached adapter for', backendType)
     return adapter
+  }
+
+  // ── Subscription usage tracking ──────────────────────────
+
+  private getUsageTracker(): UsageTracker | null {
+    if (this.usageTracker !== undefined) return this.usageTracker
+    try {
+      const tracker = new UsageTracker(this.db.usage)
+      tracker.on('recorded', (records) => {
+        this.sendToRenderer(USAGE_RECORDED_CHANNEL, records)
+        for (const record of records) {
+          // Token counts only: no cost, plan limits, task ids or content.
+          analytics()?.record('provider.usage.recorded', {
+            provider: record.provider,
+            model: record.model,
+            inputTokens: record.inputTokens,
+            cacheReadTokens: record.cacheReadTokens,
+            cacheWriteTokens: record.cacheWriteTokens,
+            outputTokens: record.outputTokens,
+            reasoningTokens: record.reasoningTokens,
+            costReported: record.costSource === 'reported'
+          })
+        }
+      })
+      tracker.on('limits', (limits) => {
+        this.sendToRenderer(USAGE_LIMITS_UPDATED_CHANNEL, limits)
+      })
+      this.usageTracker = tracker
+    } catch (error) {
+      console.warn('[AgentManager] Usage tracking unavailable:', error)
+      this.usageTracker = null
+    }
+    return this.usageTracker
+  }
+
+  private wireUsageTracking(adapter: CodingAgentAdapter): void {
+    adapter.onUsage = (report) => {
+      this.getUsageTracker()?.recordUsage(report)
+    }
+    adapter.onUsageLimits = (event) => {
+      this.getUsageTracker()?.applyLimitsEvent(event)
+    }
+  }
+
+  getUsageLimits(): ProviderUsageLimits[] {
+    return this.getUsageTracker()?.getLimits() ?? []
+  }
+
+  getUsageSummary(query: UsageSummaryQuery = {}): UsageSummary | null {
+    return this.getUsageTracker()?.getSummary(query) ?? null
+  }
+
+  /**
+   * Re-reads subscription plan limits for every provider that has a
+   * subscription-authenticated agent configured. Automatic refreshes are
+   * throttled to once per 5 minutes per provider; `force` (manual refresh)
+   * to once per 15 seconds.
+   */
+  async refreshUsageLimits(options: { force?: boolean } = {}): Promise<UsageLimitsRefreshResult> {
+    const tracker = this.getUsageTracker()
+    if (!tracker) return { limits: [], refreshed: [] }
+
+    const probes: Partial<Record<UsageProvider, UsageLimitsProbe>> = {}
+    const agents = this.db.getAgents()
+    for (const provider of USAGE_PROVIDERS) {
+      const agent = agents.find((candidate) =>
+        candidate.config?.coding_agent === provider && candidate.config?.auth_method !== 'api_key'
+      )
+      if (!agent) continue
+      const adapter = this.getAdapter(agent.id)
+      if (!adapter?.probeUsageLimits) continue
+      probes[provider] = () => adapter.probeUsageLimits!()
+    }
+    return tracker.refreshLimits(probes, options)
   }
 
   /**

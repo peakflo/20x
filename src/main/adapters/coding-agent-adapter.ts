@@ -4,6 +4,8 @@
  */
 
 import type { ReasoningEffort } from '../../shared/reasoning-effort'
+import type { ProviderUsageLimits, ProviderUsageLimitsUpdate, UsageProvider } from '../../shared/usage'
+import type { UsageBucket } from '../usage/usage-normalize'
 
 export enum SessionStatusType {
   IDLE = 'idle',
@@ -122,6 +124,33 @@ export interface MessagePart {
     usage?: { total_tokens: number; tool_uses: number; duration_ms: number }
   }
 }
+
+/**
+ * Cumulative token usage observed on a provider session. Adapters report the
+ * provider's running totals as-is; the usage tracker turns them into per-turn
+ * deltas against the last persisted totals for the same session.
+ */
+export interface AdapterUsageReport {
+  provider: UsageProvider
+  /** Provider session / thread id the totals belong to. */
+  providerSessionId: string
+  taskId?: string
+  agentId?: string
+  /**
+   * True when this app created the provider session, so every token in its
+   * running totals was consumed here. False for resumed sessions: if no
+   * baseline was persisted for them yet (e.g. they predate usage tracking),
+   * the first reading only establishes the baseline instead of attributing
+   * the session's whole history to the current turn.
+   */
+  newSession: boolean
+  buckets: UsageBucket[]
+}
+
+/** Subscription plan-limit signal from a provider runtime. */
+export type AdapterUsageLimitsEvent =
+  | { kind: 'update'; provider: UsageProvider; update: ProviderUsageLimitsUpdate }
+  | { kind: 'snapshot'; limits: ProviderUsageLimits }
 
 export interface MessagePayload {
   content: string
@@ -312,4 +341,22 @@ export interface CodingAgentAdapter {
    * continuous polling loop.
    */
   onDataAvailable?: (sessionId: string) => void
+
+  /**
+   * Optional callback set by agent-manager. Adapters whose provider reports
+   * token usage call it with cumulative totals (typically once per turn).
+   */
+  onUsage?: (report: AdapterUsageReport) => void
+
+  /**
+   * Optional callback set by agent-manager. Adapters whose provider reports
+   * subscription plan limits call it with full snapshots or sparse updates.
+   */
+  onUsageLimits?: (event: AdapterUsageLimitsEvent) => void
+
+  /**
+   * Read the provider's current subscription plan limits on demand.
+   * Returns null when the adapter cannot read limits at all.
+   */
+  probeUsageLimits?(): Promise<ProviderUsageLimits | null>
 }

@@ -7,6 +7,7 @@ import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
 import type { ReasoningEffort } from '../shared/reasoning-effort'
 import { startTaskApiServer } from './task-api-server'
+import { UsageStore } from './usage/usage-store'
 
 export interface AgentRow {
   id: string
@@ -963,6 +964,17 @@ const SCHEMA_VERSION = 9
 
 export class DatabaseManager {
   public db!: Database.Database
+  private usageStore: UsageStore | null = null
+
+  /**
+   * Subscription usage persistence (token usage events, session totals, plan
+   * limits). Created lazily so the tables are ensured on whichever
+   * connection `db` currently holds (including in-memory test databases).
+   */
+  get usage(): UsageStore {
+    if (!this.usageStore) this.usageStore = new UsageStore(this.db)
+    return this.usageStore
+  }
 
   private ensureDbOpen(): boolean {
     return !!this.db?.open

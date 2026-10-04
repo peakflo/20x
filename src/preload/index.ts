@@ -2,6 +2,15 @@ import type { BrowserRecordingManifest } from '../shared/browser-recording'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
+import {
+  USAGE_LIMITS_UPDATED_CHANNEL,
+  USAGE_RECORDED_CHANNEL,
+  type ProviderUsageLimits,
+  type TokenUsageRecord,
+  type UsageLimitsRefreshResult,
+  type UsageSummary,
+  type UsageSummaryQuery
+} from '../shared/usage'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -183,6 +192,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('agent:approval', handler)
     return () => ipcRenderer.removeListener('agent:approval', handler)
+  },
+  usage: {
+    getLimits: (): Promise<ProviderUsageLimits[]> => ipcRenderer.invoke('usage:getLimits'),
+    refreshLimits: (options?: { force?: boolean }): Promise<UsageLimitsRefreshResult> =>
+      ipcRenderer.invoke('usage:refreshLimits', options),
+    getSummary: (query?: UsageSummaryQuery): Promise<UsageSummary | null> =>
+      ipcRenderer.invoke('usage:getSummary', query)
+  },
+  onUsageLimitsUpdated: (callback: (limits: ProviderUsageLimits) => void): (() => void) => {
+    const handler = (_: unknown, data: ProviderUsageLimits): void => callback(data)
+    ipcRenderer.on(USAGE_LIMITS_UPDATED_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(USAGE_LIMITS_UPDATED_CHANNEL, handler)
+  },
+  onUsageRecorded: (callback: (records: TokenUsageRecord[]) => void): (() => void) => {
+    const handler = (_: unknown, data: TokenUsageRecord[]): void => callback(data)
+    ipcRenderer.on(USAGE_RECORDED_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(USAGE_RECORDED_CHANNEL, handler)
   },
   onAgentIncompatibleSession: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)

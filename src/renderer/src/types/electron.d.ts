@@ -501,6 +501,13 @@ interface ElectronAPI {
   onTranscriptChanged: (callback: (event: TranscriptChangedEvent) => void) => () => void
   onAgentStatus: (callback: (event: AgentStatusEvent) => void) => () => void
   onAgentApproval: (callback: (event: AgentApprovalRequest) => void) => () => void
+  usage: {
+    getLimits: () => Promise<import('@shared/usage').ProviderUsageLimits[]>
+    refreshLimits: (options?: { force?: boolean }) => Promise<import('@shared/usage').UsageLimitsRefreshResult>
+    getSummary: (query?: import('@shared/usage').UsageSummaryQuery) => Promise<import('@shared/usage').UsageSummary | null>
+  }
+  onUsageLimitsUpdated: (callback: (limits: import('@shared/usage').ProviderUsageLimits) => void) => () => void
+  onUsageRecorded: (callback: (records: import('@shared/usage').TokenUsageRecord[]) => void) => () => void
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void
   onTaskUpdated: (callback: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => () => void
   onTaskSourceActionFailed: (callback: (event: { taskId: string; taskTitle: string; error: string }) => void) => () => void

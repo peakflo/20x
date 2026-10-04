@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api/client'
 import type { Route } from '../App'
+import { SubscriptionUsageSection } from '../components/SubscriptionUsageSection'
 
 interface TaskSource {
   id: string
@@ -103,6 +104,8 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
             <button onClick={() => setError(null)} className="ml-2 font-bold">x</button>
           </div>
         )}
+
+        <SubscriptionUsageSection />
 
         {/* Task Sources Section */}
         <div>

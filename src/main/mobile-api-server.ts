@@ -22,6 +22,7 @@ import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
 import type { Artifact, ArtifactFileEntry } from '../shared/artifacts'
 import { MOBILE_VOICE_CAPABILITIES } from '../shared/voice'
 import { TaskStatus } from '../shared/constants'
+import { sanitizeUsageSummaryQuery } from './usage/usage-query'
 import { guardStream } from './child-stream-guards'
 import type { ArtifactMcpCall } from '../shared/artifact-mcp'
 
@@ -470,6 +471,16 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     return db.getSkills()
   }
 
+  // GET /api/usage/limits — subscription plan limits (Claude Code, Codex)
+  if (pathname === '/api/usage/limits') {
+    return agentRef!.getUsageLimits()
+  }
+
+  // GET /api/usage/summary?sinceMs=&untilMs=&utcOffsetMinutes=&taskId=
+  if (pathname === '/api/usage/summary') {
+    return agentRef!.getUsageSummary(sanitizeUsageSummaryQuery(Object.fromEntries(url.searchParams)))
+  }
+
   // GET /api/sessions
   if (pathname === '/api/sessions') {
     return getActiveSessions()
@@ -816,6 +827,11 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
       }
     }
     return updated
+  }
+
+  // POST /api/usage/limits/refresh — re-read plan limits ({ force?: boolean })
+  if (pathname === '/api/usage/limits/refresh') {
+    return agent.refreshUsageLimits({ force: (params as { force?: unknown }).force === true })
   }
 
   // POST /api/sessions/start

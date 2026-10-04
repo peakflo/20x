@@ -10,6 +10,7 @@ export enum SettingsTab {
   CONNECTORS = 'connectors',
   ENTERPRISE = 'enterprise',
   PLUGINS = 'plugins',
+  USAGE = 'usage',
   ADVANCED = 'advanced'
 }
 
@@ -23,6 +24,7 @@ export const SETTINGS_TABS: { value: SettingsTab; label: string; icon: string }[
   { value: SettingsTab.CONNECTORS, label: 'Connectors', icon: 'Cable' },
   { value: SettingsTab.ENTERPRISE, label: 'Enterprise', icon: 'Building2' },
   { value: SettingsTab.PLUGINS, label: 'Plugins', icon: 'Puzzle' },
+  { value: SettingsTab.USAGE, label: 'Usage', icon: 'Gauge' },
   { value: SettingsTab.ADVANCED, label: 'Advanced', icon: 'Wrench' }
 ]
 

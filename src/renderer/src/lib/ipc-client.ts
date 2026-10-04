@@ -1,6 +1,7 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
+import type { ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type {
   MicrophonePermission,
   VoiceActionOutcome,
@@ -268,6 +269,26 @@ export const onAgentStatus = (callback: (event: AgentStatusEvent) => void): (() 
 
 export const onAgentApproval = (callback: (event: AgentApprovalRequest) => void): (() => void) => {
   return window.electronAPI.onAgentApproval(callback)
+}
+
+export const usageApi = {
+  getLimits(): Promise<ProviderUsageLimits[]> {
+    return window.electronAPI.usage.getLimits()
+  },
+  refreshLimits(options?: { force?: boolean }): Promise<UsageLimitsRefreshResult> {
+    return window.electronAPI.usage.refreshLimits(options)
+  },
+  getSummary(query?: UsageSummaryQuery): Promise<UsageSummary | null> {
+    return window.electronAPI.usage.getSummary(query)
+  }
+}
+
+export const onUsageLimitsUpdated = (callback: (limits: ProviderUsageLimits) => void): (() => void) => {
+  return window.electronAPI.onUsageLimitsUpdated(callback)
+}
+
+export const onUsageRecorded = (callback: (records: TokenUsageRecord[]) => void): (() => void) => {
+  return window.electronAPI.onUsageRecorded(callback)
 }
 
 export const onAgentIncompatibleSession = (callback: (event: { taskId: string; agentId: string; error: string }) => void): (() => void) => {

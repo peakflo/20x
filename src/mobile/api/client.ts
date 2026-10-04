@@ -6,6 +6,7 @@
 import { getAuthToken } from './auth'
 import type { Artifact, ArtifactContent, PullRequestDetails } from '@shared/artifacts'
 import type { VoiceCapabilities } from '@shared/voice'
+import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -95,6 +96,18 @@ export const api = {
       post<Array<{ name: string; fullName: string; defaultBranch: string; cloneUrl: string; description: string; isPrivate: boolean }>>('/api/github/repos', { org, provider }),
     pullRequest: (url: string) =>
       get<PullRequestDetails>(`/api/github/pull-request?url=${encodeURIComponent(url)}`)
+  },
+  usage: {
+    limits: () => get<ProviderUsageLimits[]>('/api/usage/limits'),
+    refreshLimits: (force = false) => post<UsageLimitsRefreshResult>('/api/usage/limits/refresh', { force }),
+    summary: (query: UsageSummaryQuery = {}) => {
+      const params = new URLSearchParams()
+      for (const [key, value] of Object.entries(query)) {
+        if (value !== undefined && value !== null) params.set(key, String(value))
+      }
+      const qs = params.toString()
+      return get<UsageSummary | null>(`/api/usage/summary${qs ? `?${qs}` : ''}`)
+    }
   },
   capabilities: {
     /** What this client can do. Voice capture is desktop-only in phase 1. */

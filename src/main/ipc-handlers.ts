@@ -12,6 +12,8 @@ import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-
 import { getPendingPin } from './mobile-api-server'
 import { setTaskApiUiState } from './task-api-server'
 import { panelBrowserBroker } from './panel-browser-broker'
+import type { UsageSummaryQuery } from '../shared/usage'
+import { sanitizeUsageSummaryQuery } from './usage/usage-query'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -516,6 +518,19 @@ export function registerIpcHandlers(
 
   ipcMain.handle('agentSession:getRawTranscript', async (_, taskId: string) => {
     return await agentManager.getRawTranscriptForDebug(taskId)
+  })
+
+  // Subscription usage tracking (plan limits + token usage)
+  ipcMain.handle('usage:getLimits', () => {
+    return agentManager.getUsageLimits()
+  })
+
+  ipcMain.handle('usage:refreshLimits', async (_, options?: { force?: boolean }) => {
+    return await agentManager.refreshUsageLimits({ force: options?.force === true })
+  })
+
+  ipcMain.handle('usage:getSummary', (_, query?: UsageSummaryQuery) => {
+    return agentManager.getUsageSummary(sanitizeUsageSummaryQuery(query))
   })
 
   // Durable transcript snapshot: the renderer hydrates transcript state from

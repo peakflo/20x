@@ -16,8 +16,16 @@ import type {
   SessionMessage,
   MessagePart,
 } from './coding-agent-adapter'
+import type { AdapterUsageLimitsEvent, AdapterUsageReport } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 import { pickWindowsWhichMatch, resolveWindowsClaudeShim } from './claude-executable'
+import { homedir } from 'os'
+import type { ProviderUsageLimits } from '../../shared/usage'
+import {
+  claudeRateLimitInfoToUpdate,
+  claudeUsageResponseToLimits,
+  normalizeClaudeModelUsage
+} from '../usage/usage-normalize'
 
 type ClaudeSDK = typeof import('@anthropic-ai/claude-agent-sdk')
 type Query = import('@anthropic-ai/claude-agent-sdk').Query
@@ -26,6 +34,7 @@ type Options = import('@anthropic-ai/claude-agent-sdk').Options
 type McpServerConfig = import('@anthropic-ai/claude-agent-sdk').McpServerConfig
 type HookCallback = import('@anthropic-ai/claude-agent-sdk').HookCallback
 type HookCallbackMatcher = import('@anthropic-ai/claude-agent-sdk').HookCallbackMatcher
+type SDKUserMessage = import('@anthropic-ai/claude-agent-sdk').SDKUserMessage
 
 let ClaudeAgentSDK: ClaudeSDK | null = null
 
@@ -34,6 +43,11 @@ let resolvedClaudeExecutablePath: string | null = null
 
 /** Maximum number of messages to keep in the buffer per session */
 const MAX_MESSAGE_BUFFER_SIZE = 500
+
+/** Minimum interval between opportunistic plan-limit reads on a live session. */
+const PLAN_LIMITS_REFRESH_INTERVAL_MS = 5 * 60 * 1000
+/** Upper bound for a single plan-limit read (live session or ephemeral probe). */
+const PLAN_LIMITS_TIMEOUT_MS = 30 * 1000
 
 export enum ClaudeSystemSubtype {
   INIT = 'init',
@@ -88,6 +102,11 @@ interface ClaudeSession {
   config: SessionConfig // Store config for later use
   isResumed?: boolean // True if this session was resumed from persistence
   /**
+   * True when this adapter created the Claude session, so all of its usage was
+   * observed here. Unlike `isResumed` this never flips after process restarts.
+   */
+  createdInApp?: boolean
+  /**
    * Subagent / bash tasks Claude Code is currently running in the background.
    * Claude Code backgrounds Task-tool subagents by default: the tool call returns
    * immediately, the assistant's turn ends (emitting `result`) and the subagent
@@ -108,6 +127,16 @@ interface ClaudeSession {
    * calls this. Only abort, destroy, or unexpected process exit closes it.
    */
   releasePrompt: (() => void) | null
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
 }
 
 export class ClaudeCodeAdapter implements CodingAgentAdapter {
@@ -132,6 +161,16 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * latency of the fixed-interval polling heartbeat.
    */
   onDataAvailable?: (sessionId: string) => void
+
+  /** Set by agent-manager: receives cumulative token usage from `result` messages. */
+  onUsage?: (report: AdapterUsageReport) => void
+
+  /** Set by agent-manager: receives subscription plan-limit snapshots/updates. */
+  onUsageLimits?: (event: AdapterUsageLimitsEvent) => void
+
+  /** Shared in-flight plan-limit read, so concurrent callers make one request. */
+  private planLimitsRead: Promise<ProviderUsageLimits> | null = null
+  private lastPlanLimitsReadAt = 0
 
   constructor() {
     this.sdkLoading = this.loadSDK()
@@ -365,6 +404,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       lastError: null,
       config, // Store config for use in sendPrompt
       isResumed: false, // New session, not resumed
+      createdInApp: true,
       backgroundTasks: new Map(),
       sawResult: false,
       enqueuePrompt: null,
@@ -663,6 +703,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       lastError: null,
       config, // Store config for later use
       isResumed: true, // Resumed from persistence
+      createdInApp: false,
       backgroundTasks: new Map(),
       sawResult: false,
       enqueuePrompt: null,
@@ -1341,6 +1382,14 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           session.lastError = text || 'Claude Code API error'
         }
 
+        // Subscription usage tracking. Never allowed to break the stream.
+        if (msg.type === 'rate_limit_event') {
+          this.reportRateLimitEvent(msg.rate_limit_info)
+        } else if (msg.type === 'result') {
+          this.reportResultUsage(sessionId, session, msg)
+          if (!msg.is_error) this.maybeRefreshPlanLimits(session)
+        }
+
         // Buffer message (only if we didn't throw above)
         session.messageBuffer.push(message)
 
@@ -1448,6 +1497,156 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         // session ID rather than --continue (which targets most-recent in dir).
         session.isResumed = true
       }
+    }
+  }
+
+  // ── Subscription usage tracking ──────────────────────────
+
+  /**
+   * `result.modelUsage` carries per-model running totals for the whole query
+   * (main loop + subagents + compaction), cumulative across turns of the
+   * streaming-input session. Reported as-is; the tracker computes deltas.
+   */
+  private reportResultUsage(sessionId: string, session: ClaudeSession, msg: Record<string, unknown>): void {
+    if (!this.onUsage) return
+    try {
+      const buckets = normalizeClaudeModelUsage(msg.modelUsage)
+      if (buckets.length === 0) return
+      const providerSessionId =
+        (typeof msg.session_id === 'string' && msg.session_id) || session.sessionId || sessionId
+      this.onUsage({
+        provider: 'claude-code',
+        providerSessionId,
+        taskId: session.config.taskId,
+        agentId: session.config.agentId,
+        newSession: session.createdInApp === true,
+        buckets
+      })
+    } catch (error) {
+      console.warn('[ClaudeCodeAdapter] Failed to report token usage:', error)
+    }
+  }
+
+  private reportRateLimitEvent(info: unknown): void {
+    if (!this.onUsageLimits) return
+    try {
+      const update = claudeRateLimitInfoToUpdate(info)
+      if (update) this.onUsageLimits({ kind: 'update', provider: 'claude-code', update })
+    } catch (error) {
+      console.warn('[ClaudeCodeAdapter] Failed to report rate-limit event:', error)
+    }
+  }
+
+  /**
+   * After a turn completes, read the full plan-limit picture (5-hour, weekly,
+   * per-model windows) from the live query — at most once per interval across
+   * all sessions. Streamed `rate_limit_event`s only carry the window that
+   * changed, so this keeps the other windows fresh too.
+   */
+  private maybeRefreshPlanLimits(session: ClaudeSession): void {
+    if (!this.onUsageLimits || !session.queryIterator) return
+    if (this.planLimitsRead) return
+    if (Date.now() - this.lastPlanLimitsReadAt < PLAN_LIMITS_REFRESH_INTERVAL_MS) return
+    const query = session.queryIterator
+    void this.readPlanLimits(() => this.readPlanLimitsFromQuery(query))
+      .then((limits) => this.onUsageLimits?.({ kind: 'snapshot', limits }))
+      .catch((error) => {
+        console.warn('[ClaudeCodeAdapter] Plan-limit refresh failed:', error instanceof Error ? error.message : error)
+      })
+  }
+
+  /**
+   * Reads the current Claude subscription plan limits. Uses a live session's
+   * query when one exists; otherwise starts a short-lived query that never
+   * sends a prompt (no model call, no tokens consumed) and closes it.
+   */
+  async probeUsageLimits(): Promise<ProviderUsageLimits | null> {
+    const live = Array.from(this.sessions.values()).find((s) => s.queryIterator)
+    const liveQuery = live?.queryIterator ?? null
+    try {
+      return await this.readPlanLimits(() =>
+        liveQuery ? this.readPlanLimitsFromQuery(liveQuery) : this.readPlanLimitsWithEphemeralQuery()
+      )
+    } catch (error) {
+      return {
+        provider: 'claude-code',
+        checkedAt: new Date().toISOString(),
+        windows: [],
+        unavailable: {
+          reason: 'probe_failed',
+          message: error instanceof Error ? error.message : String(error)
+        }
+      }
+    }
+  }
+
+  private readPlanLimits(read: () => Promise<ProviderUsageLimits>): Promise<ProviderUsageLimits> {
+    if (this.planLimitsRead) return this.planLimitsRead
+    this.lastPlanLimitsReadAt = Date.now()
+    const pending = read().finally(() => {
+      if (this.planLimitsRead === pending) this.planLimitsRead = null
+    })
+    this.planLimitsRead = pending
+    return pending
+  }
+
+  private async readPlanLimitsFromQuery(query: Query): Promise<ProviderUsageLimits> {
+    // Experimental SDK API: guard at runtime so a future SDK that renames it
+    // degrades to "no plan limits" instead of throwing inside the stream.
+    const readUsage = (query as unknown as {
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: (opts?: { skipBehaviors?: boolean }) => Promise<unknown>
+    }).usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
+    if (typeof readUsage !== 'function') {
+      throw new Error('This Claude Agent SDK version does not expose plan usage')
+    }
+    const response = await withTimeout(
+      readUsage.call(query, { skipBehaviors: true }),
+      PLAN_LIMITS_TIMEOUT_MS,
+      'Timed out reading Claude plan usage'
+    )
+    return claudeUsageResponseToLimits(response, new Date().toISOString())
+  }
+
+  private async readPlanLimitsWithEphemeralQuery(): Promise<ProviderUsageLimits> {
+    await this.ensureSDKLoaded()
+    if (!ClaudeAgentSDK) throw new Error('Claude Agent SDK not loaded')
+    const claudePath = await this.findClaudeExecutable()
+
+    let releasePrompt: () => void = () => {}
+    const promptReleased = new Promise<void>((resolve) => { releasePrompt = resolve })
+    // A prompt stream that never yields: the CLI initializes (auth, settings)
+    // but no user turn is sent, so no model call is made.
+    const prompt = (async function* (): AsyncGenerator<SDKUserMessage> {
+      await promptReleased
+    })()
+    const abortController = new AbortController()
+    const query = ClaudeAgentSDK.query({
+      prompt,
+      options: {
+        cwd: homedir(),
+        pathToClaudeCodeExecutable: claudePath,
+        env: this.buildClaudeEnvironment(),
+        abortController,
+        persistSession: false,
+        settingSources: ['user']
+      }
+    })
+    // Drain stream messages so the SDK never blocks on an unread buffer.
+    const drain = (async () => {
+      try {
+        for await (const message of query) { void message }
+      } catch {
+        // Expected when the probe is closed.
+      }
+    })()
+
+    try {
+      return await this.readPlanLimitsFromQuery(query)
+    } finally {
+      releasePrompt()
+      try { query.close() } catch { /* already closed */ }
+      abortController.abort()
+      void drain
     }
   }
 
