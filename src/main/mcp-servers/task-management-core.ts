@@ -386,13 +386,14 @@ const mastermindTools: Tool[] = [
   {
     name: 'get_messages',
     description:
-      'Read the conversation of a task, newest first. Tool output is left out unless include_tools is true, because it is long and is rarely what a question is about. Page backwards with next_before_seq.',
+      'Read the conversation of a task, newest first. Tool output is left out unless include_tools is true, because it is long and is rarely what a question is about. Page backwards with next_before_seq. Pass seq to read one message by its number, for example one listed as omitted in a context handoff.',
     inputSchema: {
       type: 'object',
       properties: {
         task_id: { type: 'string', description: 'Task ID' },
         limit: { type: 'number', description: 'How many messages to return. Default 20, maximum 200.' },
         before_seq: { type: 'number', description: 'Return messages older than this sequence number. Use next_before_seq from the previous call.' },
+        seq: { type: 'number', description: 'Return only the message with this sequence number.' },
         role: { type: 'string', enum: ['user', 'assistant'], description: 'Return one side of the conversation only' },
         include_tools: { type: 'boolean', description: 'Include tool calls and their output. Default false.' }
       },

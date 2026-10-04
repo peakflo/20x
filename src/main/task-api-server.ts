@@ -461,6 +461,11 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (params.labels !== undefined) { updates.push('labels = ?'); qParams.push(JSON.stringify(params.labels)) }
       if (params.skill_ids !== undefined) { updates.push('skill_ids = ?'); qParams.push(JSON.stringify(params.skill_ids)) }
       if (params.agent_id !== undefined) { updates.push('agent_id = ?'); qParams.push(params.agent_id) }
+      // The raw update below bypasses DatabaseManager.updateTask, so the agent
+      // change is recorded here for the context handoff.
+      const previousAgentId = params.agent_id !== undefined
+        ? (rawDb.prepare('SELECT agent_id FROM tasks WHERE id = ?').get(params.task_id) as { agent_id: string | null } | undefined)?.agent_id ?? null
+        : undefined
       // Lets a caller with no window hand the task straight to its agent.
       if (params.auto_start_agent !== undefined) {
         updates.push('auto_start_agent = ?')
@@ -488,6 +493,9 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
       const result = rawDb.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).run(...qParams)
       if (result.changes === 0) return { error: 'Task not found' }
+      if (previousAgentId !== undefined && params.agent_id !== previousAgentId) {
+        db.markContextHandoff(params.task_id as string, previousAgentId)
+      }
 
       const updated = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(params.task_id) as Record<string, unknown>
       const parsedUpdated = parseTask(updated)
@@ -768,9 +776,15 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const role = params.role ? String(params.role) : null
 
       let parts = db.getTranscriptParts(taskId)
-      // Tool output is enormous and is rarely what a question is about, so it
-      // is left out unless it is asked for. This keeps a reply readable.
-      if (!includeTools) {
+      // One message by its sequence number, as cited by a context handoff. Tool
+      // output is returned here only when the caller asks for it, as below.
+      if (params.seq !== undefined) {
+        const seq = Number(params.seq)
+        parts = parts.filter((part) => part.seq === seq)
+        if (!includeTools) parts = parts.filter((part) => part.partType !== 'tool')
+      } else if (!includeTools) {
+        // Tool output is enormous and is rarely what a question is about, so it
+        // is left out unless it is asked for. This keeps a reply readable.
         parts = parts.filter((part) => part.role === 'user' || part.role === 'assistant')
         parts = parts.filter((part) => !part.partType || part.partType === 'text')
       }

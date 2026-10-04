@@ -160,6 +160,28 @@ describe('get_messages', () => {
     )) as { messages: Array<{ role: string }> }
     expect(result.messages.every((m) => m.role === 'user')).toBe(true)
   })
+
+  it('reads one message by seq, as a context handoff reference points to it', async () => {
+    const result = (await handleTaskApiRoute('/get_messages', { task_id: 't1', seq: 2 }, makeDb())) as {
+      messages: Array<{ seq: number; content: string }>
+    }
+    expect(result.messages).toEqual([expect.objectContaining({ seq: 2, content: 'I am looking at it' })])
+  })
+
+  it('reads a tool result by seq only when include_tools is set', async () => {
+    const db = makeDb()
+    const without = (await handleTaskApiRoute('/get_messages', { task_id: 't1', seq: 3 }, db)) as {
+      messages: unknown[]
+    }
+    expect(without.messages).toEqual([])
+
+    const withTools = (await handleTaskApiRoute(
+      '/get_messages',
+      { task_id: 't1', seq: 3, include_tools: true },
+      db
+    )) as { messages: Array<{ seq: number; type: string }> }
+    expect(withTools.messages).toEqual([expect.objectContaining({ seq: 3, type: 'tool' })])
+  })
 })
 
 describe('get_session_status', () => {

@@ -384,6 +384,15 @@ Each session wraps a coding agent adapter instance and streams events to the ren
 4. **Completion** — Idle detection transitions to `ready_for_review`, task updated
 5. **Learning** — Optional feedback loop: agent reviews session, updates skills, syncs back to DB
 
+### Context Handoff on Reassignment
+
+When a task changes agent (or harness), the new agent should not start from zero. `DatabaseManager.updateTask` and the MCP `update_task` route record a `context-handoff:<taskId>` setting holding the previous agent, but only when the task already has transcript parts. The next prompt sent to a session of the task's *current* agent carries a handoff block in front of it, built by `src/main/context-handoff.ts` from `transcript_parts`:
+
+- Priority: the original request, then the newest turns, then tool results. Messages are carried whole, within an estimated budget (default 16k tokens, overridable with the `context-handoff-token-budget` setting). The new prompt itself is never shortened.
+- Messages that do not fit are listed as references. The agent reads one with `get_messages` and `seq` (`include_tools` for tool output).
+- A transcript note (`role: system`, `partType: context-handoff`) shows "Context from <agent> carried over (N messages, M omitted)".
+- A native resume of the backend session (same harness) clears the marker, because the backend already holds the conversation. An incompatible resume falls back to a new session, which receives the handoff.
+
 ### Worktree Management
 
 Before starting an agent session, the AgentManager optionally sets up git worktrees for the task's repositories:

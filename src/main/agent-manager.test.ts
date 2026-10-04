@@ -128,6 +128,8 @@ function createMockDb(agentConfig: Record<string, unknown> = {}) {
     getMcpServer: vi.fn(() => null),
     getSecretsByIds: vi.fn(() => []),
     getSetting: vi.fn(() => null),
+    setSetting: vi.fn(),
+    deleteSetting: vi.fn(),
     getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
     updateTask: vi.fn(),
   } as unknown as ConstructorParameters<typeof AgentManager>[0]
@@ -1178,6 +1180,7 @@ describe('AgentManager implicit resume behavior', () => {
       getSecretsByIds: vi.fn(() => []),
       getSecretsWithValues: vi.fn(() => []),
       getSetting: vi.fn(() => null),
+      deleteSetting: vi.fn(),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 
     const manager = new AgentManager(mockDb)
@@ -4172,5 +4175,156 @@ describe('Workflo task execution owner', () => {
     const db = createMockDb()
     vi.mocked(db.getSetting).mockImplementation(key => key === 'workflo-upload:task-1' ? '{}' : undefined)
     await expect(new AgentManager(db).startSession('agent-1', 'task-1', '/tmp/workflo-guard')).rejects.toThrow('Wait for the Workflo task upload')
+  })
+})
+
+describe('AgentManager context handoff on agent reassignment', () => {
+  const PREVIOUS_AGENT = { id: 'agent-old', name: 'Claude Lead', config: { coding_agent: 'claude-code' } }
+  const CURRENT_AGENT = { id: 'agent-1', name: 'Codex Lead', config: { coding_agent: 'codex', system_prompt: 'You are helpful.' } }
+  const TRANSCRIPT = [
+    { taskId: 'task-1', partId: 'p1', seq: 1, role: 'user', content: 'Fix the login bug', partType: 'text', createdAt: 1, updatedAt: 1, rev: 1 },
+    { taskId: 'task-1', partId: 'p2', seq: 2, role: 'assistant', content: 'Checking auth.ts', partType: 'text', createdAt: 2, updatedAt: 2, rev: 2 },
+  ]
+  const KEY = 'context-handoff:task-1'
+
+  function makeHandoffDb(opts: { taskAgentId?: string; marker?: { fromAgentId: string | null } | null; transcript?: unknown[] }) {
+    const settings = new Map<string, string>()
+    if (opts.marker !== null) {
+      settings.set(KEY, JSON.stringify({ fromAgentId: 'agent-old', recordedAt: 1, ...(opts.marker ?? {}) }))
+    }
+    const db = createMockDb({ system_prompt: 'You are helpful.' }) as any
+    db.getTask = vi.fn(() => ({
+      id: 'task-1',
+      title: 'Ship the feature',
+      description: '',
+      repos: [],
+      skill_ids: [],
+      status: 'agent_working',
+      agent_id: opts.taskAgentId ?? 'agent-1',
+    }))
+    db.getAgent = vi.fn((id: string) => (id === 'agent-old' ? PREVIOUS_AGENT : CURRENT_AGENT))
+    db.getSetting = vi.fn((key: string) => settings.get(key) ?? null)
+    db.setSetting = vi.fn((key: string, value: string) => { settings.set(key, value) })
+    db.deleteSetting = vi.fn((key: string) => { settings.delete(key) })
+    db.getTranscriptParts = vi.fn(() => opts.transcript ?? TRANSCRIPT)
+    db.getMcpServers = vi.fn(() => [])
+    return { db, settings }
+  }
+
+  function makeSession(agentId: string) {
+    return {
+      agentId,
+      taskId: 'task-1',
+      status: 'idle',
+      workspaceDir: undefined,
+      adapter: {
+        sendPrompt: vi.fn(async () => undefined),
+        getStatus: vi.fn(async () => ({ type: 'working' })),
+      },
+      isTriageSession: false,
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      assistantTextKeys: new Set<string>(),
+    }
+  }
+
+  async function send(mgr: AgentManager, session: ReturnType<typeof makeSession>, message: string) {
+    ;(mgr as any).sessions.set('session-1', session)
+    await (mgr as any).doSendAdapterMessage(session, 'session-1', message)
+    return (session.adapter.sendPrompt as any).mock.calls.at(-1)[1][0].text as string
+  }
+
+  beforeEach(() => {
+    vi.mocked(getTaskApiPort).mockReturnValue(4321)
+  })
+
+  it('puts the earlier conversation in front of the first prompt of the new agent and announces it', async () => {
+    const { db, settings } = makeHandoffDb({})
+    manager = new AgentManager(db)
+    const sent: Array<Record<string, unknown>> = []
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation((channel: unknown, data: unknown) => {
+      if (channel === 'agent:output') sent.push(data as Record<string, unknown>)
+    })
+
+    const session = makeSession('agent-1')
+    const text = await send(manager, session, 'Continue with the fix')
+
+    expect(text.startsWith('## Conversation so far with Claude Lead (Claude Code)')).toBe(true)
+    expect(text).toContain('[#1 user] Fix the login bug')
+    expect(text).toContain('[#2 assistant] Checking auth.ts')
+    expect(text.indexOf('## Conversation')).toBeLessThan(text.indexOf('Continue with the fix'))
+    expect(text).toContain('Task id: task-1') // the lean task reminder is still appended
+
+    const note = sent.find((data) => (data.data as { partType?: string })?.partType === 'context-handoff')
+    expect(note).toBeDefined()
+    expect((note!.data as { role: string; content: string }).role).toBe('system')
+    expect((note!.data as { content: string }).content).toBe('Context from Claude Lead carried over (2 messages, 0 omitted)')
+    // The handoff is not shown as the user's message.
+    const userEcho = sent.find((data) => (data.data as { role?: string })?.role === 'user')
+    expect((userEcho!.data as { content: string }).content).not.toContain('## Conversation so far')
+
+    // Delivered, so the marker is gone and the next message does not repeat it.
+    expect(settings.has(KEY)).toBe(false)
+  })
+
+  it('hands the context over only once, on the first prompt', async () => {
+    const { db } = makeHandoffDb({})
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    const session = makeSession('agent-1')
+    const first = await send(manager, session, 'first')
+    const second = await send(manager, session, 'second')
+
+    expect(first).toContain('## Conversation so far with')
+    expect(second).not.toContain('## Conversation so far with')
+  })
+
+  it('does not hand the context to a session still running for the previous agent', async () => {
+    const { db, settings } = makeHandoffDb({ taskAgentId: 'agent-1' })
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    const oldSession = makeSession('agent-old')
+    const text = await send(manager, oldSession, 'still here')
+
+    expect(text).not.toContain('## Conversation so far with')
+    expect(settings.has(KEY)).toBe(true)
+  })
+
+  it('sends nothing extra when the task was never reassigned', async () => {
+    const { db } = makeHandoffDb({ marker: null })
+    manager = new AgentManager(db)
+    const sendSpy = vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    const text = await send(manager, makeSession('agent-1'), 'hello')
+
+    expect(text).not.toContain('## Conversation so far with')
+    expect(sendSpy.mock.calls.some(([, data]) => (data as any)?.data?.partType === 'context-handoff')).toBe(false)
+  })
+
+  it('drops the marker without a handoff when the task is back on the agent it came from', async () => {
+    const { db, settings } = makeHandoffDb({ marker: { fromAgentId: 'agent-1' } })
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    const text = await send(manager, makeSession('agent-1'), 'hello')
+
+    expect(text).not.toContain('## Conversation so far with')
+    expect(settings.has(KEY)).toBe(false)
+  })
+
+  it('keeps the marker when the handoff cannot reach the adapter, so the next attempt delivers it', async () => {
+    const { db, settings } = makeHandoffDb({})
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    const session = makeSession('agent-1')
+    session.adapter.sendPrompt = vi.fn(async () => { throw new Error('transport down') }) as any
+    ;(manager as any).sessions.set('session-1', session)
+    await expect((manager as any).doSendAdapterMessage(session, 'session-1', 'hello')).rejects.toThrow('transport down')
+
+    expect(settings.has(KEY)).toBe(true)
   })
 })
