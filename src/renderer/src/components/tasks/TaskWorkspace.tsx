@@ -37,7 +37,8 @@ import { ArtifactType } from '@shared/artifacts'
 import { ArtifactsPanel } from '@/components/artifacts/ArtifactsPanel'
 import { ArtifactRail } from '@/components/artifacts/ArtifactRail'
 import type { Artifact, ArtifactUIState } from '@shared/artifacts'
-import { dispatchShortcutFeedback, onTaskShortcut, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
+import { dispatchShortcutFeedback, onTaskShortcut, TaskShortcutAction, type TaskShortcutDetail } from '@/lib/keyboard-shortcuts'
+import { resolveRunShortcut, RunShortcutAction } from '@/lib/run-shortcut'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 const DEFAULT_ARTIFACT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
@@ -490,11 +491,15 @@ function TaskWorkspaceComponent({
 
   const handleTriage = useCallback(async () => {
     if (!task || task.agent_id) return
+    // A second press before the first triage's status update lands would
+    // otherwise triage (and start a session) twice.
+    if (startingRef.current) return
 
     // Find the default agent
     const defaultAgent = agents.find((a) => a.is_default) || agents[0]
     if (!defaultAgent) return
 
+    startingRef.current = true
     try {
       // Set status to Triaging
       await taskApi.update(task.id, { status: TaskStatus.Triaging })
@@ -507,6 +512,8 @@ function TaskWorkspaceComponent({
       // Revert status
       await taskApi.update(task.id, { status: TaskStatus.NotStarted })
       updateTaskInStore(task.id, { status: TaskStatus.NotStarted })
+    } finally {
+      startingRef.current = false
     }
   }, [task, agents, start, updateTaskInStore])
 
@@ -895,19 +902,29 @@ Update existing skills that were helpful or create new ones for patterns worth r
     if (!task) return
     const assignedAgent = task.agent_id ? agents.find((agent) => agent.id === task.agent_id) : null
     const triageAgent = !task.agent_id ? (agents.find((agent) => agent.is_default) || agents[0] || null) : null
-    const idle = session.status === SessionStatus.IDLE
-    if (task.agent_id && isAgentConfigured(assignedAgent) && !task.session_id && !session.sessionId && idle && task.status !== TaskStatus.Completed) {
+    const decision = resolveRunShortcut({
+      taskStatus: task.status,
+      assignedAgent: task.agent_id,
+      agentConfigured: task.agent_id ? isAgentConfigured(assignedAgent) : isAgentConfigured(triageAgent),
+      persistedSessionId: task.session_id,
+      liveSessionId: session.sessionId,
+      liveSessionIdle: session.status === SessionStatus.IDLE,
+      liveMessageCount: session.messages.length
+    })
+    if (decision.action === null) {
+      dispatchShortcutFeedback(decision.blockedReason, true)
+    } else if (decision.action === RunShortcutAction.START) {
       void handleStartSession()
-    } else if (task.agent_id && task.session_id && !session.sessionId && idle && session.messages.length === 0) {
+    } else if (decision.action === RunShortcutAction.RESUME) {
       void handleResumeSession()
-    } else if (task.agent_id && task.session_id && !session.sessionId && idle && session.messages.length > 0) {
+    } else if (decision.action === RunShortcutAction.RESTART) {
       void handleStartFreshSession()
-    } else if (!task.agent_id && triageAgent && isAgentConfigured(triageAgent) && idle && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging) {
+    } else {
       void handleTriage()
     }
   }, [agents, handleResumeSession, handleStartFreshSession, handleStartSession, handleTriage, session.messages.length, session.sessionId, session.status, task])
 
-  useEffect(() => onTaskShortcut(({ action, taskId }) => {
+  const handleTaskShortcut = ({ action, taskId }: TaskShortcutDetail) => {
     if (!task || task.id !== taskId) return
     const workspace = workspaceBodyRef.current
     if (workspace && window.getComputedStyle(workspace).visibility === 'hidden') return
@@ -961,7 +978,16 @@ Update existing skills that were helpful or create new ones for patterns worth r
         .then(() => dispatchShortcutFeedback('Pull-request branch copied'))
         .catch(() => dispatchShortcutFeedback('Could not copy the pull-request branch', true))
     }
-  }), [artifacts, handleCompleteTask, handleRunShortcut, newestPullRequest, selectArtifactTab, setRailExpanded, task])
+  }
+
+  // Subscribe once and call the latest handler through a ref. Re-subscribing
+  // whenever task/session changed left a gap in which a key press reached a
+  // stale closure (old task or session state) and did nothing.
+  const taskShortcutHandlerRef = useRef(handleTaskShortcut)
+  useLayoutEffect(() => {
+    taskShortcutHandlerRef.current = handleTaskShortcut
+  })
+  useEffect(() => onTaskShortcut((detail) => taskShortcutHandlerRef.current(detail)), [])
 
   if (!task) {
     return (

@@ -8,7 +8,7 @@ import { useSettingsStore } from '@/stores/settings-store'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { CodingAgentType, TaskStatus } from '@/types'
 import type { WorkfloTask, Agent } from '@/types'
-import { dispatchTaskShortcut, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
+import { dispatchTaskShortcut, onShortcutFeedback, TaskShortcutAction } from '@/lib/keyboard-shortcuts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 
 vi.mock('@/components/agents/AgentTranscriptPanel', () => ({
@@ -181,6 +181,69 @@ describe('TaskWorkspace keyboard actions', () => {
     act(() => dispatchTaskShortcut({ action: TaskShortcutAction.RUN, taskId: task.id }))
 
     await waitFor(() => expect(window.electronAPI.agentSession.start).toHaveBeenCalledWith(agent.id, task.id, undefined, undefined))
+  })
+
+  it('starts triage once when R is pressed twice in quick succession', async () => {
+    const task = makeRendererTask({ agent_id: null })
+    const agent = makeAgent({ config: { coding_agent: CodingAgentType.CODEX, model: 'gpt-6' } })
+    let finishStart: (value: { sessionId: string }) => void = () => {}
+    vi.mocked(window.electronAPI.agentSession.start).mockImplementationOnce(
+      () => new Promise((resolve) => { finishStart = resolve })
+    )
+    renderWorkspace(task, [agent])
+
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.RUN, taskId: task.id }))
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.RUN, taskId: task.id }))
+    await act(async () => { finishStart({ sessionId: 'triage-session' }) })
+
+    expect(window.electronAPI.agentSession.start).toHaveBeenCalledTimes(1)
+  })
+
+  it('resumes an assigned task that has a persisted session through R', async () => {
+    const task = makeRendererTask({ agent_id: 'agent-1', session_id: 'persisted-session' })
+    renderWorkspace(task, [makeAgent({ config: { coding_agent: CodingAgentType.CODEX, model: 'gpt-6' } })])
+
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.RUN, taskId: task.id }))
+
+    await waitFor(() => expect(window.electronAPI.agentSession.resume).toHaveBeenCalledWith('agent-1', task.id, 'persisted-session'))
+    expect(window.electronAPI.agentSession.start).not.toHaveBeenCalled()
+  })
+
+  it('acts on the task as last rendered, not on a stale copy', async () => {
+    const unassigned = makeRendererTask({ agent_id: null })
+    const agent = makeAgent({ config: { coding_agent: CodingAgentType.CODEX, model: 'gpt-6' } })
+    const { rerender } = renderWorkspace(unassigned, [agent])
+    rerender(
+      <TaskWorkspace
+        task={makeRendererTask({ agent_id: 'agent-1' })}
+        agents={[agent]}
+        onEdit={noopFn}
+        onDelete={noopFn}
+        onUpdateAttachments={noopFn}
+        onUpdateOutputFields={noopFn}
+        onCompleteTask={noopFn}
+        onAssignAgent={noopFn}
+        onUpdateTask={noopAsync}
+      />
+    )
+
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.RUN, taskId: unassigned.id }))
+
+    await waitFor(() => expect(window.electronAPI.agentSession.start).toHaveBeenCalledWith('agent-1', unassigned.id, undefined, undefined))
+  })
+
+  it('explains why R did nothing for a completed task', () => {
+    const messages: Array<{ message: string; isError: boolean }> = []
+    const unsubscribe = onShortcutFeedback((detail) => messages.push(detail))
+    const task = makeRendererTask({ status: TaskStatus.Completed })
+    renderWorkspace(task)
+
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.RUN, taskId: task.id }))
+    unsubscribe()
+
+    expect(messages).toEqual([{ message: 'This task is already completed', isError: true }])
+    expect(window.electronAPI.agentSession.start).not.toHaveBeenCalled()
+    expect(window.electronAPI.agentSession.resume).not.toHaveBeenCalled()
   })
 
   it('uses Notion for both the feedback button and action description', () => {

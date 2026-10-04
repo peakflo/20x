@@ -126,6 +126,11 @@ function isTaskPanelSelected(): boolean {
   return panels.find((p) => p.id === selectedPanelId)?.type === 'task'
 }
 
+/** False when the element, or an ancestor, is `visibility: hidden` (the canvas is hidden in other views). */
+function isElementVisible(el: HTMLElement | null): boolean {
+  return !!el && window.getComputedStyle(el).visibility !== 'hidden'
+}
+
 interface StatusHighlight {
   id: string
   taskId: string
@@ -925,9 +930,12 @@ export function InfiniteCanvas() {
       // Drawing tool shortcuts: V/R/O/L/A/T/I. Suppressed while a task panel
       // is selected — its keys belong to the global task-view shortcuts then
       // (R run, I composer, O/Y/V chords), same as in the tasks view.
-      if (!isInputFocused && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
+      // The canvas stays mounted (hidden) while another view is shown. Its tool
+      // keys must not fire there: they would claim O/R/I from the task-view
+      // shortcuts and cancel them with preventDefault().
+      if (!isInputFocused && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && !e.defaultPrevented) {
         const tool = TOOL_SHORTCUTS[e.code]
-        if (tool && !isTaskPanelSelected()) {
+        if (tool && !isTaskPanelSelected() && isElementVisible(containerRef.current)) {
           e.preventDefault()
           useDrawingStore.getState().setTool(tool)
         }

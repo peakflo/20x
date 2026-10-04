@@ -619,6 +619,17 @@ describe('InfiniteCanvas', () => {
       expect(useDrawingStore.getState().activeTool).toBe('select')
     })
 
+    it('does not claim tool keys while the canvas is hidden behind another view', () => {
+      // The canvas stays mounted in every view. Its tool keys (O, R, I, …) used to
+      // fire there and preventDefault() the key, which cancelled the O/R task
+      // shortcuts in the tasks view.
+      render(<div style={{ visibility: 'hidden' }}><InfiniteCanvas /></div>)
+      const notPrevented = fireEvent.keyDown(window, { code: 'KeyR', key: 'r' })
+      expect(notPrevented).toBe(true)
+      fireEvent.keyDown(window, { code: 'KeyO', key: 'o' })
+      expect(useDrawingStore.getState().activeTool).toBe('select')
+    })
+
     it('ignores tool shortcuts while typing in an input', () => {
       render(<InfiniteCanvas />)
       const input = document.createElement('input')

@@ -38,6 +38,78 @@ export function getChordCommand(firstKey: string, secondKey: string): ChordComma
   return CHORD_COMMANDS[`${firstKey.toLowerCase()}${secondKey.toLowerCase()}`] ?? null
 }
 
+/** How long a chord starter (O, G, Y, V) waits for its second key. */
+export const CHORD_TIMEOUT_MS = 1200
+
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'OS', 'CapsLock', 'Fn', 'FnLock'])
+
+/** True for keydown events that only press a modifier. They never complete or cancel a chord. */
+export function isModifierKeyEvent(event: Pick<KeyboardEvent, 'key'>): boolean {
+  return MODIFIER_KEYS.has(event.key)
+}
+
+/**
+ * Normalised, lower-case key for shortcut matching.
+ *
+ * `event.key` depends on the active keyboard layout and modifiers, so a
+ * non-Latin layout reports 'о' where the user pressed the physical O key. For
+ * such keys fall back to `event.code` (KeyO → 'o'), which is layout independent.
+ * Returns '' for modifier-only and other non-printable keys.
+ */
+export function getShortcutKey(event: Pick<KeyboardEvent, 'key' | 'code'>): string {
+  if (isModifierKeyEvent(event)) return ''
+  if (/^[a-z]$/i.test(event.key)) return event.key.toLowerCase()
+  const physical = /^Key([A-Z])$/.exec(event.code ?? '')
+  if (physical) return physical[1].toLowerCase()
+  return event.key.length === 1 ? event.key.toLowerCase() : ''
+}
+
+export interface ChordTracker {
+  /** Remember a chord starter. Replaces any chord that was already pending. */
+  start(starter: string): void
+  /** Whether a chord starter is waiting for its second key (and has not timed out). */
+  isPending(): boolean
+  /**
+   * Resolve the second key of the pending chord and clear the pending state.
+   * Returns null when no chord was pending or the pair is not a chord.
+   */
+  complete(secondKey: string): ChordCommand | null
+  /** Drop any pending chord without resolving it. */
+  cancel(): void
+}
+
+/**
+ * Chord state as a plain object instead of React state or a timer. Expiry is
+ * checked against the clock on each key, so the pending state cannot be lost
+ * by a re-render or by an effect being torn down and set up again, and it
+ * cannot linger after a timer was cleared.
+ */
+export function createChordTracker(now: () => number = () => Date.now()): ChordTracker {
+  let pending: { starter: string; startedAt: number } | null = null
+  const expire = () => {
+    if (pending && now() - pending.startedAt > CHORD_TIMEOUT_MS) pending = null
+  }
+  return {
+    start(starter) {
+      pending = { starter: starter.toLowerCase(), startedAt: now() }
+    },
+    isPending() {
+      expire()
+      return pending !== null
+    },
+    complete(secondKey) {
+      expire()
+      if (!pending) return null
+      const { starter } = pending
+      pending = null
+      return getChordCommand(starter, secondKey)
+    },
+    cancel() {
+      pending = null
+    }
+  }
+}
+
 const TASK_SHORTCUT_EVENT = '20x:task-shortcut'
 const SHORTCUT_FEEDBACK_EVENT = '20x:shortcut-feedback'
 

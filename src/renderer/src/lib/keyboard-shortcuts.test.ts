@@ -1,19 +1,128 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CHORD_TIMEOUT_MS,
+  createChordTracker,
   dispatchTaskShortcut,
   findComposerElement,
   focusComposerInput,
   getChordCommand,
   getNextNudgeMessage,
+  getShortcutKey,
   insertIntoComposer,
   isGlobalShortcutBlocked,
   isKeyboardInput,
+  isModifierKeyEvent,
   isPrintableKey,
   KEYBOARD_SHORTCUT_GROUPS,
   onTaskShortcut,
   shouldAutoFocusComposer,
   TaskShortcutAction
 } from './keyboard-shortcuts'
+
+describe('getShortcutKey', () => {
+  it('lower-cases the typed letter, including with Shift', () => {
+    expect(getShortcutKey({ key: 'O', code: 'KeyO' })).toBe('o')
+    expect(getShortcutKey({ key: 'r', code: 'KeyR' })).toBe('r')
+  })
+
+  it('falls back to the physical key when the layout types a non-Latin letter', () => {
+    expect(getShortcutKey({ key: 'щ', code: 'KeyO' })).toBe('o')
+    expect(getShortcutKey({ key: 'к', code: 'KeyR' })).toBe('r')
+  })
+
+  it('keeps punctuation and digits from the typed key', () => {
+    expect(getShortcutKey({ key: '#', code: 'Digit3' })).toBe('#')
+    expect(getShortcutKey({ key: '?', code: 'Slash' })).toBe('?')
+    expect(getShortcutKey({ key: '2', code: 'Digit2' })).toBe('2')
+  })
+
+  it('returns an empty key for modifier-only and other non-printable keys', () => {
+    expect(getShortcutKey({ key: 'Shift', code: 'ShiftLeft' })).toBe('')
+    expect(getShortcutKey({ key: 'Escape', code: 'Escape' })).toBe('')
+    expect(isModifierKeyEvent({ key: 'Meta' })).toBe(true)
+    expect(isModifierKeyEvent({ key: 'o' })).toBe(false)
+  })
+})
+
+describe('chord tracker', () => {
+  it('completes a chord within the timeout', () => {
+    let now = 0
+    const chords = createChordTracker(() => now)
+    chords.start('o')
+    now = CHORD_TIMEOUT_MS
+    expect(chords.isPending()).toBe(true)
+    expect(chords.complete('s')).toEqual({ type: 'subtasks' })
+    expect(chords.isPending()).toBe(false)
+  })
+
+  it('expires a pending chord after the timeout', () => {
+    let now = 0
+    const chords = createChordTracker(() => now)
+    chords.start('o')
+    now = CHORD_TIMEOUT_MS + 1
+    expect(chords.isPending()).toBe(false)
+    expect(chords.complete('s')).toBeNull()
+  })
+
+  it('keeps a pending chord across unrelated work, since state is not re-created', () => {
+    // Regression: the old effect cleared its timer on re-subscription but left the
+    // pending chord set, so the next key was swallowed forever.
+    let now = 0
+    const chords = createChordTracker(() => now)
+    chords.start('o')
+    now = 300
+    expect(chords.isPending()).toBe(true)
+    expect(chords.complete('d')).toEqual({ type: 'task', action: TaskShortcutAction.OPEN_DETAILS })
+    expect(chords.isPending()).toBe(false)
+  })
+
+  it('consumes the pending chord on a non-matching key without leaving it armed', () => {
+    const chords = createChordTracker(() => 0)
+    chords.start('o')
+    expect(chords.complete('x')).toBeNull()
+    expect(chords.isPending()).toBe(false)
+  })
+
+  it('starting a new chord replaces the pending one and restarts the timer', () => {
+    let now = 0
+    const chords = createChordTracker(() => now)
+    chords.start('g')
+    now = 1000
+    chords.start('o')
+    now = 1000 + CHORD_TIMEOUT_MS - 1
+    expect(chords.complete('p')).toEqual({ type: 'task', action: TaskShortcutAction.OPEN_PR })
+  })
+
+  it('cancel drops a pending chord', () => {
+    const chords = createChordTracker(() => 0)
+    chords.start('y')
+    chords.cancel()
+    expect(chords.complete('p')).toBeNull()
+  })
+})
+
+describe('O and other chord commands', () => {
+  it.each([
+    ['d', { type: 'task', action: TaskShortcutAction.OPEN_DETAILS }],
+    ['c', { type: 'task', action: TaskShortcutAction.OPEN_CHANGES }],
+    ['o', { type: 'task', action: TaskShortcutAction.OPEN_OUTPUT }],
+    ['a', { type: 'task', action: TaskShortcutAction.OPEN_ARTIFACT }],
+    ['p', { type: 'task', action: TaskShortcutAction.OPEN_PR }],
+    ['s', { type: 'subtasks' }]
+  ] as const)('O %s is wired', (second, command) => {
+    expect(getChordCommand('o', second)).toEqual(command)
+  })
+
+  it('treats the second key case-insensitively', () => {
+    expect(getChordCommand('O', 'S')).toEqual({ type: 'subtasks' })
+  })
+
+  it('keeps G, Y and V chords routed', () => {
+    expect(getChordCommand('g', 'd')).toEqual({ type: 'view', view: 'dashboard' })
+    expect(getChordCommand('y', 'p')).toEqual({ type: 'task', action: TaskShortcutAction.COPY_PR_URL })
+    expect(getChordCommand('v', 'm')).toEqual({ type: 'mastermindAudio' })
+  })
+})
 
 describe('keyboard shortcuts', () => {
   it('blocks shortcuts in fields and editable content', () => {
