@@ -68,7 +68,7 @@ export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
       testId="ai-usage-ring"
       detailsTestId="ai-usage-tooltip"
       details={
-        <div className="w-64 rounded-lg border border-border bg-card p-4 space-y-3 shadow-lg">
+        <div className="w-64 rounded-lg border border-border bg-card p-4 space-y-3 shadow-lg whitespace-normal">
           <div className="flex items-center gap-2">
             <Logo20x className="h-3.5 w-3.5 text-primary" />
             <span className="text-sm font-semibold text-foreground">Peakflo AI</span>

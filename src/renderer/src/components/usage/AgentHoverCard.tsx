@@ -21,8 +21,8 @@ const LIMITS_HINT: Partial<Record<UsageProvider, string>> = {
 function DetailRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-3 text-xs">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="text-foreground text-right truncate">{value}</span>
+      <span className="text-muted-foreground shrink-0">{label}</span>
+      <span className="text-foreground text-right min-w-0 break-words [overflow-wrap:anywhere]">{value}</span>
     </div>
   )
 }
@@ -57,12 +57,12 @@ export function AgentDetailsCard({ agent, className }: { agent: Agent; className
 
   return (
     <div
-      className={cn('w-72 rounded-lg border border-border bg-card p-4 space-y-3 shadow-lg text-left leading-normal', className)}
+      className={cn('w-72 rounded-lg border border-border bg-card p-4 space-y-3 shadow-lg text-left leading-normal whitespace-normal', className)}
       data-testid="agent-details-card"
     >
-      <div className="flex items-center gap-2 min-w-0">
-        {provider ? <ProviderLogo provider={provider} tinted className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5 shrink-0" />}
-        <span className="text-sm font-semibold text-foreground truncate">{agent.name}</span>
+      <div className="flex items-start gap-2 min-w-0">
+        {provider ? <ProviderLogo provider={provider} tinted className="mt-0.5 h-3.5 w-3.5" /> : <Bot className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+        <span className="min-w-0 flex-1 text-sm font-semibold text-foreground break-words [overflow-wrap:anywhere]">{agent.name}</span>
         {limits?.planType && !usesApiKey && (
           <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium capitalize shrink-0">{limits.planType}</span>
         )}

@@ -45,6 +45,19 @@ describe('AgentDetailsCard', () => {
     expect(screen.getByRole('meter', { name: 'Weekly: 71% used' })).toBeInTheDocument()
   })
 
+  it('shows long agent names and models in full (wrapped, never truncated)', () => {
+    const longName = 'Backend Agent for the Accounts Payable reconciliation and vendor onboarding workflows'
+    const longModel = 'anthropic/claude-opus-4-7-20260915-extended-thinking-preview'
+    render(<AgentDetailsCard agent={{ ...agent({ coding_agent: CodingAgentType.OPENCODE, model: longModel }), name: longName }} />)
+    const name = screen.getByText(longName)
+    const model = screen.getByText(longModel)
+    for (const el of [name, model]) {
+      expect(el.className).not.toContain('truncate')
+      expect(el.className).toContain('break-words')
+    }
+    expect(screen.getByTestId('agent-details-card').className).toContain('whitespace-normal')
+  })
+
   it('explains when plan limits do not apply', () => {
     const { rerender } = render(<AgentDetailsCard agent={agent({ coding_agent: CodingAgentType.CLAUDE_CODE, auth_method: 'api_key' })} />)
     expect(screen.getByText('API key — plan limits do not apply.')).toBeInTheDocument()

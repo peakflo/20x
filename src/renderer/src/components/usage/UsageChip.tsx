@@ -56,7 +56,7 @@ export function UsageChip({ icon, label, percent, level, limitReached, details, 
       </button>
       {open && (
         // Bottom padding bridges the gap so the pointer can move onto the card.
-        <span className="absolute bottom-full right-0 z-50 pb-1.5 text-left leading-normal" role="tooltip" data-testid={detailsTestId}>
+        <span className="absolute bottom-full right-0 z-50 pb-1.5 text-left leading-normal whitespace-normal" role="tooltip" data-testid={detailsTestId}>
           {details}
         </span>
       )}
