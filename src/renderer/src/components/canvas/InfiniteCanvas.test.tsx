@@ -689,6 +689,25 @@ describe('InfiniteCanvas', () => {
         height: 300,
       })
 
+    it('does not focus a panel on Ctrl/Cmd+number (no index-based switching)', () => {
+      addTaskPanel()
+      useCanvasStore.getState().addPanel({
+        type: 'task',
+        title: 'Second Task Panel',
+        refId: 'task-456',
+        x: 600,
+        y: 100,
+        width: 400,
+        height: 300,
+      })
+      render(<InfiniteCanvas />)
+      const viewportBefore = useCanvasStore.getState().viewport
+      fireEvent.keyDown(window, { code: 'Digit2', ctrlKey: true })
+      fireEvent.keyDown(window, { code: 'Digit1', metaKey: true })
+      expect(useCanvasStore.getState().viewport).toEqual(viewportBefore)
+      expect(useCanvasStore.getState().selectedPanelId).toBeNull()
+    })
+
     it('selects a panel on mousedown and renders a thicker outer border', () => {
       const id = addTaskPanel()
       const { container } = render(<InfiniteCanvas />)

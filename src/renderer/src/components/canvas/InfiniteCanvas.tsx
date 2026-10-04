@@ -828,9 +828,6 @@ export function InfiniteCanvas() {
   // ── Focused panel tracking (for Tab cycling) ─────────────
   const [focusedPanelIndex, setFocusedPanelIndex] = useState(-1)
 
-  // ── Ctrl-held state (shows panel index badges) ──────────
-  const [ctrlHeld, setCtrlHeld] = useState(false)
-
   // ── Keyboard shortcuts ───────────────────────────────────
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -839,16 +836,6 @@ export function InfiniteCanvas() {
       const tag = (target as HTMLElement | null)?.tagName?.toLowerCase()
       const isXtermFocused = !!target?.closest?.('.xterm')
       const isInputFocused = tag === 'input' || tag === 'textarea' || (target as HTMLElement | null)?.isContentEditable || isXtermFocused
-
-      // Track Ctrl held state — shows panel index badges (Ctrl only, not Cmd)
-      if (e.key === 'Control' && !e.repeat) {
-        setCtrlHeld(true)
-      }
-      // Clear stale ctrlHeld if Ctrl was released while OS had focus
-      // (e.g. after Ctrl+Cmd+Shift+3 screenshot, OS swallows the keyup)
-      if (!e.ctrlKey && e.key !== 'Control') {
-        setCtrlHeld(false)
-      }
 
       if (e.code === 'Space' && !e.repeat && !isInputFocused) {
         setSpaceHeld(true)
@@ -868,25 +855,6 @@ export function InfiniteCanvas() {
         e.preventDefault()
         commitViewport()
         resetViewport()
-      }
-
-      // Ctrl/Cmd + 1-9: focus panel by index
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && !isInputFocused) {
-        const digitMatch = e.code.match(/^Digit([1-9])$/)
-        if (digitMatch) {
-          const idx = parseInt(digitMatch[1], 10) - 1
-          const currentPanels = useCanvasStore.getState().panels
-          if (idx < currentPanels.length) {
-            e.preventDefault()
-            const container = containerRef.current
-            if (container) {
-              commitViewport()
-              const rect = container.getBoundingClientRect()
-              useCanvasStore.getState().focusPanel(currentPanels[idx].id, rect.width, rect.height)
-              setFocusedPanelIndex(idx)
-            }
-          }
-        }
       }
 
       // Tab / Shift+Tab: cycle through panels
@@ -969,13 +937,9 @@ export function InfiniteCanvas() {
       if (e.code === 'Space') {
         setSpaceHeld(false)
       }
-      if (e.key === 'Control') {
-        setCtrlHeld(false)
-      }
     }
     // Also clear on window blur (Ctrl+Tab to another window)
     const handleBlur = () => {
-      setCtrlHeld(false)
       setSpaceHeld(false)
     }
     window.addEventListener('keydown', handleKeyDown)
@@ -1041,14 +1005,12 @@ export function InfiniteCanvas() {
           <DrawingLayer />
 
           {/* Render panels — off-viewport panels are frozen (content hidden) */}
-          {panels.map((panel, index) => (
+          {panels.map((panel) => (
             <CanvasPanel
               key={panel.id}
               panel={panel}
               zoom={viewport.zoom}
               frozen={!visiblePanelIds.has(panel.id) && !(panel.type === 'task' && panel.id === selectedPanelId)}
-              panelIndex={index}
-              showIndex={ctrlHeld}
             />
           ))}
         </div>
