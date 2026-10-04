@@ -36,6 +36,7 @@ import {
   writeRegisteredTaskArtifactFile
 } from './artifacts'
 import { panelBrowserBroker } from './panel-browser-broker'
+import type { PullRequestWatcher } from './pull-request-watcher'
 
 let server: HttpServer | null = null
 let port: number | null = null
@@ -160,6 +161,14 @@ export function setTranscriptProvider(fn: (taskId: string) => Promise<Array<{ ro
 
 export function setTaskApiAgentController(controller: TaskApiAgentController | null): void {
   agentController = controller
+}
+
+type TaskApiPullRequestWatch = Pick<PullRequestWatcher, 'register'>
+
+let pullRequestWatch: TaskApiPullRequestWatch | null = null
+
+export function setTaskApiPullRequestWatch(watcher: TaskApiPullRequestWatch | null): void {
+  pullRequestWatch = watcher
 }
 
 export function startTaskApiServer(db: DatabaseManager): Promise<number> {
@@ -935,6 +944,27 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     // ── Acting on a running agent ─────────────────────────────
+
+    case '/watch_pull_request': {
+      if (!params.task_id) return { error: 'task_id is required' }
+      if (!params.url || !String(params.url).trim()) return { error: 'url is required' }
+      if (!pullRequestWatch) return { error: 'Pull request watching is not available' }
+      const taskId = String(params.task_id)
+      if (!db.getTask(taskId)) return { error: 'Task not found' }
+      const result = pullRequestWatch.register(taskId, String(params.url), { explicit: true })
+      if (!result.ok) return { error: result.error }
+      return {
+        success: true,
+        task_id: taskId,
+        url: result.url,
+        created: result.created,
+        // The user can switch watching off for a task. Say so, rather than implying it is live.
+        enabled: result.enabled,
+        note: result.enabled
+          ? '20x will wake this task when CI fails, when review comments or change requests arrive, when the PR has a merge conflict, or when it is ready to merge.'
+          : 'Watching is switched off for this task in 20x, so no wake-ups will be sent until it is switched on.'
+      }
+    }
 
     case '/send_message': {
       if (!params.task_id) return { error: 'task_id is required' }

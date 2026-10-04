@@ -115,6 +115,19 @@ const artifactToolNames = new Set(artifactTools.map((tool) => tool.name))
 const sharedTools: Tool[] = [
   ...artifactTools,
   {
+    name: 'watch_pull_request',
+    description:
+      'Watch a GitHub pull request for a task. 20x checks it about once a minute and wakes the task agent when a CI check fails, when a review comment or changes-requested review arrives, when the PR has a merge conflict, or when all checks pass and it is ready to merge. Call it after you open a PR, unless the PR was already detected. A PR that was merged or closed is not watched again unless you call this.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID. Automatically scoped in a task agent session.' },
+        url: { type: 'string', description: 'GitHub pull request URL, for example https://github.com/owner/repo/pull/123' }
+      },
+      required: ['url']
+    }
+  },
+  {
     name: 'list_agents',
     description: 'List all available agents with their capabilities and configurations',
     inputSchema: { type: 'object', properties: {} }
@@ -1027,6 +1040,8 @@ export async function callToolForScope(
     const normalizedArgs: Record<string, unknown> = args ? { ...args } : {}
     if (normalizedArgs.status === 'in_progress') normalizedArgs.status = 'agent_working'
     if (artifactToolNames.has(name) && scope.artifactTaskId) normalizedArgs.task_id = scope.artifactTaskId
+    // A task agent can only watch the PR of its own task.
+    if (name === 'watch_pull_request' && scope.taskId) normalizedArgs.task_id = scope.taskId
     if (browserRecordingToolNames.has(name) && (scope.taskId || scope.artifactTaskId)) {
       normalizedArgs.task_id = scope.taskId || scope.artifactTaskId
     }

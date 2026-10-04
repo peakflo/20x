@@ -341,6 +341,7 @@ export interface WorkfloTask {
   heartbeat_interval_minutes?: number | null
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
+  pr_watch_enabled?: boolean | null
   auto_start_agent: boolean
   auto_complete_without_review: boolean
   /** null = the user has not been asked yet; true = close it at the source; false = manual. */
@@ -398,6 +399,7 @@ export interface UpdateTaskDTO {
   heartbeat_interval_minutes?: number | null
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
+  pr_watch_enabled?: boolean | null
   auto_start_agent?: boolean
   auto_complete_without_review?: boolean
   complete_at_source?: boolean | null

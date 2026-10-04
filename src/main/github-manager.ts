@@ -9,6 +9,12 @@ import {
   type PullRequestCheck,
   type PullRequestDetails
 } from '../shared/artifacts'
+import {
+  parseWatchablePullRequestUrl,
+  type PullRequestCheckSnapshot,
+  type PullRequestCommentSnapshot,
+  type PullRequestWatchSnapshot
+} from './pull-request-watch'
 
 const execFileAsync = promisify(execFile)
 
@@ -119,6 +125,7 @@ function mapPullRequestCheck(check: RawPullRequestCheck): PullRequestCheck {
 
 export class GitHubManager {
   private authProcess: ChildProcess | null = null
+  private viewerLogin: string | null = null
 
   private mapRepo(raw: Record<string, unknown>): GitHubRepo {
     return {
@@ -359,6 +366,123 @@ export class GitHubManager {
       `/repos/${owner}/${repo}/issues/${number}/comments`,
       '-f', `body=${body}`
     ])
+  }
+
+  /** GitHub login of the account `gh` is signed in as, cached for the process. */
+  async fetchViewerLogin(): Promise<string> {
+    if (this.viewerLogin) return this.viewerLogin
+    const { stdout } = await execFileAsync('gh', ['api', 'user', '--jq', '.login'])
+    this.viewerLogin = stdout.trim()
+    return this.viewerLogin
+  }
+
+  /**
+   * Read what the PR watcher compares between polls: state, head commit,
+   * mergeable state, check results and new review activity. Comments written by
+   * the signed-in account are left out, so the agent's own replies never wake it.
+   */
+  async fetchPullRequestWatchSnapshot(url: string): Promise<PullRequestWatchSnapshot> {
+    const parsed = parseWatchablePullRequestUrl(url)
+    if (!parsed) throw new Error('A valid GitHub pull request URL is required')
+    const { owner, repo, number, url: canonicalUrl } = parsed
+    const viewer = await this.fetchViewerLogin().catch(() => '')
+
+    const [{ stdout: viewStdout }, reviewComments, issueComments, reviews] = await Promise.all([
+      execFileAsync('gh', [
+        'pr', 'view', canonicalUrl,
+        '--json', 'state,isDraft,headRefOid,mergeable,reviewDecision,statusCheckRollup,url'
+      ], { maxBuffer: GH_API_MAX_BUFFER }),
+      this.fetchGhApiArray(`/repos/${owner}/${repo}/pulls/${number}/comments?per_page=100`),
+      this.fetchGhApiArray(`/repos/${owner}/${repo}/issues/${number}/comments?per_page=100`),
+      this.fetchGhApiArray(`/repos/${owner}/${repo}/pulls/${number}/reviews?per_page=100`)
+    ])
+
+    const raw = JSON.parse(viewStdout) as {
+      state?: string
+      isDraft?: boolean
+      headRefOid?: string
+      mergeable?: string
+      reviewDecision?: string
+      statusCheckRollup?: RawPullRequestCheck[]
+    }
+
+    const checks = (raw.statusCheckRollup || []).map((check): PullRequestCheckSnapshot => {
+      // CheckRun reports status + conclusion. A commit status (StatusContext) reports one state.
+      if (check.__typename === 'StatusContext' || (!check.status && check.state)) {
+        const state = (check.state || '').toUpperCase()
+        return {
+          name: check.context || check.name || 'Status',
+          completed: !['PENDING', 'EXPECTED', ''].includes(state),
+          conclusion: state,
+          url: check.targetUrl || undefined
+        }
+      }
+      return {
+        name: check.name || check.context || 'Check',
+        completed: (check.status || '').toUpperCase() === 'COMPLETED',
+        conclusion: (check.conclusion || '').toUpperCase(),
+        url: check.detailsUrl || undefined
+      }
+    })
+
+    const comments: PullRequestCommentSnapshot[] = []
+    const authorOf = (item: { user?: { login?: string } | null }): string => item.user?.login || 'unknown'
+    const isOwn = (item: { user?: { login?: string } | null }): boolean => !!viewer && authorOf(item) === viewer
+
+    for (const item of reviewComments) {
+      if (isOwn(item)) continue
+      comments.push({
+        kind: 'review_comment',
+        id: String(item.id),
+        author: authorOf(item),
+        body: String(item.body || ''),
+        path: typeof item.path === 'string' ? item.path : undefined,
+        line: typeof item.line === 'number' ? item.line : (typeof item.original_line === 'number' ? item.original_line : undefined),
+        url: typeof item.html_url === 'string' ? item.html_url : undefined
+      })
+    }
+    for (const item of issueComments) {
+      if (isOwn(item)) continue
+      comments.push({
+        kind: 'issue_comment',
+        id: String(item.id),
+        author: authorOf(item),
+        body: String(item.body || ''),
+        url: typeof item.html_url === 'string' ? item.html_url : undefined
+      })
+    }
+    for (const item of reviews) {
+      if (isOwn(item)) continue
+      const state = String(item.state || '').toUpperCase()
+      const body = String(item.body || '')
+      // Approvals and dismissals carry no request. Only changes requested or a
+      // written review are worth waking the agent for.
+      if (state !== 'CHANGES_REQUESTED' && !(state === 'COMMENTED' && body.trim())) continue
+      comments.push({
+        kind: 'review',
+        id: String(item.id),
+        author: authorOf(item),
+        body: state === 'CHANGES_REQUESTED' && !body.trim() ? 'Changes requested.' : body,
+        url: typeof item.html_url === 'string' ? item.html_url : undefined
+      })
+    }
+
+    return {
+      url: canonicalUrl,
+      state: (raw.state || 'OPEN').toUpperCase() as PullRequestWatchSnapshot['state'],
+      isDraft: raw.isDraft === true,
+      headSha: raw.headRefOid || '',
+      mergeable: (raw.mergeable || 'UNKNOWN').toUpperCase(),
+      reviewDecision: (raw.reviewDecision || '').toUpperCase(),
+      checks,
+      comments
+    }
+  }
+
+  private async fetchGhApiArray(path: string): Promise<Array<Record<string, unknown> & { user?: { login?: string } | null }>> {
+    const { stdout } = await execFileAsync('gh', ['api', '--paginate', path], { maxBuffer: GH_API_MAX_BUFFER })
+    const parsed = JSON.parse(stdout) as unknown
+    return Array.isArray(parsed) ? parsed as Array<Record<string, unknown> & { user?: { login?: string } | null }> : []
   }
 
   async fetchRepoCollaborators(owner: string, repo: string): Promise<GitHubCollaborator[]> {

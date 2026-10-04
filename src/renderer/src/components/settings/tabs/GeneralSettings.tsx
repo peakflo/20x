@@ -10,6 +10,7 @@ import { Select } from '@/components/ui/Select'
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard'
 import { settingsApi, mobileApi, updaterApi, worktreeApi, onWorkspaceCleanupProgress } from '@/lib/ipc-client'
 import { MASTERMIND_PREWARM_SETTING } from '@/components/orchestrator/OrchestratorPanel'
+import { PR_WATCH_ENABLED_SETTING, PR_WATCH_READY_SETTING } from '@shared/pull-request-watch-settings'
 
 /** Human-readable summary of a cleanup run, or null when there is nothing to report. */
 function describeCleanupOutcome(cleaned: number | undefined, nodeModulesCleaned: number | undefined): string | null {
@@ -28,6 +29,8 @@ export function GeneralSettings() {
   const [launchAtStartup, setLaunchAtStartup] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [mastermindPrewarm, setMastermindPrewarm] = useState(true)
+  const [prWatchEnabled, setPrWatchEnabled] = useState(true)
+  const [prWatchReady, setPrWatchReady] = useState(true)
   const [minimizeToTray, setMinimizeToTray] = useState(false)
   const [mobileLanUrl, setMobileLanUrl] = useState('')
   const [mobileTunnelUrl, setMobileTunnelUrl] = useState<string | null>(null)
@@ -125,6 +128,18 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
         setMastermindPrewarm(warm !== 'false')
       } catch (error) {
         console.error('Failed to load the Mastermind warm-up setting:', error)
+      }
+
+      // Load pull request watch preferences
+      try {
+        const [watchEnabled, notifyReady] = await Promise.all([
+          settingsApi.get(PR_WATCH_ENABLED_SETTING),
+          settingsApi.get(PR_WATCH_READY_SETTING)
+        ])
+        setPrWatchEnabled(watchEnabled !== 'false')
+        setPrWatchReady(notifyReady !== 'false')
+      } catch (error) {
+        console.error('Failed to load the pull request watch settings:', error)
       }
 
       // Load workspace cleanup settings
@@ -232,6 +247,16 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
     }
   }
 
+  const handlePrWatchEnabledChange = async (checked: boolean): Promise<void> => {
+    setPrWatchEnabled(checked)
+    await settingsApi.set(PR_WATCH_ENABLED_SETTING, checked ? 'true' : 'false')
+  }
+
+  const handlePrWatchReadyChange = async (checked: boolean): Promise<void> => {
+    setPrWatchReady(checked)
+    await settingsApi.set(PR_WATCH_READY_SETTING, checked ? 'true' : 'false')
+  }
+
   const handleMastermindPrewarmChange = async (checked: boolean): Promise<void> => {
     setMastermindPrewarm(checked)
     // Takes effect at the next launch: the session it governs is started once,
@@ -312,6 +337,38 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             checked={mastermindPrewarm}
             onCheckedChange={handleMastermindPrewarmChange}
             disabled={loading}
+          />
+        </div>
+
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="pr-watch-enabled">Watch pull requests</Label>
+            <p className="text-xs text-muted-foreground">
+              Check the PRs that tasks open about once a minute, and wake the task agent when CI
+              fails, review comments arrive, a merge conflict appears, or the PR is ready. Each task
+              can override this in its details.
+            </p>
+          </div>
+          <Switch
+            id="pr-watch-enabled"
+            checked={prWatchEnabled}
+            onCheckedChange={handlePrWatchEnabledChange}
+            disabled={loading}
+          />
+        </div>
+
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="pr-watch-ready">Notify when a PR is ready</Label>
+            <p className="text-xs text-muted-foreground">
+              Tell the agent when every check passes and the PR can be merged. Merging stays with you.
+            </p>
+          </div>
+          <Switch
+            id="pr-watch-ready"
+            checked={prWatchReady}
+            onCheckedChange={handlePrWatchReadyChange}
+            disabled={loading || !prWatchEnabled}
           />
         </div>
 

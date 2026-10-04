@@ -8,6 +8,7 @@ import { TaskStatus } from '../shared/constants'
 import type { ReasoningEffort } from '../shared/reasoning-effort'
 import { startTaskApiServer } from './task-api-server'
 import { UsageStore } from './usage/usage-store'
+import type { PullRequestWatchEvent } from './pull-request-watch'
 
 export interface AgentRow {
   id: string
@@ -273,9 +274,23 @@ export interface TaskRow {
   heartbeat_next_check_at: string | null
   auto_start_agent: number
   auto_complete_without_review: number
+  pr_watch_enabled: number | null
   complete_at_source: number | null
   parent_task_id: string | null
   sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+/** One watched pull request for a task, with its dedupe cursor and queued events. */
+export interface PullRequestWatchRecord {
+  task_id: string
+  url: string
+  state: 'active' | 'stopped'
+  seen_keys: string[]
+  pending_events: PullRequestWatchEvent[]
+  stopped_reason: string | null
+  last_checked_at: string | null
   created_at: string
   updated_at: string
 }
@@ -369,6 +384,8 @@ export interface TaskRecord {
   heartbeat_interval_minutes: number | null
   heartbeat_last_check_at: string | null
   heartbeat_next_check_at: string | null
+  /** Per-task PR watch switch. Null follows the global setting. */
+  pr_watch_enabled: boolean | null
   auto_start_agent: boolean
   auto_complete_without_review: boolean
   /**
@@ -452,6 +469,7 @@ export interface UpdateTaskData {
   heartbeat_interval_minutes?: number | null
   heartbeat_last_check_at?: string | null
   heartbeat_next_check_at?: string | null
+  pr_watch_enabled?: boolean | null
   auto_start_agent?: boolean
   auto_complete_without_review?: boolean
   complete_at_source?: boolean | null
@@ -488,6 +506,7 @@ const UPDATABLE_COLUMNS = new Set([
   'heartbeat_interval_minutes',
   'heartbeat_last_check_at',
   'heartbeat_next_check_at',
+  'pr_watch_enabled',
   'auto_start_agent',
   'auto_complete_without_review',
   'complete_at_source',
@@ -539,6 +558,7 @@ function deserializeTask(row: TaskRow): TaskRecord {
     heartbeat_interval_minutes: row.heartbeat_interval_minutes ?? null,
     heartbeat_last_check_at: row.heartbeat_last_check_at ?? null,
     heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
+    pr_watch_enabled: row.pr_watch_enabled == null ? null : row.pr_watch_enabled === 1,
     auto_start_agent: (row.auto_start_agent ?? 0) === 1,
     auto_complete_without_review: (row.auto_complete_without_review ?? 0) === 1,
     complete_at_source: row.complete_at_source == null ? null : row.complete_at_source === 1
@@ -960,7 +980,7 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  *
  * 8 → 9: tasks.complete_at_source
  */
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -1661,6 +1681,29 @@ export class DatabaseManager {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN heartbeat_next_check_at TEXT DEFAULT NULL`)
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_heartbeat_next ON tasks(heartbeat_next_check_at) WHERE heartbeat_enabled = 1`)
     }
+
+    // Per-task PR watch switch. NULL means "follow the global setting".
+    if (!columnNames.has('pr_watch_enabled')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN pr_watch_enabled INTEGER DEFAULT NULL`)
+    }
+
+    // Pull request watches: one row per (task, PR). seen_keys records the events
+    // already reported; pending_events holds events waiting for an idle agent.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS pr_watches (
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        url TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'active',
+        seen_keys TEXT NOT NULL DEFAULT '[]',
+        pending_events TEXT NOT NULL DEFAULT '[]',
+        stopped_reason TEXT,
+        last_checked_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (task_id, url)
+      );
+      CREATE INDEX IF NOT EXISTS idx_pr_watches_state ON pr_watches(state);
+    `)
 
     // Add parent_task_id column for subtask support
     if (!columnNames.has('parent_task_id')) {
@@ -2980,6 +3023,80 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   }
 
   // ── Settings CRUD ──────────────────────────────────────────
+
+  // ── Pull request watches ─────────────────────────────────
+
+  private toPullRequestWatchRecord(row: Record<string, unknown>): PullRequestWatchRecord {
+    return {
+      task_id: row.task_id as string,
+      url: row.url as string,
+      state: row.state === 'stopped' ? 'stopped' : 'active',
+      seen_keys: parseJsonArray<string>(row.seen_keys as string),
+      pending_events: parseJsonArray<PullRequestWatchEvent>(row.pending_events as string),
+      stopped_reason: (row.stopped_reason as string | null) ?? null,
+      last_checked_at: (row.last_checked_at as string | null) ?? null,
+      created_at: row.created_at as string,
+      updated_at: row.updated_at as string
+    }
+  }
+
+  /** Start watching a PR for a task. Returns false when that PR is already watched. */
+  addPullRequestWatch(taskId: string, url: string): boolean {
+    const now = new Date().toISOString()
+    const result = this.db.prepare(
+      `INSERT OR IGNORE INTO pr_watches (task_id, url, state, seen_keys, pending_events, created_at, updated_at)
+       VALUES (?, ?, 'active', '[]', '[]', ?, ?)`
+    ).run(taskId, url, now, now)
+    return result.changes > 0
+  }
+
+  /** Resume a watch that was stopped earlier, for an explicit request to watch it again. */
+  reactivatePullRequestWatch(taskId: string, url: string): void {
+    this.db.prepare(
+      `UPDATE pr_watches SET state = 'active', stopped_reason = NULL, updated_at = ? WHERE task_id = ? AND url = ?`
+    ).run(new Date().toISOString(), taskId, url)
+  }
+
+  getPullRequestWatch(taskId: string, url: string): PullRequestWatchRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM pr_watches WHERE task_id = ? AND url = ?')
+      .get(taskId, url) as Record<string, unknown> | undefined
+    return row ? this.toPullRequestWatchRecord(row) : undefined
+  }
+
+  listPullRequestWatchesForTask(taskId: string): PullRequestWatchRecord[] {
+    const rows = this.db.prepare('SELECT * FROM pr_watches WHERE task_id = ? ORDER BY created_at').all(taskId) as Record<string, unknown>[]
+    return rows.map((row) => this.toPullRequestWatchRecord(row))
+  }
+
+  listActivePullRequestWatches(): PullRequestWatchRecord[] {
+    const rows = this.db.prepare(`SELECT * FROM pr_watches WHERE state = 'active' ORDER BY created_at`).all() as Record<string, unknown>[]
+    return rows.map((row) => this.toPullRequestWatchRecord(row))
+  }
+
+  savePullRequestWatchProgress(
+    taskId: string,
+    url: string,
+    progress: { seenKeys: string[]; pendingEvents: PullRequestWatchEvent[]; checkedAt: string }
+  ): void {
+    this.db.prepare(
+      `UPDATE pr_watches SET seen_keys = ?, pending_events = ?, last_checked_at = ?, updated_at = ?
+       WHERE task_id = ? AND url = ?`
+    ).run(
+      JSON.stringify(progress.seenKeys),
+      JSON.stringify(progress.pendingEvents),
+      progress.checkedAt,
+      new Date().toISOString(),
+      taskId,
+      url
+    )
+  }
+
+  stopPullRequestWatch(taskId: string, url: string, reason: string): void {
+    this.db.prepare(
+      `UPDATE pr_watches SET state = 'stopped', stopped_reason = ?, pending_events = '[]', updated_at = ?
+       WHERE task_id = ? AND url = ?`
+    ).run(reason, new Date().toISOString(), taskId, url)
+  }
 
   getSetting(key: string): string | undefined {
     const row = this.db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined

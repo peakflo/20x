@@ -220,3 +220,29 @@ describe('saved browser recording tools', () => {
     expect(calls).toEqual([{ task_id: 'owner' }])
   })
 })
+
+describe('watch_pull_request', () => {
+  it('is offered to both full-access and scoped sessions', () => {
+    expect(listToolsForScope(FULL_ACCESS_SCOPE).map((t) => t.name)).toContain('watch_pull_request')
+    expect(listToolsForScope(SCOPED).map((t) => t.name)).toContain('watch_pull_request')
+  })
+
+  it('requires a url and pins a task agent to its own task', async () => {
+    const calls: Array<{ route: string; params: Record<string, unknown> }> = []
+    const invoke = async (route: string, params: Record<string, unknown>): Promise<unknown> => {
+      calls.push({ route, params })
+      return { success: true }
+    }
+    await callToolForScope(
+      'watch_pull_request',
+      { task_id: 'some-other-task', url: 'https://github.com/acme/app/pull/1' },
+      SCOPED,
+      invoke
+    )
+    expect(calls).toEqual([
+      { route: '/watch_pull_request', params: { task_id: 'task-own', url: 'https://github.com/acme/app/pull/1' } }
+    ])
+    expect(propertiesOf(SCOPED, 'watch_pull_request')).toHaveProperty('url')
+    expect(toolByName(SCOPED, 'watch_pull_request')?.inputSchema.required).toEqual(['url'])
+  })
+})

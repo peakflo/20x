@@ -19,6 +19,7 @@ import type { WorkfloTask, FileAttachment, OutputField, Agent, RecurrencePattern
 import { AnthropicLogo, OpenCodeLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
 import { AgentHoverCard } from '@/components/usage/AgentHoverCard'
 import { HeartbeatSection } from './HeartbeatSection'
+import { PullRequestWatchToggle } from './PullRequestWatchToggle'
 import { useUIStore } from '@/stores/ui-store'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 
@@ -734,6 +735,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
             {(task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
               <HeartbeatSection task={task} />
             )}
+            {task.status !== TaskStatus.Completed && <PullRequestWatchToggle task={task} />}
           </div>
 
           {task.labels.length > 0 && (

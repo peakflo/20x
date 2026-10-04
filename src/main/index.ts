@@ -26,6 +26,7 @@ import { assistantTextParts, sinceLastUserMessage } from './voice/voice-answer-p
 import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { HeartbeatScheduler } from './heartbeat-scheduler'
+import { PullRequestWatcher } from './pull-request-watcher'
 import { TaskAutomationScheduler } from './task-automation-scheduler'
 import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
 import { ClaudePluginManager } from './claude-plugin-manager'
@@ -34,7 +35,7 @@ import { buildWorkspaceStates, sweepLeakedWorkspaceProcesses, readDiskSpace, wor
 import { WORKSPACES_DIR, listWorkspaceDirs } from './workspace-paths'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
-import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
+import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiPullRequestWatch, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
@@ -74,6 +75,7 @@ let oauthManager: OAuthManager | null = null
 let enterpriseAuth: EnterpriseAuth | null = null
 let recurrenceScheduler: RecurrenceScheduler | null = null
 let heartbeatScheduler: HeartbeatScheduler | null = null
+let pullRequestWatcher: PullRequestWatcher | null = null
 let taskAutomationScheduler: TaskAutomationScheduler | null = null
 let workspaceCleanupScheduler: WorkspaceCleanupScheduler | null = null
 let claudePluginManager: ClaudePluginManager | null = null
@@ -274,6 +276,7 @@ async function shutdownAppServices(): Promise<void> {
   voiceSessionManager?.shutdown()
   enterpriseHeartbeatInstance?.stop()
   heartbeatScheduler?.stop()
+  pullRequestWatcher?.stop()
   taskAutomationScheduler?.stop()
   workspaceCleanupScheduler?.stop()
 
@@ -351,6 +354,9 @@ function createWindow(): void {
     if (heartbeatScheduler && mainWindow) {
       heartbeatScheduler.start(mainWindow)
     }
+
+    // Start the PR watcher. It polls GitHub once a minute and wakes task agents.
+    pullRequestWatcher?.start()
 
     // Start task automation scheduler (auto-start / auto-complete reconciliation).
     // Deliberately window-independent: the flags must hold with no window open.
@@ -1018,6 +1024,15 @@ app.whenReady().then(async () => {
     void taskAutomationScheduler?.runNow()
   })
   workspaceCleanupScheduler = new WorkspaceCleanupScheduler(db)
+
+  // Watch the PRs tasks open: wake the agent on CI failures, review comments,
+  // merge conflicts and readiness. PRs are found from tool results, or registered
+  // explicitly through the watch_pull_request tool.
+  pullRequestWatcher = new PullRequestWatcher(db, agentManager, githubManager)
+  agentManager.setPullRequestDetectedHandler((taskId, url) => {
+    pullRequestWatcher?.register(taskId, url, { explicit: false })
+  })
+  setTaskApiPullRequestWatch(pullRequestWatcher)
 
   // Initialize enterprise auth (gracefully — missing env vars just disable the feature)
   try {

@@ -465,6 +465,8 @@ export class RecurrenceScheduler {
       heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
       auto_start_agent: (row.auto_start_agent ?? 0) === 1,
       auto_complete_without_review: (row.auto_complete_without_review ?? 0) === 1,
+      // A new occurrence opens its own PR, so it must not inherit a past switch.
+      pr_watch_enabled: null,
       // A new occurrence must not inherit the answer given on a past one.
       complete_at_source: row.complete_at_source == null ? null : row.complete_at_source === 1,
       parent_task_id: row.parent_task_id ?? null,

@@ -274,6 +274,8 @@ export class AgentManager extends EventEmitter {
   private oauthManager: import('./oauth/oauth-manager').OAuthManager | null = null
   private enterpriseAuth: import('./enterprise-auth').EnterpriseAuth | null = null
   private externalListeners: Array<(channel: string, data: unknown) => void> = []
+  /** Told each time a task's transcript shows a pull request it opened or reported. */
+  private pullRequestDetectedHandler: ((taskId: string, url: string) => void) | null = null
   private enterpriseStateSync: import('./enterprise-state-sync').EnterpriseStateSync | null = null
 
   // ── Centralized Polling Coordinator ──
@@ -5531,6 +5533,10 @@ Important:
    * Register an external listener that receives all events sent to the renderer.
    * Used by the mobile API server to broadcast via WebSocket.
    */
+  setPullRequestDetectedHandler(fn: ((taskId: string, url: string) => void) | null): void {
+    this.pullRequestDetectedHandler = fn
+  }
+
   addExternalListener(fn: (channel: string, data: unknown) => void): void {
     this.externalListeners.push(fn)
   }
@@ -5676,6 +5682,11 @@ Important:
       if (url) prUrls.add(url)
     }
     for (const url of prUrls) {
+      try {
+        this.pullRequestDetectedHandler?.(taskId, url)
+      } catch (err) {
+        console.error('[AgentManager] Pull request watch registration failed:', (err as Error).message)
+      }
       const number = url.match(/\/(\d+)$/)?.[1]
       this.sendArtifactUpdated({
         id: `${taskId}:${ArtifactType.PR}:${encodeURIComponent(url)}`,

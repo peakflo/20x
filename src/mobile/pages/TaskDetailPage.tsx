@@ -678,6 +678,36 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                 </div>
               </>
             )}
+
+            {/* Watch PR — wakes the agent on CI failures, review comments, conflicts and readiness */}
+            {task.status !== TaskStatus.Completed && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-1.5">
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="6" cy="6" r="3" />
+                    <circle cx="6" cy="18" r="3" />
+                    <circle cx="18" cy="18" r="3" />
+                    <path d="M6 9v6" />
+                    <path d="M18 15V9a3 3 0 0 0-3-3h-3" />
+                  </svg>
+                  Watch PR
+                </span>
+                <div className="flex items-center gap-2">
+                  <Badge variant={task.pr_watch_enabled === false ? 'default' : 'green'}>
+                    {task.pr_watch_enabled === null || task.pr_watch_enabled === undefined ? 'Default' : task.pr_watch_enabled ? 'On' : 'Off'}
+                  </Badge>
+                  <button
+                    onClick={async () => {
+                      const current = task.pr_watch_enabled ?? true
+                      await updateTask(task.id, { pr_watch_enabled: !current })
+                    }}
+                    className="text-xs text-primary active:opacity-60 ml-auto"
+                  >
+                    {(task.pr_watch_enabled ?? true) ? 'Turn off' : 'Turn on'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
