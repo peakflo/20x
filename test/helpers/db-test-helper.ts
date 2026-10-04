@@ -224,6 +224,11 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       revoked INTEGER NOT NULL DEFAULT 0
     );
 
+    CREATE TABLE IF NOT EXISTS mobile_push_subscriptions (
+      session_id TEXT PRIMARY KEY REFERENCES mobile_sessions(id) ON DELETE CASCADE,
+      subscription TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS transcript_parts (
       task_id TEXT NOT NULL,
       part_id TEXT NOT NULL,

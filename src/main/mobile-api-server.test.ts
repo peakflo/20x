@@ -7,6 +7,29 @@ import { makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
 import { startMobileApiServer, stopMobileApiServer } from './mobile-api-server'
 
+describe('mobile push subscription endpoint', () => {
+  it('requires a paired session and stores the subscription against it', async () => {
+    const { db } = createTestDb()
+    const token = 'push-device-token'
+    db.createMobileSession('push-device', createHash('sha256').update(token).digest('hex'), 'Phone')
+    const port = await startMobileApiServer(db, {} as never, {} as never, 21000 + Math.floor(Math.random() * 40000))
+    try {
+      const subscription = { endpoint: 'https://push.example.com/endpoint', keys: { p256dh: 'abc', auth: 'def' } }
+      const unauthorized = await fetch(`http://127.0.0.1:${port}/api/push/subscription`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscription })
+      })
+      expect(unauthorized.status).toBe(401)
+      const authorized = await fetch(`http://127.0.0.1:${port}/api/push/subscription`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ subscription })
+      })
+      expect(authorized.status).toBe(200)
+      expect(db.getMobilePushSubscriptions()[0].session_id).toBe('push-device')
+      db.revokeMobileSession('push-device')
+      expect(db.getMobilePushSubscriptions()).toEqual([])
+    } finally { stopMobileApiServer(); db.close() }
+  })
+})
+
 // We test the database-level route logic for the create task feature,
 // which is the new functionality we're testing.
 

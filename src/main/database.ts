@@ -1247,6 +1247,11 @@ export class DatabaseManager {
         revoked INTEGER NOT NULL DEFAULT 0
       );
 
+      CREATE TABLE IF NOT EXISTS mobile_push_subscriptions (
+        session_id TEXT PRIMARY KEY REFERENCES mobile_sessions(id) ON DELETE CASCADE,
+        subscription TEXT NOT NULL
+      );
+
       -- Durable transcript projection: the main process is the source of truth
       -- for every message part shown in a task transcript. The renderer hydrates
       -- from snapshots of this table instead of depending on catching live
@@ -3232,11 +3237,26 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   }
 
   revokeMobileSession(id: string): boolean {
+    this.db.prepare('DELETE FROM mobile_push_subscriptions WHERE session_id = ?').run(id)
     const result = this.db.prepare('UPDATE mobile_sessions SET revoked = 1 WHERE id = ?').run(id)
     return result.changes > 0
   }
 
   revokeAllMobileSessions(): void {
+    this.db.prepare('DELETE FROM mobile_push_subscriptions').run()
     this.db.prepare('UPDATE mobile_sessions SET revoked = 1').run()
+  }
+
+  setMobilePushSubscription(sessionId: string, subscription: string | null): void {
+    if (subscription === null) {
+      this.db.prepare('DELETE FROM mobile_push_subscriptions WHERE session_id = ?').run(sessionId)
+    } else {
+      this.db.prepare('INSERT OR REPLACE INTO mobile_push_subscriptions (session_id, subscription) VALUES (?, ?)').run(sessionId, subscription)
+    }
+  }
+
+  getMobilePushSubscriptions(): Array<{ session_id: string; subscription: string }> {
+    return this.db.prepare(`SELECT p.session_id, p.subscription FROM mobile_push_subscriptions p
+      JOIN mobile_sessions s ON s.id = p.session_id WHERE s.revoked = 0`).all() as Array<{ session_id: string; subscription: string }>
   }
 }

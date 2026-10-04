@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api/client'
 import type { Route } from '../App'
 import { SubscriptionUsageSection } from '../components/SubscriptionUsageSection'
+import { PushSettings } from '../components/PushSettings'
 
 interface TaskSource {
   id: string
@@ -106,6 +107,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
         )}
 
         <SubscriptionUsageSection />
+        <PushSettings />
 
         {/* Task Sources Section */}
         <div>

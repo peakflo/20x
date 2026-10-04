@@ -8,6 +8,7 @@ import type { Artifact, ArtifactContent, PullRequestDetails } from '@shared/arti
 import type { VoiceCapabilities } from '@shared/voice'
 import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
+import type { PushPreferences } from '@shared/push-notifications'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -51,6 +52,12 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export const api = {
+  push: {
+    config: () => get<{ publicKey: string; preferences: PushPreferences }>('/api/push/config'),
+    subscribe: (subscription: PushSubscriptionJSON | null) => post<{ success: boolean }>('/api/push/subscription', { subscription }),
+    preferences: (preferences: PushPreferences) => post<{ preferences: PushPreferences }>('/api/push/preferences', { preferences }),
+    test: () => post<{ success: boolean }>('/api/push/test')
+  },
   tasks: {
     list: (params?: Record<string, string>) => {
       const qs = params ? '?' + new URLSearchParams(params).toString() : ''

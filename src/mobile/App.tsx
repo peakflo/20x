@@ -29,7 +29,10 @@ export type Route =
 export function App() {
   const pairCode = getPairCodeFromUrl()
   const [paired, setPaired] = useState(() => !pairCode && hasSessionToken())
-  const [route, setRoute] = useState<Route>({ page: 'list' })
+  const [route, setRoute] = useState<Route>(() => {
+    const taskId = new URLSearchParams(window.location.search).get('conversation')
+    return taskId ? { page: 'conversation', taskId } : { page: 'list' }
+  })
   const activeTaskId = 'taskId' in route ? route.taskId : null
   const isPopRef = useRef(false)
 
@@ -59,7 +62,8 @@ export function App() {
       isPopRef.current = false
     }
     // Seed initial history entry
-    history.replaceState({ page: 'list' }, '', null)
+    const taskId = new URLSearchParams(window.location.search).get('conversation')
+    history.replaceState(taskId ? { page: 'conversation', taskId } : { page: 'list' }, '', null)
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])

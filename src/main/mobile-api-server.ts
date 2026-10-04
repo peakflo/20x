@@ -25,6 +25,9 @@ import { TaskStatus } from '../shared/constants'
 import { sanitizeUsageSummaryQuery } from './usage/usage-query'
 import { guardStream } from './child-stream-guards'
 import type { ArtifactMcpCall } from '../shared/artifact-mcp'
+import { getVapidPublicKey, isPushSubscription, PUSH_PREFERENCES_KEY } from './mobile-push'
+import { buildPushPayload, parsePushPreferences, PUSH_EVENTS, type PushPreferences } from '../shared/push-notifications'
+import webpush from 'web-push'
 
 // ── State ────────────────────────────────────────────────────
 let server: HttpServer | null = null
@@ -388,6 +391,10 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
     return tasks
   }
 
+  if (pathname === '/api/push/config') {
+    return { publicKey: getVapidPublicKey(db), preferences: parsePushPreferences(db.getSetting(PUSH_PREFERENCES_KEY)) }
+  }
+
   // GET /api/tasks/:taskId/transcript — full durable transcript snapshot.
   // Mobile is a PURE READER of the projection: read straight from the DB, never
   // via AgentManager.getTranscriptSnapshot (which can trigger the one-time
@@ -594,6 +601,34 @@ async function routeGet(pathname: string, url: URL): Promise<unknown> {
 async function routePost(pathname: string, params: Record<string, unknown>, req?: IncomingMessage): Promise<unknown> {
   const agent = agentRef!
   const db = dbRef!
+
+  if (pathname === '/api/push/subscription' || pathname === '/api/push/test') {
+    const token = req?.headers.authorization?.slice('Bearer '.length)
+    const session = token ? db.getMobileSessionByTokenHash(hashToken(token)) : undefined
+    if (!session) throw Object.assign(new Error('Unauthorized'), { status: 401 })
+    if (pathname === '/api/push/subscription') {
+      if (params.subscription !== null && !isPushSubscription(params.subscription)) {
+        throw Object.assign(new Error('Invalid push subscription'), { status: 400 })
+      }
+      db.setMobilePushSubscription(session.id, params.subscription === null ? null : JSON.stringify(params.subscription))
+      return { success: true }
+    }
+    const row = db.getMobilePushSubscriptions().find(item => item.session_id === session.id)
+    if (!row) throw Object.assign(new Error('Enable notifications on this device first'), { status: 400 })
+    const publicKey = getVapidPublicKey(db)
+    webpush.setVapidDetails('mailto:notifications@20x.app', publicKey, db.getSetting('mobile_push_vapid_private')!)
+    await webpush.sendNotification(JSON.parse(row.subscription), JSON.stringify(buildPushPayload('finished', '', '20x test notification')))
+    return { success: true }
+  }
+
+  if (pathname === '/api/push/preferences') {
+    const value = params.preferences as Partial<PushPreferences> | undefined
+    if (!value || typeof value !== 'object' || PUSH_EVENTS.some(event => typeof value[event] !== 'boolean')) {
+      throw Object.assign(new Error('Invalid notification preferences'), { status: 400 })
+    }
+    db.setSetting(PUSH_PREFERENCES_KEY, JSON.stringify(value))
+    return { preferences: parsePushPreferences(db.getSetting(PUSH_PREFERENCES_KEY)) }
+  }
 
   const artifactMcpMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/artifacts\/mcp$/)
   if (artifactMcpMatch) {

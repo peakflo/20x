@@ -10,6 +10,7 @@ import type { ArtifactMcpCall } from '../shared/artifact-mcp'
 import WebSocket from 'ws'
 import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
 import { getPendingPin } from './mobile-api-server'
+import { sendMobilePush } from './mobile-push'
 import { setTaskApiUiState } from './task-api-server'
 import { panelBrowserBroker } from './panel-browser-broker'
 import type { UsageSummaryQuery } from '../shared/usage'
@@ -615,8 +616,13 @@ export function registerIpcHandlers(
     const all = db.getAllSettings()
     // Strip internal mobile pairing keys — they're live credentials, not UI settings
     return Object.fromEntries(
-      Object.entries(all).filter(([k]) => !k.startsWith('mobile_init_code_'))
+      Object.entries(all).filter(([k]) => !k.startsWith('mobile_init_code_') && k !== 'mobile_push_vapid_private')
     )
+  })
+
+  ipcMain.handle('mobile:pushTest', async () => {
+    await sendMobilePush(db, 'finished', '', '20x test notification')
+    return { success: true }
   })
 
   // Environment variable handlers

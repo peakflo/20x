@@ -50,6 +50,8 @@ import {
 import { inspectTaskArtifact } from './artifacts'
 import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
 import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../shared/system-authority'
+import { sendMobilePush } from './mobile-push'
+import { pushEventForStatus } from '../shared/push-notifications'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -386,6 +388,7 @@ export class AgentManager extends EventEmitter {
 
   // Track last sent status per session to detect transitions for OS notifications
   private lastSentStatus: Map<string, string> = new Map()
+  private pendingQuestionPush = new Set<string>()
 
   /**
    * Maximum total characters allowed in partContentLengths values per session.
@@ -5900,6 +5903,20 @@ Important:
       try { fn(channel, data) } catch { /* ignore */ }
     }
 
+    // Notify paired phones on run transitions and user questions.
+    if ((channel === 'agent:output' || channel === 'agent:output-batch') && data && typeof data === 'object') {
+      const output = data as { taskId?: string; sessionId?: string; data?: { partType?: string; tool?: { name?: string } }; messages?: Array<{ partType?: string; tool?: { name?: string } }> }
+      const parts = output.messages ?? (output.data ? [output.data] : [])
+      if (output.taskId && parts.some(part => part.tool?.name === 'question' || part.tool?.name === 'AskUserQuestion' || (part.partType === 'question' && part.tool?.name !== 'permission'))) {
+        const task = this.db.getTask(output.taskId)
+        const parentCompleted = task?.parent_task_id && this.db.getTask(task.parent_task_id)?.status === TaskStatus.Completed
+        if (task && !parentCompleted && !task.id.startsWith('heartbeat-') && task.id !== 'mastermind-session') {
+          if (output.sessionId) this.pendingQuestionPush.add(output.sessionId)
+          void sendMobilePush(this.db, 'question', task.id, task.title).catch(error => console.error('[MobilePush] Send failed:', error))
+        }
+      }
+    }
+
     // Show OS notification when agent transitions from working to idle/waiting_approval
     // and the app window is not focused
     if (channel === 'agent:status' && data && typeof data === 'object') {
@@ -5907,6 +5924,16 @@ Important:
       if (sessionId && status) {
         const prevStatus = this.lastSentStatus.get(sessionId)
         this.lastSentStatus.set(sessionId, status)
+        let pushEvent = pushEventForStatus(prevStatus, status)
+        if (pushEvent === 'approval' && this.pendingQuestionPush.delete(sessionId)) pushEvent = null
+        if (status === SessionStatus.WORKING) this.pendingQuestionPush.delete(sessionId)
+        if (pushEvent && taskId) {
+          const task = this.db.getTask(taskId)
+          const parentCompleted = task?.parent_task_id && this.db.getTask(task.parent_task_id)?.status === TaskStatus.Completed
+          if (task && !parentCompleted && !taskId.startsWith('heartbeat-') && taskId !== 'mastermind-session') {
+            void sendMobilePush(this.db, pushEvent, taskId, task.title).catch(error => console.error('[MobilePush] Send failed:', error))
+          }
+        }
 
         // Check ALL conditions BEFORE doing any DB/notification work.
         // Previously the sync db.getTask() call ran inside the notification
