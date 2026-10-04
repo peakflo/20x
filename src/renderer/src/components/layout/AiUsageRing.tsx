@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { fetchAiUsage, usageLevel, type AiUsage } from '@/lib/ai-usage'
+import { Sparkles } from 'lucide-react'
+import { UsageChip } from '@/components/usage/UsageChip'
 
 const REFRESH_MS = 5 * 60 * 1000
-const COLORS = { normal: 'text-primary', warn: 'text-amber-500', critical: 'text-red-500' } as const
+const CHIP_LEVEL = { normal: 'normal', warn: 'warning', critical: 'critical' } as const
+const BAR = { normal: 'bg-primary', warn: 'bg-warning', critical: 'bg-destructive' } as const
 
-/** Small progress ring showing Peakflo AI subscription usage. Renders nothing without a subscription. */
+/** Status-bar meter for Peakflo AI subscription usage (hover for details). Renders nothing without a subscription. */
 export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
   const [fetched, setFetched] = useState<AiUsage | null>(null)
   const running = useAgentStore((s) => {
@@ -41,50 +44,47 @@ export function AiUsageRing({ usage: override }: { usage?: AiUsage | null }) {
     setPrevRunning(running)
   }, [running])
 
-  const [hovered, setHovered] = useState(false)
   const usage = override !== undefined ? override : fetched
   if (!usage) return null
 
-  const r = 5
-  const c = 2 * Math.PI * r
   const level = usageLevel(usage.percent)
-  const parts = [`Peakflo AI: ${usage.percent}% used`]
+  let resetText: string | null = null
   if (usage.resetAt) {
     const reset = new Date(usage.resetAt)
     if (!Number.isNaN(reset.getTime())) {
       const days = Math.ceil((reset.getTime() - Date.now()) / (24 * 60 * 60 * 1000))
       const when = days <= 0 ? 'today' : days === 1 ? 'in 1 day' : `in ${days} days`
-      parts.push(`Resets ${when} (${reset.toLocaleDateString()})`)
+      resetText = `Resets ${when} (${reset.toLocaleDateString()})`
     }
   }
-  const label = parts.join(' · ')
+  const label = [`Peakflo AI: ${usage.percent}% used`, resetText].filter(Boolean).join(' · ')
 
   return (
-    <span
-      className={`relative flex items-center gap-1.5 ${COLORS[level]}`}
-      data-testid="ai-usage-ring"
-      tabIndex={0}
-      role="status"
-      aria-label={label}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onFocus={() => setHovered(true)}
-      onBlur={() => setHovered(false)}
-    >
-      <svg width="12" height="12" viewBox="0 0 12 12" className="-rotate-90">
-        <circle cx="6" cy="6" r={r} fill="none" stroke="currentColor" strokeOpacity="0.2" strokeWidth="1.5" />
-        <circle cx="6" cy="6" r={r} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
-          strokeDasharray={c} strokeDashoffset={c * (1 - usage.percent / 100)} />
-      </svg>
-      {usage.percent}%
-      {hovered && (
-        <span
-          className="absolute bottom-full left-0 mb-1.5 whitespace-nowrap rounded border border-border bg-popover px-2 py-1 text-[10px] text-popover-foreground shadow-md"
-          data-testid="ai-usage-tooltip"
-        >
-          {label}
-        </span>
-      )}
-    </span>
+    <UsageChip
+      icon={<Sparkles className="h-2.5 w-2.5" />}
+      label={label}
+      percent={usage.percent}
+      level={CHIP_LEVEL[level]}
+      testId="ai-usage-ring"
+      detailsTestId="ai-usage-tooltip"
+      details={
+        <div className="w-64 rounded-lg border border-border bg-card p-4 space-y-3 shadow-lg">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-3.5 w-3.5 text-primary" />
+            <span className="text-sm font-semibold text-foreground">Peakflo AI</span>
+          </div>
+          <div className="space-y-1.5">
+            <div className="flex items-baseline justify-between gap-3 text-xs">
+              <span className="font-medium text-foreground">Subscription</span>
+              <span className="text-muted-foreground tabular-nums">{usage.percent}% used</span>
+            </div>
+            <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+              <div className={`h-full rounded-full ${BAR[level]}`} style={{ width: `${usage.percent}%` }} />
+            </div>
+          </div>
+          {resetText && <p className="text-[11px] text-muted-foreground">{resetText}</p>}
+        </div>
+      }
+    />
   )
 }

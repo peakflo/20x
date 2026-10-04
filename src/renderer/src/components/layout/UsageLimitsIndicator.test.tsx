@@ -65,7 +65,7 @@ describe('UsageLimitsIndicator', () => {
     render(<UsageLimitsIndicator />)
 
     const claudeChip = await screen.findByRole('button', { name: /Claude: 82% of weekly limit used/ })
-    expect(claudeChip).toHaveTextContent('Claude')
+    expect(claudeChip.querySelector('svg')).not.toBeNull()
     expect(claudeChip).toHaveTextContent('82%')
     expect(claudeChip.className).toContain('text-warning')
     expect(screen.getByRole('button', { name: /Codex: 12% of 5-hour limit used, resets in 3h 0m/ })).toBeInTheDocument()

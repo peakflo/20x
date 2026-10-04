@@ -36,9 +36,9 @@ describe('AiUsageRing', () => {
 
   it('also shows the popover on keyboard focus', () => {
     render(<AiUsageRing usage={{ percent: 97, used: 97, limit: 100, resetAt: null }} />)
-    fireEvent.focus(screen.getByTestId('ai-usage-ring'))
+    fireEvent.focus(screen.getByRole('button', { name: /Peakflo AI/ }))
     expect(screen.getByTestId('ai-usage-tooltip')).toBeInTheDocument()
-    fireEvent.blur(screen.getByTestId('ai-usage-ring'))
+    fireEvent.blur(screen.getByRole('button', { name: /Peakflo AI/ }))
     expect(screen.queryByTestId('ai-usage-tooltip')).not.toBeInTheDocument()
   })
 })

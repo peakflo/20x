@@ -1,6 +1,7 @@
 import { AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
+import { ProviderLogo } from './ProviderLogo'
 import {
   USAGE_PROVIDER_LABELS,
   effectiveUsedPercent,
@@ -76,6 +77,7 @@ export function ProviderLimitsCard({
     <div className={cn('rounded-lg border border-border bg-card p-4 space-y-3', className)} data-testid={`usage-limits-${limits.provider}`}>
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
+          <ProviderLogo provider={limits.provider} tinted className="h-3.5 w-3.5" />
           <span className="text-sm font-semibold text-foreground">{USAGE_PROVIDER_LABELS[limits.provider]}</span>
           {plan && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground font-medium">{plan}</span>

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ArrowLeft, Bot, Check, ChevronDown, ExternalLink, FolderOpen, Layers, Menu, MoreHorizontal, Pencil, Play, RotateCcw, Sparkles, Terminal, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { AnthropicLogo, OpenAILogo, OpenCodeLogo, PiLogo } from '@/components/icons/AgentLogos'
+import { AgentHoverCard } from '@/components/usage/AgentHoverCard'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { CodingAgentType, TASK_STATUSES, TaskStatus } from '@/types'
@@ -214,6 +215,7 @@ export function TaskHeaderBar({
         <TaskPriorityBadge priority={task.priority} />
         {onAssignAgent && agents ? (
           <div ref={agentMenuRef} className="relative">
+            <AgentHoverCard agent={agent} disabled={agentMenuOpen}>
             <button
               type="button"
               onClick={() => setAgentMenuOpen((open) => !open)}
@@ -227,6 +229,7 @@ export function TaskHeaderBar({
               <span className="truncate">{agent?.name || 'Unassigned'}</span>
               <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
             </button>
+            </AgentHoverCard>
             {agentMenuOpen && (
               <div role="menu" aria-label="Agent" className="absolute right-0 top-7 z-50 w-48 overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
                 <button
@@ -270,10 +273,15 @@ export function TaskHeaderBar({
             )}
           </div>
         ) : (
-          <span className="hidden items-center gap-1.5 rounded-full border border-border/50 bg-card px-2 py-1 text-[11px] text-muted-foreground lg:inline-flex">
-            <HarnessIcon className="h-3 w-3" />
-            <span className="truncate">{agent?.name || 'Unassigned'}</span>
-          </span>
+          <AgentHoverCard agent={agent} className="hidden lg:inline-flex">
+            <span
+              tabIndex={agent ? 0 : undefined}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border/50 bg-card px-2 py-1 text-[11px] text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <HarnessIcon className="h-3 w-3" />
+              <span className="truncate">{agent?.name || 'Unassigned'}</span>
+            </span>
+          </AgentHoverCard>
         )}
       </div>
       {actionMeta && onAction && task.server_execution_mode !== 'autonomous' && (

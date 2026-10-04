@@ -17,6 +17,7 @@ import { AssigneeSelect } from './AssigneeSelect'
 import { TaskStatus, CodingAgentType } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, RecurrencePattern, RecurrencePatternObject } from '@/types'
 import { AnthropicLogo, OpenCodeLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
+import { AgentHoverCard } from '@/components/usage/AgentHoverCard'
 import { HeartbeatSection } from './HeartbeatSection'
 import { useUIStore } from '@/stores/ui-store'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
@@ -512,12 +513,15 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
                                          codingAgent === CodingAgentType.PI ? PiLogo :
                                          OpenAILogo
                     return (
-                      <div
-                        className="w-4 h-4 flex items-center justify-center opacity-70 hover:opacity-100 transition-opacity"
-                        title={agentName}
-                      >
-                        <LogoComponent className="w-full h-full" />
-                      </div>
+                      <AgentHoverCard agent={agent} align="left">
+                        <span
+                          tabIndex={0}
+                          aria-label={`${agentName} agent details`}
+                          className="w-4 h-4 flex items-center justify-center opacity-70 hover:opacity-100 focus-visible:opacity-100 transition-opacity outline-none"
+                        >
+                          <LogoComponent className="w-full h-full" />
+                        </span>
+                      </AgentHoverCard>
                     )
                   })()}
                   {/* Per-row action buttons are outline/secondary — the big
