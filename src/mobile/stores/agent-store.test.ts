@@ -4,6 +4,7 @@ import { captureAnalyticsEvent } from '@/lib/analytics'
 import { onEvent } from '../api/websocket'
 import { useAgentStore, SessionStatus, __clearProjectionsForTest } from './agent-store'
 import { api, type TranscriptPartRecord } from '../api/client'
+import type { ContextUsageSnapshot } from '@shared/context-usage'
 
 vi.mock('@/lib/analytics', () => ({
   captureAnalyticsEvent: vi.fn()
@@ -19,6 +20,7 @@ const eventHandlers = new Map<string, (payload: unknown) => void>()
 }
 const statusHandler = eventHandlers.get('agent:status')!
 const transcriptHandler = eventHandlers.get('transcript:changed')!
+const contextUsageHandler = eventHandlers.get('agent:context-usage')!
 
 beforeEach(() => {
   useAgentStore.setState({ agents: [], skills: [], sessions: new Map() })
@@ -263,5 +265,73 @@ describe('useAgentStore (projection model)', () => {
       useAgentStore.getState().clearMessageDedup('task-1')
       expect(useAgentStore.getState().sessions.get('task-1')!.messages).toHaveLength(2)
     })
+  })
+})
+
+describe('useAgentStore (context usage)', () => {
+  function snapshot(over: Partial<ContextUsageSnapshot> = {}): ContextUsageSnapshot {
+    return {
+      taskId: over.taskId ?? 'task-1',
+      agentId: 'agent-1',
+      codingAgent: 'claude-code',
+      usedTokens: over.usedTokens ?? 50_000,
+      maxTokens: 200_000,
+      percent: 25,
+      model: 'claude-sonnet',
+      compacting: false,
+      canCompact: true,
+      updatedAt: over.updatedAt ?? '2026-10-05T10:00:00.000Z'
+    }
+  }
+
+  beforeEach(() => {
+    useAgentStore.setState({ contextUsage: {} })
+    // The shared client mock has no contextUsage route; provide one for these tests.
+    ;(api as unknown as { contextUsage: { get: Mock } }).contextUsage = { get: vi.fn().mockResolvedValue(null) }
+  })
+
+  it('stores live agent:context-usage pushes by taskId', () => {
+    contextUsageHandler(snapshot({ taskId: 'task-1', usedTokens: 60_000 }))
+    contextUsageHandler(snapshot({ taskId: 'task-2', usedTokens: 10_000 }))
+
+    const state = useAgentStore.getState().contextUsage
+    expect(state['task-1'].usedTokens).toBe(60_000)
+    expect(state['task-2'].usedTokens).toBe(10_000)
+  })
+
+  it('ignores pushes without a taskId', () => {
+    contextUsageHandler({ usedTokens: 1 })
+    expect(useAgentStore.getState().contextUsage).toEqual({})
+  })
+
+  it('hydrates a snapshot from REST', async () => {
+    const hydrated = snapshot({ usedTokens: 90_000 })
+    ;(api as unknown as { contextUsage: { get: Mock } }).contextUsage.get.mockResolvedValue(hydrated)
+
+    await useAgentStore.getState().loadContextUsage('task-1')
+
+    expect(useAgentStore.getState().contextUsage['task-1']).toEqual(hydrated)
+  })
+
+  it('keeps a newer live push over an older REST response', async () => {
+    contextUsageHandler(snapshot({ usedTokens: 120_000, updatedAt: '2026-10-05T10:05:00.000Z' }))
+    ;(api as unknown as { contextUsage: { get: Mock } }).contextUsage.get.mockResolvedValue(
+      snapshot({ usedTokens: 30_000, updatedAt: '2026-10-05T10:00:00.000Z' })
+    )
+
+    await useAgentStore.getState().loadContextUsage('task-1')
+
+    expect(useAgentStore.getState().contextUsage['task-1'].usedTokens).toBe(120_000)
+  })
+
+  it('logs and ignores REST errors', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    ;(api as unknown as { contextUsage: { get: Mock } }).contextUsage.get.mockRejectedValue(new Error('offline'))
+
+    await expect(useAgentStore.getState().loadContextUsage('task-1')).resolves.toBeUndefined()
+
+    expect(warn).toHaveBeenCalled()
+    expect(useAgentStore.getState().contextUsage).toEqual({})
+    warn.mockRestore()
   })
 })

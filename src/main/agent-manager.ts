@@ -47,6 +47,14 @@ import {
   type UsageSummary,
   type UsageSummaryQuery
 } from '../shared/usage'
+import {
+  AGENT_CONTEXT_USAGE_CHANNEL,
+  isCompactCommand,
+  mergeContextUsage,
+  normalizeAutoCompactTokens,
+  type AdapterContextUsageReport,
+  type ContextUsageSnapshot
+} from '../shared/context-usage'
 import { inspectTaskArtifact } from './artifacts'
 import {
   buildContextHandoff,
@@ -306,6 +314,8 @@ export class AgentManager extends EventEmitter {
   private limitRecovery: UsageLimitRecoveryScheduler | null | undefined = undefined
   /** Tasks whose continuation is being dispatched by the recovery scheduler (not a user message). */
   private limitRecoveryDispatching = new Set<string>()
+  /** Latest context-window meter state per task, pushed as `agent:context-usage`. */
+  private contextUsage = new Map<string, ContextUsageSnapshot>()
   private worktreeManager: WorktreeManager | null = null
   private githubManager: GitHubManager | null = null
   private gitlabManager: GitLabManager | null = null
@@ -925,6 +935,39 @@ export class AgentManager extends EventEmitter {
     adapter.onUsageLimits = (event) => {
       this.getUsageTracker()?.applyLimitsEvent(event)
     }
+    adapter.onContextUsage = (report) => {
+      this.applyContextUsageReport(report)
+    }
+  }
+
+  /**
+   * Merges an adapter's partial context report into the task's snapshot and
+   * pushes it when something the meter shows has changed.
+   */
+  private applyContextUsageReport(report: AdapterContextUsageReport): void {
+    const taskId = report.taskId
+    if (!taskId) return
+    const previous = this.contextUsage.get(taskId)
+    const agent = report.agentId ? this.db.getAgent(report.agentId) : undefined
+    const next = mergeContextUsage(previous, report, {
+      taskId,
+      agentId: report.agentId ?? null,
+      codingAgent: agent?.config?.coding_agent ?? null
+    })
+    if (previous && previous.usedTokens === next.usedTokens
+      && previous.maxTokens === next.maxTokens
+      && previous.compacting === next.compacting
+      && previous.canCompact === next.canCompact
+      && previous.model === next.model) {
+      return
+    }
+    this.contextUsage.set(taskId, next)
+    this.sendToRenderer(AGENT_CONTEXT_USAGE_CHANNEL, next)
+  }
+
+  /** Latest context-window meter state for a task, or null when no adapter has reported one. */
+  getContextUsage(taskId: string): ContextUsageSnapshot | null {
+    return this.contextUsage.get(taskId) ?? null
   }
 
   /** Lets the user allow (or revoke) reading the Cursor CLI login from the macOS Keychain. */
@@ -1152,6 +1195,7 @@ export class AgentManager extends EventEmitter {
       workspaceDir: workspaceDir || this.db.getWorkspaceDir(taskId),
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
+      autoCompactTokens: normalizeAutoCompactTokens(agent.config?.auto_compact_tokens),
       systemPrompt: baseSystemPrompt,
       mcpServers,
       authMethod: agent.config?.auth_method,
@@ -1821,6 +1865,7 @@ export class AgentManager extends EventEmitter {
       workspaceDir,
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
+      autoCompactTokens: normalizeAutoCompactTokens(agent.config?.auto_compact_tokens),
       systemPrompt: agent.config?.system_prompt,
       mcpServers,
       authMethod: agent.config?.auth_method,
@@ -3143,6 +3188,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       workspaceDir,
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
+      autoCompactTokens: normalizeAutoCompactTokens(agent.config?.auto_compact_tokens),
       systemPrompt: baseSystemPrompt,
       mcpServers,
       authMethod: agent.config?.auth_method,
@@ -4614,6 +4660,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       this.enterpriseStateSync.recordAgentRunStarted(currentTask, agent?.name)
     }
 
+    // `/compact` is a harness request: no user bubble and no task or attachment
+    // context, so the adapter receives the bare command.
+    const isCompactRequest = isCompactCommand(message)
     const userFacingMessage = this.buildDisplayMessage(message, attachments)
 
     // First message of a session that took over a reassigned task: announce the carried-over context.
@@ -4621,17 +4670,19 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     if (handoff?.announce) this.announceContextHandoff(sessionId, session.taskId, handoff)
 
     // Show user's message in UI
-    this.sendToRenderer('agent:output', {
-      sessionId,
-      taskId: session.taskId,
-      type: 'message',
-      data: {
-        id: `user-message-${Date.now()}`,
-        role: 'user',
-        content: userFacingMessage,
-        partType: 'text'
-      }
-    })
+    if (!isCompactRequest) {
+      this.sendToRenderer('agent:output', {
+        sessionId,
+        taskId: session.taskId,
+        type: 'message',
+        data: {
+          id: `user-message-${Date.now()}`,
+          role: 'user',
+          content: userFacingMessage,
+          partType: 'text'
+        }
+      })
+    }
 
     // Build session config (includes secret broker fields if agent has secrets).
     // systemPrompt inside is task-agnostic and frozen — see buildSessionConfig.
@@ -4660,8 +4711,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // systemPrompt which some adapters only consult when spawning a fresh
     // process). It's appended here, not shown in the UI (userFacingMessage
     // above), same treatment as the attachment-context block below.
-    let promptText = this.buildMessageWithAttachmentContext(session, message, attachments)
-    if (currentTask) {
+    let promptText = isCompactRequest
+      ? message.trim()
+      : this.buildMessageWithAttachmentContext(session, message, attachments)
+    if (currentTask && !isCompactRequest) {
       promptText += this.buildTaskContextReminder(currentTask, liveTaskContextMode)
     }
     if (handoff) promptText = handoff.block + CONTEXT_HANDOFF_SEPARATOR + promptText

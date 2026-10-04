@@ -9,6 +9,7 @@ import type { VoiceCapabilities } from '@shared/voice'
 import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { PushPreferences } from '@shared/push-notifications'
+import type { ContextUsageSnapshot } from '@shared/context-usage'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -120,6 +121,10 @@ export const api = {
       const qs = params.toString()
       return get<UsageSummary | null>(`/api/usage/summary${qs ? `?${qs}` : ''}`)
     }
+  },
+  contextUsage: {
+    /** Latest context-window snapshot for a task, or null when no session has reported one. */
+    get: (taskId: string) => get<ContextUsageSnapshot | null>(`/api/context-usage?taskId=${encodeURIComponent(taskId)}`)
   },
   capabilities: {
     /** What this client can do. Voice capture is desktop-only in phase 1. */

@@ -22,8 +22,10 @@ import type {
 } from './coding-agent-adapter'
 import type { AdapterUsageLimitsEvent, AdapterUsageReport, UsageLimitStop } from './coding-agent-adapter'
 import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
+import { isCompactCommand, type AdapterContextUsageReport } from '../../shared/context-usage'
 import type { ProviderUsageLimits } from '../../shared/usage'
 import type { UsageBucket } from '../usage/usage-normalize'
+import { codexContextUsageFromTokenUsage } from '../usage/context-usage-normalize'
 import {
   codexRateLimitsResponseToLimits,
   codexRateLimitsUpdatedToUpdate,
@@ -390,6 +392,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   /** Set by agent-manager: receives ChatGPT-plan rate-limit snapshots/updates. */
   onUsageLimits?: (event: AdapterUsageLimitsEvent) => void
 
+  /** Set by agent-manager: receives context-window occupancy and compaction state. */
+  onContextUsage?: (report: AdapterContextUsageReport) => void
+
   private rateLimitsRead: Promise<ProviderUsageLimits> | null = null
   private lastRateLimitsReadAt = 0
   /** Latest known ChatGPT-plan windows (from reads and rolling updates), for limit reset times. */
@@ -535,6 +540,12 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       throw new Error('No text content in message parts')
     }
 
+    // `/compact` is a harness request, not a user turn: no bubble, no turn/start.
+    if (isCompactCommand(promptText)) {
+      await this.compactThread(session)
+      return
+    }
+
     session.messageBuffer = []
 
     const userItem = {
@@ -571,6 +582,31 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
     if (isObject(result)) {
       session.activeTurnId = asString(result.turnId) || asString(result.turn_id) || session.activeTurnId
+    }
+  }
+
+  private async compactThread(session: AppServerSession): Promise<void> {
+    this.reportContextUsageState(session, { compacting: true })
+    try {
+      await this.sendRpcRequest(session, 'thread/compact/start', { threadId: session.threadId })
+    } catch (error) {
+      this.reportContextUsageState(session, { compacting: false })
+      throw error
+    }
+  }
+
+  private reportContextUsageState(session: AppServerSession, report: Omit<AdapterContextUsageReport, 'taskId' | 'agentId' | 'providerSessionId'>): void {
+    if (!this.onContextUsage) return
+    try {
+      this.onContextUsage({
+        taskId: session.config.taskId,
+        agentId: session.config.agentId,
+        providerSessionId: session.threadId || undefined,
+        canCompact: true,
+        ...report
+      })
+    } catch (error) {
+      console.warn('[CodexAppServerAdapter] Failed to report context usage:', error)
     }
   }
 
@@ -1065,8 +1101,18 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
     if (notification.method === 'thread/tokenUsage/updated') {
       this.trackThreadTokenUsage(session, params)
+      this.reportThreadContextUsage(session, params)
       // Bookkeeping only — not a transcript event.
       return
+    }
+
+    if (notification.method === 'thread/compacted') {
+      this.reportContextUsageState(session, { compacting: false })
+      return
+    }
+
+    if (notification.method === 'item/completed' && isObject(params.item) && params.item.type === 'contextCompaction') {
+      this.reportContextUsageState(session, { compacting: false })
     }
 
     if (notification.method === 'account/rateLimits/updated') {
@@ -1150,6 +1196,25 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   }
 
   // ── Subscription usage tracking ──────────────────────────
+
+  /** Context occupancy is the last model call's size, so it is reported as soon as it arrives. */
+  private reportThreadContextUsage(session: AppServerSession, params: Record<string, unknown>): void {
+    if (!this.onContextUsage) return
+    try {
+      const context = codexContextUsageFromTokenUsage(params)
+      if (!context) return
+      this.onContextUsage({
+        taskId: session.config.taskId,
+        agentId: session.config.agentId,
+        providerSessionId: asString(params.threadId) || session.threadId || undefined,
+        model: session.config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
+        canCompact: true,
+        ...context
+      })
+    } catch (error) {
+      console.warn('[CodexAppServerAdapter] Failed to report context usage:', error)
+    }
+  }
 
   private trackThreadTokenUsage(session: AppServerSession, params: Record<string, unknown>): void {
     try {

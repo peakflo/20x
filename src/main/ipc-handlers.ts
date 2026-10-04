@@ -568,6 +568,11 @@ export function registerIpcHandlers(
     return agentManager.getTranscriptDelta(taskId, sinceRev)
   })
 
+  // Context-window meter: latest known usage for a task (live updates arrive as agent:context-usage).
+  ipcMain.handle('agentSession:getContextUsage', (_, taskId: string) => {
+    return agentManager.getContextUsage(taskId)
+  })
+
   // Agent Config handlers
   ipcMain.handle('agentConfig:getProviders', async (_, serverUrl?: string, backendType?: string) => {
     return await agentManager.getProviders(serverUrl, undefined, backendType)

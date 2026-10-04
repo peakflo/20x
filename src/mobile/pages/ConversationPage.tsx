@@ -8,6 +8,8 @@ import { useSessionControls } from '../hooks/useSessionControls'
 import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '../components/MessageBubble'
 import { ArtifactCard } from '../components/ArtifactCard'
 import { ChatInput, type ChatInputAttachment } from '../components/ChatInput'
+import { ContextWindowMeter } from '../components/ContextWindowMeter'
+import { COMPACT_COMMAND } from '@shared/context-usage'
 import { useArtifactStore } from '../stores/artifact-store'
 import { cn } from '../lib/utils'
 import { captureAnalyticsEvent } from '@/lib/analytics'
@@ -106,6 +108,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const bindTranscript = useAgentStore((s) => s.bindTranscript)
   const beginSend = useAgentStore((s) => s.beginSend)
   const endSend = useAgentStore((s) => s.endSend)
+  const contextUsage = useAgentStore((s) => s.contextUsage[taskId])
+  const loadContextUsage = useAgentStore((s) => s.loadContextUsage)
   const artifactsByTask = useArtifactStore((s) => s.artifactsByTask)
   const hydrateArtifacts = useArtifactStore((s) => s.hydrate)
   const artifacts = artifactsByTask.get(taskId) || []
@@ -119,6 +123,11 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   useEffect(() => {
     void hydrateArtifacts(taskId)
   }, [hydrateArtifacts, taskId])
+
+  // Context-window meter: hydrate the latest snapshot; live pushes update the store.
+  useEffect(() => {
+    void loadContextUsage(taskId)
+  }, [loadContextUsage, taskId])
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
@@ -276,6 +285,13 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     },
     [taskId, isQuestion, activeQuestionId, initSession, beginSend, endSend]
   )
+
+  // Compact goes through the composer's send path. While a question/approval is
+  // pending, handleSend would answer it instead, so the button is not offered then.
+  const handleCompact = useCallback(() => {
+    if (isQuestion) return
+    void handleSend(COMPACT_COMMAND)
+  }, [handleSend, isQuestion])
 
   // Handle question answer from QuestionMessage options
   const handleAnswer = useCallback(
@@ -455,6 +471,12 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           </span>
         </div>
         <div className="flex items-center gap-3 shrink-0">
+          {contextUsage && (
+            <ContextWindowMeter
+              usage={contextUsage}
+              onCompact={canSendInput && !isQuestion ? handleCompact : undefined}
+            />
+          )}
           {/* Status indicator — matches desktop */}
           {session && (
             <span className={cn(

@@ -497,6 +497,13 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
     return agentRef!.getUsageLimits()
   }
 
+  // GET /api/context-usage?taskId=... — latest context-window meter for a task (null when unknown)
+  if (pathname === '/api/context-usage') {
+    const taskId = url.searchParams.get('taskId')
+    if (!taskId) throw Object.assign(new Error('taskId is required'), { status: 400 })
+    return agentRef!.getContextUsage(taskId)
+  }
+
   // GET /api/usage/summary?sinceMs=&untilMs=&utcOffsetMinutes=&taskId=
   if (pathname === '/api/usage/summary') {
     return agentRef!.getUsageSummary(sanitizeUsageSummaryQuery(Object.fromEntries(url.searchParams)))

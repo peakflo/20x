@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { api, type TranscriptPartRecord } from '../api/client'
 import { onEvent } from '../api/websocket'
 import { captureAnalyticsEvent } from '@/lib/analytics'
+import { AGENT_CONTEXT_USAGE_CHANNEL, type ContextUsageSnapshot } from '@shared/context-usage'
 
 // ── Message types (mirrors desktop agent-store) ──────────────
 
@@ -162,6 +163,10 @@ interface AgentState {
   agents: Agent[]
   skills: Skill[]
   sessions: Map<string, TaskSession>
+  /** Latest context-window snapshot per task (live WS pushes + REST hydration). */
+  contextUsage: Record<string, ContextUsageSnapshot>
+  /** Hydrate a task's context-window snapshot from REST. Errors are logged and ignored. */
+  loadContextUsage: (taskId: string) => Promise<void>
   fetchAgents: () => Promise<void>
   fetchSkills: () => Promise<void>
   syncActiveSessions: () => Promise<void>
@@ -303,6 +308,13 @@ export const useAgentStore = create<AgentState>((set, get) => {
     if (event.status === SessionStatus.IDLE) void reconcileDelta(session.taskId)
   })
 
+  // Context-window meter: live snapshots per task.
+  onEvent(AGENT_CONTEXT_USAGE_CHANNEL, (payload) => {
+    const snapshot = payload as ContextUsageSnapshot
+    if (!snapshot?.taskId) return
+    set((state) => ({ contextUsage: { ...state.contextUsage, [snapshot.taskId]: snapshot } }))
+  })
+
   // Clear a stuck "starting" indicator if the backend never reports a turn.
   const clearPendingSend = (taskId: string): void => {
     set((state) => {
@@ -316,6 +328,23 @@ export const useAgentStore = create<AgentState>((set, get) => {
     agents: [],
     skills: [],
     sessions: new Map(),
+    contextUsage: {},
+
+    loadContextUsage: async (taskId) => {
+      if (!taskId) return
+      try {
+        const snapshot = await api.contextUsage.get(taskId)
+        if (!snapshot) return
+        set((state) => {
+          // A live push may have arrived while the request was in flight; keep the newer one.
+          const current = state.contextUsage[taskId]
+          if (current && current.updatedAt > snapshot.updatedAt) return state
+          return { contextUsage: { ...state.contextUsage, [taskId]: snapshot } }
+        })
+      } catch (e) {
+        console.warn(`[mobile] loadContextUsage failed for ${taskId}:`, e)
+      }
+    },
 
     fetchAgents: async () => {
       try {

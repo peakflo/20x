@@ -1,5 +1,6 @@
 import type { BrowserRecordingManifest } from '@shared/browser-recording'
 import type { UiCommand } from '@shared/ui-commands'
+import type { ContextUsageSnapshot } from '@shared/context-usage'
 import type {
   WorkfloTask,
   CreateTaskDTO,
@@ -266,6 +267,8 @@ interface ElectronAPI {
     getRawTranscript: (taskId: string) => Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>>
     getTranscriptSnapshot: (taskId: string, sinceSeq?: number) => Promise<TranscriptPartRecord[]>
     getTranscriptDelta: (taskId: string, sinceRev: number) => Promise<{ parts: TranscriptPartRecord[]; maxRev: number }>
+    getContextUsage: (taskId: string) => Promise<ContextUsageSnapshot | null>
+    onContextUsage: (callback: (event: ContextUsageSnapshot) => void) => () => void
   }
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string) => Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null>

@@ -2,6 +2,7 @@ import type { BrowserRecordingManifest } from '../shared/browser-recording'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
+import { AGENT_CONTEXT_USAGE_CHANNEL, type ContextUsageSnapshot } from '../shared/context-usage'
 import {
   USAGE_LIMITS_UPDATED_CHANNEL,
   USAGE_RECORDED_CHANNEL,
@@ -143,7 +144,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getTranscriptSnapshot: (taskId: string, sinceSeq?: number): Promise<Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number; rev: number }>> =>
       ipcRenderer.invoke('agentSession:getTranscriptSnapshot', taskId, sinceSeq),
     getTranscriptDelta: (taskId: string, sinceRev: number): Promise<{ parts: Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number; rev: number }>; maxRev: number }> =>
-      ipcRenderer.invoke('agentSession:getTranscriptDelta', taskId, sinceRev)
+      ipcRenderer.invoke('agentSession:getTranscriptDelta', taskId, sinceRev),
+    getContextUsage: (taskId: string): Promise<ContextUsageSnapshot | null> =>
+      ipcRenderer.invoke('agentSession:getContextUsage', taskId),
+    onContextUsage: (callback: (event: ContextUsageSnapshot) => void): (() => void) => {
+      const handler = (_: unknown, data: ContextUsageSnapshot): void => callback(data)
+      ipcRenderer.on(AGENT_CONTEXT_USAGE_CHANNEL, handler)
+      return () => ipcRenderer.removeListener(AGENT_CONTEXT_USAGE_CHANNEL, handler)
+    }
   },
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> =>

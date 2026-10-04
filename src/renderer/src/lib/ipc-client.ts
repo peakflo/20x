@@ -2,6 +2,7 @@ import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, 
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
+import type { ContextUsageSnapshot } from '@shared/context-usage'
 import type { ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type {
   MicrophonePermission,
@@ -185,6 +186,14 @@ export const agentSessionApi = {
 
   getTranscriptDelta: (taskId: string, sinceRev: number): Promise<{ parts: TranscriptPartRecord[]; maxRev: number }> => {
     return window.electronAPI.agentSession.getTranscriptDelta(taskId, sinceRev)
+  },
+
+  getContextUsage: (taskId: string): Promise<ContextUsageSnapshot | null> => {
+    return window.electronAPI.agentSession.getContextUsage(taskId)
+  },
+
+  onContextUsage: (callback: (event: ContextUsageSnapshot) => void): (() => void) => {
+    return window.electronAPI.agentSession.onContextUsage(callback)
   }
 }
 

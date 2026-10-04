@@ -4,6 +4,7 @@
  */
 
 import type { ReasoningEffort } from '../../shared/reasoning-effort'
+import type { AdapterContextUsageReport } from '../../shared/context-usage'
 import type { ProviderUsageLimits, ProviderUsageLimitsUpdate, UsageProvider } from '../../shared/usage'
 import type { UsageBucket } from '../usage/usage-normalize'
 import type { DiscreteUsageItem } from '../usage/usage-store'
@@ -59,6 +60,8 @@ export interface SessionConfig {
   authMethod?: 'subscription' | 'api_key'
   permissionMode?: 'ask' | 'allow'
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  /** Claude Code auto-compact threshold in tokens (100k–1M). Undefined or null leaves the harness default. */
+  autoCompactTokens?: number | null
   apiKeys?: {
     openai?: string
     anthropic?: string
@@ -381,6 +384,13 @@ export interface CodingAgentAdapter {
    * subscription plan limits call it with full snapshots or sparse updates.
    */
   onUsageLimits?: (event: AdapterUsageLimitsEvent) => void
+
+  /**
+   * Optional callback set by agent-manager. Adapters that know how full the
+   * model's context window is call it with partial reports (used / max tokens,
+   * compaction state). Reports are merged per task by the agent manager.
+   */
+  onContextUsage?: (report: AdapterContextUsageReport) => void
 
   /**
    * Read the provider's current subscription plan limits on demand.

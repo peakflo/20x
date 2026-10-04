@@ -7,12 +7,14 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Label } from '@/components/ui/Label'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
+import { Switch } from '@/components/ui/Switch'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { useMcpStore } from '@/stores/mcp-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
 import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
+import { AUTO_COMPACT_TOKENS_MAX, AUTO_COMPACT_TOKENS_MIN, normalizeAutoCompactTokens } from '@shared/context-usage'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode, AgentSandboxMode } from '@/types'
 import type { ReasoningEffort } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS } from '@/types'
@@ -27,6 +29,8 @@ interface Model {
   id: string
   name: string
 }
+
+const DEFAULT_AUTO_COMPACT_TOKENS = 150_000
 
 /** Parse agent config mcp_servers into a map of serverId → enabledTools (undefined = all tools) */
 function parseMcpSelection(entries?: Array<string | AgentMcpServerEntry>): Map<string, string[] | undefined> {
@@ -57,6 +61,8 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     () => parseMcpSelection(agent?.config.mcp_servers)
   )
   const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set())
+  const [autoCompactEnabled, setAutoCompactEnabled] = useState(agent?.config.auto_compact_tokens != null)
+  const [autoCompactTokens, setAutoCompactTokens] = useState(agent?.config.auto_compact_tokens ?? DEFAULT_AUTO_COMPACT_TOKENS)
 
   // Auth method state (Claude Code and Codex)
   const [authMethod, setAuthMethod] = useState<ClaudeAuthMethod>(
@@ -247,6 +253,10 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         permission_mode: permissionMode,
         sandbox_mode: codingAgent === CodingAgentType.CODEX ? sandboxMode : undefined,
         system_prompt: systemPrompt.trim() || undefined,
+        // Claude Code only; other agents leave the key out entirely.
+        auto_compact_tokens: codingAgent === CodingAgentType.CLAUDE_CODE
+          ? (autoCompactEnabled ? normalizeAutoCompactTokens(autoCompactTokens) : null)
+          : undefined,
         max_parallel_sessions: maxParallelSessions,
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
         skill_ids: skillIds,
@@ -646,6 +656,37 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
                   Required: Enter your API key or set ANTHROPIC_API_KEY environment variable
                 </p>
               )}
+            </div>
+          )}
+        </>
+      )}
+
+      {codingAgent === CodingAgentType.CLAUDE_CODE && (
+        <>
+          <div className="flex items-center justify-between gap-4">
+            <Label htmlFor="claude-auto-compact">Auto-compact</Label>
+            <Switch
+              id="claude-auto-compact"
+              checked={autoCompactEnabled}
+              onCheckedChange={setAutoCompactEnabled}
+            />
+          </div>
+
+          {autoCompactEnabled && (
+            <div className="space-y-1.5">
+              <Label htmlFor="claude-auto-compact-tokens">Auto-compact after N tokens</Label>
+              <Input
+                id="claude-auto-compact-tokens"
+                type="number"
+                min={AUTO_COMPACT_TOKENS_MIN}
+                max={AUTO_COMPACT_TOKENS_MAX}
+                step={10_000}
+                value={autoCompactTokens}
+                onChange={(e) => setAutoCompactTokens(Number(e.target.value))}
+              />
+              <p className="text-xs text-muted-foreground">
+                Claude compacts the conversation once it reaches this many tokens.
+              </p>
             </div>
           )}
         </>

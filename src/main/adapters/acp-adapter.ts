@@ -23,8 +23,10 @@ import type {
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 import type { AdapterUsageLimitsEvent, AdapterUsageReport, UsageLimitStop } from './coding-agent-adapter'
+import type { AdapterContextUsageReport } from '../../shared/context-usage'
 import type { ProviderUsageLimits } from '../../shared/usage'
 import { acpUsageUpdateCostUsd, normalizeAcpPromptUsage } from '../usage/usage-normalize'
+import { acpUsageUpdateContextUsage } from '../usage/context-usage-normalize'
 import { probeCursorUsageLimits } from '../usage/cursor-limits'
 
 // ACP Agent Types
@@ -176,6 +178,8 @@ export class AcpAdapter implements CodingAgentAdapter {
   onUsage?: (report: AdapterUsageReport) => void
   /** Set by agent-manager: receives Cursor plan-limit snapshots. */
   onUsageLimits?: (event: AdapterUsageLimitsEvent) => void
+  /** Set by agent-manager: receives context-window size from `usage_update`. Compaction is not exposed over ACP. */
+  onContextUsage?: (report: AdapterContextUsageReport) => void
   /**
    * Set by agent-manager: whether the user allowed reading the Cursor CLI login
    * from the macOS Keychain for plan limits.
@@ -196,6 +200,25 @@ export class AcpAdapter implements CodingAgentAdapter {
       .finally(() => { this.limitsRead = null })
     this.limitsRead = pending
     return pending
+  }
+
+  /** `usage_update.used` / `.size` are the context occupancy and window of the ACP session. */
+  private reportContextUsageUpdate(session: AcpSession, update: Record<string, unknown>): void {
+    if (!this.onContextUsage) return
+    try {
+      const context = acpUsageUpdateContextUsage(update)
+      if (!context) return
+      this.onContextUsage({
+        ...context,
+        model: session.config.model || null,
+        taskId: session.config.taskId,
+        agentId: session.config.agentId,
+        providerSessionId: session.acpSessionId || undefined,
+        canCompact: false
+      })
+    } catch (error) {
+      console.warn(`[AcpAdapter/${this.agentType}] Failed to report context usage:`, error)
+    }
   }
 
   /**
@@ -1331,6 +1354,7 @@ export class AcpAdapter implements CodingAgentAdapter {
           // Context size / cumulative session cost — bookkeeping, not transcript.
           const cost = acpUsageUpdateCostUsd(update)
           if (cost !== null) session.usageCostUsd = cost
+          this.reportContextUsageUpdate(session, update)
           return
         }
       }

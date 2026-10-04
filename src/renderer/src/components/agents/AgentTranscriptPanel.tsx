@@ -10,10 +10,13 @@ import { agentSessionApi, artifactApi, voiceApi } from '@/lib/ipc-client'
 import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
+import { COMPACT_COMMAND } from '@shared/context-usage'
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
 import { SpeakMessageButton } from '@/components/voice/SpeakMessageButton'
 import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
 import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
+import { useContextUsage } from '@/hooks/use-context-usage'
+import { ContextWindowMeter } from './ContextWindowMeter'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -831,6 +834,7 @@ export function AgentTranscriptPanel({
   const [isDragOverComposer, setIsDragOverComposer] = useState(false)
   const [debugCopyToast, setDebugCopyToast] = useState(false)
   const taskArtifacts = useArtifactStore((state) => taskId ? (state.artifactsByTask[taskId] || EMPTY_ARTIFACTS) : EMPTY_ARTIFACTS)
+  const contextUsage = useContextUsage(taskId)
   const selectArtifactTab = useArtifactStore((state) => state.selectTab)
   const handleOpenArtifact = useCallback((artifact: Artifact) => {
     selectArtifactTab(artifact.taskId, artifact.id, true)
@@ -1160,6 +1164,21 @@ export function AgentTranscriptPanel({
   // send function of the current render, never one captured earlier.
   sendRef.current = handleSend
 
+  const handleCompact = useCallback(() => {
+    if (!taskId) return
+    const reportFailure = (detail: string) => dispatchShortcutFeedback(`Could not compact the context — ${detail.slice(0, 280)}`, true)
+    agentSessionApi.sendByTaskId(taskId, COMPACT_COMMAND).then(
+      (result) => {
+        if (!result?.success) reportFailure('the agent session did not accept the request')
+      },
+      (error: unknown) => {
+        console.error('[AgentTranscriptPanel] Compact request failed:', error)
+        const detail = error instanceof Error && error.message ? error.message.trim() : String(error ?? '').trim()
+        reportFailure(detail || 'the agent session did not start')
+      }
+    )
+  }, [taskId])
+
   const handleAddAttachments = async () => {
     if (!onPickAttachments) return
     const picked = await onPickAttachments()
@@ -1231,6 +1250,9 @@ export function AgentTranscriptPanel({
           </span>
         </div>
         <div className="flex items-center gap-3">
+          {contextUsage && (
+            <ContextWindowMeter usage={contextUsage} onCompact={taskId ? handleCompact : undefined} />
+          )}
           <span className={`text-xs flex items-center gap-1 ${getStatusColor()}`}>
             {(isStarting || status === SessionStatus.WORKING) && <Loader2 className="h-3 w-3 animate-spin" />}
             {getStatusLabel()}

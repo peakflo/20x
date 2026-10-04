@@ -201,6 +201,7 @@ export interface AgentConfig {
   skill_ids?: string[]
   secret_ids?: string[]
   max_parallel_sessions?: number  // Default: 1, range: 1-10
+  auto_compact_tokens?: number | null  // Claude Code only: compact once the context reaches this many tokens; null = off
   api_keys?: {
     openai?: string  // For Codex
     anthropic?: string  // For Claude Code

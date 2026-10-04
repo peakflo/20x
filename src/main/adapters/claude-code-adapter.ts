@@ -17,6 +17,7 @@ import type {
   MessagePart,
 } from './coding-agent-adapter'
 import type { AdapterUsageLimitsEvent, AdapterUsageReport, UsageLimitStop } from './coding-agent-adapter'
+import type { AdapterContextUsageReport } from '../../shared/context-usage'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 import { pickWindowsWhichMatch, resolveWindowsClaudeShim } from './claude-executable'
 import { homedir } from 'os'
@@ -27,6 +28,21 @@ import {
   latestResetAt,
   normalizeClaudeModelUsage
 } from '../usage/usage-normalize'
+import {
+  claudeAssistantContextTokens,
+  claudeCompactBoundaryTokens,
+  claudeContextWindowsFromModelUsage,
+  claudeFallbackContextWindow
+} from '../usage/context-usage-normalize'
+
+/**
+ * SDK `settings.autoCompactWindow` for the Claude auto-compact threshold. Empty
+ * when the user left auto-compact off, so the CLI default applies.
+ */
+export function claudeAutoCompactOptions(autoCompactTokens: number | null | undefined): Pick<Options, 'settings'> | Record<string, never> {
+  if (typeof autoCompactTokens !== 'number' || !Number.isFinite(autoCompactTokens) || autoCompactTokens <= 0) return {}
+  return { settings: { autoCompactWindow: Math.round(autoCompactTokens) } }
+}
 
 type ClaudeSDK = typeof import('@anthropic-ai/claude-agent-sdk')
 type Query = import('@anthropic-ai/claude-agent-sdk').Query
@@ -127,6 +143,10 @@ interface ClaudeSession {
   backgroundTasks: Map<string, BackgroundTask>
   /** True once the current turn emitted a non-error `result` message. */
   sawResult: boolean
+  /** Context window size per model id, learned from `result.modelUsage[*].contextWindow`. */
+  contextWindows?: Record<string, number>
+  /** Model of the latest main-loop assistant message, used to attribute `result` windows. */
+  contextModel?: string
   /**
    * Adds a new user turn to the live Claude Code input stream. Keeping one
    * stream for the full adapter-session lifetime preserves harness events while
@@ -178,6 +198,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
   /** Set by agent-manager: receives subscription plan-limit snapshots/updates. */
   onUsageLimits?: (event: AdapterUsageLimitsEvent) => void
+
+  /** Set by agent-manager: receives context-window occupancy and compaction state. */
+  onContextUsage?: (report: AdapterContextUsageReport) => void
 
   /** Shared in-flight plan-limit read, so concurrent callers make one request. */
   private planLimitsRead: Promise<ProviderUsageLimits> | null = null
@@ -819,6 +842,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)
       allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
       ...(secretHooks ? { hooks: secretHooks } : {}),
+      ...claudeAutoCompactOptions(config.autoCompactTokens),
     }
 
     // Determine session continuation mode
@@ -1418,6 +1442,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           this.reportResultUsage(sessionId, session, msg)
           if (!msg.is_error) this.maybeRefreshPlanLimits(session)
         }
+        this.reportContextUsage(sessionId, session, msg)
 
         // Buffer message (only if we didn't throw above)
         session.messageBuffer.push(message)
@@ -1598,6 +1623,51 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       })
     } catch (error) {
       console.warn('[ClaudeCodeAdapter] Failed to report token usage:', error)
+    }
+  }
+
+  /**
+   * Context-window meter. Only the main loop counts: subagent messages carry a
+   * `parent_tool_use_id` and run in their own context. `result.modelUsage` is the
+   * only place the SDK states a model's window size, so windows are learned there
+   * and the `[1m]` / 200k fallback covers the first turn.
+   */
+  private reportContextUsage(sessionId: string, session: ClaudeSession, msg: Record<string, unknown>): void {
+    if (!this.onContextUsage) return
+    try {
+      const base = {
+        taskId: session.config.taskId,
+        agentId: session.config.agentId,
+        providerSessionId: session.sessionId || sessionId,
+        canCompact: true
+      }
+      if (msg.type === 'assistant') {
+        if ((msg.parent_tool_use_id ?? null) !== null) return
+        const model = typeof (msg.message as { model?: unknown } | undefined)?.model === 'string'
+          ? (msg.message as { model: string }).model
+          : undefined
+        const usedTokens = claudeAssistantContextTokens(msg)
+        if (usedTokens === null) return
+        session.contextModel = model ?? session.contextModel
+        const maxTokens = (model && session.contextWindows?.[model]) || claudeFallbackContextWindow(model)
+        this.onContextUsage({ ...base, usedTokens, maxTokens, model: model ?? null })
+      } else if (msg.type === 'result') {
+        const windows = claudeContextWindowsFromModelUsage(msg.modelUsage)
+        session.contextWindows = { ...session.contextWindows, ...windows }
+        const model = session.contextModel ?? Object.keys(windows)[0] ?? null
+        const maxTokens = model ? windows[model] ?? session.contextWindows[model] : undefined
+        if (maxTokens) this.onContextUsage({ ...base, maxTokens, model })
+      } else if (msg.type === 'system' && msg.subtype === 'compact_boundary') {
+        this.onContextUsage({
+          ...base,
+          usedTokens: claudeCompactBoundaryTokens(msg) ?? undefined,
+          compacting: false
+        })
+      } else if (msg.type === 'system' && msg.subtype === 'status') {
+        this.onContextUsage({ ...base, compacting: msg.status === 'compacting' })
+      }
+    } catch (error) {
+      console.warn('[ClaudeCodeAdapter] Failed to report context usage:', error)
     }
   }
 

@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, rmSync } from 'fs'
 import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
 import type { ReasoningEffort } from '../shared/reasoning-effort'
+import { normalizeAutoCompactTokens } from '../shared/context-usage'
 import { startTaskApiServer } from './task-api-server'
 import { UsageStore } from './usage/usage-store'
 import { contextHandoffSettingKey, isSameHarness, parseContextHandoffMarker, type ContextHandoffMarker } from './context-handoff'
@@ -39,6 +40,8 @@ export interface AgentConfigRecord {
   coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor' | 'pi'
   model?: string
   reasoning_effort?: ReasoningEffort
+  /** Claude Code auto-compact threshold in tokens (100k–1M); null or absent = off. */
+  auto_compact_tokens?: number | null
   auth_method?: 'subscription' | 'api_key'
   permission_mode?: 'ask' | 'allow'
   sandbox_mode?: 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -158,6 +161,12 @@ export interface UpdateMcpServerData {
    * exposed for migrations and tests only — UI/IPC paths should never write it.
    */
   source?: McpServerSource
+}
+
+/** Stores the auto-compact threshold in its bounded form (null = off). */
+function normalizeAgentConfigRecord(config: AgentConfigRecord | undefined): AgentConfigRecord | undefined {
+  if (!config || !('auto_compact_tokens' in config)) return config
+  return { ...config, auto_compact_tokens: normalizeAutoCompactTokens(config.auto_compact_tokens) }
 }
 
 export interface CreateAgentData {
@@ -2624,7 +2633,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       id,
       data.name,
       data.server_url ?? 'http://localhost:4096',
-      JSON.stringify(data.config ?? {}),
+      JSON.stringify(normalizeAgentConfigRecord(data.config) ?? {}),
       data.is_default ? 1 : 0,
       now,
       now
@@ -2647,7 +2656,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     }
     if (data.config !== undefined) {
       setClauses.push('config = ?')
-      values.push(JSON.stringify(data.config))
+      values.push(JSON.stringify(normalizeAgentConfigRecord(data.config)))
     }
     if (data.is_default !== undefined) {
       setClauses.push('is_default = ?')

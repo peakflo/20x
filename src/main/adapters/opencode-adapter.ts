@@ -5,7 +5,7 @@ import { homedir } from 'os'
 import { execSync } from 'child_process'
 import { buildMergedOpencodeConfig, readOpencodeAuth } from '../utils/opencode-config'
 import type { ProviderUsageLimits } from '../../shared/usage'
-import { normalizeOpenCodeAssistantMessage, openCodeGoUsageToLimits } from '../usage/usage-normalize'
+import { normalizeOpenCodeAssistantMessage, openCodeGoUsageToLimits, type OpenCodeMessageUsage } from '../usage/usage-normalize'
 import { ENTERPRISE_AI_GATEWAY_PROVIDER_ID, readEnterpriseAiGatewayConfig } from '../enterprise-ai-gateway'
 import type { DatabaseManager } from '../database'
 import type {
@@ -18,6 +18,7 @@ import type {
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 import type { AdapterUsageLimitsEvent, AdapterUsageReport } from './coding-agent-adapter'
+import type { AdapterContextUsageReport } from '../../shared/context-usage'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
@@ -142,6 +143,8 @@ export class OpencodeAdapter implements CodingAgentAdapter {
   onUsage?: (report: AdapterUsageReport) => void
   /** Set by agent-manager: receives OpenCode Go plan-limit snapshots. */
   onUsageLimits?: (event: AdapterUsageLimitsEvent) => void
+  /** Set by agent-manager: receives the context size of each completed main-session message. */
+  onContextUsage?: (report: AdapterContextUsageReport) => void
   /**
    * Usage attribution for sessions created/resumed here. `trackSinceMs` is 0
    * for sessions created here (every message is ours) and the resume time for
@@ -2477,13 +2480,15 @@ export class OpencodeAdapter implements CodingAgentAdapter {
 
   /** Reports a completed assistant message (live SSE event or reconcile pass). */
   private trackMessageUsage(info: unknown): void {
-    if (!this.onUsage) return
+    if (!this.onUsage && !this.onContextUsage) return
     try {
       const message = normalizeOpenCodeAssistantMessage(info)
       if (!message) return
       const rootId = this.resolveUsageSession(message.sessionId)
       if (!rootId) return
       const tracked = this.usageSessions.get(rootId)!
+      this.reportMessageContext(message, rootId, tracked)
+      if (!this.onUsage) return
       // Resumed sessions: only messages produced after the resume are ours to count.
       if (tracked.trackSinceMs > 0 && (message.createdAt ?? 0) < tracked.trackSinceMs - 5_000) return
       this.onUsage({
@@ -2502,6 +2507,31 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     } catch (error) {
       console.warn('[OpencodeAdapter] Failed to report token usage:', error)
     }
+  }
+
+  /**
+   * Context occupied after a main-session assistant message: prompt tokens
+   * (fresh input + cache reads/writes) plus its output. Subagent messages live
+   * in child sessions and are skipped. OpenCode's message payload carries no
+   * window size, so `maxTokens` is left to the agent manager's fallback.
+   */
+  private reportMessageContext(
+    message: OpenCodeMessageUsage,
+    rootId: string,
+    tracked: { taskId: string; agentId: string }
+  ): void {
+    if (!this.onContextUsage || message.sessionId !== rootId) return
+    const { usage } = message
+    const usedTokens = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens + usage.outputTokens
+    if (usedTokens <= 0) return
+    this.onContextUsage({
+      usedTokens,
+      model: message.model,
+      taskId: tracked.taskId,
+      agentId: tracked.agentId,
+      providerSessionId: rootId,
+      canCompact: false
+    })
   }
 
   private async reconcileSessionUsage(sessionId: string, config: SessionConfig): Promise<void> {
