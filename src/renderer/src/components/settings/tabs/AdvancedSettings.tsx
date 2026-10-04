@@ -3,16 +3,22 @@ import { CheckCircle, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
+import { Select } from '@/components/ui/Select'
 import { SettingsSection } from '../SettingsSection'
 import { useSettingsStore } from '@/stores/settings-store'
 import { settingsApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
+import { WORKTREE_BRANCH_MODE_KEY, WORKTREE_BRANCH_PREFIX_KEY, WORKTREE_BRANCH_TEMPLATE_KEY, type WorktreeBranchMode } from '@shared/worktree-branch-name'
 
 export function AdvancedSettings() {
   const { githubOrg, ghCliStatus, setGithubOrg, checkGhCli, startGhAuth } = useSettingsStore()
   const [orgInput, setOrgInput] = useState(githubOrg || '')
   const [isAuthenticating, setIsAuthenticating] = useState(false)
   const [deviceCode, setDeviceCode] = useState('')
+  const [branchMode, setBranchMode] = useState<WorktreeBranchMode>('prefix')
+  const [branchPrefix, setBranchPrefix] = useState('task')
+  const [branchTemplate, setBranchTemplate] = useState('{type}/{slug}-{shortId}')
+  const [branchSaved, setBranchSaved] = useState(false)
 
   // API Keys
   const [anthropicKey, setAnthropicKey] = useState('')
@@ -37,6 +43,10 @@ export function AdvancedSettings() {
       setAnthropicKey(keys.anthropic_api_key || '')
       setOpenaiKey(keys.openai_api_key || '')
       setGoogleKey(keys.google_api_key || '')
+      const mode = keys[WORKTREE_BRANCH_MODE_KEY]
+      if (mode === 'prefix' || mode === 'type-title' || mode === 'ai' || mode === 'template') setBranchMode(mode)
+      setBranchPrefix(keys[WORKTREE_BRANCH_PREFIX_KEY] ?? 'task')
+      setBranchTemplate(keys[WORKTREE_BRANCH_TEMPLATE_KEY] ?? '{type}/{slug}-{shortId}')
     }
     loadKeys()
   }, [githubOrg])
@@ -52,6 +62,42 @@ export function AdvancedSettings() {
 
   return (
     <div className="space-y-6">
+      <SettingsSection
+        title="Worktree branch names"
+        description="Choose names for newly created task branches. Existing worktrees keep their branches."
+      >
+        <div className="space-y-3">
+          <div className="space-y-1.5">
+            <Label htmlFor="branch-mode">Naming rule</Label>
+            <Select id="branch-mode" value={branchMode} onChange={(event) => { setBranchMode(event.target.value as WorktreeBranchMode); setBranchSaved(false) }} options={[
+              { value: 'prefix', label: 'Prefix + task id' },
+              { value: 'type-title', label: 'Type + title slug' },
+              { value: 'ai', label: 'AI-picked' },
+              { value: 'template', label: 'Custom template' }
+            ]} />
+          </div>
+          {branchMode === 'prefix' && <div className="space-y-1.5">
+            <Label htmlFor="branch-prefix">Prefix</Label>
+            <Input id="branch-prefix" value={branchPrefix} onChange={(event) => { setBranchPrefix(event.target.value); setBranchSaved(false) }} placeholder="task" />
+            <p className="text-xs text-muted-foreground">Example: task/task-123</p>
+          </div>}
+          {branchMode === 'template' && <div className="space-y-1.5">
+            <Label htmlFor="branch-template">Template</Label>
+            <Input id="branch-template" value={branchTemplate} onChange={(event) => { setBranchTemplate(event.target.value); setBranchSaved(false) }} placeholder="{type}/{slug}-{shortId}" />
+            <p className="text-xs text-muted-foreground">Use {'{type}'}, {'{slug}'}, {'{id}'}, {'{shortId}'}, and {'{date}'}.</p>
+          </div>}
+          {branchMode === 'ai' && <p className="text-xs text-muted-foreground">Uses the configured OpenAI API key. If unavailable or slow, uses type + title slug.</p>}
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={async () => {
+              await settingsApi.set(WORKTREE_BRANCH_MODE_KEY, branchMode)
+              await settingsApi.set(WORKTREE_BRANCH_PREFIX_KEY, branchPrefix)
+              await settingsApi.set(WORKTREE_BRANCH_TEMPLATE_KEY, branchTemplate)
+              setBranchSaved(true)
+            }}>Save</Button>
+            {branchSaved && <span className="text-xs text-muted-foreground">Saved</span>}
+          </div>
+        </div>
+      </SettingsSection>
       <SettingsSection
         title="GitHub Integration"
         description="Configure GitHub CLI for repository operations and worktree management"

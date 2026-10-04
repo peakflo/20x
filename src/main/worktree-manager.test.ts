@@ -88,6 +88,16 @@ describe('WorktreeManager', () => {
         return
       }
 
+      if (file === 'git' && args[0] === 'show-ref') {
+        callback(new Error('Branch does not exist'))
+        return
+      }
+
+      if (file === 'git' && args[0] === 'check-ref-format') {
+        callback(null, '', '')
+        return
+      }
+
       if (file === 'git' && args[0] === 'rev-parse') {
         callback(null, 'origin/main', '')
         return
@@ -138,6 +148,42 @@ describe('WorktreeManager', () => {
       expect.objectContaining({ timeout: 300000 }),
       expect.any(Function)
     )
+  })
+
+  it('adds the short task id when a generated branch already exists', async () => {
+    const settings: Record<string, string> = { worktree_branch_mode: 'ai' }
+    const db = {
+      getSetting: (key: string) => settings[key] ?? null,
+      getTask: () => ({ id: 'task-12345678', title: 'Fix login', type: 'coding', labels: ['bug'] })
+    }
+    execFileMock.mockImplementation((file: string, args: string[], optionsOrCallback: unknown, maybeCallback?: (error: Error | null, stdout?: string, stderr?: string) => void) => {
+      const callback = typeof optionsOrCallback === 'function'
+        ? optionsOrCallback as (error: Error | null, stdout?: string, stderr?: string) => void
+        : maybeCallback as (error: Error | null, stdout?: string, stderr?: string) => void
+      if (file === 'git' && args[0] === 'show-ref') {
+        callback(args[3] === 'refs/heads/fix/fix-login-12345678' ? null : new Error('Missing'))
+      } else if (file === 'git' && args[0] === 'rev-parse') callback(null, 'origin/main', '')
+      else callback(null, '', '')
+    })
+
+    await new WorktreeManager(db).setupWorkspaceForTask('task-12345678', [{ fullName: 'peakflo/20x', defaultBranch: 'main' }], 'peakflo')
+
+    expect(execFileMock).toHaveBeenCalledWith('git', [
+      'worktree', 'add', expect.any(String), '-b', 'fix/fix-login-12345678-12345678', 'origin/main'
+    ], expect.any(Object), expect.any(Function))
+  })
+
+  it('keeps an existing worktree when the naming rule changes', async () => {
+    const workspace = path.join('/tmp/20x-user-data', 'workspaces', 'task-keep', '20x')
+    existsSyncMock.mockImplementation((candidate: string) => candidate === workspace)
+    const db = {
+      getSetting: (key: string) => key === 'worktree_branch_mode' ? 'type-title' : null,
+      getTask: () => ({ id: 'task-keep', title: 'Changed title', labels: ['feature'] })
+    }
+
+    await new WorktreeManager(db).setupWorkspaceForTask('task-keep', [{ fullName: 'peakflo/20x', defaultBranch: 'main' }], 'peakflo')
+
+    expect(execFileMock.mock.calls.some(([file, args]) => file === 'git' && args[0] === 'worktree' && args[1] === 'add')).toBe(false)
   })
 
   it('returns tracked and untracked files for the complete worktree inventory', async () => {
