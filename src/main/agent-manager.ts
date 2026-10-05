@@ -1846,6 +1846,11 @@ export class AgentManager extends EventEmitter {
       let promptText: string
 
       if (isTriageSession && task) {
+        // Refresh plan limits (throttled) so list_agents reports current usage
+        // when the triage agent compares agents. Never blocks the triage start.
+        void this.refreshUsageLimits().catch((err) => {
+          console.warn('[AgentManager] Plan-limit refresh before triage failed:', err)
+        })
         // Use triage-specific prompt
         promptText = this.buildTriagePrompt(task)
       } else {
@@ -5143,11 +5148,14 @@ IMPORTANT: For ALL task operations below, use ONLY the \`task-management\` MCP s
 Follow these steps:
 
 1. Call \`find_similar_tasks\` with individual keywords extracted from the title/description. Pass them as space-separated words in \`title_keywords\` (e.g. "login bug fix" not the full title). Do NOT set \`completed_only\` — search all tasks so you find patterns even if tasks are still in progress.
-2. Call \`list_agents\` to see available agents and their capabilities.
+2. Call \`list_agents\` to see available agents, their capabilities, and the current subscription plan usage of each agent's harness (\`usage_limits\`).
 3. Call \`list_skills\` to see available skills.
 4. Call \`list_repos\` to see known repositories.
 5. Based on the similar tasks and available resources, determine:
-   - The best agent_id to assign (REQUIRED — you must set this)
+   - The best agent_id to assign (REQUIRED — you must set this). Choose in this order:
+     1. Fit comes first: the agent whose purpose, system prompt, MCP servers, skills and past similar tasks best match this task. Never pick a worse-fitting agent only because it has more headroom.
+     2. Among agents that fit equally well, prefer the one whose \`usage_limits\` shows the lowest usage (highest \`headroom_percent\`). This matters most when usage is high: avoid agents at \`critical\` or \`exhausted\` level when an equally suitable agent has headroom.
+     3. Treat \`unknown\` and \`not_applicable\` (API key) as having headroom, but below a known \`low\` level.
    - Relevant skill_ids (if any match the task)
    - Appropriate repos (if the task relates to specific repositories)
    - Priority (critical/high/medium/low) — adjust if the current priority seems wrong
@@ -5158,7 +5166,7 @@ Follow these steps:
      - A review task might have: { id: "approved", name: "Approved", type: "boolean", required: true }
 6. If the task is complex and clearly involves multiple distinct steps that would benefit from separate agents or sequential human review, create subtasks using \`create_subtask\` from the \`task-management\` MCP server. Each subtask should:
    - Have a clear, specific title describing one step
-   - Be assigned to the most appropriate agent_id (REQUIRED for each subtask)
+   - Be assigned to the most appropriate agent_id (REQUIRED for each subtask), using the same order: fit first, then the lowest current plan usage among equally suitable agents
    - Have relevant skill_ids assigned based on what skills match that subtask's work
    - Have repos set to the repositories relevant to that subtask (inherits from parent if not specified)
    - Include a description explaining the subtask's scope, expected output, and how it relates to other subtasks

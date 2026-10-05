@@ -116,7 +116,7 @@ const sharedTools: Tool[] = [
   ...artifactTools,
   {
     name: 'list_agents',
-    description: 'List all available agents with their capabilities and configurations',
+    description: 'List all available agents with their capabilities and configurations. Each agent includes `usage_limits`: the current subscription plan usage of its harness (level low/moderate/high/critical/exhausted/unknown/not_applicable, most_used_percent, headroom_percent, per-window usage and reset times). When several agents fit a task equally well, prefer the one with the most headroom.',
     inputSchema: { type: 'object', properties: {} }
   },
   {

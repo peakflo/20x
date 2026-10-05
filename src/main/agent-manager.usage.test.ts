@@ -30,7 +30,7 @@ vi.mock('./secret-broker', () => ({
 
 import { AgentManager } from './agent-manager'
 import { createTestDb } from '../../test/helpers/db-test-helper'
-import { makeAgent } from '../../test/helpers/task-fixtures'
+import { makeAgent, makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
 import type { CodingAgentAdapter } from './adapters/coding-agent-adapter'
 import { USAGE_LIMITS_UPDATED_CHANNEL, USAGE_RECORDED_CHANNEL } from '../shared/usage'
@@ -95,5 +95,16 @@ describe('AgentManager usage tracking', () => {
 
     expect(result.refreshed).toEqual(['claude-code'])
     expect(result.limits).toEqual([expect.objectContaining({ provider: 'claude-code', planType: 'max' })])
+  })
+})
+
+describe('AgentManager triage prompt', () => {
+  it('asks the triage agent to prefer harnesses with plan-limit headroom only among equally suitable agents', () => {
+    const task = db.createTask(makeTask({ title: 'Fix login' }))!
+    const prompt = (manager as unknown as { buildTriagePrompt(task: unknown): string }).buildTriagePrompt(task)
+    expect(prompt).toContain('`usage_limits`')
+    expect(prompt).toContain('Fit comes first')
+    expect(prompt).toMatch(/Among agents that fit equally well, prefer the one whose `usage_limits` shows the lowest usage/)
+    expect(prompt).toContain('fit first, then the lowest current plan usage among equally suitable agents')
   })
 })

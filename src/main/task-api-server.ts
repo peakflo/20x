@@ -28,6 +28,7 @@ import {
   type UiOpenTaskTarget
 } from '../shared/ui-commands'
 import { buildSimilarTasksQuery } from './task-search'
+import { limitsByProvider, summarizeAgentUsage } from './usage/agent-usage-summary'
 import {
   createRegisteredTaskArtifact,
   editRegisteredTaskArtifactFile,
@@ -529,7 +530,19 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
     case '/list_agents': {
       const agents = rawDb.prepare('SELECT * FROM agents ORDER BY created_at ASC').all() as Record<string, unknown>[]
-      agents.forEach((a) => { a.config = JSON.parse((a.config as string) || '{}'); a.is_default = !!a.is_default })
+      // Current subscription plan usage of each agent's harness, so agents that
+      // assign work (triage, coordinators) can prefer harnesses with headroom.
+      let planLimits = limitsByProvider([])
+      try {
+        planLimits = limitsByProvider(db.usage.getProviderUsageLimits())
+      } catch (err) {
+        console.warn('[TaskAPI] Plan limits unavailable for list_agents:', err)
+      }
+      agents.forEach((a) => {
+        a.config = JSON.parse((a.config as string) || '{}')
+        a.is_default = !!a.is_default
+        a.usage_limits = summarizeAgentUsage(a as { config: Record<string, unknown> }, planLimits)
+      })
       return agents
     }
 
