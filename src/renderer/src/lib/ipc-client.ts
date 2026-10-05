@@ -3,6 +3,7 @@ import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentAp
 import type { ArtifactApi } from '@shared/artifacts'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
+import type { HarnessInstanceView } from '@shared/harness-instances'
 import type {
   MicrophonePermission,
   VoiceActionOutcome,
@@ -103,6 +104,24 @@ export const mcpServerApi = {
 
   submitManualClientId: (mcpServerId: string, clientId: string): Promise<{ needsManualClientId?: boolean }> => {
     return window.electronAPI.mcpServers.submitManualClientId(mcpServerId, clientId)
+  }
+}
+
+export const harnessInstanceApi = {
+  list: (): Promise<HarnessInstanceView[]> => {
+    return window.electronAPI.harnessInstances.list()
+  },
+
+  create: (data: { harness_type: 'claude-code' | 'codex'; label: string; home_path: string }): Promise<HarnessInstanceView> => {
+    return window.electronAPI.harnessInstances.create(data)
+  },
+
+  update: (id: string, data: { label?: string; home_path?: string }): Promise<HarnessInstanceView | undefined> => {
+    return window.electronAPI.harnessInstances.update(id, data)
+  },
+
+  delete: (id: string): Promise<boolean> => {
+    return window.electronAPI.harnessInstances.delete(id)
   }
 }
 

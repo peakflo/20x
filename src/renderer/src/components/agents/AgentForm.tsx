@@ -8,11 +8,13 @@ import { Label } from '@/components/ui/Label'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
 import { agentConfigApi } from '@/lib/ipc-client'
+import { useHarnessInstanceStore } from '@/stores/harness-instance-store'
 import { useMcpStore } from '@/stores/mcp-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
 import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
+import { HARNESS_INSTANCE_PREFIX, harnessDropdownOptions } from '@shared/harness-instances'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode, AgentSandboxMode } from '@/types'
 import type { ReasoningEffort } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS } from '@/types'
@@ -42,10 +44,20 @@ function parseMcpSelection(entries?: Array<string | AgentMcpServerEntry>): Map<s
   return map
 }
 
+/** An API-key login is billed per token and does not use a harness account. */
+function usesApiKeyLogin(codingAgent: CodingAgentType | '', authMethod: string): boolean {
+  return authMethod === 'api_key' && (codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX)
+}
+
 export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [name, setName] = useState(agent?.name ?? '')
   const [serverUrl, setServerUrl] = useState(agent?.server_url ?? 'http://localhost:4096')
   const [codingAgent, setCodingAgent] = useState<CodingAgentType | ''>(agent?.config.coding_agent ?? '')
+  // The harness dropdown picks an account: the default of a harness, or a stored instance of it.
+  const [harnessInstanceId, setHarnessInstanceId] = useState<string>(agent?.config.harness_instance_id ?? '')
+  const harnessInstances = useHarnessInstanceStore((s) => s.instances)
+  const loadHarnessInstances = useHarnessInstanceStore((s) => s.load)
+  useEffect(() => { void loadHarnessInstances() }, [loadHarnessInstances])
   const [model, setModel] = useState(agent?.config.model ?? '')
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | ''>(agent?.config.reasoning_effort ?? '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.config.system_prompt ?? '')
@@ -237,6 +249,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       server_url: serverUrl.trim(),
       config: {
         coding_agent: codingAgent || undefined,
+        // Only a subscription login has an account of its own. Clears the field otherwise.
+        harness_instance_id: harnessInstanceId && (codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX)
+          && !usesApiKeyLogin(codingAgent, authMethod)
+          ? harnessInstanceId
+          : undefined,
         model: model.trim() || undefined,
         reasoning_effort: supportsReasoningEffort && supportedReasoningEfforts.has(reasoningEffort)
           ? reasoningEffort || undefined
@@ -368,13 +385,24 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         <Label htmlFor="coding-agent">Coding Agent</Label>
         <select
           id="coding-agent"
-          value={codingAgent}
-          onChange={(e) => setCodingAgent(e.target.value as CodingAgentType | '')}
+          value={harnessInstanceId ? `${HARNESS_INSTANCE_PREFIX}${harnessInstanceId}` : codingAgent}
+          onChange={(e) => {
+            const value = e.target.value
+            if (value.startsWith(HARNESS_INSTANCE_PREFIX)) {
+              const id = value.slice(HARNESS_INSTANCE_PREFIX.length)
+              const instance = harnessInstances.find((i) => i.id === id)
+              setCodingAgent((instance?.harness_type as CodingAgentType) ?? '')
+              setHarnessInstanceId(id)
+            } else {
+              setCodingAgent(value as CodingAgentType | '')
+              setHarnessInstanceId('')
+            }
+          }}
           className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
         >
           <option value="">Select a coding agent...</option>
-          {CODING_AGENTS.map((ca) => (
-            <option key={ca.value} value={ca.value}>{ca.label}</option>
+          {harnessDropdownOptions(harnessInstances, CODING_AGENTS).map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
           ))}
         </select>
       </div>

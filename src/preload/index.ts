@@ -90,6 +90,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agent:update', id, data),
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('agent:delete', id)
   },
+  harnessInstances: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('harnessInstance:list'),
+    create: (data: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('harnessInstance:create', data),
+    update: (id: string, data: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('harnessInstance:update', id, data),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('harnessInstance:delete', id)
+  },
   mcpServers: {
     getAll: (): Promise<unknown[]> => ipcRenderer.invoke('mcp:getAll'),
     get: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:get', id),

@@ -2,6 +2,7 @@ import { getSourceCompletionDescription, getTaskSourceName } from '@shared/task-
 import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
 import { TaskStatus } from '@shared/constants'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
+import { harnessInstanceDisplayName, type HarnessInstanceView } from '@shared/harness-instances'
 import { CollapsibleDescription } from '../components/CollapsibleDescription'
 import { useTaskStore, type Task } from '../stores/task-store'
 import { useAgentStore, SessionStatus } from '../stores/agent-store'
@@ -80,6 +81,21 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
   const updateTask = useTaskStore((s) => s.updateTask)
   const agents = useAgentStore((s) => s.agents)
+  // Read-only account labels (harness instances) for the agent menu.
+  const [harnessInstances, setHarnessInstances] = useState<HarnessInstanceView[]>([])
+  useEffect(() => {
+    let cancelled = false
+    Promise.resolve()
+      .then(() => api.harnessInstances.list())
+      .then((list) => { if (!cancelled) setHarnessInstances(list) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [])
+  const accountLabelOf = (agent: { config?: { harness_instance_id?: string } }): string | null => {
+    const id = agent.config?.harness_instance_id
+    const instance = id ? harnessInstances.find((i) => i.id === id) : undefined
+    return instance ? harnessInstanceDisplayName(instance.harness_type, instance.label) : null
+  }
   const skills = useAgentStore((s) => s.skills)
   const session = useAgentStore((s) => s.sessions.get(taskId))
   const initSession = useAgentStore((s) => s.initSession)
@@ -343,7 +359,12 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                   className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground active:bg-accent"
                   data-testid={`mobile-header-agent-option-${a.id}`}
                 >
-                  <span className="truncate">{a.name}</span>
+                  <span className="min-w-0">
+                    <span className="block truncate">{a.name}</span>
+                    {accountLabelOf(a) && (
+                      <span className="block truncate text-[10px] text-muted-foreground" data-testid={`mobile-header-agent-account-${a.id}`}>{accountLabelOf(a)}</span>
+                    )}
+                  </span>
                   {task.agent_id === a.id && <svg className="h-3.5 w-3.5 text-primary shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>}
                 </button>
               ))}

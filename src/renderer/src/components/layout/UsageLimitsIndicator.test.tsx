@@ -121,3 +121,31 @@ describe('UsageLimitsIndicator', () => {
     expect(container).toBeEmptyDOMElement()
   })
 })
+
+describe('one chip per harness instance', () => {
+  it('shows each account of a harness with its own plan limits, and no switch control', async () => {
+    const work: ProviderUsageLimits = {
+      ...codex,
+      instanceId: 'hi_work',
+      instanceLabel: 'Codex · Work',
+      windows: [{ ...codex.windows[0], usedPercent: 85 }]
+    }
+    const personal: ProviderUsageLimits = {
+      ...codex,
+      instanceId: 'hi_personal',
+      instanceLabel: 'Codex · Personal',
+      windows: [{ ...codex.windows[0], usedPercent: 12 }]
+    }
+    getLimits.mockResolvedValue([work, personal])
+    refreshLimits.mockResolvedValue({ limits: [work, personal], refreshed: [] })
+
+    render(<UsageLimitsIndicator />)
+
+    await waitFor(() => expect(screen.getByTestId('usage-chip-hi_work')).toBeTruthy())
+    expect(screen.getByText('Codex · Work')).toBeTruthy()
+    expect(screen.getByText('85%')).toBeTruthy()
+    expect(screen.getByText('Codex · Personal')).toBeTruthy()
+    expect(screen.getByText('12%')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /switch/i })).toBeNull()
+  })
+})

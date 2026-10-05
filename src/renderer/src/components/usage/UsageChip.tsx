@@ -9,6 +9,8 @@ export type UsageChipLevel = UsageLimitLevel
 interface UsageChipProps {
   /** Small icon identifying the subscription (provider logo, Peakflo AI mark). */
   icon: ReactNode
+  /** Account name shown before the percentage, e.g. "Codex · Work". Omit for the default account. */
+  name?: string
   /** Accessible summary, e.g. "Claude: 42% of weekly limit used, resets in 2h". */
   label: string
   percent: number
@@ -26,7 +28,7 @@ interface UsageChipProps {
  * Hover or focus shows the full details card; it stays open while the
  * pointer moves onto the card.
  */
-export function UsageChip({ icon, label, percent, level, limitReached, details, onClick, testId, detailsTestId }: UsageChipProps) {
+export function UsageChip({ icon, name, label, percent, level, limitReached, details, onClick, testId, detailsTestId }: UsageChipProps) {
   const [open, setOpen] = useState(false)
   const used = Math.min(100, Math.max(0, percent))
   return (
@@ -52,6 +54,7 @@ export function UsageChip({ icon, label, percent, level, limitReached, details, 
         <span className="h-1 w-5 rounded-full bg-muted overflow-hidden" aria-hidden>
           <span className={cn('block h-full rounded-full', USAGE_LEVEL_BAR[level])} style={{ width: `${used}%` }} />
         </span>
+        {name && <span className="whitespace-nowrap">{name}</span>}
         <span>{Math.round(used)}%</span>
       </button>
       {open && (

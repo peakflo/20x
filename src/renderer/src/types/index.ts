@@ -194,6 +194,8 @@ export interface AgentConfig {
   model?: string
   reasoning_effort?: ReasoningEffort
   auth_method?: ClaudeAuthMethod
+  /** Harness instance (subscription login) the agent runs under. Unset means the harness default. */
+  harness_instance_id?: string
   permission_mode?: AgentPermissionMode
   sandbox_mode?: AgentSandboxMode
   system_prompt?: string

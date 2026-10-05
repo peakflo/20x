@@ -9,6 +9,7 @@ import type { VoiceCapabilities } from '@shared/voice'
 import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { PushPreferences } from '@shared/push-notifications'
+import type { HarnessInstanceView } from '@shared/harness-instances'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -105,6 +106,9 @@ export const api = {
       post<Array<{ name: string; fullName: string; defaultBranch: string; cloneUrl: string; description: string; isPrivate: boolean }>>('/api/github/repos', { org, provider }),
     pullRequest: (url: string) =>
       get<PullRequestDetails>(`/api/github/pull-request?url=${encodeURIComponent(url)}`)
+  },
+  harnessInstances: {
+    list: () => get<HarnessInstanceView[]>('/api/harness-instances')
   },
   usage: {
     limits: () => get<ProviderUsageLimits[]>('/api/usage/limits'),

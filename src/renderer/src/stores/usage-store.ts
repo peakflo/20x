@@ -5,7 +5,7 @@ import { onUsageLimitsUpdated, usageApi } from '@/lib/ipc-client'
 const ENABLE_CURSOR_KEYCHAIN_ACTION = 'enable-cursor-keychain'
 
 interface UsageState {
-  /** Latest plan-limit snapshot per provider. */
+  /** Latest plan-limit snapshot per harness instance. */
   limits: ProviderUsageLimits[]
   loaded: boolean
   refreshing: boolean
@@ -22,7 +22,9 @@ interface UsageState {
 }
 
 function sortLimits(limits: ProviderUsageLimits[]): ProviderUsageLimits[] {
-  return [...limits].sort((a, b) => a.provider.localeCompare(b.provider))
+  return [...limits].sort((a, b) =>
+    a.provider.localeCompare(b.provider) || (a.instanceId ?? '').localeCompare(b.instanceId ?? '')
+  )
 }
 
 let subscribers = 0
@@ -91,7 +93,7 @@ export const useUsageStore = create<UsageState>((set, get) => {
 
     upsert: (limits) => {
       set((state) => ({
-        limits: sortLimits([...state.limits.filter((l) => l.provider !== limits.provider), limits])
+        limits: sortLimits([...state.limits.filter((l) => (l.instanceId ?? l.provider) !== (limits.instanceId ?? limits.provider)), limits])
       }))
     }
   }

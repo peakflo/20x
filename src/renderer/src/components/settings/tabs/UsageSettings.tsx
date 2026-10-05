@@ -155,7 +155,7 @@ export function UsageSettings() {
           <div className="grid gap-3 sm:grid-cols-2">
             {limits.map((providerLimits) => (
               <ProviderLimitsCard
-                key={providerLimits.provider}
+                key={providerLimits.instanceId ?? providerLimits.provider}
                 limits={providerLimits}
                 onAction={(actionId) => void runLimitsAction(actionId)}
                 actionPending={refreshing}

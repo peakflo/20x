@@ -23,8 +23,14 @@ const LEVEL_BAR = {
   critical: 'bg-red-500'
 } as const
 
+/** One entry per harness instance (subscription login). */
+function instanceKey(limits: ProviderUsageLimits): string {
+  return limits.instanceId ?? limits.provider
+}
+
 function upsert(list: ProviderUsageLimits[], next: ProviderUsageLimits): ProviderUsageLimits[] {
-  return [...list.filter((l) => l.provider !== next.provider), next].sort((a, b) => a.provider.localeCompare(b.provider))
+  return [...list.filter((l) => instanceKey(l) !== instanceKey(next))].concat(next)
+    .sort((a, b) => a.provider.localeCompare(b.provider) || instanceKey(a).localeCompare(instanceKey(b)))
 }
 
 /** Subscription plan limits + 7-day token usage, for the mobile Settings page. */
@@ -86,9 +92,9 @@ export function SubscriptionUsageSection() {
       ) : (
         <div className="space-y-2">
           {limits.map((provider) => (
-            <div key={provider.provider} className="rounded-lg border border-border/50 bg-card p-3 space-y-2.5">
+            <div key={instanceKey(provider)} className="rounded-lg border border-border/50 bg-card p-3 space-y-2.5" data-testid={`usage-limits-${instanceKey(provider)}`}>
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">{USAGE_PROVIDER_LABELS[provider.provider]}</span>
+                <span className="text-sm font-medium">{provider.instanceLabel ?? USAGE_PROVIDER_LABELS[provider.provider]}</span>
                 {provider.planType && (
                   <span className="text-[10px] bg-muted text-muted-foreground px-1.5 py-0.5 rounded capitalize">{provider.planType}</span>
                 )}

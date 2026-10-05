@@ -41,17 +41,25 @@ function mostConstrained(limits: ProviderUsageLimits, nowMs: number) {
   return { window: best, used: bestUsed }
 }
 
-function ProviderChip({ limits, nowMs }: { limits: ProviderUsageLimits; nowMs: number }) {
+/** Name of the account a chip belongs to, e.g. "Codex · Work". The default account has no separate name. */
+function accountName(limits: ProviderUsageLimits, showName: boolean): string | undefined {
+  if (!showName || !limits.instanceLabel) return undefined
+  return limits.instanceLabel
+}
+
+function ProviderChip({ limits, nowMs, showName }: { limits: ProviderUsageLimits; nowMs: number; showName: boolean }) {
   const openSettings = useUIStore((s) => s.openSettings)
   const setSettingsTab = useUIStore((s) => s.setSettingsTab)
   const { window, used } = mostConstrained(limits, nowMs)
   const level = limits.limitReached ? 'critical' : usageLimitLevel(used)
   const resetIn = formatResetIn(window.resetsAt, nowMs)
-  const label = `${SHORT_LABELS[limits.provider]}: ${Math.round(used)}% of ${window.label.toLowerCase()} limit used${resetIn ? `, resets ${resetIn}` : ''}`
+  const name = accountName(limits, showName)
+  const label = `${name ?? SHORT_LABELS[limits.provider]}: ${Math.round(used)}% of ${window.label.toLowerCase()} limit used${resetIn ? `, resets ${resetIn}` : ''}`
 
   return (
     <UsageChip
       icon={<ProviderLogo provider={limits.provider} className="h-2.5 w-2.5" />}
+      name={name}
       label={label}
       percent={used}
       level={level}
@@ -61,7 +69,7 @@ function ProviderChip({ limits, nowMs }: { limits: ProviderUsageLimits; nowMs: n
         setSettingsTab(SettingsTab.USAGE)
         openSettings()
       }}
-      testId={`usage-chip-${limits.provider}`}
+      testId={`usage-chip-${limits.instanceId ?? limits.provider}`}
     />
   )
 }
@@ -90,12 +98,24 @@ export function UsageLimitsIndicator() {
 
   const visible = limits.filter((l) => l.windows.length > 0)
   if (visible.length === 0) return null
+  // Chips carry the account name only when a harness has more than one account to tell apart.
+  const countByProvider = new Map<string, number>()
+  for (const l of visible) countByProvider.set(l.provider, (countByProvider.get(l.provider) ?? 0) + 1)
 
   return (
     <span className="flex items-center gap-3" data-testid="usage-limits-indicator">
-      {visible.map((providerLimits) => (
-        <ProviderChip key={providerLimits.provider} limits={providerLimits} nowMs={nowMs} />
-      ))}
+      {visible.map((instanceLimits) => {
+        const isCustomAccount = !!instanceLimits.instanceId && !instanceLimits.instanceId.startsWith('default:')
+        const showName = isCustomAccount || (countByProvider.get(instanceLimits.provider) ?? 0) > 1
+        return (
+          <ProviderChip
+            key={instanceLimits.instanceId ?? instanceLimits.provider}
+            limits={instanceLimits}
+            nowMs={nowMs}
+            showName={showName}
+          />
+        )
+      })}
     </span>
   )
 }

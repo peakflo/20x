@@ -36,6 +36,7 @@ import type {
   HeartbeatLog
 } from './index'
 import type { PullRequestDetails } from '@shared/artifacts'
+import type { HarnessInstanceView } from '@shared/harness-instances'
 import type { ArtifactApi } from '@shared/artifacts'
 import type {
   VoiceActionOutcome,
@@ -249,6 +250,12 @@ interface ElectronAPI {
     get: (id: string) => Promise<Agent | undefined>
     create: (data: CreateAgentDTO) => Promise<Agent>
     update: (id: string, data: UpdateAgentDTO) => Promise<Agent | undefined>
+    delete: (id: string) => Promise<boolean>
+  }
+  harnessInstances: {
+    list: () => Promise<HarnessInstanceView[]>
+    create: (data: { harness_type: 'claude-code' | 'codex'; label: string; home_path: string }) => Promise<HarnessInstanceView>
+    update: (id: string, data: { label?: string; home_path?: string }) => Promise<HarnessInstanceView | undefined>
     delete: (id: string) => Promise<boolean>
   }
   agentSession: {
