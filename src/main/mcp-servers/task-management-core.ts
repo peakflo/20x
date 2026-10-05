@@ -193,7 +193,8 @@ const getMessagesTool: Tool = {
       before_seq: { type: 'number', description: 'Return messages older than this sequence number. Use next_before_seq from the previous call.' },
       seq: { type: 'number', description: 'Return only the message with this sequence number.' },
       role: { type: 'string', enum: ['user', 'assistant'], description: 'Return one side of the conversation only' },
-      include_tools: { type: 'boolean', description: 'Include tool calls and their output. Default false.' }
+      include_tools: { type: 'boolean', description: 'Include tool calls and their output. Default false.' },
+      output_offset: { type: 'number', description: 'Character offset into a tool output to read from. Use output_next_offset from the previous result to read the next page. Default 0.' }
     },
     required: ['task_id']
   }

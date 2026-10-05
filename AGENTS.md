@@ -386,12 +386,25 @@ Each session wraps a coding agent adapter instance and streams events to the ren
 
 ### Context Handoff on Reassignment
 
-When a task changes agent (or harness), the new agent should not start from zero. `DatabaseManager.updateTask` and the MCP `update_task` route record a `context-handoff:<taskId>` setting holding the previous agent, but only when the task already has transcript parts. The next prompt sent to a session of the task's *current* agent carries a handoff block in front of it, built by `src/main/context-handoff.ts` from `transcript_parts`:
+The agent of a task is changed from the existing agent dropdown only (task header menu and task details select, plus mobile). Reassignment is handled in `DatabaseManager.updateTask`, the renderer IPC and the mobile PATCH route, and the MCP `update_task` route. The rule depends on the harness (`config.coding_agent`):
 
-- Priority: the original request, then the newest turns, then tool results. Messages are carried whole, within an estimated budget (default 16k tokens, overridable with the `context-handoff-token-budget` setting). The new prompt itself is never shortened.
-- Messages that do not fit are listed as references. The agent reads one with `get_messages` and `seq` (`include_tools` for tool output).
-- A transcript note (`role: system`, `partType: context-handoff`) shows "Context from <agent> carried over (N messages, M omitted)".
-- A native resume of the backend session (same harness) clears the marker, because the backend already holds the conversation. An incompatible resume falls back to a new session, which receives the handoff.
+- **Same harness** (for example Claude Code → Claude Code): the task keeps its `session_id`. The previous agent's live session is stopped, and the new agent continues the same session id with its own configuration. This is a native resume: no handoff block is sent, and a successful resume clears the marker.
+- **Different harness** (for example Claude Code → Codex): the task's `session_id` is cleared, the previous session is stopped, and the new agent's first prompt carries the handoff block.
+- **Unassigned:** the session is cleared. The next agent receives the handoff if there is history.
+- **No history:** the task starts fresh.
+
+Every reassignment records a `context-handoff:<taskId>` setting holding the first agent that held the conversation. It is written only when the task has transcript parts and only after the task update succeeds. Planning is done by `planContinuation(task, from, to, opts)` in `src/main/context-handoff.ts`, which returns `native-resume`, `handoff` or `fresh`. The account switch reuses it. `opts.sessionsShared: false` forces a handoff for an instance whose sessions are not shared.
+
+A pending marker means the backend session does not hold the conversation. So the handoff is planned for any session that was not resumed natively, including a fresh session started after a failed resume. If a same-harness resume fails with a gone session (`INCOMPATIBLE_SESSION_ID`, not found, missing file) and a marker is pending, the dead session is dropped without a dialog. The next session receives the handoff.
+
+The handoff block is built from `transcript_parts` by `src/main/context-handoff.ts`:
+
+- The original request is the task title and description. It replaces the first user message, which is the startup prompt. Assistant messages are never replaced.
+- Priority after the request: the newest user and assistant text, contiguous, then tool results with their real output (`tool.output`, not the placeholder `content`). The budget is 16k estimated tokens by default, overridable with the `context-handoff-token-budget` setting. The new prompt is never shortened.
+- A message longer than 8,000 characters is shortened with a pointer. Messages that do not fit are listed as references.
+- The carried text is wrapped in `<prior_conversation>`. Closing tags, `---` lines and fake `[#N …]` headers inside it are escaped.
+- The agent reads an omitted message with `get_messages` and `seq` (`include_tools` for tool output). Long tool output is paged with `output_offset` and `output_next_offset`. The tool is also available to subtask sessions, limited to their own task.
+- A transcript note (`role: system`, `partType: context-handoff`) reads "Context from <agent> carried over (N messages, M omitted)". It is shown once per handoff.
 
 ### Worktree Management
 

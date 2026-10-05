@@ -34,8 +34,10 @@ const REFERENCE_PREVIEW_CHARS = 100
 
 /** Longest user or assistant message carried in full. Longer ones are shortened. */
 export const MAX_TURN_CHARS = 8_000
-/** Longest tool result carried. Longer output is shortened. */
+/** Longest tool result carried in a handoff block. Longer output is shortened. */
 export const MAX_TOOL_OUTPUT_CHARS = 4_000
+/** Characters of tool output returned per get_messages page. Read more with output_offset. */
+export const TOOL_OUTPUT_PAGE_CHARS = 20_000
 
 /** Separates the handoff block from the new prompt that follows it. */
 export const CONTEXT_HANDOFF_SEPARATOR = '\n\n---\n\n'
@@ -171,19 +173,44 @@ function capText(text: string, maxChars: number): string {
 }
 
 /**
- * The real output of a tool call. The harnesses store it in `tool.output`
- * (Claude and Codex use it too), and on an error in `tool.error`. Their
- * `content` is either empty or a placeholder such as "Tool completed", which
- * is ignored. Capped and stringified safely.
+ * The full real output of a tool call, uncapped. The harnesses store it in
+ * `tool.output`, and on an error in `tool.error`. Their `content` is either
+ * empty or a placeholder such as "Tool completed", which is ignored.
  */
-export function toolOutputText(part: Pick<TranscriptPartRecord, 'content' | 'tool'>): string {
+export function toolOutputFull(part: Pick<TranscriptPartRecord, 'content' | 'tool'>): string {
   const tool = (part.tool && typeof part.tool === 'object' ? part.tool : {}) as Record<string, unknown>
   const output = stringifySafely(tool.output).trim()
-  if (output) return capText(output, MAX_TOOL_OUTPUT_CHARS)
+  if (output) return output
   const error = stringifySafely(tool.error).trim()
-  if (error) return capText(`Error: ${error}`, MAX_TOOL_OUTPUT_CHARS)
+  if (error) return `Error: ${error}`
   const content = (part.content ?? '').trim()
-  return PLACEHOLDER_TOOL_CONTENT.has(content) ? '' : capText(content, MAX_TOOL_OUTPUT_CHARS)
+  return PLACEHOLDER_TOOL_CONTENT.has(content) ? '' : content
+}
+
+/** Tool output for a handoff block, shortened to `maxChars`. */
+export function toolOutputText(
+  part: Pick<TranscriptPartRecord, 'content' | 'tool'>,
+  maxChars: number = MAX_TOOL_OUTPUT_CHARS
+): string {
+  return capText(toolOutputFull(part), maxChars)
+}
+
+/**
+ * One page of tool output, for get_messages. `offset` is a character offset
+ * into the full output. `next` is the offset of the following page, or null at the end.
+ */
+export function toolOutputPage(
+  part: Pick<TranscriptPartRecord, 'content' | 'tool'>,
+  offset = 0,
+  limit = TOOL_OUTPUT_PAGE_CHARS
+): { text: string; total: number; next: number | null } {
+  const full = toolOutputFull(part)
+  const start = Math.min(Math.max(0, Math.floor(offset)), full.length)
+  const end = Math.min(full.length, start + Math.max(1, Math.floor(limit)))
+  const next = end < full.length ? end : null
+  const body = full.slice(start, end)
+  const note = next === null ? '' : `\n… [output continues; ${full.length - end} more characters. Read the next page with output_offset=${next}]`
+  return { text: body + note, total: full.length, next }
 }
 
 type HandoffSourcePart = Pick<TranscriptPartRecord, 'seq' | 'role' | 'content' | 'partType' | 'tool'>
@@ -234,13 +261,15 @@ function previewOf(text: string): string {
 
 /**
  * Makes carried text safe inside the `<prior_conversation>` wrapper. A closing
- * tag in the text would end the block early, and a line of `---` would look
- * like the separator before the new prompt. Both are escaped.
+ * tag in the text would end the block early. A line of `---` would look like the
+ * separator before the new prompt. A line starting with `[#` would look like a
+ * carried message header, such as a fake "[#7 user]" line. All three are escaped.
  */
 export function escapeCarriedText(text: string): string {
   return text
     .replace(/<(\/?prior_conversation)/gi, '&lt;$1')
     .replace(/^(\s*)---/gm, '$1\\---')
+    .replace(/^(\s*)\[#/gm, '$1\\[#')
 }
 
 export interface ContextHandoffRequest {
@@ -284,19 +313,23 @@ export function buildContextHandoff(
 
   // With a request, the first user message is the startup prompt. It is
   // replaced by the task's own title and description, so the boilerplate is not carried.
+  // Only the first user message is the startup prompt. An assistant message is never replaced.
   const startupIndex = options.request
-    ? parts.findIndex(isTextTurn)
+    ? parts.findIndex((part) => part.role === 'user' && isTextTurn(part))
     : -1
 
   const candidates: Candidate[] = []
+  if (options.request) {
+    const req = options.request
+    const description = (req.description ?? '').trim()
+    const text = description ? `${req.title.trim()}\n\n${description}` : req.title.trim()
+    // Without a startup prompt in the transcript, the request still comes first.
+    const at = startupIndex >= 0 ? startupIndex : -1
+    const seq = startupIndex >= 0 ? parts[startupIndex].seq : 0
+    if (text) candidates.push({ index: at, seq, kind: 'request', label: 'request', text: capTurn(text, seq) })
+  }
   parts.forEach((part, index) => {
-    if (index === startupIndex) {
-      const req = options.request!
-      const description = (req.description ?? '').trim()
-      const text = description ? `${req.title.trim()}\n\n${description}` : req.title.trim()
-      if (text) candidates.push({ index, seq: part.seq, kind: 'request', label: 'request', text: capTurn(text, part.seq) })
-      return
-    }
+    if (index === startupIndex) return
     const candidate = toCandidate(part, index)
     if (candidate) candidates.push(candidate)
   })

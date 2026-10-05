@@ -5966,16 +5966,19 @@ Important:
       return null
     }
 
-    // A same-harness session that is still on the task continues natively, with no block.
-    // A task without a session starts from the handoff.
+    // This runs for a session that was NOT resumed natively: a new session, or a live one
+    // started without a resume. A native resume consumes the marker before it gets here.
+    // So a pending marker always means the backend session does not hold the conversation,
+    // whatever session_id the task has now. The session id saved by a fresh start must not
+    // make a same-harness handoff look native, so the reachability is always false here.
     const previous = marker.fromAgentId ? this.db.getAgent(marker.fromAgentId) : undefined
     const current = this.db.getAgent(agentId)
     const transcript = this.db.getTranscriptParts(taskId)
     const plan = planContinuation(
-      { session_id: task.session_id ?? null },
+      { session_id: null },
       previous ? this.continuationAgent(previous.id, previous.config?.coding_agent) : null,
       this.continuationAgent(agentId, current?.config?.coding_agent),
-      { hasHistory: transcript.length > 0, sessionReachable: !!task.session_id }
+      { hasHistory: transcript.length > 0, sessionReachable: false }
     )
     if (plan !== 'handoff') {
       this.db.deleteSetting(key)

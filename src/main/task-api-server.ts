@@ -29,7 +29,7 @@ import {
 } from '../shared/ui-commands'
 import { buildSimilarTasksQuery } from './task-search'
 import { limitsByProvider, summarizeAgentUsage } from './usage/agent-usage-summary'
-import { isSameHarness, toolOutputText } from './context-handoff'
+import { isSameHarness, toolOutputPage } from './context-handoff'
 import {
   createRegisteredTaskArtifact,
   editRegisteredTaskArtifactFile,
@@ -781,6 +781,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const taskId = String(params.task_id)
       const limit = Math.min(Number(params.limit) || 20, 200)
       const includeTools = params.include_tools === true
+      const outputOffset = params.output_offset !== undefined ? Number(params.output_offset) : 0
       const role = params.role ? String(params.role) : null
 
       let parts = db.getTranscriptParts(taskId)
@@ -806,14 +807,20 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
       return {
         task_id: taskId,
-        messages: page.map((part) => ({
-          seq: part.seq,
-          role: part.role,
-          type: part.partType ?? 'text',
+        messages: page.map((part) => {
           // Tool parts carry their real output in `tool`; `content` is often a placeholder.
-          content: part.partType === 'tool' ? toolOutputText(part) : part.content,
-          created_at: new Date(part.createdAt).toISOString()
-        })),
+          // Output is returned in pages, so a long result can be read in full.
+          const output = part.partType === 'tool' ? toolOutputPage(part, outputOffset) : null
+          return {
+            seq: part.seq,
+            role: part.role,
+            type: part.partType ?? 'text',
+            content: output ? output.text : part.content,
+            ...(output ? { output_total_chars: output.total } : {}),
+            ...(output && output.next !== null ? { output_next_offset: output.next } : {}),
+            created_at: new Date(part.createdAt).toISOString()
+          }
+        }),
         next_before_seq: page.length === limit ? page[page.length - 1].seq : null,
         total_available: ordered.length
       }

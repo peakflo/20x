@@ -4440,6 +4440,63 @@ describe('AgentManager resume after a reassignment from the agent dropdown', () 
     expect(handoff.block).toContain('Checking auth.ts')
   })
 
+  it('gives the new session that follows a failed same-harness resume the handoff, through sendMessage', async () => {
+    const settings = new Map<string, string>([[KEY_, JSON.stringify({ fromAgentId: 'agent-old', recordedAt: 1, announced: false })]])
+    const task: Record<string, unknown> = {
+      id: 'task-1', title: 'Ship the feature', description: '', repos: [], skill_ids: [],
+      status: 'agent_working', agent_id: 'agent-1', session_id: 'backend-session-1'
+    }
+    const agents: Record<string, unknown> = {
+      'agent-old': { id: 'agent-old', name: 'Claude Lead', config: { coding_agent: 'claude-code' } },
+      'agent-1': { id: 'agent-1', name: 'Next Lead', config: { coding_agent: 'claude-code' } },
+    }
+    const db = createMockDb({ system_prompt: 'You are helpful.' }) as any
+    Object.assign(db, {
+      getTask: vi.fn(() => ({ ...task })),
+      updateTask: vi.fn((_id: string, data: Record<string, unknown>) => { Object.assign(task, data) }),
+      getAgent: vi.fn((id: string) => agents[id]),
+      getSetting: vi.fn((key: string) => settings.get(key) ?? null),
+      setSetting: vi.fn((key: string, value: string) => { settings.set(key, value) }),
+      deleteSetting: vi.fn((key: string) => { settings.delete(key) }),
+      getTranscriptParts: vi.fn(() => TRANSCRIPT_),
+      getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
+    })
+
+    const manager = new AgentManager(db)
+    const adapter = {
+      initialize: vi.fn(async () => undefined),
+      createSession: vi.fn(async () => 'new-session-1'),
+      resumeSession: vi.fn(async () => { throw new Error('INCOMPATIBLE_SESSION_ID: session not found on this account') }),
+      sendPrompt: vi.fn(async () => undefined),
+      getStatus: vi.fn(async () => ({ type: 'working' })),
+    }
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(manager as any, 'writeSkillFiles').mockResolvedValue(undefined)
+    vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+    const emitted: Array<[string, unknown]> = []
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation((channel: unknown, data: unknown) => { emitted.push([channel as string, data]) })
+
+    await manager.sendMessage('missing-live-session', 'continue please', 'task-1', 'agent-1')
+    // The send after the fresh start is fire-and-forget, so wait for it to reach the adapter.
+    await vi.waitFor(() => expect(adapter.sendPrompt).toHaveBeenCalled())
+
+    // The resume failed and the task now runs a fresh session, which is the one that holds the new id.
+    expect(adapter.resumeSession).toHaveBeenCalledWith('backend-session-1', expect.anything())
+    expect(task.session_id).toBe('new-session-1')
+    // The new session's first prompt carries the earlier conversation, and the request is not lost.
+    expect(adapter.sendPrompt).toHaveBeenCalled()
+    const firstPrompt = (adapter.sendPrompt.mock.calls[0] as unknown as [string, Array<{ text: string }>])[1][0].text
+    expect(firstPrompt).toContain('## Conversation so far with Claude Lead (Claude Code)')
+    expect(firstPrompt).toContain('[#1 request] Ship the feature')
+    expect(firstPrompt).toContain('[#2 assistant] Checking auth.ts')
+    // The note is shown once, and the marker is cleared after the prompt was accepted.
+    expect(emitted.filter(([channel, data]) => channel === 'agent:output' && (data as any)?.data?.partType === 'context-handoff')).toHaveLength(1)
+    expect(settings.has(KEY_)).toBe(false)
+    expect(emitted.some(([channel]) => channel === 'agent:incompatible-session')).toBe(false)
+  })
+
   it('hands a different harness over, and never resumes its old session', async () => {
     const { manager, adapter, task } = setup({ sameHarness: false })
 

@@ -390,3 +390,29 @@ describe('get_messages tool output from the adapters', () => {
     expect(result.messages.map((m) => m.seq)).toEqual([2])
   })
 })
+
+describe('get_messages reads long tool output in pages', () => {
+  it('returns the output page by page, so a referenced message can be read in full', async () => {
+    const big = 'k'.repeat(45_000)
+    const parts = [{ ...part(1, 'assistant', '', 'tool'), tool: { name: 'bash', status: 'success', output: big } }]
+    const db = { ...makeDb() as object, getTranscriptParts: vi.fn(() => parts) } as never
+
+    const first = (await handleTaskApiRoute('/get_messages', { task_id: 't1', seq: 1, include_tools: true }, db)) as {
+      messages: Array<{ content: string; output_total_chars: number; output_next_offset?: number }>
+    }
+    expect(first.messages[0].output_total_chars).toBe(big.length)
+    expect(first.messages[0].output_next_offset).toBeGreaterThan(0)
+
+    let text = ''
+    let offset: number | undefined = 0
+    while (offset !== undefined) {
+      const page = (await handleTaskApiRoute('/get_messages', { task_id: 't1', seq: 1, include_tools: true, output_offset: offset }, db)) as {
+        messages: Array<{ content: string; output_next_offset?: number }>
+      }
+      const message = page.messages[0]
+      text += message.content.split('\n… [output continues')[0]
+      offset = message.output_next_offset
+    }
+    expect(text).toBe(big)
+  })
+})
