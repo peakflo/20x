@@ -454,11 +454,13 @@ export function registerIpcHandlers(
 
   // Agent Session handlers
   ipcMain.handle('agentSession:start', async (_, agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => {
+    agentManager.noteUserTaskActivity(taskId)
     const sessionId = await agentManager.startSession(agentId, taskId, workspaceDir, skipInitialPrompt)
     return { sessionId }
   })
 
   ipcMain.handle('agentSession:resume', async (_, agentId: string, taskId: string, ocSessionId: string) => {
+    agentManager.noteUserTaskActivity(taskId)
     const sessionId = await agentManager.resumeSession(agentId, taskId, ocSessionId)
     if (!sessionId) {
       // Session ended normally (task completed/reviewed) — session_id already cleared.
@@ -486,6 +488,7 @@ export function registerIpcHandlers(
   ipcMain.handle(
     'agentSession:sendByTaskId',
     async (_, taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
+      agentManager.noteUserTaskActivity(taskId)
       const result = await agentManager.sendByTaskId(taskId, message, attachments)
       return { success: true, ...result }
     }
@@ -494,6 +497,7 @@ export function registerIpcHandlers(
   ipcMain.handle(
     'agentSession:send',
     async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
+      agentManager.noteUserTaskActivity(taskId, sessionId)
       const result = await agentManager.sendMessage(sessionId, message, taskId, agentId, attachments)
       return { success: true, ...result }
     }

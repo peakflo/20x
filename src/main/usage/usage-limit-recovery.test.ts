@@ -162,6 +162,55 @@ describe('UsageLimitRecoveryScheduler', () => {
   })
 })
 
+describe('UsageLimitRecoveryScheduler review fixes', () => {
+  it('re-reads the row before firing: a message sent during the sweep wins', async () => {
+    const other = scheduler.recordStop({ taskId: 'task-2', agentId: 'agent-1', provider: 'codex', sessionId: 's2', resetAt: iso(now + HOUR), message: null })
+    stop(iso(now + HOUR))
+    now += 2 * HOUR
+    // The first send takes a while; meanwhile the user writes to task-1.
+    resume.mockImplementationOnce(async () => { scheduler.supersede('task-1') })
+    await scheduler.sweep()
+    expect(other.taskId).toBe('task-2')
+    expect(resume).toHaveBeenCalledTimes(1)
+    expect(resume.mock.calls[0][0].taskId).toBe('task-2')
+    expect(scheduler.get('task-1')?.status).toBe('superseded')
+  })
+
+  it('does not fire a recovery the user cancelled during the sweep', async () => {
+    scheduler.recordStop({ taskId: 'task-2', agentId: 'agent-1', provider: 'codex', sessionId: 's2', resetAt: iso(now + HOUR), message: null })
+    stop(iso(now + HOUR))
+    now += 2 * HOUR
+    resume.mockImplementationOnce(async () => { scheduler.setAutoResume('task-1', false) })
+    await scheduler.sweep()
+    expect(resume).toHaveBeenCalledTimes(1)
+    expect(scheduler.get('task-1')).toMatchObject({ status: 'waiting', autoResume: false })
+  })
+
+  it('marks a continuation failed when its turn errors soon after', async () => {
+    stop(iso(now + HOUR))
+    now += HOUR + RESET_GRACE_MS + 1
+    await scheduler.sweep()
+    scheduler.markFailedIfRecent('task-1', 'Claude Code process exited')
+    expect(scheduler.get('task-1')).toMatchObject({ status: 'failed', error: 'Claude Code process exited' })
+  })
+
+  it('ignores errors long after the continuation', async () => {
+    stop(iso(now + HOUR))
+    now += HOUR + RESET_GRACE_MS + 1
+    await scheduler.sweep()
+    now += 6 * 60 * 1000
+    scheduler.markFailedIfRecent('task-1', 'later error')
+    expect(scheduler.get('task-1')?.status).toBe('resumed')
+  })
+
+  it('cleans up waiting rows of tasks that no longer exist, even without a reset time', async () => {
+    stop(null)
+    taskState = { exists: false, completed: false, agentId: null, busy: false }
+    await scheduler.sweep()
+    expect(scheduler.get('task-1')).toBeNull()
+  })
+})
+
 describe('reset-time helpers', () => {
   it('uses the latest reset among blocking windows, and only when all are known', () => {
     expect(latestResetAt(['2026-10-05T13:00:00Z', '2026-10-05T15:00:00Z'])).toBe('2026-10-05T15:00:00.000Z')

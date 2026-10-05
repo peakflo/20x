@@ -76,6 +76,35 @@ describe('Claude usage-limit stops', () => {
   })
 })
 
+describe('Claude usage-limit stop review fixes', () => {
+  it('only counts windows rejected during the current turn', async () => {
+    const { adapter, session } = claudeSetup([])
+    await adapter.initialize()
+    session.rejectedLimitWindows = new Map([['seven_day_opus', '2026-10-09T00:00:00.000Z']])
+    session.enqueuePrompt = vi.fn()
+    session.queryIterator = { [Symbol.asyncIterator]() { return this }, async next() { return { done: true } } }
+    await adapter.sendPrompt('s1', [{ type: 'text', text: 'next' } as any], session.config)
+    expect(session.rejectedLimitWindows.size).toBe(0)
+  })
+
+  it('treats rapid_refill_breaker as a limit stop', async () => {
+    const { adapter, session } = claudeSetup([
+      { type: 'result', subtype: 'error_during_execution', is_error: true, terminal_reason: 'rapid_refill_breaker', errors: ['slow down'], uuid: 'r1' }
+    ])
+    await (adapter as any).consumeStream('s1', session)
+    expect((await adapter.getStatus('s1', {} as any)).usageLimit).toEqual({ resetAt: null })
+  })
+
+  it('does not treat an API-key 429 as a plan limit', async () => {
+    const { adapter, session } = claudeSetup([
+      { type: 'result', subtype: 'error_during_execution', is_error: true, api_error_status: 429, errors: ['rate limited'], uuid: 'r1' }
+    ])
+    session.config.authMethod = 'api_key'
+    await (adapter as any).consumeStream('s1', session)
+    expect((await adapter.getStatus('s1', {} as any)).usageLimit).toBeUndefined()
+  })
+})
+
 describe('Codex usage-limit stops', () => {
   function codexSetup() {
     const adapter = new CodexAppServerAdapter()
@@ -109,6 +138,32 @@ describe('Codex usage-limit stops', () => {
     await new Promise((resolve) => setImmediate(resolve))
     const status = await adapter.getStatus('thread-1', {} as any)
     expect(status.usageLimit).toEqual({ resetAt: new Date(1_791_200_000 * 1000).toISOString() })
+  })
+
+  it('ignores a cached window whose reset already passed and reads fresh windows', async () => {
+    const { adapter, priv, session } = codexSetup()
+    priv.latestRateLimits = {
+      provider: 'codex', checkedAt: 'x',
+      windows: [{ id: 'primary', kind: 'session', label: '5-hour', usedPercent: 100, resetsAt: new Date(Date.now() - 60_000).toISOString() }]
+    }
+    priv.sendRpcRequest.mockResolvedValue({
+      rateLimits: { limitId: 'codex', primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: Math.floor(Date.now() / 1000) + 3600 } }
+    })
+    priv.handleRpcMessage(session, limitError)
+    expect(session.usageLimit).toEqual({ resetAt: null })
+    await new Promise((resolve) => setImmediate(resolve))
+    expect((await adapter.getStatus('thread-1', {} as any)).usageLimit?.resetAt).not.toBeNull()
+  })
+
+  it('does not copy plan reset times onto API-key sessions', () => {
+    const { priv, session } = codexSetup()
+    session.codexUseApiKey = true
+    session.usageLimit = { resetAt: null }
+    priv.rememberRateLimits({
+      provider: 'codex', checkedAt: 'x',
+      windows: [{ id: 'primary', kind: 'session', label: '5-hour', usedPercent: 100, resetsAt: new Date(Date.now() + 3_600_000).toISOString() }]
+    })
+    expect(session.usageLimit).toEqual({ resetAt: null })
   })
 
   it('uses already-known windows immediately and ignores other error codes', async () => {

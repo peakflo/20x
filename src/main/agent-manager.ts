@@ -842,6 +842,18 @@ export class AgentManager extends EventEmitter {
     return this.getLimitRecovery()?.get(taskId) ?? null
   }
 
+  /**
+   * The user acted on a task (sent a message, started or resumed a session).
+   * Takes over from any scheduled usage-limit continuation. Called only from
+   * user-facing entry points (desktop IPC, mobile API) — automated senders
+   * (heartbeat, coordinator wake-ups, agent messages) must not cancel it.
+   */
+  noteUserTaskActivity(taskId?: string | null, sessionId?: string | null): void {
+    const resolvedTaskId = taskId || (sessionId ? this.sessions.get(sessionId)?.taskId : undefined)
+    if (!resolvedTaskId || this.limitRecoveryDispatching.has(resolvedTaskId)) return
+    this.getLimitRecovery()?.supersede(resolvedTaskId)
+  }
+
   setUsageLimitRecoveryAutoResume(taskId: string, autoResume: boolean): UsageLimitRecovery | null {
     return this.getLimitRecovery()?.setAutoResume(taskId, autoResume) ?? null
   }
@@ -2674,6 +2686,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
         if (status.usageLimit) {
           this.recordUsageLimitStop(config.taskId, config.agentId, sessionId, status.usageLimit.resetAt, status.message)
+        } else {
+          // A continuation that failed for another reason shows as failed, not resumed.
+          this.limitRecovery?.markFailedIfRecent(config.taskId, status.message)
         }
 
         // Regular error (e.g., rate limit). If the same poll already delivered
@@ -4383,12 +4398,6 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     attachments?: MessageAttachmentRef[]
   ): Promise<{ newSessionId?: string }> {
     let session = this.sessions.get(sessionId)
-
-    // A message from the user takes over from any scheduled limit continuation.
-    const messageTaskId = taskId ?? session?.taskId
-    if (messageTaskId && !this.limitRecoveryDispatching.has(messageTaskId)) {
-      this.limitRecovery?.supersede(messageTaskId)
-    }
 
     // Check redirect map: session ID may have been re-keyed (temp → real)
     if (!session) {

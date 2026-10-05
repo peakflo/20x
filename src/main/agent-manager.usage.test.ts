@@ -152,3 +152,25 @@ describe('AgentManager usage-limit recovery', () => {
     expect(manager.setUsageLimitRecoveryAutoResume(task.id, true)?.autoResume).toBe(true)
   })
 })
+
+describe('AgentManager usage-limit recovery: user activity', () => {
+  it('only user activity supersedes a scheduled continuation', () => {
+    const agent = db.createAgent(makeAgent({ config: { coding_agent: 'claude-code' } }))!
+    const task = db.createTask(makeTask())!
+    db.updateTask(task.id, { agent_id: agent.id })
+    const priv = manager as unknown as {
+      recordUsageLimitStop(...args: unknown[]): void
+      limitRecoveryDispatching: Set<string>
+    }
+    priv.recordUsageLimitStop(task.id, agent.id, 's1', new Date(Date.now() + 3_600_000).toISOString(), 'limit')
+
+    // A continuation being dispatched by the scheduler itself is not user activity.
+    priv.limitRecoveryDispatching.add(task.id)
+    manager.noteUserTaskActivity(task.id)
+    expect(manager.getUsageLimitRecovery(task.id)?.status).toBe('waiting')
+    priv.limitRecoveryDispatching.delete(task.id)
+
+    manager.noteUserTaskActivity(task.id)
+    expect(manager.getUsageLimitRecovery(task.id)?.status).toBe('superseded')
+  })
+})

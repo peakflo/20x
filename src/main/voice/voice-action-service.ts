@@ -46,7 +46,7 @@ export type VoiceActionDb = Pick<
 export type VoiceActionAgents = Pick<
   AgentManager,
   'startTask' | 'sendByTaskId' | 'respondToPermission' | 'findSessionByTaskId' | 'getSessionStatus' | 'getLastAssistantMessage'
->
+> & Partial<Pick<AgentManager, 'noteUserTaskActivity'>>
 
 export interface VoiceActionDeps {
   db: VoiceActionDb
@@ -254,6 +254,8 @@ export class VoiceActionService {
 
       case 'reply_to_agent': {
         if (!task) return this.noTarget(turnId)
+        // A spoken reply is the user acting on the task (cancels any scheduled limit continuation).
+        this.deps.agents.noteUserTaskActivity?.(task.id)
         await this.deps.agents.sendByTaskId(task.id, intent.message)
         return {
           status: 'executed',

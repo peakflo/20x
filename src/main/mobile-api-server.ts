@@ -853,6 +853,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
   if (pathname === '/api/sessions/start') {
     const { agentId, taskId, skipInitialPrompt } = params as { agentId: string; taskId: string; skipInitialPrompt?: boolean }
     if (!agentId || !taskId) throw Object.assign(new Error('agentId and taskId are required'), { status: 400 })
+    agent.noteUserTaskActivity(taskId)
     const sessionId = await agent.startSession(agentId, taskId, undefined, skipInitialPrompt as boolean | undefined)
     return { sessionId }
   }
@@ -863,6 +864,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     const sessionId = resumeMatch[1]
     const { agentId, taskId } = params as { agentId: string; taskId: string }
     if (!agentId || !taskId) throw Object.assign(new Error('agentId and taskId are required'), { status: 400 })
+    agent.noteUserTaskActivity(taskId)
     const newSessionId = await agent.resumeSession(agentId, taskId, sessionId)
     return { sessionId: newSessionId }
   }
@@ -878,6 +880,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
       attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>
     }
     if (!message) throw Object.assign(new Error('message is required'), { status: 400 })
+    agent.noteUserTaskActivity(taskId, sessionId)
     const result = await agent.sendMessage(sessionId, message, taskId, aid, attachments)
     return { success: true, ...result }
   }

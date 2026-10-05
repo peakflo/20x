@@ -1190,9 +1190,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   /** Marks a usage-limit stop; the reset time comes from the exhausted plan windows. */
   private markUsageLimitStop(session: AppServerSession, code: string | null): void {
     if (!isCodexUsageLimitCode(code)) return
-    session.usageLimit = {
-      resetAt: this.latestRateLimits ? exhaustedWindowsResetAt(this.latestRateLimits.windows) : null
-    }
+    const known = this.latestRateLimits ? exhaustedWindowsResetAt(this.latestRateLimits.windows) : null
+    // A cached window whose reset already passed is stale: read fresh windows instead.
+    session.usageLimit = { resetAt: known && Date.parse(known) > Date.now() ? known : null }
     // The stop often precedes the rolling update that carries the reset time.
     if (!session.usageLimit.resetAt && !session.codexUseApiKey) {
       void this.readRateLimits(() => this.readRateLimitsFromSession(session))
@@ -1205,8 +1205,10 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   private rememberRateLimits(limits: ProviderUsageLimits): void {
     this.latestRateLimits = limits
     const resetAt = exhaustedWindowsResetAt(limits.windows)
-    if (!resetAt) return
+    if (!resetAt || Date.parse(resetAt) <= Date.now()) return
     for (const session of this.sessions.values()) {
+      // Plan windows say nothing about API-key sessions.
+      if (session.codexUseApiKey) continue
       if (session.usageLimit && !session.usageLimit.resetAt) session.usageLimit = { resetAt }
     }
   }

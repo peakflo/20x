@@ -774,6 +774,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       session.lastError = null
       session.usageLimit = null
       session.sawRateLimitError = false
+      // Only windows rejected during this turn count towards a limit stop.
+      session.rejectedLimitWindows?.clear()
       session.enqueuePrompt(promptText)
       return
     }
@@ -912,6 +914,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     session.lastError = null // Clear any previous error (e.g., rate limit) for recovery
     session.usageLimit = null
     session.sawRateLimitError = false
+    session.rejectedLimitWindows?.clear()
     if (!isFirstPrompt) {
       session.messageBuffer = [] // Clear buffer for new messages (but keep history for first prompt)
       session.messageCursor = 0
@@ -1552,12 +1555,17 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    */
   private detectUsageLimitStop(session: ClaudeSession, msg: Record<string, unknown>): void {
     const rejected = session.rejectedLimitWindows ?? new Map<string, string | null>()
-    const blocking = msg.terminal_reason === 'blocking_limit' || msg.api_error_status === 429
+    // A plain HTTP 429 on an API-key login is a per-minute API rate limit, not a plan limit.
+    const subscription = session.config.authMethod !== 'api_key'
+    const blocking =
+      msg.terminal_reason === 'blocking_limit' ||
+      msg.terminal_reason === 'rapid_refill_breaker' ||
+      (subscription && msg.api_error_status === 429)
     const failedWhileLimited = msg.is_error === true && (rejected.size > 0 || session.sawRateLimitError === true)
     if (!blocking && !failedWhileLimited) return
     // Authentication problems are not usage limits.
     const text = typeof msg.result === 'string' ? msg.result : ''
-    if (/authenticat|oauth|log ?in/i.test(text) && !blocking) return
+    if (/\bauthenticat|\boauth\b|\blog ?in\b/i.test(text) && !blocking) return
 
     session.usageLimit = { resetAt: latestResetAt(Array.from(rejected.values())) }
     session.status = 'error'

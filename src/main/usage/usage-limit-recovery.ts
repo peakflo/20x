@@ -27,6 +27,8 @@ export const SWEEP_INTERVAL_MS = 30 * 1000
 /** Wait this long after the reported reset before continuing. */
 export const RESET_GRACE_MS = 60 * 1000
 export const MAX_CONSECUTIVE_AUTO_RESUMES = 3
+/** A turn error this soon after a continuation counts as the continuation failing. */
+export const RECENT_CONTINUATION_MS = 5 * 60 * 1000
 /** A new stop within this window of an automatic continuation counts as "hit again". */
 const REPEAT_WINDOW_MS = 30 * 60 * 1000
 
@@ -219,13 +221,29 @@ export class UsageLimitRecoveryScheduler {
     if (recovery?.status === 'waiting') this.commit({ ...recovery, status: 'superseded' })
   }
 
+  /**
+   * A continuation was sent but the turn it started failed for another reason
+   * (process died, auth error, …). Surfaces the failure instead of silently
+   * leaving the recovery marked as resumed.
+   */
+  markFailedIfRecent(taskId: string, error: string | null | undefined): void {
+    const recovery = this.deps.store.get(taskId)
+    if (!recovery || recovery.status !== 'resumed' || recovery.resumedAt === null) return
+    if (this.now() - recovery.resumedAt > RECENT_CONTINUATION_MS) return
+    this.commit({ ...recovery, status: 'failed', error: error || 'The continuation failed.' })
+  }
+
   /** Runs one pass: continues every recovery whose reset has passed. */
   async sweep(): Promise<void> {
     if (this.sweeping) return
     this.sweeping = true
     try {
       for (const recovery of this.deps.store.listWaiting()) {
-        if (!recovery.autoResume || !recovery.resetAt) continue
+        if (!recovery.autoResume || !recovery.resetAt) {
+          // Drop rows of tasks that no longer exist (e.g. heartbeat/mastermind ids, deleted tasks).
+          if (!this.deps.getTaskState(recovery.taskId).exists) this.deps.store.delete(recovery.taskId)
+          continue
+        }
         if (Date.parse(recovery.resetAt) + RESET_GRACE_MS > this.now()) continue
         await this.fire(recovery)
       }
@@ -234,7 +252,19 @@ export class UsageLimitRecoveryScheduler {
     }
   }
 
-  private async fire(recovery: UsageLimitRecovery): Promise<void> {
+  private async fire(snapshot: UsageLimitRecovery): Promise<void> {
+    // Earlier sends in this sweep can take seconds; the user may have sent a
+    // message or cancelled meanwhile. Always act on the current row.
+    const recovery = this.deps.store.get(snapshot.taskId)
+    if (
+      !recovery ||
+      recovery.status !== 'waiting' ||
+      !recovery.autoResume ||
+      recovery.resetAt !== snapshot.resetAt ||
+      recovery.stoppedAt !== snapshot.stoppedAt
+    ) {
+      return
+    }
     const task = this.deps.getTaskState(recovery.taskId)
     if (!task.exists) {
       this.deps.store.delete(recovery.taskId)
