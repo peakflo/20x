@@ -161,7 +161,6 @@ async function sqliteRows<T>(path: string, sql: (db: Database.Database) => T): P
 
 export async function readFirefox(path: string): Promise<{ cookies: Cookie[]; skipped: number }> {
   return sqliteRows(path, db => {
-    const schemaVersion = Number((db.pragma('user_version', { simple: true }) as number) || 0)
     const columns = db.prepare('PRAGMA table_info(moz_cookies)').all() as { name: string }[]
     const has = (name: string) => columns.some(column => column.name === name)
     const rows = db.prepare(`SELECT host, name, value, path, expiry, isSecure, isHttpOnly, ${has('sameSite') ? 'sameSite' : '256 AS sameSite'}, ${has('originAttributes') ? 'originAttributes' : "'' AS originAttributes"} FROM moz_cookies`).all() as Array<{ host: string; name: string; value: string; path: string; expiry: number; isSecure: number; isHttpOnly: number; sameSite: number; originAttributes: string }>
@@ -169,7 +168,7 @@ export async function readFirefox(path: string): Promise<{ cookies: Cookie[]; sk
     let skipped = 0
     for (const row of rows) {
       if (row.originAttributes?.includes('partitionKey=')) { skipped++; continue }
-      cookies.push({ host: row.host, name: row.name, value: row.value, path: row.path || '/', secure: !!row.isSecure, httpOnly: !!row.isHttpOnly, sameSite: sameSite(row.sameSite), expirationDate: row.expiry > 0 ? (schemaVersion >= 16 ? Math.floor(row.expiry / 1000) : row.expiry) : undefined })
+      cookies.push({ host: row.host, name: row.name, value: row.value, path: row.path || '/', secure: !!row.isSecure, httpOnly: !!row.isHttpOnly, sameSite: sameSite(row.sameSite), expirationDate: row.expiry > 0 ? (row.expiry > 1e11 ? Math.floor(row.expiry / 1000) : row.expiry) : undefined })
     }
     return { cookies, skipped }
   })

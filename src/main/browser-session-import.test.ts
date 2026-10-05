@@ -38,14 +38,26 @@ describe('browser session import', () => {
     expect(read.cookies).toMatchObject([{ host: '.example.com', name: 'sid', value: 'value', secure: true, httpOnly: true, sameSite: 'strict' }])
   })
 
-  it('converts Firefox schema 16 millisecond expiry to seconds', async () => {
+  it('detects Firefox millisecond expiry even with an older schema', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'browser-import-test-'))
+    temporary.push(dir)
+    const file = join(dir, 'cookies.sqlite')
+    const db = new Database(file)
+    db.pragma('user_version = 15')
+    db.exec('CREATE TABLE moz_cookies (host TEXT, name TEXT, value TEXT, path TEXT, expiry INTEGER, isSecure INTEGER, isHttpOnly INTEGER, sameSite INTEGER)')
+    db.prepare('INSERT INTO moz_cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('.example.com', 'sid', 'value', '/', 2000000000123, 1, 1, 1)
+    db.close()
+    expect((await readFirefox(file)).cookies[0].expirationDate).toBe(2000000000)
+  })
+
+  it('keeps Firefox second expiry even with a newer schema', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'browser-import-test-'))
     temporary.push(dir)
     const file = join(dir, 'cookies.sqlite')
     const db = new Database(file)
     db.pragma('user_version = 16')
     db.exec('CREATE TABLE moz_cookies (host TEXT, name TEXT, value TEXT, path TEXT, expiry INTEGER, isSecure INTEGER, isHttpOnly INTEGER, sameSite INTEGER)')
-    db.prepare('INSERT INTO moz_cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('.example.com', 'sid', 'value', '/', 2000000000123, 1, 1, 1)
+    db.prepare('INSERT INTO moz_cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('.example.com', 'sid', 'value', '/', 2000000000, 1, 1, 1)
     db.close()
     expect((await readFirefox(file)).cookies[0].expirationDate).toBe(2000000000)
   })
