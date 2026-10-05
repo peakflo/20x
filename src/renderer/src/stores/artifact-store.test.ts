@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ArtifactContentKind, ArtifactType, type ArtifactApi } from '@shared/artifacts'
 import type { TranscriptPartRecord } from '@/types/electron'
-import { artifactsFromMessage, useArtifactStore } from './artifact-store'
+import { artifactsFromMessage, flushArtifactPersist, useArtifactStore } from './artifact-store'
 
 const persisted = new Map<string, string>()
 vi.stubGlobal('localStorage', {
@@ -176,5 +176,32 @@ describe('useArtifactStore', () => {
     expect(api.scan).toHaveBeenCalledTimes(1)
     expect(subscriber).toHaveBeenCalledTimes(2)
     expect(useArtifactStore.getState().getArtifacts('task-1')).toHaveLength(500)
+  })
+})
+
+describe('artifact persistence', () => {
+  it('coalesces localStorage writes and flushes the latest snapshot', () => {
+    vi.useFakeTimers()
+    try {
+      flushArtifactPersist()
+      const setItem = vi.spyOn(localStorage, 'setItem')
+      const store = useArtifactStore.getState()
+      for (let i = 0; i < 20; i++) {
+        store.upsertArtifact({ taskId: 'task-1', type: ArtifactType.MARKDOWN, title: `f${i}.md`, path: `f${i}.md`, updatedAt: i })
+      }
+      expect(setItem).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(500)
+      expect(setItem).toHaveBeenCalledTimes(1)
+      const saved = JSON.parse(String(setItem.mock.calls[0][1]))
+      expect(saved.artifactsByTask['task-1']).toHaveLength(20)
+
+      store.setOpen('task-1', true)
+      flushArtifactPersist()
+      expect(setItem).toHaveBeenCalledTimes(2)
+      setItem.mockRestore()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

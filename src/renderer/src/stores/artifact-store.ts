@@ -62,7 +62,22 @@ function readPersistedState(): PersistedState {
   }
 }
 
-function persist(state: Pick<ArtifactState, 'artifactsByTask' | 'uiByTask'>): void {
+// Serializing every task's artifacts on each upsert blocked the renderer
+// while transcripts streamed (one projected tool part can upsert several
+// artifacts per flush). Coalesce writes and keep only the latest snapshot.
+const PERSIST_DELAY_MS = 400
+let pendingPersist: Pick<ArtifactState, 'artifactsByTask' | 'uiByTask'> | null = null
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+let persistErrorLogged = false
+
+export function flushArtifactPersist(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  const state = pendingPersist
+  pendingPersist = null
+  if (!state) return
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(STORAGE_KEY, JSON.stringify({
@@ -70,9 +85,24 @@ function persist(state: Pick<ArtifactState, 'artifactsByTask' | 'uiByTask'>): vo
         uiByTask: state.uiByTask
       }))
     }
-  } catch {
+  } catch (error) {
     // Preferences are best-effort (private windows and quota errors are safe).
+    if (!persistErrorLogged) {
+      persistErrorLogged = true
+      console.warn('[artifact-store] failed to persist artifact registry', error)
+    }
   }
+}
+
+function persist(state: Pick<ArtifactState, 'artifactsByTask' | 'uiByTask'>): void {
+  pendingPersist = state
+  if (persistTimer) return
+  persistTimer = setTimeout(flushArtifactPersist, PERSIST_DELAY_MS)
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('pagehide', flushArtifactPersist)
+  window.addEventListener('beforeunload', flushArtifactPersist)
 }
 
 function normalizePath(path: string): string {

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { ListChecks } from 'lucide-react'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
@@ -12,7 +13,6 @@ import { UsageLimitsIndicator } from './UsageLimitsIndicator'
  * counts on the left, subscription plan usage and app version on the right.
  */
 export function StatusBar() {
-  const tasks = useTaskStore((s) => s.tasks)
   // Select the derived count (a primitive) rather than the sessions Map: the
   // Map gets a new identity on every streamed delta, which re-rendered this
   // always-mounted bar 10–20×/s during any agent run. Object.is on the number
@@ -28,16 +28,18 @@ export function StatusBar() {
     window.electronAPI?.app?.getVersion().then((v) => v && setVersion(v))
   }, [])
 
-  const { active, total } = useMemo(() => {
+  // Derive the two counts inside the selector so this always-mounted bar only
+  // re-renders when a count changes, not on every task update.
+  const { active, total } = useTaskStore(useShallow((s) => {
     let a = 0
     let t = 0
-    for (const task of tasks) {
+    for (const task of s.tasks) {
       if (task.parent_task_id) continue
       t++
       if (task.status !== TaskStatus.Completed && !isSnoozed(task.snoozed_until)) a++
     }
     return { active: a, total: t }
-  }, [tasks])
+  }))
 
   return (
     <div className="app-chrome bg-background flex-shrink-0 flex items-center gap-4 h-4 px-3 pb-1 leading-none text-[10px] text-muted-foreground select-none tabular-nums">
