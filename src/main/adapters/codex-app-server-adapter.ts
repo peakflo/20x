@@ -381,6 +381,12 @@ function decisionLabel(decision: string): string {
 export class CodexAppServerAdapter implements CodingAgentAdapter {
   private sessions = new Map<string, AppServerSession>()
   private codexExecutablePath: string | null = null
+  /** CODEX_HOME of the harness instance this adapter serves. Sessions may override it per call. */
+  private readonly harnessHome: string | undefined
+
+  constructor(options: { harnessHome?: string } = {}) {
+    this.harnessHome = options.harnessHome
+  }
 
   onDataAvailable?: (sessionId: string) => void
 
@@ -887,7 +893,11 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (!useApiKey) {
       delete env.OPENAI_API_KEY
       delete env.CODEX_API_KEY
-      if (!env.CODEX_HOME) {
+      // The instance's home holds its login. Without one, the inherited CODEX_HOME or ~/.codex applies.
+      const home = config.harnessHome ?? this.harnessHome
+      if (home) {
+        env.CODEX_HOME = home
+      } else if (!env.CODEX_HOME) {
         env.CODEX_HOME = join(homedir(), '.codex')
       }
     }
@@ -1288,7 +1298,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       agentId: '',
       taskId: 'usage-limits-probe',
       workspaceDir: homedir(),
-      authMethod: 'subscription'
+      authMethod: 'subscription',
+      harnessHome: this.harnessHome
     }
     const session = await this.startAppServerProcess(probeConfig, 'usage-limits-probe')
     try {

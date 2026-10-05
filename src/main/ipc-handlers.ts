@@ -22,6 +22,8 @@ import type {
   FileAttachmentRecord,
   CreateAgentData,
   UpdateAgentData,
+  CreateHarnessInstanceData,
+  UpdateHarnessInstanceData,
   CreateMcpServerData,
   UpdateMcpServerData,
   CreateTaskSourceData,
@@ -458,6 +460,23 @@ export function registerIpcHandlers(
 
   ipcMain.handle('agent:delete', (_, id: string) => {
     return db.deleteAgent(id)
+  })
+
+  // Harness instances (one subscription login of Claude Code or Codex)
+  ipcMain.handle('harnessInstance:list', () => {
+    return agentManager.listHarnessInstances()
+  })
+
+  ipcMain.handle('harnessInstance:create', (_, data: CreateHarnessInstanceData) => {
+    return agentManager.createHarnessInstance(data)
+  })
+
+  ipcMain.handle('harnessInstance:update', (_, id: string, data: UpdateHarnessInstanceData) => {
+    return agentManager.updateHarnessInstance(id, data)
+  })
+
+  ipcMain.handle('harnessInstance:delete', (_, id: string) => {
+    return agentManager.deleteHarnessInstance(id)
   })
 
   // Agent Session handlers

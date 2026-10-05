@@ -19,6 +19,7 @@ import type {
 import type { AdapterUsageLimitsEvent, AdapterUsageReport, UsageLimitStop } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 import { pickWindowsWhichMatch, resolveWindowsClaudeShim } from './claude-executable'
+import { realHomeFor } from '../harness-instances'
 import { homedir } from 'os'
 import type { ProviderUsageLimits } from '../../shared/usage'
 import {
@@ -152,6 +153,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
 
 export class ClaudeCodeAdapter implements CodingAgentAdapter {
   private sessions = new Map<string, ClaudeSession>()
+  /** Home of the harness instance this adapter serves. Sessions may override it per call. */
+  private readonly harnessHome: string | undefined
   private sdkLoading: Promise<void> | null = null
   private claudeExecutablePath: string | null = null
   /**
@@ -183,7 +186,8 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   private planLimitsRead: Promise<ProviderUsageLimits> | null = null
   private lastPlanLimitsReadAt = 0
 
-  constructor() {
+  constructor(options: { harnessHome?: string } = {}) {
+    this.harnessHome = options.harnessHome
     this.sdkLoading = this.loadSDK()
   }
 
@@ -313,11 +317,14 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * When secrets are configured, sets SHELL to the secret-shell.sh wrapper
    * so every bash command fetches secrets from the broker transparently.
    */
-  private buildClaudeEnvironment(): Record<string, string> {
+  private buildClaudeEnvironment(harnessHome: string | undefined = this.harnessHome): Record<string, string> {
     const env = { ...process.env } as Record<string, string>
 
     // Remove CLAUDECODE to prevent nested session error
     delete env.CLAUDECODE
+
+    // The instance's config directory selects its login and its session store.
+    if (harnessHome) env.CLAUDE_CONFIG_DIR = harnessHome
 
     return env
   }
@@ -448,13 +455,12 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * Cleans the session file by removing messages with empty text blocks
    * This prevents API errors when resuming sessions
    */
-  private async cleanSessionFile(sessionId: string, workspaceDir: string): Promise<void> {
+  private async cleanSessionFile(sessionId: string, workspaceDir: string, harnessHome?: string): Promise<void> {
     try {
       const { readFileSync, writeFileSync, existsSync } = await import('fs')
       const { join } = await import('path')
-      const { homedir } = await import('os')
 
-      const claudeDir = join(homedir(), '.claude', 'projects')
+      const claudeDir = join(harnessHome ?? this.harnessHome ?? realHomeFor('claude-code'), 'projects')
       // Claude Code CLI encodes workspace paths by replacing all non-alphanumeric/non-hyphen chars with '-'
       const encodedWorkspace = workspaceDir.replace(/[^a-zA-Z0-9-]/g, '-')
       const sessionFile = join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
@@ -518,21 +524,20 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     const workspaceDir = config.workspaceDir
     if (!workspaceDir) return []
     try {
-      return await this.loadSessionHistory(sessionId, workspaceDir)
+      return await this.loadSessionHistory(sessionId, workspaceDir, config.harnessHome)
     } catch {
       return []
     }
   }
 
-  private async loadSessionHistory(sessionId: string, workspaceDir: string): Promise<SessionMessage[]> {
+  private async loadSessionHistory(sessionId: string, workspaceDir: string, harnessHome?: string): Promise<SessionMessage[]> {
     try {
       const { readFileSync, existsSync } = await import('fs')
       const { join } = await import('path')
-      const { homedir } = await import('os')
 
       // Session files are stored in: ~/.claude/projects/[encoded-workspace]/[sessionId].jsonl
       // Claude Code CLI encodes workspace paths by replacing all non-alphanumeric/non-hyphen chars with '-'
-      const claudeDir = join(homedir(), '.claude', 'projects')
+      const claudeDir = join(harnessHome ?? this.harnessHome ?? realHomeFor('claude-code'), 'projects')
       const encodedWorkspace = workspaceDir.replace(/[^a-zA-Z0-9-]/g, '-')
       const sessionFile = join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
 
@@ -700,7 +705,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     }
 
     // Clean session file to remove empty text blocks before resuming
-    await this.cleanSessionFile(sessionId, config.workspaceDir)
+    await this.cleanSessionFile(sessionId, config.workspaceDir, config.harnessHome)
 
     // Create session state (idle until user sends a message)
     const session: ClaudeSession = {
@@ -728,7 +733,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     console.log(`[ClaudeCodeAdapter] Session resumed: ${sessionId} (waiting for user prompt)`)
 
     // Load conversation history from session file
-    const messages = await this.loadSessionHistory(sessionId, config.workspaceDir)
+    const messages = await this.loadSessionHistory(sessionId, config.workspaceDir, config.harnessHome)
 
     console.log(`[ClaudeCodeAdapter] Session loaded with ${messages.length} messages`)
 
@@ -810,7 +815,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     const options: Options = {
       cwd: config.workspaceDir,
       pathToClaudeCodeExecutable: claudePath,
-      env: this.buildClaudeEnvironment(),
+      env: this.buildClaudeEnvironment(config.harnessHome),
       mcpServers: config.mcpServers as Record<string, McpServerConfig> | undefined,
       model: config.model,
       effort,

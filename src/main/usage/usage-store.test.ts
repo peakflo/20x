@@ -225,10 +225,34 @@ describe('UsageStore plan limits + pruning', () => {
     expect(store.getProviderUsageLimits()).toEqual([
       {
         provider: 'codex',
+        instanceId: 'default:codex',
         checkedAt: '2026-10-05T00:00:00.000Z',
         windows: [{ id: 'primary', kind: 'session', label: '5-hour', usedPercent: 10 }]
       }
     ])
+  })
+
+  it('keeps one snapshot per harness instance of a provider', () => {
+    const snapshot = (instanceId: string, usedPercent: number) => ({
+      provider: 'codex' as const,
+      instanceId,
+      checkedAt: '2026-10-05T00:00:00.000Z',
+      windows: [{ id: 'primary', kind: 'session' as const, label: '5-hour', usedPercent }]
+    })
+    store.saveProviderUsageLimits(snapshot('hi_work', 85))
+    store.saveProviderUsageLimits(snapshot('hi_personal', 12))
+    store.saveProviderUsageLimits(snapshot('hi_work', 90))
+    expect(store.getProviderUsageLimits().map((l) => [l.instanceId, l.windows[0].usedPercent])).toEqual([
+      ['hi_personal', 12],
+      ['hi_work', 90]
+    ])
+  })
+
+  it('records the harness instance on every usage event', () => {
+    store.recordCumulativeUsage({ provider: 'codex', sessionId: 's-work', newSession: true, instanceId: 'hi_work', buckets: [bucket('m', { outputTokens: 5 })], observedAt: NOW })
+    store.recordCumulativeUsage({ provider: 'codex', sessionId: 's-default', newSession: true, buckets: [bucket('m', { outputTokens: 3 })], observedAt: NOW })
+    const byInstance = Object.fromEntries(store.getUsageEvents({ sinceMs: 0, untilMs: NOW + 1 }).map((e) => [e.sessionId, e.instanceId]))
+    expect(byInstance).toEqual({ 's-work': 'hi_work', 's-default': 'default:codex' })
   })
 
   it('prunes stale session totals and events older than a year', () => {

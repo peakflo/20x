@@ -6,6 +6,7 @@
 
 import type { ProviderUsageLimits } from '../../shared/usage'
 import { effectiveUsedPercent, isUsageProvider } from '../../shared/usage'
+import { defaultHarnessInstanceId } from '../../shared/harness-instances'
 
 /**
  * - `low` (< 50% used), `moderate` (< 75%), `high` (< 90%), `critical` (≥ 90%),
@@ -31,6 +32,8 @@ export interface AgentUsageSummary {
 
 interface AgentLike {
   config?: { coding_agent?: unknown; auth_method?: unknown } | null
+  /** Harness instance the agent runs under. Absent means the provider's default instance. */
+  instanceId?: string | null
 }
 
 /** Readings older than this are reported as `unknown` (numbers kept for reference). */
@@ -43,9 +46,13 @@ function levelFor(usedPercent: number): AgentUsageLevel {
   return 'low'
 }
 
+/**
+ * Summarises the plan limits of the agent's own harness instance, so agents on
+ * different accounts of the same harness can be compared for headroom.
+ */
 export function summarizeAgentUsage(
   agent: AgentLike,
-  limitsByProvider: Map<string, ProviderUsageLimits>,
+  limitsByInstance: Map<string, ProviderUsageLimits>,
   nowMs = Date.now()
 ): AgentUsageSummary {
   const empty = { stale: false, most_used_percent: null, headroom_percent: null, windows: [], plan_type: null, checked_at: null }
@@ -56,7 +63,7 @@ export function summarizeAgentUsage(
   if (!isUsageProvider(provider)) {
     return { level: 'unknown', ...empty, note: 'Harness does not report plan limits.' }
   }
-  const limits = limitsByProvider.get(provider)
+  const limits = limitsByInstance.get(agent.instanceId || defaultHarnessInstanceId(provider))
   if (!limits || limits.windows.length === 0) {
     return {
       level: 'unknown',
@@ -110,7 +117,10 @@ export function summarizeAgentUsage(
   }
 }
 
-/** Indexes plan-limit snapshots by provider id. */
-export function limitsByProvider(limits: ProviderUsageLimits[]): Map<string, ProviderUsageLimits> {
-  return new Map(limits.map((snapshot) => [snapshot.provider, snapshot]))
+/** Indexes plan-limit snapshots by harness instance id. */
+export function limitsByInstance(limits: ProviderUsageLimits[]): Map<string, ProviderUsageLimits> {
+  return new Map(limits.map((snapshot) => [
+    snapshot.instanceId || defaultHarnessInstanceId(snapshot.provider),
+    snapshot
+  ]))
 }

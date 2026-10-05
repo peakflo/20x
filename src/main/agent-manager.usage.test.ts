@@ -94,8 +94,8 @@ describe('AgentManager usage tracking', () => {
 
     const result = await manager.refreshUsageLimits({ force: true })
 
-    expect(result.refreshed).toEqual(['claude-code'])
-    expect(result.limits).toEqual([expect.objectContaining({ provider: 'claude-code', planType: 'max' })])
+    expect(result.refreshed).toEqual(['default:claude-code'])
+    expect(result.limits).toEqual([expect.objectContaining({ provider: 'claude-code', instanceId: 'default:claude-code', instanceLabel: 'Claude Code', planType: 'max' })])
   })
 })
 

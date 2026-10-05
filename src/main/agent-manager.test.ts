@@ -4442,9 +4442,13 @@ describe('AgentManager resume after a reassignment from the agent dropdown', () 
     expect(resumed).toBeTruthy()
     expect(adapter.resumeSession).toHaveBeenCalledWith('backend-session-1', expect.anything())
     expect(task.session_id).toBe('backend-session-1')
-    // The native resume holds the conversation, so the marker is consumed and no block is prepared.
+    // The marker stays until the first prompt is accepted; only then it is removed.
+    expect(settings.has(KEY_)).toBe(true)
+    const session = (manager as any).sessions.get(resumed)
+    expect(session.nativeResumeAwaitingAck).toBe(true)
+    ;(manager as any).completeNativeResume(session)
     expect(settings.has(KEY_)).toBe(false)
-    expect((manager as any).prepareContextHandoff('task-1', 'agent-1')).toBeNull()
+    expect(session.nativeResumeAwaitingAck).toBe(false)
   })
 
   it('falls back to the handoff when a same-harness resume fails, without losing the context', async () => {
@@ -4455,9 +4459,9 @@ describe('AgentManager resume after a reassignment from the agent dropdown', () 
 
     const resumed = await (manager as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'backend-session-1')
 
-    // The dead session is dropped, no "start new session?" dialog is shown, and the marker stays.
+    // No dialog is shown, the marker stays, and the session id stays until a new session replaces it.
     expect(resumed).toBe('')
-    expect(task.session_id).toBeNull()
+    expect(task.session_id).toBe('backend-session-1')
     expect(emitted.some(([channel]) => channel === 'agent:incompatible-session')).toBe(false)
     expect(settings.has(KEY_)).toBe(true)
 
@@ -4531,7 +4535,8 @@ describe('AgentManager resume after a reassignment from the agent dropdown', () 
 
     expect(resumed).toBe('')
     expect(adapter.resumeSession).not.toHaveBeenCalled()
-    expect(task.session_id).toBeNull()
+    // Not dropped before the handoff is carried: the new session replaces it.
+    expect(task.session_id).toBe('backend-session-1')
     expect((manager as any).prepareContextHandoff('task-1', 'agent-1').block).toContain('## Conversation so far with Claude Lead')
   })
 })

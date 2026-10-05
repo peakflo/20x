@@ -28,7 +28,7 @@ import {
   type UiOpenTaskTarget
 } from '../shared/ui-commands'
 import { buildSimilarTasksQuery } from './task-search'
-import { limitsByProvider, summarizeAgentUsage } from './usage/agent-usage-summary'
+import { limitsByInstance, summarizeAgentUsage } from './usage/agent-usage-summary'
 import { isSameHarness, toolOutputPage } from './context-handoff'
 import {
   createRegisteredTaskArtifact,
@@ -548,16 +548,20 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const agents = rawDb.prepare('SELECT * FROM agents ORDER BY created_at ASC').all() as Record<string, unknown>[]
       // Current subscription plan usage of each agent's harness, so agents that
       // assign work (triage, coordinators) can prefer harnesses with headroom.
-      let planLimits = limitsByProvider([])
+      let planLimits = limitsByInstance([])
       try {
-        planLimits = limitsByProvider(db.usage.getProviderUsageLimits())
+        planLimits = limitsByInstance(db.usage.getProviderUsageLimits())
       } catch (err) {
         console.warn('[TaskAPI] Plan limits unavailable for list_agents:', err)
       }
       agents.forEach((a) => {
         a.config = JSON.parse((a.config as string) || '{}')
         a.is_default = !!a.is_default
-        a.usage_limits = summarizeAgentUsage(a as { config: Record<string, unknown> }, planLimits)
+        const config = a.config as Record<string, unknown>
+        a.usage_limits = summarizeAgentUsage(
+          { config, instanceId: typeof config.harness_instance_id === 'string' ? config.harness_instance_id : null },
+          planLimits
+        )
       })
       return agents
     }

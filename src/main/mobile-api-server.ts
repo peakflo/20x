@@ -492,7 +492,12 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
     return agentRef!.getUsageLimitRecovery(decodeURIComponent(limitRecoveryGet[1]))
   }
 
-  // GET /api/usage/limits — subscription plan limits (Claude Code, Codex)
+  // GET /api/harness-instances — subscription logins (read-only on mobile)
+  if (pathname === '/api/harness-instances') {
+    return agentRef!.listHarnessInstances()
+  }
+
+  // GET /api/usage/limits — subscription plan limits per harness instance (Claude Code, Codex)
   if (pathname === '/api/usage/limits') {
     return agentRef!.getUsageLimits()
   }

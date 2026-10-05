@@ -60,6 +60,8 @@ export interface ContextHandoffMarker {
   recordedAt: number
   /** True once the transcript note has been shown, so a retried send does not repeat it. */
   announced?: boolean
+  /** True once the "Continued on <instance>" note of a native resume has been shown. */
+  continuedNoteShown?: boolean
 }
 
 export function contextHandoffSettingKey(taskId: string): string {
@@ -74,7 +76,8 @@ export function parseContextHandoffMarker(raw: string | null | undefined): Conte
     return {
       fromAgentId: typeof parsed.fromAgentId === 'string' ? parsed.fromAgentId : null,
       recordedAt: typeof parsed.recordedAt === 'number' ? parsed.recordedAt : 0,
-      announced: parsed.announced === true
+      announced: parsed.announced === true,
+      continuedNoteShown: parsed.continuedNoteShown === true
     }
   } catch {
     return null

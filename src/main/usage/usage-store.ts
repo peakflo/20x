@@ -10,7 +10,7 @@
  * - `token_usage_session_totals` last cumulative totals seen per provider session +
  *                               bucket, used to turn cumulative provider figures into
  *                               per-turn deltas (survives app restarts / session resume).
- * - `provider_usage_limits`     latest plan-limit snapshot per provider.
+ * - `provider_usage_limits`     latest plan-limit snapshot per harness instance (provider + instance_id).
  */
 
 import type Database from 'better-sqlite3'
@@ -24,6 +24,7 @@ import type {
   UsageSummaryQuery
 } from '../../shared/usage'
 import { isUsageProvider } from '../../shared/usage'
+import { defaultHarnessInstanceId } from '../../shared/harness-instances'
 import type { UsageBucket, UsageTotals } from './usage-normalize'
 import { computeUsageDelta, isEmptyUsage } from './usage-normalize'
 
@@ -61,9 +62,11 @@ export const USAGE_SCHEMA_SQL = `
   );
 
   CREATE TABLE IF NOT EXISTS provider_usage_limits (
-    provider TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    instance_id TEXT NOT NULL,
     snapshot TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (provider, instance_id)
   );
 `
 
@@ -89,6 +92,8 @@ export interface RecordDiscreteUsageInput {
   sessionId?: string | null
   taskId?: string | null
   agentId?: string | null
+  /** Harness instance that produced the usage. Defaults to the provider's default instance. */
+  instanceId?: string | null
   items: DiscreteUsageItem[]
 }
 
@@ -98,6 +103,8 @@ export interface RecordCumulativeUsageInput {
   sessionId: string
   taskId?: string | null
   agentId?: string | null
+  /** Harness instance that produced the usage. Defaults to the provider's default instance. */
+  instanceId?: string | null
   /**
    * Whether the whole session was observed by this app. When false and no
    * baseline exists for a bucket, the reading only becomes the baseline
@@ -110,6 +117,7 @@ export interface RecordCumulativeUsageInput {
 }
 
 interface UsageEventRow {
+  instance_id: string | null
   id: string
   task_id: string | null
   agent_id: string | null
@@ -169,6 +177,7 @@ function toRecord(row: UsageEventRow): TokenUsageRecord {
     provider: row.provider as UsageProvider,
     model: row.model,
     sessionId: row.session_id,
+    instanceId: row.instance_id,
     inputTokens: row.input_tokens,
     cacheReadTokens: row.cache_read_tokens,
     cacheWriteTokens: row.cache_write_tokens,
@@ -200,6 +209,34 @@ export class UsageStore {
   constructor(private readonly db: Database.Database) {
     this.db.exec(USAGE_SCHEMA_SQL)
     this.ensureSourceKeyColumn()
+    this.ensureInstanceSchema()
+  }
+
+  /**
+   * Brings databases created before harness instances up to date: usage events
+   * get an `instance_id` column, and plan limits move from one row per provider
+   * to one row per (provider, instance). Legacy rows belong to the default
+   * instance of their provider.
+   */
+  private ensureInstanceSchema(): void {
+    const eventColumns = this.db.prepare('PRAGMA table_info(token_usage_events)').all() as Array<{ name: string }>
+    if (!eventColumns.some((column) => column.name === 'instance_id')) {
+      this.db.exec('ALTER TABLE token_usage_events ADD COLUMN instance_id TEXT')
+      this.db.exec(`UPDATE token_usage_events SET instance_id = 'default:' || provider WHERE instance_id IS NULL`)
+    }
+
+    const limitColumns = this.db.prepare('PRAGMA table_info(provider_usage_limits)').all() as Array<{ name: string }>
+    if (!limitColumns.some((column) => column.name === 'instance_id')) {
+      this.db.transaction(() => {
+        this.db.exec('ALTER TABLE provider_usage_limits RENAME TO provider_usage_limits_legacy')
+        this.db.exec(USAGE_SCHEMA_SQL)
+        this.db.exec(`
+          INSERT INTO provider_usage_limits (provider, instance_id, snapshot, updated_at)
+          SELECT provider, 'default:' || provider, snapshot, updated_at FROM provider_usage_limits_legacy
+        `)
+        this.db.exec('DROP TABLE provider_usage_limits_legacy')
+      })()
+    }
   }
 
   /** Adds `source_key` to tables created by an earlier build of this feature. */
@@ -226,9 +263,10 @@ export class UsageStore {
       INSERT OR IGNORE INTO token_usage_events (
         id, task_id, agent_id, provider, model, session_id,
         input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens,
-        cost_usd, cost_source, created_at, source_key
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        cost_usd, cost_source, created_at, source_key, instance_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
+    const instanceId = input.instanceId || defaultHarnessInstanceId(input.provider)
     const run = this.db.transaction((): TokenUsageRecord[] => {
       const written: TokenUsageRecord[] = []
       for (const item of input.items) {
@@ -241,6 +279,7 @@ export class UsageStore {
           provider: input.provider,
           model: item.model || 'unknown',
           sessionId: input.sessionId ?? null,
+          instanceId,
           inputTokens: Math.round(item.usage.inputTokens),
           cacheReadTokens: Math.round(item.usage.cacheReadTokens),
           cacheWriteTokens: Math.round(item.usage.cacheWriteTokens),
@@ -253,7 +292,7 @@ export class UsageStore {
         const result = insert.run(
           record.id, record.taskId, record.agentId, record.provider, record.model, record.sessionId,
           record.inputTokens, record.cacheReadTokens, record.cacheWriteTokens, record.outputTokens, record.reasoningTokens,
-          record.costUsd, record.costSource, record.createdAt, item.sourceKey
+          record.costUsd, record.costSource, record.createdAt, item.sourceKey, instanceId
         )
         if (result.changes > 0) written.push(record)
       }
@@ -286,9 +325,10 @@ export class UsageStore {
       INSERT INTO token_usage_events (
         id, task_id, agent_id, provider, model, session_id,
         input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens,
-        cost_usd, cost_source, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        cost_usd, cost_source, created_at, instance_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `)
+    const instanceId = input.instanceId || defaultHarnessInstanceId(input.provider)
 
     const run = this.db.transaction((): TokenUsageRecord[] => {
       const previousByBucket = new Map<string, UsageTotals>()
@@ -319,6 +359,7 @@ export class UsageStore {
           provider: input.provider,
           model: bucket.model,
           sessionId: input.sessionId,
+          instanceId,
           inputTokens: Math.round(delta.inputTokens),
           cacheReadTokens: Math.round(delta.cacheReadTokens),
           cacheWriteTokens: Math.round(delta.cacheWriteTokens),
@@ -331,7 +372,7 @@ export class UsageStore {
         insertEvent.run(
           record.id, record.taskId, record.agentId, record.provider, record.model, record.sessionId,
           record.inputTokens, record.cacheReadTokens, record.cacheWriteTokens, record.outputTokens, record.reasoningTokens,
-          record.costUsd, record.costSource, record.createdAt
+          record.costUsd, record.costSource, record.createdAt, instanceId
         )
         written.push(record)
       }
@@ -415,16 +456,17 @@ export class UsageStore {
   }
 
   getProviderUsageLimits(): ProviderUsageLimits[] {
-    const rows = this.db.prepare('SELECT provider, snapshot FROM provider_usage_limits ORDER BY provider').all() as Array<{
-      provider: string
-      snapshot: string
-    }>
+    const rows = this.db.prepare(
+      'SELECT provider, instance_id, snapshot FROM provider_usage_limits ORDER BY provider, instance_id'
+    ).all() as Array<{ provider: string; instance_id: string; snapshot: string }>
     const result: ProviderUsageLimits[] = []
     for (const row of rows) {
       if (!isUsageProvider(row.provider)) continue
       try {
         const snapshot = JSON.parse(row.snapshot) as ProviderUsageLimits
-        if (snapshot && Array.isArray(snapshot.windows)) result.push({ ...snapshot, provider: row.provider })
+        if (snapshot && Array.isArray(snapshot.windows)) {
+          result.push({ ...snapshot, provider: row.provider, instanceId: row.instance_id })
+        }
       } catch {
         // Corrupt row — ignore; the next probe overwrites it.
       }
@@ -433,10 +475,11 @@ export class UsageStore {
   }
 
   saveProviderUsageLimits(limits: ProviderUsageLimits): void {
+    const instanceId = limits.instanceId || defaultHarnessInstanceId(limits.provider)
     this.db.prepare(`
-      INSERT INTO provider_usage_limits (provider, snapshot, updated_at) VALUES (?, ?, ?)
-      ON CONFLICT(provider) DO UPDATE SET snapshot = excluded.snapshot, updated_at = excluded.updated_at
-    `).run(limits.provider, JSON.stringify(limits), Date.now())
+      INSERT INTO provider_usage_limits (provider, instance_id, snapshot, updated_at) VALUES (?, ?, ?, ?)
+      ON CONFLICT(provider, instance_id) DO UPDATE SET snapshot = excluded.snapshot, updated_at = excluded.updated_at
+    `).run(limits.provider, instanceId, JSON.stringify({ ...limits, instanceId }), Date.now())
   }
 
   /** Drops stale session totals and very old usage events. Safe to call at any time. */

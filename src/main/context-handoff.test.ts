@@ -214,8 +214,8 @@ describe('context handoff markers and labels', () => {
 
   it('round-trips a marker and ignores malformed values', () => {
     const raw = JSON.stringify({ fromAgentId: 'agent-a', recordedAt: 5 })
-    expect(parseContextHandoffMarker(raw)).toEqual({ fromAgentId: 'agent-a', recordedAt: 5, announced: false })
-    expect(parseContextHandoffMarker(JSON.stringify({ fromAgentId: null }))).toEqual({ fromAgentId: null, recordedAt: 0, announced: false })
+    expect(parseContextHandoffMarker(raw)).toEqual({ fromAgentId: 'agent-a', recordedAt: 5, announced: false, continuedNoteShown: false })
+    expect(parseContextHandoffMarker(JSON.stringify({ fromAgentId: null }))).toEqual({ fromAgentId: null, recordedAt: 0, announced: false, continuedNoteShown: false })
     expect(parseContextHandoffMarker(JSON.stringify({ fromAgentId: 'agent-a', recordedAt: 5, announced: true }))?.announced).toBe(true)
     expect(parseContextHandoffMarker(undefined)).toBeNull()
     expect(parseContextHandoffMarker('not json')).toBeNull()

@@ -26,6 +26,14 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS harness_instances (
+      id TEXT PRIMARY KEY,
+      harness_type TEXT NOT NULL CHECK (harness_type IN ('claude-code', 'codex')),
+      label TEXT NOT NULL,
+      home_path TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL

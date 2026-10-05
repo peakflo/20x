@@ -856,15 +856,29 @@ describe('Context handoff marker on agent reassignment', () => {
     expect(JSON.parse(db.getSetting(key(task.id))!)).toMatchObject({ fromAgentId: first.id, announced: false })
   })
 
-  it('clears the session of the task when it is reassigned to another harness', () => {
+  it('keeps the session id when the task is reassigned to another harness, until the new session replaces it', () => {
     const first = db.createAgent(makeAgent({ name: 'First', config: { coding_agent: 'claude-code' } }))!
     const second = db.createAgent(makeAgent({ name: 'Second', config: { coding_agent: 'codex' } }))!
     const task = assigned(first.id)
+    db.upsertTranscriptParts(task.id, [{ id: 'p1', role: 'user', content: 'hello' }])
     db.updateTask(task.id, { session_id: 'backend-session-1' })
 
     const updated = db.updateTask(task.id, { agent_id: second.id })
 
-    expect(updated?.session_id).toBeNull()
+    // Never dropped before the context has been carried: the handoff is planned at resume time.
+    expect(updated?.session_id).toBe('backend-session-1')
+    expect(JSON.parse(db.getSetting(key(task.id))!)).toMatchObject({ fromAgentId: first.id, announced: false })
+  })
+
+  it('records a marker for a reassignment of a task that has a session but no transcript yet', () => {
+    const first = db.createAgent(makeAgent({ name: 'First', config: { coding_agent: 'codex' } }))!
+    const second = db.createAgent(makeAgent({ name: 'Second', config: { coding_agent: 'codex' } }))!
+    const task = assigned(first.id)
+    db.updateTask(task.id, { session_id: 'thread-1' })
+
+    db.updateTask(task.id, { agent_id: second.id })
+
+    expect(JSON.parse(db.getSetting(key(task.id))!)).toMatchObject({ fromAgentId: first.id })
   })
 
   it('keeps the session when the task moves to another agent of the same harness', () => {
@@ -882,14 +896,14 @@ describe('Context handoff marker on agent reassignment', () => {
     expect(JSON.parse(db.getSetting(key(task.id))!)).toMatchObject({ fromAgentId: first.id, announced: false })
   })
 
-  it('clears the session when the task is unassigned', () => {
+  it('keeps the session id when the task is unassigned', () => {
     const first = db.createAgent(makeAgent({ name: 'First', config: { coding_agent: 'claude-code' } }))!
     const task = assigned(first.id)
     db.updateTask(task.id, { session_id: 'backend-session-1' })
 
     const updated = db.updateTask(task.id, { agent_id: null })
 
-    expect(updated?.session_id).toBeNull()
+    expect(updated?.session_id).toBe('backend-session-1')
   })
 
   it('keeps the session when the agent does not change', () => {

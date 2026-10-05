@@ -49,6 +49,13 @@ export interface UsageLimitWindow {
 
 export interface ProviderUsageLimits {
   provider: UsageProvider
+  /**
+   * Harness instance the limits belong to (one subscription login). Defaults to
+   * the implicit default instance of the provider when absent.
+   */
+  instanceId?: string
+  /** Label shown in the usage bar and settings, e.g. "Codex · Work". */
+  instanceLabel?: string
   /** ISO-8601 time of the last successful read or update. */
   checkedAt: string
   /** e.g. `pro`, `max`, `plus`, `team` — when reported. */
@@ -81,8 +88,8 @@ export interface ProviderUsageLimitsUpdate {
 
 export interface UsageLimitsRefreshResult {
   limits: ProviderUsageLimits[]
-  /** Providers that were actually probed by this call (others were throttled or not configured). */
-  refreshed: UsageProvider[]
+  /** Harness instance ids that were actually probed by this call (others were throttled or not configured). */
+  refreshed: string[]
 }
 
 /**
@@ -229,6 +236,8 @@ export interface TokenUsageRecord extends TokenCounts {
   model: string
   /** Provider session / thread id the usage was observed on. */
   sessionId: string | null
+  /** Harness instance that produced the usage. Null for rows recorded before instances existed. */
+  instanceId?: string | null
   costUsd: number | null
   costSource: UsageCostSource
   /** Unix ms. */

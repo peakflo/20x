@@ -8,7 +8,9 @@ import { TaskStatus } from '../shared/constants'
 import type { ReasoningEffort } from '../shared/reasoning-effort'
 import { startTaskApiServer } from './task-api-server'
 import { UsageStore } from './usage/usage-store'
-import { contextHandoffSettingKey, isSameHarness, parseContextHandoffMarker, type ContextHandoffMarker } from './context-handoff'
+import { contextHandoffSettingKey, parseContextHandoffMarker, type ContextHandoffMarker } from './context-handoff'
+import { harnessTypeOf, type HarnessInstance, type HarnessType } from '../shared/harness-instances'
+import { normalizeHomePath } from './harness-instances'
 
 export interface AgentRow {
   id: string
@@ -37,6 +39,11 @@ export interface AgentMcpServerEntry {
 
 export interface AgentConfigRecord {
   coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor' | 'pi'
+  /**
+   * Harness instance (one subscription login of the coding_agent). Unset means
+   * the default instance of the coding_agent. Ignored for API-key agents.
+   */
+  harness_instance_id?: string
   model?: string
   reasoning_effort?: ReasoningEffort
   auth_method?: 'subscription' | 'api_key'
@@ -51,6 +58,28 @@ export interface AgentConfigRecord {
     anthropic?: string
     cursor?: string
   }
+}
+
+/** A stored harness instance. The implicit defaults ("Claude Code", "Codex") are not rows. */
+export type HarnessInstanceRecord = HarnessInstance
+
+interface HarnessInstanceRow {
+  id: string
+  harness_type: string
+  label: string
+  home_path: string
+  created_at: string
+}
+
+export interface CreateHarnessInstanceData {
+  harness_type: HarnessType
+  label: string
+  home_path: string
+}
+
+export interface UpdateHarnessInstanceData {
+  label?: string
+  home_path?: string
 }
 
 export interface McpServerConfigRecord {
@@ -586,6 +615,23 @@ function deserializeMcpServer(row: McpServerRow): McpServerRecord {
   }
 }
 
+function deserializeHarnessInstance(row: HarnessInstanceRow): HarnessInstanceRecord {
+  return {
+    id: row.id,
+    harness_type: row.harness_type as HarnessType,
+    label: row.label,
+    home_path: row.home_path,
+    created_at: row.created_at
+  }
+}
+
+/** Label for a migrated account_home: the harness name plus the directory name, e.g. "Codex · work". */
+function legacyInstanceLabel(homePath: string): string {
+  const base = homePath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
+  const name = base.replace(/^\.+/, '') || 'account'
+  return name
+}
+
 function deserializeAgent(row: AgentRow): AgentRecord {
   return {
     ...row,
@@ -960,8 +1006,9 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  * they build the schema from `CREATE TABLE`, not from the migration path.
  *
  * 8 → 9: tasks.complete_at_source
+ * 9 → 10: harness_instances table; agent config account_home → harness_instance_id
  */
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -1133,6 +1180,14 @@ export class DatabaseManager {
         is_default INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS harness_instances (
+        id TEXT PRIMARY KEY,
+        harness_type TEXT NOT NULL CHECK (harness_type IN ('claude-code', 'codex')),
+        label TEXT NOT NULL,
+        home_path TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS settings (
@@ -1522,6 +1577,9 @@ export class DatabaseManager {
 
     // Migrate inline MCP servers from agent configs → mcp_servers table
     this.migrateInlineMcpServers()
+
+    // Free-text account_home on agents → harness instances
+    this.migrateAccountHomesToHarnessInstances()
 
     // Migrate task_sources: add plugin_id + config columns
     const tsColumns = this.db.pragma('table_info(task_sources)') as { name: string }[]
@@ -2322,7 +2380,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
    * came from is kept.
    */
   markContextHandoff(taskId: string, fromAgentId: string | null): void {
-    if (!this.hasTranscriptParts(taskId)) return
+    // A task with neither transcript nor session has nothing to continue.
+    if (!this.hasTranscriptParts(taskId) && !this.getTask(taskId)?.session_id) return
     // The first agent that held the conversation stays the source until the
     // handoff is delivered, however many times the task changes agent before then.
     const existing = parseContextHandoffMarker(this.getSetting(contextHandoffSettingKey(taskId)))
@@ -2439,16 +2498,11 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       throw new Error('Only the sync service can change a task source link.')
     }
     const currentTask = this.getTask(id)
-    // Reassigning to an agent of another harness ends the backend session: the
-    // new agent starts from a handoff. Within the same harness the session id
-    // is kept, and the new agent continues it with its own configuration.
+    // Reassigning the agent keeps the session id. Whether the new agent resumes
+    // that session or continues by handoff is decided at resume time (see
+    // planContinuation), and the id is only replaced once a new session starts.
+    // So the id is never dropped before the context has been carried.
     const agentChanged = !!currentTask && data.agent_id !== undefined && data.agent_id !== currentTask.agent_id
-    if (agentChanged && data.session_id === undefined) {
-      const fromAgent = currentTask!.agent_id ? this.getAgent(currentTask!.agent_id) : undefined
-      const toAgent = data.agent_id ? this.getAgent(data.agent_id) : undefined
-      const keepSession = !!fromAgent && !!toAgent && isSameHarness(fromAgent.config?.coding_agent, toAgent.config?.coding_agent)
-      if (!keepSession) data = { ...data, session_id: null }
-    }
     const approvedStatusWrite = origin === 'session-feedback' || origin === 'task-source'
     if (!approvedStatusWrite && currentTask?.status === TaskStatus.AgentLearning && this.getSetting(`session-feedback-completion:${id}`) && !(data.status === TaskStatus.Completed && data.complete_at_source === false)) {
       data = { ...data, status: TaskStatus.AgentLearning }
@@ -2670,6 +2724,100 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   deleteAgent(id: string): boolean {
     const result = this.db.prepare('DELETE FROM agents WHERE id = ?').run(id)
     return result.changes > 0
+  }
+
+  // ── Harness instance CRUD ──────────────────────────────────
+
+  listHarnessInstances(): HarnessInstanceRecord[] {
+    const rows = this.db.prepare('SELECT * FROM harness_instances ORDER BY harness_type ASC, label ASC').all() as HarnessInstanceRow[]
+    return rows.map(deserializeHarnessInstance)
+  }
+
+  getHarnessInstance(id: string): HarnessInstanceRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM harness_instances WHERE id = ?').get(id) as HarnessInstanceRow | undefined
+    return row ? deserializeHarnessInstance(row) : undefined
+  }
+
+  createHarnessInstance(data: CreateHarnessInstanceData): HarnessInstanceRecord {
+    const id = `hi_${createId()}`
+    const now = new Date().toISOString()
+    this.db.prepare(`
+      INSERT INTO harness_instances (id, harness_type, label, home_path, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(id, data.harness_type, data.label.trim(), data.home_path, now)
+    return this.getHarnessInstance(id) ?? { id, harness_type: data.harness_type, label: data.label.trim(), home_path: data.home_path, created_at: now }
+  }
+
+  updateHarnessInstance(id: string, data: UpdateHarnessInstanceData): HarnessInstanceRecord | undefined {
+    const setClauses: string[] = []
+    const values: string[] = []
+    if (data.label !== undefined) {
+      setClauses.push('label = ?')
+      values.push(data.label.trim())
+    }
+    if (data.home_path !== undefined) {
+      setClauses.push('home_path = ?')
+      values.push(data.home_path)
+    }
+    if (setClauses.length > 0) {
+      this.db.prepare(`UPDATE harness_instances SET ${setClauses.join(', ')} WHERE id = ?`).run(...values, id)
+    }
+    return this.getHarnessInstance(id)
+  }
+
+  /**
+   * Removes an instance. Agents that pointed at it fall back to the default
+   * instance of their harness. Their sessions keep their ids.
+   */
+  deleteHarnessInstance(id: string): boolean {
+    const run = this.db.transaction((): boolean => {
+      for (const agent of this.getAgents()) {
+        if (agent.config?.harness_instance_id !== id) continue
+        const config = { ...agent.config }
+        delete config.harness_instance_id
+        this.updateAgent(agent.id, { config })
+      }
+      return this.db.prepare('DELETE FROM harness_instances WHERE id = ?').run(id).changes > 0
+    })
+    return run()
+  }
+
+  /**
+   * Moves the free-text `account_home` of agents into harness instances. Each
+   * distinct directory becomes one instance, labelled from its directory name.
+   * The agent then points at it through `harness_instance_id`. Runs on every
+   * migration pass, so it is a no-op once no agent has an account_home left.
+   */
+  private migrateAccountHomesToHarnessInstances(): void {
+    const rows = this.db.prepare('SELECT id, config FROM agents').all() as Array<{ id: string; config: string }>
+    const run = this.db.transaction(() => {
+      for (const row of rows) {
+        let config: AgentConfigRecord & { account_home?: unknown }
+        try {
+          config = JSON.parse(row.config) as AgentConfigRecord & { account_home?: unknown }
+        } catch {
+          continue
+        }
+        if (!('account_home' in config)) continue
+
+        const { account_home: legacyHome, ...rest } = config
+        const harness = harnessTypeOf(rest.coding_agent)
+        const homePath = typeof legacyHome === 'string' ? normalizeHomePath(legacyHome) : undefined
+        if (harness && homePath && !rest.harness_instance_id) {
+          const existing = this.db.prepare(
+            'SELECT id FROM harness_instances WHERE harness_type = ? AND home_path = ?'
+          ).get(harness, homePath) as { id: string } | undefined
+          const instanceId = existing?.id ?? this.createHarnessInstance({
+            harness_type: harness,
+            label: legacyInstanceLabel(homePath),
+            home_path: homePath
+          }).id
+          rest.harness_instance_id = instanceId
+        }
+        this.db.prepare('UPDATE agents SET config = ? WHERE id = ?').run(JSON.stringify(rest), row.id)
+      }
+    })
+    run()
   }
 
   // ── MCP Server CRUD ────────────────────────────────────────

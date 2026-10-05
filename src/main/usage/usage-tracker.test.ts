@@ -82,14 +82,16 @@ describe('UsageTracker', () => {
   it('keeps the last known windows when a probe fails', async () => {
     tracker.applyLimitsEvent({ kind: 'snapshot', limits: claudeLimits(40) })
     now += 10 * 60 * 1000
-    await tracker.refreshLimits({
-      'claude-code': async () => ({
+    await tracker.refreshLimits([{
+      instanceId: 'default:claude-code',
+      provider: 'claude-code',
+      probe: async () => ({
         provider: 'claude-code',
         checkedAt: new Date(now).toISOString(),
         windows: [],
         unavailable: { reason: 'probe_failed', message: 'offline' }
       })
-    })
+    }])
     const [limits] = tracker.getLimits()
     expect(limits.windows).toHaveLength(2)
     expect(limits.unavailable).toEqual({ reason: 'probe_failed', message: 'offline' })
@@ -97,27 +99,72 @@ describe('UsageTracker', () => {
 
   it('throttles automatic refreshes and shares in-flight probes', async () => {
     const probe = vi.fn(async () => claudeLimits(10))
+    const target = { instanceId: 'default:claude-code', provider: 'claude-code' as const, probe }
     const [first, second] = await Promise.all([
-      tracker.refreshLimits({ 'claude-code': probe }),
-      tracker.refreshLimits({ 'claude-code': probe })
+      tracker.refreshLimits([target]),
+      tracker.refreshLimits([target])
     ])
     expect(probe).toHaveBeenCalledTimes(1)
-    expect(first.refreshed).toEqual(['claude-code'])
+    expect(first.refreshed).toEqual(['default:claude-code'])
     expect(second.refreshed).toEqual([])
 
     now += 60 * 1000
-    await tracker.refreshLimits({ 'claude-code': probe })
+    await tracker.refreshLimits([target])
     expect(probe).toHaveBeenCalledTimes(1)
 
     // A manual refresh is allowed sooner.
-    await tracker.refreshLimits({ 'claude-code': probe }, { force: true })
+    await tracker.refreshLimits([target], { force: true })
     expect(probe).toHaveBeenCalledTimes(2)
   })
 
   it('turns a throwing probe into a probe_failed snapshot', async () => {
-    await tracker.refreshLimits({ codex: async () => { throw new Error('codex not installed') } })
+    await tracker.refreshLimits([{
+      instanceId: 'default:codex',
+      provider: 'codex',
+      probe: async () => { throw new Error('codex not installed') }
+    }])
     expect(tracker.getLimits()).toEqual([
-      expect.objectContaining({ provider: 'codex', unavailable: { reason: 'probe_failed', message: 'codex not installed' } })
+      expect.objectContaining({ provider: 'codex', instanceId: 'default:codex', unavailable: { reason: 'probe_failed', message: 'codex not installed' } })
     ])
+  })
+
+  it('keeps plan limits of two instances of one harness apart', async () => {
+    const labels: Record<string, string> = { 'hi_work': 'Codex · Work', 'hi_personal': 'Codex · Personal' }
+    tracker = new UsageTracker(store, () => now, (instanceId) => labels[instanceId] ?? 'Codex')
+    const codex = (usedPercent: number): ProviderUsageLimits => ({
+      provider: 'codex',
+      checkedAt: new Date(now).toISOString(),
+      windows: [{ id: 'primary', kind: 'session', label: '5-hour', usedPercent, resetsAt: null }],
+      unavailable: null
+    })
+    await tracker.refreshLimits([
+      { instanceId: 'hi_work', provider: 'codex', probe: async () => codex(85) },
+      { instanceId: 'hi_personal', provider: 'codex', probe: async () => codex(12) }
+    ])
+    const limits = tracker.getLimits()
+    expect(limits.map((l) => [l.instanceId, l.instanceLabel, l.windows[0].usedPercent])).toEqual([
+      ['hi_personal', 'Codex · Personal', 12],
+      ['hi_work', 'Codex · Work', 85]
+    ])
+    // Labels are read at each read, so a rename shows at once.
+    labels.hi_work = 'Codex · Team'
+    expect(tracker.getLimits().find((l) => l.instanceId === 'hi_work')?.instanceLabel).toBe('Codex · Team')
+    // Both survive a restart of the tracker.
+    const restarted = new UsageTracker(store, () => now)
+    expect(restarted.getLimits().map((l) => l.instanceId)).toEqual(['hi_personal', 'hi_work'])
+  })
+
+  it('moves plan limits saved before instances existed to the default instance', () => {
+    const legacy = new Database(':memory:')
+    legacy.exec(`
+      CREATE TABLE provider_usage_limits (provider TEXT PRIMARY KEY, snapshot TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      INSERT INTO provider_usage_limits (provider, snapshot, updated_at) VALUES ('codex', '{"provider":"codex","checkedAt":"2026-10-05T11:00:00Z","windows":[]}', 1);
+    `)
+    const migrated = new UsageStore(legacy)
+    expect(migrated.getProviderUsageLimits()).toEqual([
+      expect.objectContaining({ provider: 'codex', instanceId: 'default:codex' })
+    ])
+    // The legacy table is gone, and a second open is a no-op.
+    expect(new UsageStore(legacy).getProviderUsageLimits()).toHaveLength(1)
   })
 })

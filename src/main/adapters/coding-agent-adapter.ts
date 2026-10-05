@@ -57,6 +57,11 @@ export interface SessionConfig {
   mcpServers?: Record<string, McpServerConfig>
   /** Claude Code auth method: 'subscription' (OAuth/Pro/Max) or 'api_key' (pay-per-use). Defaults to 'subscription'. */
   authMethod?: 'subscription' | 'api_key'
+  /**
+   * Home directory of the harness instance the session runs under: CODEX_HOME
+   * for Codex, CLAUDE_CONFIG_DIR for Claude Code. Unset means the harness default.
+   */
+  harnessHome?: string
   permissionMode?: 'ask' | 'allow'
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
   apiKeys?: {
@@ -148,6 +153,8 @@ export interface AdapterCumulativeUsageReport {
   providerSessionId: string
   taskId?: string
   agentId?: string
+  /** Harness instance that produced the usage. Set by agent-manager. */
+  instanceId?: string
   /**
    * True when this app created the provider session, so every token in its
    * running totals was consumed here. False for resumed sessions: if no
@@ -170,6 +177,8 @@ export interface AdapterDiscreteUsageReport {
   providerSessionId?: string
   taskId?: string
   agentId?: string
+  /** Harness instance that produced the usage. Set by agent-manager. */
+  instanceId?: string
   items: DiscreteUsageItem[]
 }
 
@@ -177,8 +186,8 @@ export type AdapterUsageReport = AdapterCumulativeUsageReport | AdapterDiscreteU
 
 /** Subscription plan-limit signal from a provider runtime. */
 export type AdapterUsageLimitsEvent =
-  | { kind: 'update'; provider: UsageProvider; update: ProviderUsageLimitsUpdate }
-  | { kind: 'snapshot'; limits: ProviderUsageLimits }
+  | { kind: 'update'; provider: UsageProvider; instanceId?: string; update: ProviderUsageLimitsUpdate }
+  | { kind: 'snapshot'; instanceId?: string; limits: ProviderUsageLimits }
 
 export interface MessagePayload {
   content: string
