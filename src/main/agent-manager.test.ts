@@ -294,6 +294,39 @@ describe('Queued follow-ups', () => {
     expect(db.deleteQueuedMessage).toHaveBeenCalledOnce()
   })
 
+  it('drains the next message if the turn ends while promotion holds the lock', async () => {
+    const db = createMockDb({ coding_agent: 'pi' })
+    const first = { id: 'one', task_id: 'task-1', text: 'change course', attachments: [], position: 0, created_at: '' }
+    const second = { ...first, id: 'two', text: 'next turn', position: 1 }
+    const queued = [first, second]
+    Object.assign(db, {
+      listQueuedMessages: vi.fn(() => [...queued]),
+      deleteQueuedMessage: vi.fn((_taskId: string, id: string) => {
+        queued.splice(queued.findIndex((item) => item.id === id), 1)
+        return true
+      })
+    })
+    manager = new AgentManager(db)
+    const session = { agentId: 'agent-1', status: 'working' }
+    vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue({ sessionId: 'session-1', session })
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    const send = vi.spyOn(manager, 'sendByTaskId').mockImplementationOnce(async () => {
+      await pending
+      return { sessionId: 'session-1' }
+    }).mockResolvedValue({ sessionId: 'session-1' })
+
+    const promoting = manager.promoteQueuedMessage('task-1', first.id)
+    session.status = 'idle'
+    expect(await (manager as any).dispatchNextQueuedMessage('task-1')).toBe(false)
+    release()
+    const snapshot = await promoting
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send).toHaveBeenNthCalledWith(2, 'task-1', 'next turn', [], true)
+    expect(snapshot.messages).toEqual([])
+  })
+
   it('rejects steering while the agent needs approval or has an error', async () => {
     manager = new AgentManager(createMockDb({ coding_agent: 'pi' }))
     const found = vi.spyOn(manager as any, 'findSessionByTaskId')

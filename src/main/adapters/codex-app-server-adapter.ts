@@ -552,26 +552,33 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
         }
       }
     }
-    const result = await this.sendRpcRequest(session, session.activeTurnId ? 'turn/steer' : 'turn/start', session.activeTurnId ? {
-      threadId: session.threadId,
-      expectedTurnId: session.activeTurnId,
-      input: [{ type: 'text', text: promptText }]
-    } : {
-      threadId: session.threadId,
-      input: [{ type: 'text', text: promptText }],
-      cwd: config.workspaceDir,
-      model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
-      effort: config.reasoningEffort && config.reasoningEffort !== 'max' ? config.reasoningEffort : null,
-      approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
-      approvalsReviewer: 'user',
-      sandbox: this.resolveSandboxMode(config),
-      sandboxPolicy: this.buildSandboxPolicy(config),
-      runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
-      config: this.buildConfigOverrides(config)
-    })
+    const previousStatus = session.status
+    session.status = SessionStatusType.BUSY
+    let result: unknown
+    try {
+      result = await this.sendRpcRequest(session, session.activeTurnId ? 'turn/steer' : 'turn/start', session.activeTurnId ? {
+        threadId: session.threadId,
+        expectedTurnId: session.activeTurnId,
+        input: [{ type: 'text', text: promptText }]
+      } : {
+        threadId: session.threadId,
+        input: [{ type: 'text', text: promptText }],
+        cwd: config.workspaceDir,
+        model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
+        effort: config.reasoningEffort && config.reasoningEffort !== 'max' ? config.reasoningEffort : null,
+        approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
+        approvalsReviewer: 'user',
+        sandbox: this.resolveSandboxMode(config),
+        sandboxPolicy: this.buildSandboxPolicy(config),
+        runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
+        config: this.buildConfigOverrides(config)
+      })
+    } catch (error) {
+      if (session.status === SessionStatusType.BUSY) session.status = previousStatus
+      throw error
+    }
 
     this.addEvent(session, userItem)
-    session.status = SessionStatusType.BUSY
     session.lastError = null
     session.usageLimit = null
 

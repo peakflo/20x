@@ -4510,10 +4510,15 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       await this.sendWhileBusy(taskId, item.text, item.attachments, 'steer', false)
       this.db.deleteQueuedMessage(taskId, id)
       if (!this.db.listQueuedMessages(taskId).length) this.db.deleteSetting(`message-queue-paused:${taskId}`)
-      return this.publishMessageQueue(taskId)
+      this.publishMessageQueue(taskId)
     } finally {
       this.queueDispatching.delete(taskId)
+      const found = this.findSessionByTaskId(taskId)
+      if ((!found || found.session.status === 'idle') && this.db.listQueuedMessages(taskId).length) {
+        await this.dispatchNextQueuedMessage(taskId)
+      }
     }
+    return this.getMessageQueue(taskId)
   }
 
   async resumeMessageQueue(taskId: string): Promise<MessageQueueSnapshot> {

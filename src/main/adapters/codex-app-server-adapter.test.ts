@@ -896,6 +896,25 @@ describe('CodexAppServerAdapter', () => {
     expect(session.status).toBe(SessionStatusType.BUSY)
   })
 
+  it('reports a new turn busy while turn/start is pending and restores idle if it fails', async () => {
+    const instance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(instance)
+    const session = createSession()
+    adapter.sessions.set('thread-1', session)
+    let rejectRpc!: (error: Error) => void
+    adapter.sendRpcRequest = vi.fn(() => new Promise((_resolve, reject) => { rejectRpc = reject }))
+
+    const sending = instance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'hello' }], {
+      agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/workspace'
+    })
+    expect((await instance.getStatus('thread-1', {} as never)).type).toBe(SessionStatusType.BUSY)
+    expect(session.messageBuffer).toEqual([])
+    rejectRpc(new Error('turn/start failed'))
+    await expect(sending).rejects.toThrow('turn/start failed')
+    expect((await instance.getStatus('thread-1', {} as never)).type).toBe(SessionStatusType.IDLE)
+    expect(session.messageBuffer).toEqual([])
+  })
+
   it('defaults missing codex sandbox mode to danger full access', async () => {
     const adapterInstance = new CodexAppServerAdapter()
     const adapter = adapterPrivate(adapterInstance)
