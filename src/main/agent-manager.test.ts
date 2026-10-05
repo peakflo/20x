@@ -1007,7 +1007,7 @@ describe('AgentManager OS notifications', () => {
     expect(notificationInstances[0].show).toHaveBeenCalled()
   })
 
-  it('sends one question push and no finished push when the turn ends on a question', () => {
+  it('sends one question push and a question (not finished) desktop alert when the turn ends on a question', () => {
     const { mgr } = createManagerWithWindow({ isFocused: false })
     vi.spyOn(mgr as any, 'persistTranscriptEvent').mockImplementation(() => undefined)
     ;(mgr as any).sendToRenderer('agent:status', { sessionId: 's1', taskId: 'task-1', status: SessionStatus.WORKING })
@@ -1017,7 +1017,9 @@ describe('AgentManager OS notifications', () => {
     ;(mgr as any).sendToRenderer('agent:status', { sessionId: 's1', taskId: 'task-1', status: SessionStatus.IDLE })
     expect(sendMobilePush).toHaveBeenCalledTimes(1)
     expect(sendMobilePush).toHaveBeenCalledWith(expect.anything(), 'question', 'task-1', 'Test Task')
-    expect(notificationInstances).toHaveLength(0)
+    expect(notificationInstances).toHaveLength(1)
+    expect(notificationInstances[0].opts.title).toBe('Agent has a question')
+    expect(notificationInstances[0].opts.body).toContain('Test Task')
   })
 
   it('keeps phone notifications quiet while the desktop window is focused', () => {

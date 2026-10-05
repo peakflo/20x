@@ -5944,7 +5944,8 @@ Important:
         // block but BEFORE checking if the window was inactive, blocking the
         // event loop on every status transition even when no notification was
         // needed.
-        const isNotifiableTransition = prevStatus === SessionStatus.WORKING && (status === SessionStatus.IDLE || status === SessionStatus.WAITING_APPROVAL) && !this.pushEvents.hasPendingQuestion(sessionId)
+        const isNotifiableTransition = prevStatus === SessionStatus.WORKING && (status === SessionStatus.IDLE || status === SessionStatus.WAITING_APPROVAL)
+        const questionPending = this.pushEvents.hasPendingQuestion(sessionId)
 
         if (isNotifiableTransition && isWindowInactive) {
           try {
@@ -5963,7 +5964,11 @@ Important:
 
               let title: string
               let body: string
-              if (status === SessionStatus.WAITING_APPROVAL) {
+              if (questionPending) {
+                // The agent stopped to ask the user something. Say so instead of "finished".
+                title = 'Agent has a question'
+                body = taskTitle ? `"${taskTitle}" is waiting for your answer` : 'An agent is waiting for your answer'
+              } else if (status === SessionStatus.WAITING_APPROVAL) {
                 title = 'Agent needs approval'
                 body = taskTitle ? `"${taskTitle}" is waiting for your approval` : 'An agent is waiting for your approval'
               } else {
