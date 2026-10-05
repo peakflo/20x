@@ -40,6 +40,16 @@ describe('harness instance store', () => {
     ).run()).toThrow()
   })
 
+  it('removing an instance also drops its plan-limit snapshot', () => {
+    const instance = db.createHarnessInstance({ harness_type: 'codex', label: 'Work', home_path: '/accounts/codex-work' })
+    db.usage.saveProviderUsageLimits({ provider: 'codex', instanceId: instance.id, checkedAt: '2026-10-05T00:00:00Z', windows: [] })
+    expect(db.usage.getProviderUsageLimits().map((l) => l.instanceId)).toContain(instance.id)
+
+    db.deleteHarnessInstance(instance.id)
+
+    expect(db.usage.getProviderUsageLimits().map((l) => l.instanceId)).not.toContain(instance.id)
+  })
+
   it('removing an instance moves its agents back to the default instance and keeps their sessions', () => {
     const instance = db.createHarnessInstance({ harness_type: 'codex', label: 'Work', home_path: '/accounts/codex-work' })
     const agent = db.createAgent(makeAgent({ name: 'Coder', config: { coding_agent: 'codex', harness_instance_id: instance.id, model: 'gpt' } }))!

@@ -12,21 +12,24 @@ Settings → Agents → **Accounts**:
 2. Run the sign-in command shown for that account, in a terminal. 20x never runs the login itself. Each command is quoted, with a POSIX-shell and a PowerShell variant:
    - Codex: `CODEX_HOME="…" codex login`
    - Claude Code: `CLAUDE_CONFIG_DIR="…" claude /login`
+   The folder must be absolute (or start with `~`). It cannot be your home folder, the default home of the harness, or a folder that contains the default home.
 3. Rename or remove an account at any time. Agents that used a removed account go back to the default login of their harness. Their sessions keep their ids.
 
-The built-in "Claude Code" and "Codex" instances use the default home, or the `CLAUDE_CONFIG_DIR` / `CODEX_HOME` already set in the environment. They are not stored.
+The built-in "Claude Code" and "Codex" instances are not stored. They set no home override, so an existing login (including the macOS Keychain item and `~/.claude.json`) stays where it is. An inherited `CLAUDE_CONFIG_DIR` or `CODEX_HOME` still applies.
 
 ## Sharing session history
 
 Moving a task between accounts of the same harness keeps its session, so the conversation is not copied. This works only when the accounts read the same session files.
 
-**Codex.** An account home holds its own `auth.json` and `models_cache.json`. These are linked to the real default home: `sessions`, `archived_sessions`, `skills`, `prompts`, `sqlite`, `config.toml` and `AGENTS.md`.
+**Codex.** An account home holds its own `auth.json` and `models_cache.json`. Thread state is linked to the real default home: the `sessions`, `archived_sessions`, `skills`, `prompts` and `sqlite` directories, every root-level `*.sqlite` database (`state_5.sqlite`, `thread_history_1.sqlite`, `goals_1.sqlite`, and so on), `AGENTS.md` and `session_index.jsonl`. SQLite places the `-wal` and `-shm` files next to the real database, so the links need no companions.
+
+Two files drift. Codex rewrites `config.toml` and may rewrite `session_index.jsonl` atomically, which replaces a link with a plain file. `config.toml` is copied once when an account is set up, and later changes to the default do not reach the account. Re-linking is not done.
 
 **Claude Code.** An account has its own `CLAUDE_CONFIG_DIR`, so its login (`.credentials.json`, or the Keychain entry for that directory) is separate. The session history is linked to the default config directory: `projects/`, plus `session-env/`, `todos/` and `file-history/` when they exist. Not linked: `settings.json`, `.credentials.json`, and `sessions/`, the live process registry. MCP servers are passed to each session by 20x, so they do not depend on the account's settings.
 
 Two points are not verified against the Claude Code CLI. The list of linked directories was chosen from the layout of a local `~/.claude`, and the session-file location is taken from the adapter's existing lookup of `projects/<encoded workspace>/<session>.jsonl`. Re-check the list when the CLI changes.
 
-Links use a directory junction on Windows and a directory symlink elsewhere. A real directory is never replaced by a link. An empty one is replaced. A non-empty one, or a link to some other folder, marks the account as **not sharing history**. The settings screen shows this as "Context is carried over".
+Links use a directory junction on Windows and a directory symlink elsewhere. Each account's sharing is checked when it is created or changed, and once at startup. Resuming reads only that record, so it does no filesystem work. A real directory is never replaced by a link. An empty one is replaced. A non-empty one, or a link to some other folder, marks the account as **not sharing history**. The settings screen shows this as "Context is carried over".
 
 ## What happens when a task changes agent
 
@@ -40,7 +43,8 @@ Links use a directory junction on Windows and a directory symlink elsewhere. A r
 Details of the native case:
 
 - The session id is kept when the agent changes. It is replaced only by a new session, and only after the carried context is in that session's prompt.
-- The handoff marker is kept after a native resume. It is removed when the first prompt on the resumed session is accepted by the backend. A "No conversation found", `INCOMPATIBLE_SESSION_ID`, missing-session-file or "session no longer exists" error on that prompt falls back to a handoff.
+- The handoff marker is kept after a native resume. It is removed only when the backend answers the first prompt: assistant output, or an idle state after the turn ran. Starting the turn alone does not count, because Claude Code reports a missing session on its stream after the turn has started.
+- A "No conversation found", `INCOMPATIBLE_SESSION_ID`, missing-session-file or "session no longer exists" error before that answer starts a new session with the handoff and the same message. No dialog is shown.
 - The transcript shows "Continued on <account>" after a native continue. A handoff shows "Context from … carried over". After a native continue that falls back to a handoff, both notes appear, in that order.
 
 API-key agents never share history. They are not affected by accounts.

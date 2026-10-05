@@ -482,6 +482,11 @@ export class UsageStore {
     `).run(limits.provider, instanceId, JSON.stringify({ ...limits, instanceId }), Date.now())
   }
 
+  /** Drops the plan-limit snapshot of a removed harness instance. */
+  forgetInstance(instanceId: string): void {
+    this.db.prepare('DELETE FROM provider_usage_limits WHERE instance_id = ?').run(instanceId)
+  }
+
   /** Drops stale session totals and very old usage events. Safe to call at any time. */
   prune(nowMs = Date.now()): void {
     this.db.prepare('DELETE FROM token_usage_session_totals WHERE updated_at < ?').run(nowMs - SESSION_TOTALS_RETENTION_MS)

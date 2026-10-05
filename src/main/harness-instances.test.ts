@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import {
   directoryLinkType,
+  instanceHomeError,
   instanceHomeFor,
   linkSharedHistory,
   normalizeHomePath,
@@ -180,5 +181,75 @@ describe('shared session history', () => {
     const env = { CODEX_HOME: real }
     const home = instanceHomeFor('codex', undefined, env, root)
     expect(linkSharedHistory({ harness: 'codex', instanceHome: home, realHome: realHomeFor('codex', env, root), platform: 'linux' }).shareable).toBe(true)
+  })
+})
+
+describe('Codex thread state', () => {
+  it('links the root-level SQLite databases where thread state lives, not their companions', () => {
+    const real = join(root, 'codex-default')
+    const instance = join(root, 'codex-work')
+    mkdirSync(real)
+    for (const name of ['state_5.sqlite', 'thread_history_1.sqlite', 'state_5.sqlite-wal', 'state_5.sqlite-shm']) {
+      writeFileSync(join(real, name), '')
+    }
+
+    linkSharedHistory({ harness: 'codex', instanceHome: instance, realHome: real, platform: 'linux' })
+
+    expect(readlinkSync(join(instance, 'state_5.sqlite'))).toBe(join(real, 'state_5.sqlite'))
+    expect(readlinkSync(join(instance, 'thread_history_1.sqlite'))).toBe(join(real, 'thread_history_1.sqlite'))
+    expect(existsSync(join(instance, 'state_5.sqlite-wal'))).toBe(false)
+    expect(existsSync(join(instance, 'state_5.sqlite-shm'))).toBe(false)
+  })
+
+  it('copies config.toml once and never overwrites the instance copy', () => {
+    const real = join(root, 'codex-default')
+    const instance = join(root, 'codex-work')
+    mkdirSync(real)
+    writeFileSync(join(real, 'config.toml'), 'model = "a"')
+
+    const first = linkSharedHistory({ harness: 'codex', instanceHome: instance, realHome: real, platform: 'linux' })
+    expect(first.links).toContainEqual({ name: 'config.toml', status: 'copied' })
+    expect(isLink(join(instance, 'config.toml'))).toBe(false)
+
+    writeFileSync(join(real, 'config.toml'), 'model = "b"')
+    writeFileSync(join(instance, 'config.toml'), 'model = "instance"')
+    linkSharedHistory({ harness: 'codex', instanceHome: instance, realHome: real, platform: 'linux' })
+    expect(readFileSync(join(instance, 'config.toml'), 'utf8')).toBe('model = "instance"')
+  })
+})
+
+describe('instanceHomeError', () => {
+  const env = {}
+  const home = '/home/u'
+  const check = (input: string, harness: 'codex' | 'claude-code' = 'codex', e: Record<string, string> = env) =>
+    instanceHomeError(input, harness, e, home)
+
+  it('accepts a separate absolute folder or one under ~', () => {
+    expect(check('/accounts/codex-work')).toBeNull()
+    expect(check('~/accounts/codex-work')).toBeNull()
+  })
+
+  it('rejects a blank or relative folder', () => {
+    expect(check('  ')).toMatch(/Choose a folder/)
+    expect(check('accounts/codex-work')).toMatch(/absolute folder path/)
+  })
+
+  it('rejects the home folder, the default home, and any ancestor of the default home', () => {
+    expect(check('/home/u')).toMatch(/home folder/)
+    expect(check('~')).toMatch(/home folder/)
+    expect(check('/home/u/.codex')).toMatch(/default home/)
+    expect(check('/home')).toMatch(/contains the default home/)
+    expect(check('/')).toMatch(/contains the default home/)
+  })
+
+  it('treats an inherited CODEX_HOME as the default home', () => {
+    expect(check('/opt/codex', 'codex', { CODEX_HOME: '/opt/codex' })).toMatch(/default home/)
+    expect(check('/opt', 'codex', { CODEX_HOME: '/opt/codex' })).toMatch(/contains the default home/)
+    expect(check('/opt/codex-work', 'codex', { CODEX_HOME: '/opt/codex' })).toBeNull()
+  })
+
+  it('applies the same rules to Claude Code', () => {
+    expect(check('/home/u/.claude', 'claude-code')).toMatch(/default home/)
+    expect(check('/home/u/.claude-work', 'claude-code')).toBeNull()
   })
 })

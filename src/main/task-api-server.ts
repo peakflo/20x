@@ -29,6 +29,7 @@ import {
 } from '../shared/ui-commands'
 import { buildSimilarTasksQuery } from './task-search'
 import { limitsByInstance, summarizeAgentUsage } from './usage/agent-usage-summary'
+import { agentInstanceId } from '../shared/harness-instances'
 import { isSameHarness, toolOutputPage } from './context-handoff'
 import {
   createRegisteredTaskArtifact,
@@ -554,12 +555,15 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       } catch (err) {
         console.warn('[TaskAPI] Plan limits unavailable for list_agents:', err)
       }
+      // A stored account counts only when it exists, belongs to the agent's harness and is a subscription login.
+      const accounts = db.listHarnessInstances()
       agents.forEach((a) => {
         a.config = JSON.parse((a.config as string) || '{}')
         a.is_default = !!a.is_default
         const config = a.config as Record<string, unknown>
+        const instanceId = agentInstanceId(config as { coding_agent?: string; auth_method?: string; harness_instance_id?: string }, accounts)
         a.usage_limits = summarizeAgentUsage(
-          { config, instanceId: typeof config.harness_instance_id === 'string' ? config.harness_instance_id : null },
+          { config, instanceId: instanceId ?? null },
           planLimits
         )
       })

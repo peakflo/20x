@@ -122,6 +122,13 @@ export class UsageTracker extends EventEmitter {
     return next
   }
 
+  /** Drops the plan limits of a removed instance, from memory and from the next read. */
+  forgetInstance(instanceId: string): void {
+    this.limits.delete(instanceId)
+    this.lastProbeAt.delete(instanceId)
+    this.inFlightProbes.delete(instanceId)
+  }
+
   /** Allows the next refresh to probe `instanceId` immediately (e.g. after its auth settings changed). */
   clearProbeThrottle(instanceId: string): void {
     this.lastProbeAt.delete(instanceId)

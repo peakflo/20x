@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   defaultHarnessInstanceId,
+  agentInstanceId,
   harnessDropdownOptions,
   harnessInstanceDisplayName,
   harnessTypeOf,
@@ -73,5 +74,21 @@ describe('harnessDropdownOptions', () => {
 
   it('lists only the defaults when no account is stored', () => {
     expect(harnessDropdownOptions([], harnesses).map((o) => o.value)).toEqual(['opencode', 'claude-code', 'codex', 'pi'])
+  })
+})
+
+describe('agentInstanceId', () => {
+  const instances = [{ id: 'hi_work', harness_type: 'codex' }, { id: 'hi_claude', harness_type: 'claude-code' }]
+
+  it('uses a stored instance of the agent\'s own harness on a subscription', () => {
+    expect(agentInstanceId({ coding_agent: 'codex', harness_instance_id: 'hi_work' }, instances)).toBe('hi_work')
+  })
+
+  it('falls back to the default for a missing, mismatched, or API-key instance', () => {
+    expect(agentInstanceId({ coding_agent: 'codex', harness_instance_id: 'hi_gone' }, instances)).toBeNull()
+    expect(agentInstanceId({ coding_agent: 'codex', harness_instance_id: 'hi_claude' }, instances)).toBeNull()
+    expect(agentInstanceId({ coding_agent: 'codex', harness_instance_id: 'hi_work', auth_method: 'api_key' }, instances)).toBeNull()
+    expect(agentInstanceId({ coding_agent: 'opencode', harness_instance_id: 'hi_work' }, instances)).toBeNull()
+    expect(agentInstanceId({ coding_agent: 'codex' }, instances)).toBeNull()
   })
 })

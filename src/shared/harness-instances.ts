@@ -133,3 +133,19 @@ export function harnessDropdownOptions<T extends { value: string; label: string 
     ]
   })
 }
+
+/**
+ * Id of the stored instance an agent really runs under, or null for the harness
+ * default. A stored id counts only when that instance exists, belongs to the
+ * agent's harness, and the agent signs in with a subscription. Anything else
+ * (a deleted account, a mismatched harness, an API key) falls back to the default.
+ */
+export function agentInstanceId(
+  config: { coding_agent?: string | null; auth_method?: string | null; harness_instance_id?: string | null } | null | undefined,
+  instances: ReadonlyArray<{ id: string; harness_type: string }>
+): string | null {
+  const harness = harnessTypeOf(config?.coding_agent)
+  if (!harness || !config?.harness_instance_id || config.auth_method === 'api_key') return null
+  const instance = instances.find((i) => i.id === config.harness_instance_id)
+  return instance && instance.harness_type === harness ? instance.id : null
+}

@@ -80,6 +80,7 @@ function setup(opts: {
     getAgent: vi.fn((id: string) => agentRecords[id]),
     getAgents: vi.fn(() => Object.values(agentRecords)),
     getHarnessInstance: vi.fn((id: string) => INSTANCES[id]),
+    listHarnessInstances: vi.fn(() => Object.values(INSTANCES)),
     getSetting: vi.fn((key: string) => settings.get(key) ?? null),
     setSetting: vi.fn((key: string, value: string) => { settings.set(key, value) }),
     deleteSetting: vi.fn((key: string) => { settings.delete(key) }),
@@ -93,6 +94,8 @@ function setup(opts: {
     usage: { getProviderUsageLimits: vi.fn(() => []) },
   } as unknown as ConstructorParameters<typeof AgentManager>[0]
   const manager = new AgentManager(db)
+  // As at startup: every stored account is checked once, before any resume.
+  manager.checkHarnessInstances()
   const emitted: Array<[string, any]> = []
   vi.spyOn(manager as any, 'sendToRenderer').mockImplementation((channel: unknown, data: unknown) => { emitted.push([channel as string, data]) })
   vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
@@ -108,7 +111,7 @@ function fakeAdapter(overrides: Partial<Record<string, any>> = {}) {
     initialize: vi.fn(async () => undefined),
     createSession: vi.fn(async () => 'new-session-1'),
     resumeSession: vi.fn(async () => [{ id: 'msg-1', role: MessageRole.ASSISTANT, parts: [{ id: 'part-1', type: MessagePartType.TEXT, text: 'Earlier reply' }] }]),
-    sendPrompt: vi.fn(async () => undefined),
+    sendPrompt: vi.fn(async (_id: string, _parts: unknown, _config: unknown) => undefined),
     getStatus: vi.fn(async () => ({ type: 'working' })),
     destroySession: vi.fn(async () => undefined),
     ...overrides,
@@ -141,8 +144,8 @@ describe('one adapter per harness instance', () => {
     // Two instances of one harness are two adapters, so they run in parallel with distinct environments.
     expect(work).not.toBe(personal)
     expect(work).not.toBe(defaultOne)
-    expect(built.map((b) => b.harnessHome)).toEqual(['/accounts/codex-work', '/accounts/codex-personal', expect.any(String)])
-    expect(built[2].harnessHome).not.toBe('/accounts/codex-work')
+    // Stored accounts set their home. The default sets none, so its environment is the app's own.
+    expect(built.map((b) => b.harnessHome)).toEqual(['/accounts/codex-work', '/accounts/codex-personal', undefined])
     // Agents of the same instance share one adapter.
     expect((manager as any).getAdapter('agent-work')).toBe(work)
   })
@@ -256,6 +259,89 @@ describe('resuming on another harness instance', () => {
     const newId = await (manager as any).startSession('agent-1', 'task-1', undefined, true)
     await (manager as any).doSendAdapterMessage((manager as any).sessions.get(newId), newId, 'continue please')
     expect(promptText(adapter, 0)).toContain('## Conversation so far with Claude Lead (Claude Code)')
+    expect(settings.has(KEY)).toBe(false)
+  })
+
+  it('a session-not-found error reported after the turn started still hands the task over, with the same message', async () => {
+    const { manager, task, settings, emitted } = setup({
+      agents: { 'agent-1': { coding_agent: 'claude-code', harness_instance_id: 'hi_claude_b' } },
+      taskAgent: 'agent-1',
+    })
+    let pendingAtSend: unknown = 'not-sent'
+    const adapter = fakeAdapter()
+    // Captured while the first prompt is still in flight.
+    adapter.sendPrompt.mockImplementationOnce(async (id: string) => {
+      pendingAtSend = (manager as any).sessions.get(id)?.nativeResumeFirstPrompt
+    })
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+
+    const resumed = await (manager as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'backend-session-1')
+    await (manager as any).sendMessage(resumed, 'continue please', 'task-1', 'agent-1')
+    await vi.waitFor(() => expect(adapter.sendPrompt).toHaveBeenCalledTimes(1))
+    // The request to resend is recorded before the backend is asked, not after.
+    expect(pendingAtSend).toEqual({ message: 'continue please', attachments: undefined })
+
+    // The turn starts: BUSY is not an acknowledgement, so the handoff stays pending.
+    const session = (manager as any).sessions.get(resumed)
+    await (manager as any).settleNativeResume(resumed, session, { type: 'busy' }, [])
+    expect(settings.has(KEY)).toBe(true)
+    expect(session.nativeResumeAwaitingAck).toBe(true)
+
+    // Claude Code then reports that the session is missing, on the stream.
+    const outcome = await (manager as any).settleNativeResume(resumed, session, {
+      type: 'error',
+      message: 'INCOMPATIBLE_SESSION_ID: This session does not exist on Claude Code servers.'
+    }, [])
+    expect(outcome).toBe('fell-back')
+
+    // A new session carries the conversation and the same message, in one prompt.
+    await vi.waitFor(() => expect(adapter.sendPrompt).toHaveBeenCalledTimes(2))
+    const retry = promptText(adapter, 1)
+    expect(retry).toContain('## Conversation so far with Claude Lead (Claude Code)')
+    expect(retry).toContain('continue please')
+    expect(emitted.filter(([channel, data]) => channel === 'agent:output' && data?.data?.content === 'continue please')).toHaveLength(1)
+    expect(emitted.some(([channel]) => channel === 'agent:incompatible-session')).toBe(false)
+    expect(task.session_id).toBe('new-session-1')
+    expect(settings.has(KEY)).toBe(false)
+  })
+
+  it('acknowledges the resume on assistant output, and then a later session error keeps the session', async () => {
+    const { manager, task, settings } = setup({
+      agents: { 'agent-1': { coding_agent: 'claude-code', harness_instance_id: 'hi_claude_b' } },
+      taskAgent: 'agent-1',
+    })
+    const adapter = fakeAdapter()
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    const resumed = await (manager as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'backend-session-1')
+    await (manager as any).sendMessage(resumed, 'continue please', 'task-1', 'agent-1')
+    await vi.waitFor(() => expect(adapter.sendPrompt).toHaveBeenCalledTimes(1))
+
+    const session = (manager as any).sessions.get(resumed)
+    await (manager as any).settleNativeResume(resumed, session, { type: 'busy' }, [{ role: 'assistant' }])
+    expect(settings.has(KEY)).toBe(false)
+    expect(session.nativeResumeAwaitingAck).toBe(false)
+    expect(task.session_id).toBe('backend-session-1')
+    expect(adapter.sendPrompt).toHaveBeenCalledTimes(1)
+  })
+
+  it('acknowledges on idle once the turn has started, and not before', async () => {
+    const { manager, settings } = setup({
+      agents: { 'agent-1': { coding_agent: 'claude-code', harness_instance_id: 'hi_claude_b' } },
+      taskAgent: 'agent-1',
+    })
+    const adapter = fakeAdapter()
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    const resumed = await (manager as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'backend-session-1')
+    await (manager as any).sendMessage(resumed, 'continue please', 'task-1', 'agent-1')
+    await vi.waitFor(() => expect(adapter.sendPrompt).toHaveBeenCalledTimes(1))
+
+    const session = (manager as any).sessions.get(resumed)
+    // Idle before the turn started is the state the resumed session already had: not an acknowledgement.
+    await (manager as any).settleNativeResume(resumed, session, { type: 'idle' }, [])
+    expect(settings.has(KEY)).toBe(true)
+    // After the turn has run, idle is the successful result.
+    ;(manager as any).pollingEntries.set(resumed, { hasSeenWork: true })
+    await (manager as any).settleNativeResume(resumed, session, { type: 'idle' }, [])
     expect(settings.has(KEY)).toBe(false)
   })
 

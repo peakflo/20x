@@ -2777,6 +2777,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         delete config.harness_instance_id
         this.updateAgent(agent.id, { config })
       }
+      this.usage.forgetInstance(id)
       return this.db.prepare('DELETE FROM harness_instances WHERE id = ?').run(id).changes > 0
     })
     return run()

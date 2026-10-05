@@ -36,6 +36,29 @@ describe('harness instance environment', () => {
     expect(env.CODEX_HOME).toBeTruthy()
   })
 
+  it('the default Claude Code instance sets no config directory, so its login and state are unchanged', () => {
+    const saved = process.env.CLAUDE_CONFIG_DIR
+    delete process.env.CLAUDE_CONFIG_DIR
+    try {
+      const adapter = new ClaudeCodeAdapter()
+      expect((adapter as any).buildClaudeEnvironment().CLAUDE_CONFIG_DIR).toBeUndefined()
+      expect((adapter as any).buildClaudeEnvironment(undefined).CLAUDE_CONFIG_DIR).toBeUndefined()
+    } finally {
+      if (saved !== undefined) process.env.CLAUDE_CONFIG_DIR = saved
+    }
+  })
+
+  it('the default Claude Code instance keeps an inherited CLAUDE_CONFIG_DIR as it was', () => {
+    const saved = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = '/inherited/claude'
+    try {
+      expect((new ClaudeCodeAdapter() as any).buildClaudeEnvironment().CLAUDE_CONFIG_DIR).toBe('/inherited/claude')
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = saved
+    }
+  })
+
   it('runs two Claude Code instances in parallel with distinct CLAUDE_CONFIG_DIR', () => {
     const first = new ClaudeCodeAdapter({ harnessHome: '/accounts/claude-first' })
     const second = new ClaudeCodeAdapter({ harnessHome: '/accounts/claude-second' })

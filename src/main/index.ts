@@ -979,6 +979,12 @@ app.whenReady().then(async () => {
   await pathFixPromise
 
   agentManager = new AgentManager(db)
+  try {
+    // Links each account's shared session history once, so resuming never does filesystem work.
+    agentManager.checkHarnessInstances()
+  } catch (err) {
+    console.warn('[Main] Harness account check failed:', err)
+  }
   githubManager = new GitHubManager()
   gitlabManager = new GitLabManager()
   worktreeManager = new WorktreeManager(db)

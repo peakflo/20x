@@ -27,8 +27,8 @@ import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, wr
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
 import { UsageTracker, type UsageLimitsProbeTarget } from './usage/usage-tracker'
-import { harnessInstanceDisplayName, harnessTypeLabel, harnessTypeOf, defaultHarnessInstanceId, isDefaultHarnessInstanceId, isHarnessType, type HarnessInstanceView, type HarnessType } from '../shared/harness-instances'
-import { instanceHomeFor, linkSharedHistory, normalizeHomePath, realHomeFor } from './harness-instances'
+import { agentInstanceId, harnessInstanceDisplayName, harnessTypeLabel, harnessTypeOf, defaultHarnessInstanceId, isDefaultHarnessInstanceId, isHarnessType, type HarnessInstanceView, type HarnessType } from '../shared/harness-instances'
+import { instanceHomeError, instanceHomeFor, linkSharedHistory, normalizeHomePath, realHomeFor } from './harness-instances'
 import { CURSOR_KEYCHAIN_ACCESS_SETTING } from './usage/cursor-limits'
 import { UsageLimitRecoveryScheduler, UsageLimitRecoveryStore } from './usage/usage-limit-recovery'
 import {
@@ -174,8 +174,12 @@ interface AgentSession {
 interface ResolvedHarnessInstance {
   id: string
   harness: HarnessType
-  /** Home directory the instance runs in (CLAUDE_CONFIG_DIR / CODEX_HOME). */
-  home: string
+  /**
+   * Home directory the instance runs in (CLAUDE_CONFIG_DIR / CODEX_HOME). Undefined
+   * for the default instance, which sets no override, so the environment the app
+   * started with (including any inherited CLAUDE_CONFIG_DIR / CODEX_HOME) applies.
+   */
+  home: string | undefined
   label: string
   /** False when the instance keeps its own session history, so sessions cannot be resumed from elsewhere. */
   shareable: boolean
@@ -336,6 +340,8 @@ export class AgentManager extends EventEmitter {
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
   /** Subscription usage tracker; created lazily (undefined = not yet, null = unavailable). */
   private usageTracker: UsageTracker | null | undefined = undefined
+  /** Whether each stored harness instance shares session history with the default home. Set on create, update and startup. */
+  private instanceSharing = new Map<string, boolean>()
   /** Continues tasks after a usage-limit reset; created lazily (null = unavailable). */
   private limitRecovery: UsageLimitRecoveryScheduler | null | undefined = undefined
   /** Tasks whose continuation is being dispatched by the recovery scheduler (not a user message). */
@@ -853,8 +859,8 @@ export class AgentManager extends EventEmitter {
 
   /**
    * The harness instance an agent runs under. Null for agents that have no
-   * subscription login: API-key agents, and harnesses without instances.
-   * Linking the shared session history is part of resolving a stored instance.
+   * subscription login (API-key agents, harnesses without instances). Reads only
+   * in-memory records, so resolving an instance does no filesystem work.
    */
   private resolveAgentInstance(agent: AgentRecord | undefined): ResolvedHarnessInstance | null {
     if (!agent) return null
@@ -862,25 +868,26 @@ export class AgentManager extends EventEmitter {
     const harness = harnessTypeOf(config.coding_agent)
     if (!harness || config.auth_method === 'api_key') return null
 
-    const stored = config.harness_instance_id ? this.db.getHarnessInstance(config.harness_instance_id) : undefined
-    if (!stored || stored.harness_type !== harness) {
+    const candidate = config.harness_instance_id ? this.db.getHarnessInstance(config.harness_instance_id) : undefined
+    const id = candidate ? agentInstanceId(config, [candidate]) : null
+    if (!candidate || !id) {
       return {
         id: defaultHarnessInstanceId(harness),
         harness,
-        home: realHomeFor(harness),
+        home: undefined,
         label: harnessTypeLabel(harness),
         shareable: true,
         isDefault: true
       }
     }
-    const home = instanceHomeFor(harness, stored.home_path)
-    const shared = linkSharedHistory({ harness, instanceHome: home, realHome: realHomeFor(harness) })
     return {
-      id: stored.id,
+      id,
       harness,
-      home,
-      label: harnessInstanceDisplayName(harness, stored.label),
-      shareable: shared.shareable,
+      home: instanceHomeFor(harness, candidate.home_path),
+      label: harnessInstanceDisplayName(harness, candidate.label),
+      // Recorded when the instance was created, updated or checked at startup.
+      // An instance without a record is treated as not shareable: a handoff is always safe.
+      shareable: this.instanceSharing.get(id) ?? false,
       isDefault: false
     }
   }
@@ -1039,6 +1046,31 @@ export class AgentManager extends EventEmitter {
 
   // ── Harness instances (settings) ─────────────────────────
 
+  /**
+   * Links every stored instance's shared session history and records whether it
+   * is shareable. Called once at startup. The resume path reads only these records.
+   */
+  checkHarnessInstances(): void {
+    for (const instance of this.db.listHarnessInstances()) this.recordInstanceSharing(instance)
+  }
+
+  /** Links the instance's shared session history (idempotent) and records whether it is shareable. */
+  private recordInstanceSharing(instance: { id: string; harness_type: string; home_path: string }): boolean {
+    const harness = instance.harness_type as HarnessType
+    let shareable = false
+    try {
+      shareable = linkSharedHistory({
+        harness,
+        instanceHome: instanceHomeFor(harness, instance.home_path),
+        realHome: realHomeFor(harness)
+      }).shareable
+    } catch (err) {
+      console.warn(`[AgentManager] Could not check the shared history of ${instance.id}:`, err)
+    }
+    this.instanceSharing.set(instance.id, shareable)
+    return shareable
+  }
+
   listHarnessInstances(): HarnessInstanceView[] {
     return this.db.listHarnessInstances().map((instance) => this.toInstanceView(instance))
   }
@@ -1047,12 +1079,12 @@ export class AgentManager extends EventEmitter {
     if (!isHarnessType(data.harness_type)) throw new Error('Choose Claude Code or Codex for this account.')
     const label = data.label?.trim()
     if (!label) throw new Error('Name this account.')
-    const homePath = normalizeHomePath(data.home_path)
-    if (!homePath) throw new Error('Choose a folder for this account.')
-    if (homePath === realHomeFor(data.harness_type)) {
-      throw new Error('That folder is the default home of this harness. Use the built-in instance instead.')
-    }
-    return this.toInstanceView(this.db.createHarnessInstance({ harness_type: data.harness_type, label, home_path: homePath }))
+    const error = instanceHomeError(data.home_path ?? '', data.harness_type)
+    if (error) throw new Error(error)
+    const homePath = normalizeHomePath(data.home_path) ?? ''
+    const created = this.db.createHarnessInstance({ harness_type: data.harness_type, label, home_path: homePath })
+    this.recordInstanceSharing(created)
+    return this.toInstanceView(created)
   }
 
   updateHarnessInstance(id: string, data: UpdateHarnessInstanceData): HarnessInstanceView | undefined {
@@ -1065,35 +1097,39 @@ export class AgentManager extends EventEmitter {
       patch.label = label
     }
     if (data.home_path !== undefined) {
-      const homePath = normalizeHomePath(data.home_path)
-      if (!homePath) throw new Error('Choose a folder for this account.')
-      patch.home_path = homePath
+      const error = instanceHomeError(data.home_path, before.harness_type as HarnessType)
+      if (error) throw new Error(error)
+      patch.home_path = normalizeHomePath(data.home_path) ?? ''
     }
     const updated = this.db.updateHarnessInstance(id, patch)
-    // A new folder means a new login, so its adapters are rebuilt on next use.
-    if (patch.home_path !== undefined && patch.home_path !== before.home_path) this.forgetHarnessInstanceAdapters(id)
+    if (updated && patch.home_path !== undefined && patch.home_path !== before.home_path) {
+      // A new folder means a new login: rebuild its adapters and re-check its history.
+      this.forgetHarnessInstanceAdapters(id)
+      this.recordInstanceSharing(updated)
+    }
     return updated ? this.toInstanceView(updated) : undefined
   }
 
-  /** Removes an instance. Its agents continue on the default instance of their harness, and their sessions keep their ids. */
+  /**
+   * Removes an instance. Its agents continue on the default instance of their
+   * harness, and their sessions keep their ids. Its plan-limit snapshot is dropped too.
+   */
   deleteHarnessInstance(id: string): boolean {
     const removed = this.db.deleteHarnessInstance(id)
-    if (removed) this.forgetHarnessInstanceAdapters(id)
+    if (removed) {
+      this.forgetHarnessInstanceAdapters(id)
+      this.instanceSharing.delete(id)
+      this.getUsageTracker()?.forgetInstance(id)
+    }
     return removed
   }
 
   private toInstanceView(instance: { id: string; harness_type: string; label: string; home_path: string; created_at: string }): HarnessInstanceView {
-    return { ...instance, harness_type: instance.harness_type as HarnessType, shares_history: this.instanceSharesHistory(instance) }
-  }
-
-  /** Links the instance's session history to the default home (idempotent) and reports whether it is shared. */
-  private instanceSharesHistory(instance: { harness_type: string; home_path: string }): boolean {
-    const harness = instance.harness_type as HarnessType
-    return linkSharedHistory({
-      harness,
-      instanceHome: instanceHomeFor(harness, instance.home_path),
-      realHome: realHomeFor(harness)
-    }).shareable
+    return {
+      ...instance,
+      harness_type: instance.harness_type as HarnessType,
+      shares_history: this.instanceSharing.get(instance.id) ?? false
+    }
   }
 
   getUsageLimits(): ProviderUsageLimits[] {
@@ -2866,16 +2902,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       // First prompt of a natively resumed session: the backend's answer decides
       // whether the task keeps its session or continues by handoff.
       if (session?.nativeResumeAwaitingAck) {
-        if (status.type === SessionStatusType.ERROR && isSessionGoneMessage(status.message) && session.nativeResumeFirstPrompt) {
-          const pending = session.nativeResumeFirstPrompt
-          try {
-            await this.fallBackToHandoff(sessionId, session, pending.message, pending.attachments, status.message)
-          } catch (error) {
-            this.handleSessionError(sessionId, session, error)
-          }
-          return
-        }
-        if (status.type !== SessionStatusType.ERROR) this.completeNativeResume(session)
+        const settled = await this.settleNativeResume(sessionId, session, status, batchMessages)
+        if (settled === 'fell-back') return
       }
 
       // Check for errors first (higher priority than idle)
@@ -4864,6 +4892,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     }
     if (handoff) promptText = handoff.block + CONTEXT_HANDOFF_SEPARATOR + promptText
     const parts: MessagePart[] = [{ type: MessagePartType.TEXT, text: promptText }]
+    // Set before the send: the backend can report "session not found" while the send is still in flight.
+    if (nativeFirstPrompt) session.nativeResumeFirstPrompt = { message, attachments }
     try {
       await session.adapter.sendPrompt(sessionId, parts, sessionConfig)
     } catch (error) {
@@ -4874,7 +4904,6 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       throw error
     }
     if (handoff) this.completeContextHandoff(session.taskId)
-    if (nativeFirstPrompt) session.nativeResumeFirstPrompt = { message, attachments }
     analytics()?.record('provider.turn.sent', {
       provider: getAgentProvider(this.db.getAgent(session.agentId)),
       model: sessionConfig.model,
@@ -6156,7 +6185,8 @@ Important:
       from ? this.continuationAgent(from.id, from.config?.coding_agent) : null,
       this.continuationAgent(agentId, to?.config?.coding_agent),
       {
-        hasHistory: this.db.getTranscriptParts(taskId).length > 0,
+        // An existing session id is history in its own right, even when no transcript was stored.
+        hasHistory: !!sessionId || this.db.getTranscriptParts(taskId).length > 0,
         // Reachability is only known once the first prompt is answered. A
         // missing session then falls back to a handoff (see fallBackToHandoff).
         sessionReachable: true,
@@ -6272,6 +6302,43 @@ Important:
   /** Called once the handoff has reached the adapter. Until then the marker stays, so a failed send is retried. */
   private completeContextHandoff(taskId: string): void {
     this.db.deleteSetting(contextHandoffSettingKey(taskId))
+  }
+
+  /**
+   * Decides the first prompt of a natively resumed session from what the backend reports.
+   *
+   * - Acknowledged on assistant output, or on idle after the turn started (the
+   *   result came back). BUSY alone does not count: Claude Code reports a
+   *   missing session only after it has started the turn, so an early
+   *   acknowledgement would drop the handoff.
+   * - A session-gone error before the acknowledgement hands the task over: a new
+   *   session starts with the carried context and the same message. No dialog.
+   */
+  private async settleNativeResume(
+    sessionId: string,
+    session: AgentSession,
+    status: { type: string; message?: string },
+    batchMessages: ReadonlyArray<{ role: string }>
+  ): Promise<'pending' | 'acknowledged' | 'fell-back'> {
+    if (batchMessages.some((message) => message.role === 'assistant')) {
+      this.completeNativeResume(session)
+      return 'acknowledged'
+    }
+    if (status.type === SessionStatusType.ERROR && isSessionGoneMessage(status.message) && session.nativeResumeFirstPrompt) {
+      const pending = session.nativeResumeFirstPrompt
+      try {
+        await this.fallBackToHandoff(sessionId, session, pending.message, pending.attachments, status.message)
+      } catch (error) {
+        this.handleSessionError(sessionId, session, error)
+      }
+      return 'fell-back'
+    }
+    const entry = this.pollingEntries.get(sessionId)
+    if (status.type === SessionStatusType.IDLE && entry?.hasSeenWork) {
+      this.completeNativeResume(session)
+      return 'acknowledged'
+    }
+    return 'pending'
   }
 
   /**

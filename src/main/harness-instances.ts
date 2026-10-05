@@ -21,14 +21,29 @@
  * Every function takes its platform, environment and link function as
  * arguments, so tests run on any host.
  */
-import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmdirSync, symlinkSync } from 'fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmdirSync, symlinkSync } from 'fs'
 import { homedir } from 'os'
-import { dirname, isAbsolute, join, resolve } from 'path'
+import { dirname, isAbsolute, join, parse, resolve, sep } from 'path'
 import type { HarnessType } from '../shared/harness-instances'
 
-/** Codex state that every instance shares with the real default home. */
+/**
+ * Codex state that every instance shares with the real default home.
+ *
+ * Thread state lives in root-level SQLite databases (`state_5.sqlite`,
+ * `thread_history_1.sqlite`, ...), not only in `sqlite/`. Those are linked.
+ * SQLite places the `-wal` and `-shm` files next to the real database, so the
+ * links need no companions (checked with better-sqlite3: a connection opened
+ * through a link and one on the real file see the same rows).
+ */
 export const CODEX_SHARED_DIRECTORIES = ['sessions', 'archived_sessions', 'skills', 'prompts', 'sqlite'] as const
-export const CODEX_SHARED_FILES = ['config.toml', 'AGENTS.md'] as const
+/**
+ * Codex files linked to the default home. Codex may rewrite these atomically,
+ * which replaces a link with a plain copy. The instance then keeps that copy.
+ */
+export const CODEX_SHARED_FILES = ['AGENTS.md', 'session_index.jsonl'] as const
+/** Copied once when the instance has none. Codex rewrites it, so later default changes do not reach the instance. */
+export const CODEX_COPIED_ONCE_FILES = ['config.toml'] as const
+const CODEX_ROOT_DATABASE = /^[A-Za-z0-9_]+\.sqlite$/
 
 /**
  * Claude Code session state linked to the default config directory. `projects`
@@ -47,6 +62,7 @@ export type LinkFn = (target: string, path: string, type: LinkType) => void
 
 export type SharedLinkStatus =
   | 'linked'
+  | 'copied'
   | 'already-linked'
   | 'replaced-empty-dir'
   | 'kept-real-file'
@@ -147,6 +163,40 @@ function linkPointsTo(link: string, target: string): boolean {
   }
 }
 
+/** Root-level SQLite databases of a Codex home (the main files, not their -wal or -shm companions). */
+function listRootDatabases(home: string): string[] {
+  try {
+    return readdirSync(home).filter((name) => CODEX_ROOT_DATABASE.test(name)).sort()
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Why a folder cannot be an account home, or null when it can. The folder must be
+ * absolute (or start with ~). It must not be the home folder, the default home of
+ * the harness, or an ancestor of that default home (for example "/").
+ */
+export function instanceHomeError(
+  input: string,
+  harness: HarnessType,
+  env: Record<string, string | undefined> = process.env,
+  home: string = homedir()
+): string | null {
+  const raw = input.trim()
+  if (!raw) return 'Choose a folder for this account.'
+  if (!(raw.startsWith('~') || isAbsolute(raw))) return 'Use an absolute folder path, or one that starts with ~.'
+  const folder = resolve(normalizeHomePath(raw, home) ?? raw)
+  if (folder === resolve(home)) return 'That is your home folder. Choose a separate folder for this account.'
+  const real = resolve(realHomeFor(harness, env, home))
+  if (folder === real) return 'That folder is the default home of this harness. Use the built-in account instead.'
+  const prefix = folder.endsWith(sep) ? folder : folder + sep
+  if (real.startsWith(prefix) || folder === parse(folder).root) {
+    return 'That folder contains the default home of this harness. Choose a separate folder for this account.'
+  }
+  return null
+}
+
 const defaultLink: LinkFn = (target, path, type) => {
   symlinkSync(target, path, type)
 }
@@ -233,9 +283,23 @@ export function linkSharedHistory(options: LinkSharedHistoryOptions): SharedHist
     }
   }
 
+  const copyOnce = (name: string): void => {
+    const target = join(real, name)
+    const path = join(home, name)
+    if (existsSync(path) || !existsSync(target)) return
+    try {
+      copyFileSync(target, path)
+      links.push({ name, status: 'copied' })
+    } catch {
+      links.push({ name, status: 'failed' })
+    }
+  }
+
   if (options.harness === 'codex') {
     for (const name of CODEX_SHARED_DIRECTORIES) linkDirectory(name)
     for (const name of CODEX_SHARED_FILES) linkFile(name)
+    for (const name of CODEX_COPIED_ONCE_FILES) copyOnce(name)
+    for (const name of listRootDatabases(real)) linkFile(name)
   } else {
     for (const name of CLAUDE_SHARED_DIRECTORIES) linkDirectory(name)
   }
