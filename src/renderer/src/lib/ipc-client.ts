@@ -340,7 +340,7 @@ export const settingsApi = {
   }
 }
 
-export const pushTest = (): Promise<{ success: boolean }> => window.electronAPI.pushTest()
+export const pushTest = (): Promise<{ success: boolean; sent: number }> => window.electronAPI.pushTest()
 
 export const updaterApi = {
   check: (): Promise<{ success: boolean; version?: string; error?: string }> => {

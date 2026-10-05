@@ -226,6 +226,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
 
     CREATE TABLE IF NOT EXISTS mobile_push_subscriptions (
       session_id TEXT PRIMARY KEY REFERENCES mobile_sessions(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
       subscription TEXT NOT NULL
     );
 

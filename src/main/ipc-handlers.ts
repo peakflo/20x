@@ -605,6 +605,7 @@ export function registerIpcHandlers(
 
   // Settings handlers
   ipcMain.handle('settings:get', (_, key: string) => {
+    if (key === 'mobile_push_vapid_private') return null
     return db.getSetting(key) ?? null
   })
 
@@ -621,8 +622,8 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('mobile:pushTest', async () => {
-    await sendMobilePush(db, 'finished', '', '20x test notification')
-    return { success: true }
+    const result = await sendMobilePush(db, 'finished', '', '20x test notification', undefined, { ignorePreferences: true, throwOnError: true })
+    return { success: result.sent > 0, sent: result.sent }
   })
 
   // Environment variable handlers

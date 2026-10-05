@@ -6,6 +6,7 @@ import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
 import { startMobileApiServer, stopMobileApiServer } from './mobile-api-server'
+import webpush from 'web-push'
 
 describe('mobile push subscription endpoint', () => {
   it('requires a paired session and stores the subscription against it', async () => {
@@ -14,7 +15,7 @@ describe('mobile push subscription endpoint', () => {
     db.createMobileSession('push-device', createHash('sha256').update(token).digest('hex'), 'Phone')
     const port = await startMobileApiServer(db, {} as never, {} as never, 21000 + Math.floor(Math.random() * 40000))
     try {
-      const subscription = { endpoint: 'https://push.example.com/endpoint', keys: { p256dh: 'abc', auth: 'def' } }
+      const subscription = { endpoint: 'https://fcm.googleapis.com/fcm/send/endpoint', keys: { p256dh: 'abc', auth: 'def' } }
       const unauthorized = await fetch(`http://127.0.0.1:${port}/api/push/subscription`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ subscription })
       })
@@ -24,9 +25,27 @@ describe('mobile push subscription endpoint', () => {
       })
       expect(authorized.status).toBe(200)
       expect(db.getMobilePushSubscriptions()[0].session_id).toBe('push-device')
+      const state = await fetch(`http://127.0.0.1:${port}/api/push/subscription`, { headers: { Authorization: `Bearer ${token}` } })
+      expect((await state.json()).subscription.endpoint).toBe(subscription.endpoint)
       db.revokeMobileSession('push-device')
       expect(db.getMobilePushSubscriptions()).toEqual([])
     } finally { stopMobileApiServer(); db.close() }
+  })
+
+  it('returns an error and removes an expired endpoint after a test send', async () => {
+    const { db } = createTestDb()
+    const token = 'expired-push-token'
+    db.createMobileSession('expired-phone', createHash('sha256').update(token).digest('hex'), 'Phone')
+    db.setMobilePushSubscription('expired-phone', JSON.stringify({ endpoint: 'https://fcm.googleapis.com/fcm/send/expired', keys: { p256dh: 'abc', auth: 'def' } }))
+    const send = vi.spyOn(webpush, 'sendNotification').mockRejectedValue({ statusCode: 410 })
+    const port = await startMobileApiServer(db, {} as never, {} as never, 21000 + Math.floor(Math.random() * 40000))
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/push/test`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}'
+      })
+      expect(response.status).toBe(410)
+      expect(db.getMobilePushSubscriptions()).toEqual([])
+    } finally { send.mockRestore(); stopMobileApiServer(); db.close() }
   })
 })
 

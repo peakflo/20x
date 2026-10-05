@@ -102,4 +102,29 @@ describe('DatabaseManager migrations on an existing install', () => {
     // Documents the coupling: a new migration is only reachable by raising this.
     expect(Number(stored.value)).toBeGreaterThanOrEqual(9)
   })
+
+  it('migrates existing push subscriptions and removes duplicate endpoints', () => {
+    const first = new DatabaseManager()
+    first.initialize()
+    first.close?.()
+
+    const raw = openRaw()
+    raw.exec(`DROP TABLE mobile_push_subscriptions;
+      CREATE TABLE mobile_push_subscriptions (
+        session_id TEXT PRIMARY KEY REFERENCES mobile_sessions(id) ON DELETE CASCADE,
+        subscription TEXT NOT NULL
+      );`)
+    raw.prepare('INSERT INTO mobile_sessions (id, token_hash, device_name) VALUES (?, ?, ?)').run('old', 'old-hash', 'Phone')
+    raw.prepare('INSERT INTO mobile_sessions (id, token_hash, device_name) VALUES (?, ?, ?)').run('new', 'new-hash', 'Phone')
+    const subscription = JSON.stringify({ endpoint: 'https://fcm.googleapis.com/fcm/send/same', keys: { p256dh: 'a', auth: 'b' } })
+    raw.prepare('INSERT INTO mobile_push_subscriptions (session_id, subscription) VALUES (?, ?)').run('old', subscription)
+    raw.prepare('INSERT INTO mobile_push_subscriptions (session_id, subscription) VALUES (?, ?)').run('new', subscription)
+    raw.close()
+
+    const second = new DatabaseManager()
+    second.initialize()
+    expect(second.getMobilePushSubscriptions()).toHaveLength(1)
+    expect(second.getMobilePushSubscriptions()[0].endpoint).toBe('https://fcm.googleapis.com/fcm/send/same')
+    second.close?.()
+  })
 })

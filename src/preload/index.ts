@@ -252,7 +252,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     set: (key: string, value: string): Promise<void> => ipcRenderer.invoke('settings:set', key, value),
     getAll: (): Promise<Record<string, string>> => ipcRenderer.invoke('settings:getAll')
   },
-  pushTest: (): Promise<{ success: boolean }> => ipcRenderer.invoke('mobile:pushTest'),
+  pushTest: (): Promise<{ success: boolean; sent: number }> => ipcRenderer.invoke('mobile:pushTest'),
   env: {
     get: (key: string): Promise<string | null> => ipcRenderer.invoke('env:get', key)
   },

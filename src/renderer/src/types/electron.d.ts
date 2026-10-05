@@ -302,7 +302,7 @@ interface ElectronAPI {
     set: (key: string, value: string) => Promise<void>
     getAll: () => Promise<Record<string, string>>
   }
-  pushTest: () => Promise<{ success: boolean }>
+  pushTest: () => Promise<{ success: boolean; sent: number }>
   env: {
     get: (key: string) => Promise<string | null>
   }

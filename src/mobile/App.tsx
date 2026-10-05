@@ -63,7 +63,9 @@ export function App() {
     }
     // Seed initial history entry
     const taskId = new URLSearchParams(window.location.search).get('conversation')
-    history.replaceState(taskId ? { page: 'conversation', taskId } : { page: 'list' }, '', null)
+    const initialUrl = new URL(window.location.href)
+    initialUrl.searchParams.delete('conversation')
+    history.replaceState(taskId ? { page: 'conversation', taskId } : { page: 'list' }, '', initialUrl.pathname + initialUrl.search + initialUrl.hash)
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])

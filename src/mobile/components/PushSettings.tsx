@@ -20,7 +20,14 @@ export function PushSettings() {
   useEffect(() => {
     void api.push.config().then(config => setPreferences(config.preferences)).catch(error => setMessage(String(error)))
     if (supported) void navigator.serviceWorker.register('/push-sw.js').then(async registration => {
-      setSubscribed(Boolean(await registration.pushManager.getSubscription()))
+      const browserSubscription = await registration.pushManager.getSubscription()
+      const serverSubscription = (await api.push.subscription()).subscription
+      if (browserSubscription && browserSubscription.endpoint !== serverSubscription?.endpoint) {
+        await api.push.subscribe(browserSubscription.toJSON())
+      } else if (!browserSubscription && serverSubscription) {
+        await api.push.subscribe(null)
+      }
+      setSubscribed(Boolean(browserSubscription))
     }).catch(error => setMessage(String(error)))
   }, [supported])
 
@@ -32,7 +39,8 @@ export function PushSettings() {
       }
       const registration = await navigator.serviceWorker.register('/push-sw.js')
       const config = await api.push.config()
-      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(config.publicKey) })
+      const subscription = await registration.pushManager.getSubscription() ??
+        await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(config.publicKey) })
       await api.push.subscribe(subscription.toJSON())
       setSubscribed(true)
       setMessage('Notifications enabled on this device.')
@@ -57,6 +65,7 @@ export function PushSettings() {
 
   return <section className="space-y-3">
     <h2 className="text-sm font-semibold">Phone notifications</h2>
+    <p className="text-xs text-muted-foreground">The event choices below apply to every paired phone. Device enrollment is separate.</p>
     <p className="text-xs text-muted-foreground">Push requires HTTPS. Open the tunnel URL from desktop Settings; plain LAN HTTP does not support push. If the tunnel URL changes, enable notifications again at the new address.</p>
     {!supported && <p className="text-xs text-amber-400">Push is unavailable here. On iPhone, open the HTTPS link in Safari, choose Share → Add to Home Screen, then open the installed app. iOS 16.4 or later is required.</p>}
     {supported && <button className="text-sm text-primary" onClick={subscribed ? disable : enable}>{subscribed ? 'Disable on this device' : 'Enable on this device'}</button>}

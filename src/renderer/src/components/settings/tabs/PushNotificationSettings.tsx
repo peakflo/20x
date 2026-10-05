@@ -11,7 +11,13 @@ const LABELS: Record<PushEvent, string> = {
 export function PushNotificationSettings() {
   const [preferences, setPreferences] = useState<PushPreferences>(DEFAULT_PUSH_PREFERENCES)
   const [message, setMessage] = useState('')
-  useEffect(() => { void settingsApi.get('mobile_push_preferences').then(value => setPreferences(parsePushPreferences(value ?? undefined))) }, [])
+  useEffect(() => {
+    const refresh = () => { void settingsApi.get('mobile_push_preferences').then(value => setPreferences(parsePushPreferences(value ?? undefined))) }
+    refresh()
+    window.addEventListener('focus', refresh)
+    const timer = window.setInterval(refresh, 5_000)
+    return () => { window.removeEventListener('focus', refresh); window.clearInterval(timer) }
+  }, [])
 
   const toggle = async (event: PushEvent) => {
     const next = { ...preferences, [event]: !preferences[event] }
@@ -23,9 +29,10 @@ export function PushNotificationSettings() {
 
   return <section className="space-y-3">
     <h3 className="font-medium">Phone push notifications</h3>
+    <p className="text-xs text-muted-foreground">Event choices apply to every paired phone.</p>
     <p className="text-xs text-muted-foreground">Pair your phone, open the HTTPS tunnel URL, then enable notifications in mobile Settings. Plain LAN HTTP does not support push. On iPhone, add the site to the Home Screen first. Re-enable after a tunnel URL change.</p>
     {PUSH_EVENTS.map(event => <div key={event} className="flex items-center justify-between"><span className="text-sm">{LABELS[event]}</span><Switch checked={preferences[event]} onCheckedChange={() => void toggle(event)} /></div>)}
-    <Button variant="outline" onClick={() => void pushTest().then(() => setMessage('Test sent to subscribed phones.')).catch(error => setMessage(String(error)))}>Send test notification</Button>
+    <Button variant="outline" onClick={() => void pushTest().then(result => setMessage(result.sent > 0 ? `Test sent to ${result.sent} phone${result.sent === 1 ? '' : 's'}.` : 'No subscribed phones.')).catch(error => setMessage(String(error)))}>Send test notification</Button>
     {message && <p className="text-xs text-muted-foreground">{message}</p>}
   </section>
 }

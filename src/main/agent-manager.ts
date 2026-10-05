@@ -51,7 +51,7 @@ import { inspectTaskArtifact } from './artifacts'
 import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
 import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../shared/system-authority'
 import { sendMobilePush } from './mobile-push'
-import { pushEventForStatus } from '../shared/push-notifications'
+import { AgentPushEvents, type QuestionPart } from './agent-push-events'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -388,7 +388,7 @@ export class AgentManager extends EventEmitter {
 
   // Track last sent status per session to detect transitions for OS notifications
   private lastSentStatus: Map<string, string> = new Map()
-  private pendingQuestionPush = new Set<string>()
+  private pushEvents = new AgentPushEvents()
 
   /**
    * Maximum total characters allowed in partContentLengths values per session.
@@ -5905,14 +5905,19 @@ Important:
 
     // Notify paired phones on run transitions and user questions.
     if ((channel === 'agent:output' || channel === 'agent:output-batch') && data && typeof data === 'object') {
-      const output = data as { taskId?: string; sessionId?: string; data?: { partType?: string; tool?: { name?: string } }; messages?: Array<{ partType?: string; tool?: { name?: string } }> }
+      const output = data as { taskId?: string; sessionId?: string; data?: QuestionPart; messages?: QuestionPart[] }
       const parts = output.messages ?? (output.data ? [output.data] : [])
-      if (output.taskId && parts.some(part => part.tool?.name === 'question' || part.tool?.name === 'AskUserQuestion' || (part.partType === 'question' && part.tool?.name !== 'permission'))) {
+      const newQuestions = output.sessionId ? parts.filter(part => this.pushEvents.questionStarted(output.sessionId!, part)) : []
+      if (output.taskId && newQuestions.length > 0) {
         const task = this.db.getTask(output.taskId)
         const parentCompleted = task?.parent_task_id && this.db.getTask(task.parent_task_id)?.status === TaskStatus.Completed
         if (task && !parentCompleted && !task.id.startsWith('heartbeat-') && task.id !== 'mastermind-session') {
-          if (output.sessionId) this.pendingQuestionPush.add(output.sessionId)
-          void sendMobilePush(this.db, 'question', task.id, task.title).catch(error => console.error('[MobilePush] Send failed:', error))
+          const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
+          if (isWindowInactive) {
+            for (let i = 0; i < newQuestions.length; i++) {
+              void sendMobilePush(this.db, 'question', task.id, task.title).catch(error => console.error('[MobilePush] Send failed:', error))
+            }
+          }
         }
       }
     }
@@ -5924,10 +5929,9 @@ Important:
       if (sessionId && status) {
         const prevStatus = this.lastSentStatus.get(sessionId)
         this.lastSentStatus.set(sessionId, status)
-        let pushEvent = pushEventForStatus(prevStatus, status)
-        if (pushEvent === 'approval' && this.pendingQuestionPush.delete(sessionId)) pushEvent = null
-        if (status === SessionStatus.WORKING) this.pendingQuestionPush.delete(sessionId)
-        if (pushEvent && taskId) {
+        const pushEvent = this.pushEvents.statusChanged(sessionId, prevStatus, status)
+        const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
+        if (pushEvent && taskId && isWindowInactive) {
           const task = this.db.getTask(taskId)
           const parentCompleted = task?.parent_task_id && this.db.getTask(task.parent_task_id)?.status === TaskStatus.Completed
           if (task && !parentCompleted && !taskId.startsWith('heartbeat-') && taskId !== 'mastermind-session') {
@@ -5940,8 +5944,7 @@ Important:
         // block but BEFORE checking if the window was inactive, blocking the
         // event loop on every status transition even when no notification was
         // needed.
-        const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
-        const isNotifiableTransition = prevStatus === SessionStatus.WORKING && (status === SessionStatus.IDLE || status === SessionStatus.WAITING_APPROVAL)
+        const isNotifiableTransition = prevStatus === SessionStatus.WORKING && (status === SessionStatus.IDLE || status === SessionStatus.WAITING_APPROVAL) && !this.pushEvents.hasPendingQuestion(sessionId)
 
         if (isNotifiableTransition && isWindowInactive) {
           try {

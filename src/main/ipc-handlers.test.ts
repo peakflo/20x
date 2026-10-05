@@ -71,6 +71,19 @@ describe('registerIpcHandlers', () => {
     expect(channels).toContain('voice:selectModel')
   })
 
+  it('does not expose the private push key through settings reads', () => {
+    const db = {
+      getSetting: vi.fn(() => 'private-key'),
+      getAllSettings: vi.fn(() => ({ mobile_push_vapid_private: 'private-key', mobile_push_preferences: '{}' }))
+    } as unknown as Parameters<typeof registerIpcHandlers>[0]
+    registerIpcHandlers(db, {} as never, {} as never, {} as never, {} as never, {} as never)
+    const handlers = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls as [string, (...args: unknown[]) => unknown][]
+    const get = handlers.find(([channel]) => channel === 'settings:get')![1]
+    const getAll = handlers.find(([channel]) => channel === 'settings:getAll')![1]
+    expect(get({}, 'mobile_push_vapid_private')).toBeNull()
+    expect(getAll({})).toEqual({ mobile_push_preferences: '{}' })
+  })
+
   it('keeps a newly created source-less task local', async () => {
     const task = { id: 'task-1', title: 'Instant task', status: 'not_started', source_id: null }
     const db = {

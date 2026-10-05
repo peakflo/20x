@@ -997,6 +997,7 @@ export class DatabaseManager {
     this.db.pragma('busy_timeout = 5000') // Retry on SQLITE_BUSY for up to 5s
 
     this.createTables()
+    this.ensureMobilePushEndpointColumn()
 
     const currentVersion = this.getSchemaVersion()
     if (currentVersion < SCHEMA_VERSION) {
@@ -1048,6 +1049,28 @@ export class DatabaseManager {
     } catch (err) {
       console.error('[Database] ensureTranscriptRevColumn failed:', err)
     }
+  }
+
+  private ensureMobilePushEndpointColumn(): void {
+    const columns = this.db.prepare('PRAGMA table_info(mobile_push_subscriptions)').all() as Array<{ name: string }>
+    if (!columns.some(column => column.name === 'endpoint')) {
+      this.db.exec('ALTER TABLE mobile_push_subscriptions ADD COLUMN endpoint TEXT')
+      const rows = this.db.prepare(`SELECT p.session_id, p.subscription FROM mobile_push_subscriptions p
+        JOIN mobile_sessions s ON s.id = p.session_id ORDER BY s.revoked ASC, s.last_seen DESC`).all() as Array<{ session_id: string; subscription: string }>
+      const seen = new Set<string>()
+      const update = this.db.prepare('UPDATE mobile_push_subscriptions SET endpoint = ? WHERE session_id = ?')
+      const remove = this.db.prepare('DELETE FROM mobile_push_subscriptions WHERE session_id = ?')
+      for (const row of rows) {
+        let endpoint: string | undefined
+        try { endpoint = JSON.parse(row.subscription).endpoint } catch { /* discard invalid legacy data */ }
+        if (typeof endpoint !== 'string' || seen.has(endpoint)) remove.run(row.session_id)
+        else {
+          seen.add(endpoint)
+          update.run(endpoint, row.session_id)
+        }
+      }
+    }
+    this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_mobile_push_endpoint ON mobile_push_subscriptions(endpoint)')
   }
 
   private getSchemaVersion(): number {
@@ -1249,6 +1272,7 @@ export class DatabaseManager {
 
       CREATE TABLE IF NOT EXISTS mobile_push_subscriptions (
         session_id TEXT PRIMARY KEY REFERENCES mobile_sessions(id) ON DELETE CASCADE,
+        endpoint TEXT NOT NULL UNIQUE,
         subscription TEXT NOT NULL
       );
 
@@ -3251,12 +3275,20 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (subscription === null) {
       this.db.prepare('DELETE FROM mobile_push_subscriptions WHERE session_id = ?').run(sessionId)
     } else {
-      this.db.prepare('INSERT OR REPLACE INTO mobile_push_subscriptions (session_id, subscription) VALUES (?, ?)').run(sessionId, subscription)
+      const endpoint = (JSON.parse(subscription) as { endpoint: string }).endpoint
+      this.db.transaction(() => {
+        this.db.prepare('DELETE FROM mobile_push_subscriptions WHERE endpoint = ? OR session_id = ?').run(endpoint, sessionId)
+        this.db.prepare('INSERT INTO mobile_push_subscriptions (session_id, endpoint, subscription) VALUES (?, ?, ?)').run(sessionId, endpoint, subscription)
+      })()
     }
   }
 
-  getMobilePushSubscriptions(): Array<{ session_id: string; subscription: string }> {
-    return this.db.prepare(`SELECT p.session_id, p.subscription FROM mobile_push_subscriptions p
-      JOIN mobile_sessions s ON s.id = p.session_id WHERE s.revoked = 0`).all() as Array<{ session_id: string; subscription: string }>
+  getMobilePushSubscription(sessionId: string): { session_id: string; endpoint: string; subscription: string } | undefined {
+    return this.db.prepare('SELECT session_id, endpoint, subscription FROM mobile_push_subscriptions WHERE session_id = ?').get(sessionId) as { session_id: string; endpoint: string; subscription: string } | undefined
+  }
+
+  getMobilePushSubscriptions(): Array<{ session_id: string; endpoint: string; subscription: string }> {
+    return this.db.prepare(`SELECT p.session_id, p.endpoint, p.subscription FROM mobile_push_subscriptions p
+      JOIN mobile_sessions s ON s.id = p.session_id WHERE s.revoked = 0`).all() as Array<{ session_id: string; endpoint: string; subscription: string }>
   }
 }

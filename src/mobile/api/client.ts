@@ -54,6 +54,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 export const api = {
   push: {
     config: () => get<{ publicKey: string; preferences: PushPreferences }>('/api/push/config'),
+    subscription: () => get<{ subscription: PushSubscriptionJSON | null }>('/api/push/subscription'),
     subscribe: (subscription: PushSubscriptionJSON | null) => post<{ success: boolean }>('/api/push/subscription', { subscription }),
     preferences: (preferences: PushPreferences) => post<{ preferences: PushPreferences }>('/api/push/preferences', { preferences }),
     test: () => post<{ success: boolean }>('/api/push/test')

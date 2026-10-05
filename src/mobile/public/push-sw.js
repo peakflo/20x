@@ -1,3 +1,7 @@
+self.addEventListener('activate', event => {
+  event.waitUntil(self.clients.claim())
+})
+
 self.addEventListener('push', event => {
   let data = {}
   try { data = event.data ? event.data.json() : {} } catch { /* ignore malformed payload */ }
@@ -18,8 +22,10 @@ self.addEventListener('notificationclick', event => {
   event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async windows => {
     const existing = windows.find(client => new URL(client.url).origin === url.origin)
     if (existing) {
-      await existing.navigate(url.href)
-      return existing.focus()
+      try {
+        const navigated = await existing.navigate(url.href)
+        if (navigated) return navigated.focus()
+      } catch { /* open a new window below */ }
     }
     return clients.openWindow(url.href)
   }))
