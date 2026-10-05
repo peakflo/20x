@@ -106,5 +106,6 @@ describe('AgentManager triage prompt', () => {
     expect(prompt).toContain('Fit comes first')
     expect(prompt).toMatch(/Among agents that fit equally well, prefer the one whose `usage_limits` shows the lowest usage/)
     expect(prompt).toContain('fit first, then the lowest current plan usage among equally suitable agents')
+    expect(prompt).toContain('API-key login billed per token')
   })
 })

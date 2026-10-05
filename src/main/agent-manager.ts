@@ -5155,7 +5155,8 @@ Follow these steps:
    - The best agent_id to assign (REQUIRED — you must set this). Choose in this order:
      1. Fit comes first: the agent whose purpose, system prompt, MCP servers, skills and past similar tasks best match this task. Never pick a worse-fitting agent only because it has more headroom.
      2. Among agents that fit equally well, prefer the one whose \`usage_limits\` shows the lowest usage (highest \`headroom_percent\`). This matters most when usage is high: avoid agents at \`critical\` or \`exhausted\` level when an equally suitable agent has headroom.
-     3. Treat \`unknown\` and \`not_applicable\` (API key) as having headroom, but below a known \`low\` level.
+     3. Treat \`unknown\` (including stale readings) as having headroom, but below a known \`low\` level.
+     4. \`not_applicable\` means an API-key login billed per token: among equally suitable agents, prefer a subscription agent that still has headroom; use the API-key agent when subscription agents are \`critical\` or \`exhausted\`, or when it is the better fit.
    - Relevant skill_ids (if any match the task)
    - Appropriate repos (if the task relates to specific repositories)
    - Priority (critical/high/medium/low) — adjust if the current priority seems wrong

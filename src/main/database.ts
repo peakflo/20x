@@ -1986,7 +1986,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       { name: 'read_artifact_file', description: 'Read a file owned by an artifact workpiece' },
       { name: 'write_artifact_file', description: 'Write a file owned by an artifact workpiece' },
       { name: 'edit_artifact_file', description: 'Edit a file owned by an artifact workpiece' },
-      { name: 'list_agents', description: 'List all available agents with their configurations' },
+      { name: 'list_agents', description: 'List all available agents with their configurations and the current subscription plan usage of each agent harness (usage_limits)' },
       { name: 'list_skills', description: 'List all available skills with their descriptions' },
       { name: 'find_similar_tasks', description: 'Find historical tasks similar to given criteria for pattern analysis' },
       { name: 'get_task_statistics', description: 'Get aggregated statistics about tasks (label usage, agent workload, completion rate)' }
