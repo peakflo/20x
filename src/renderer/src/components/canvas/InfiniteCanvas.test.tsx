@@ -140,6 +140,44 @@ describe('InfiniteCanvas', () => {
     expect(screen.getByTitle('Zoom in')).toBeTruthy()
     expect(screen.getByTitle('Zoom out')).toBeTruthy()
     expect(screen.getByTitle('Reset view (Ctrl+0)')).toBeTruthy()
+    expect(screen.getByTitle('Fit all content (Ctrl+Shift+0)')).toBeTruthy()
+  })
+
+  it('can bring distant panels back with Fit all or its shortcut', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      private callback: ResizeObserverCallback
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback
+      }
+      observe() {
+        this.callback([{ contentRect: { width: 800, height: 600 } } as ResizeObserverEntry], this as ResizeObserver)
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+
+    try {
+      const id = useCanvasStore.getState().addPanel({
+        type: 'task', title: 'Distant Task', x: 5000, y: 3000, width: 400, height: 300,
+      })
+      render(<InfiniteCanvas />)
+      const panel = useCanvasStore.getState().panels.find((p) => p.id === id)!
+      const isPanelOnScreen = () => {
+        const vp = useCanvasStore.getState().viewport
+        return panel.x * vp.zoom + vp.x >= 0 && (panel.x + panel.width) * vp.zoom + vp.x <= 800
+      }
+
+      fireEvent.click(screen.getByTitle('Fit all content (Ctrl+Shift+0)'))
+      expect(isPanelOnScreen()).toBe(true)
+
+      await act(async () => useCanvasStore.getState().resetViewport())
+      expect(isPanelOnScreen()).toBe(false)
+      fireEvent.keyDown(window, { code: 'Digit0', ctrlKey: true, shiftKey: true })
+      expect(isPanelOnScreen()).toBe(true)
+    } finally {
+      globalThis.ResizeObserver = originalResizeObserver
+    }
   })
 
   it('should render panels when they exist', () => {
@@ -580,6 +618,62 @@ describe('InfiniteCanvas', () => {
       })
 
       expect(layer.style.transform).toBe('translate(12px, 34px) scale(2)')
+    })
+
+    it('keeps Reset view in force after a pending wheel gesture', async () => {
+      useCanvasStore.getState().setViewport({ x: 100, y: 80, zoom: 1 })
+      const { container } = render(<InfiniteCanvas />)
+      const layer = container.querySelector('[data-canvas-transform-layer="true"]') as HTMLElement
+      const canvas = layer.parentElement as HTMLElement
+
+      fireEvent.wheel(canvas, { deltaX: 30, deltaY: 40 })
+      expect(useCanvasStore.getState().viewport).toEqual({ x: 100, y: 80, zoom: 1 })
+
+      fireEvent.click(screen.getByTitle('Reset view (Ctrl+0)'))
+      await flushFrames()
+      expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+      })
+      expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
+      expect(layer.style.transform).toBe('translate(0px, 0px) scale(1)')
+    })
+
+    it('keeps minimap navigation in force after a pending wheel gesture', async () => {
+      useCanvasStore.getState().addPanel({
+        type: 'task',
+        title: 'Map Task',
+        x: 0,
+        y: 0,
+        width: 400,
+        height: 300,
+      })
+      const { container } = render(<InfiniteCanvas />)
+      const canvas = container.querySelector('[data-canvas-transform-layer="true"]')?.parentElement as HTMLElement
+      const map = container.querySelector('svg.cursor-crosshair') as SVGSVGElement
+
+      fireEvent.wheel(canvas, { deltaX: 30, deltaY: 40 })
+      fireEvent.mouseDown(map, { clientX: 90, clientY: 60 })
+      const requestedViewport = useCanvasStore.getState().viewport
+
+      await flushFrames()
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+      })
+      expect(useCanvasStore.getState().viewport).toEqual(requestedViewport)
+    })
+
+    it('keeps a requested reset in force after a pending wheel gesture', async () => {
+      const { container } = render(<InfiniteCanvas />)
+      const canvas = container.querySelector('[data-canvas-transform-layer="true"]')?.parentElement as HTMLElement
+
+      fireEvent.wheel(canvas, { deltaX: 30, deltaY: 40 })
+      await act(async () => useCanvasStore.getState().requestViewCommand({ kind: 'reset' }))
+      await flushFrames()
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+      })
+      expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
     })
 
     it('moves a dragged panel with a transform and writes x/y only on mouseup', async () => {

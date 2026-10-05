@@ -156,4 +156,15 @@ describe('CanvasMinimap', () => {
     expect((400 - vp.x) / vp.zoom).toBeCloseTo(280)
     expect((300 - vp.y) / vp.zoom).toBeCloseTo(210)
   })
+
+  it('keeps a map drag inside its bounds', () => {
+    useCanvasStore.setState({ panels: [makePanel()] })
+    const { container } = render(<CanvasMinimap containerWidth={800} containerHeight={600} />)
+    const svg = container.querySelector('svg.cursor-crosshair') as SVGSVGElement
+
+    fireEvent.mouseDown(svg, { clientX: 10000, clientY: 10000 })
+    const viewport = useCanvasStore.getState().viewport
+    expect(Math.abs(viewport.x)).toBeLessThan(5000)
+    expect(Math.abs(viewport.y)).toBeLessThan(5000)
+  })
 })

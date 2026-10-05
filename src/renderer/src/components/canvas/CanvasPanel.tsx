@@ -35,6 +35,7 @@ const FROZEN_CONTENT_STYLE: CSSProperties = { visibility: 'hidden', contain: 'la
 
 interface CanvasPanelProps {
   panel: CanvasPanelData
+  commitPendingViewport?: () => void
   /** When true, the panel is off-viewport — heavy content (iframes, terminals) is hidden */
   frozen?: boolean
 }
@@ -46,7 +47,7 @@ interface CanvasPanelProps {
  * Memoized so that only the panel whose data changed re-renders — prevents
  * iframes/terminals from being remounted when a *different* panel moves.
  */
-export const CanvasPanel = memo(function CanvasPanel({ panel, frozen = false }: CanvasPanelProps) {
+export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewport, frozen = false }: CanvasPanelProps) {
   const bringToFront = useCanvasStore((s) => s.bringToFront)
   const updatePanel = useCanvasStore((s) => s.updatePanel)
   const removePanel = useCanvasStore((s) => s.removePanel)
@@ -340,11 +341,12 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, frozen = false }: 
       e.stopPropagation()
       const canvas = panelRef.current?.closest('[data-canvas-root]') as HTMLElement | null
       if (canvas) {
+        commitPendingViewport?.()
         const rect = canvas.getBoundingClientRect()
         focusPanel(panel.id, rect.width, rect.height)
       }
     },
-    [focusPanel, panel.id]
+    [focusPanel, panel.id, commitPendingViewport]
   )
 
   // ── Close ─────────────────────────────────────────────────

@@ -219,9 +219,11 @@ const MinimapContent = memo(function MinimapContent({
 function CanvasMinimapComponent({
   containerWidth,
   containerHeight,
+  commitPendingViewport,
 }: {
   containerWidth: number
   containerHeight: number
+  commitPendingViewport?: () => void
 }) {
   const panels = useCanvasStore((s) => s.panels)
   const viewport = useCanvasStore((s) => s.viewport)
@@ -284,9 +286,10 @@ function CanvasMinimapComponent({
     (clientX: number, clientY: number) => {
       const svg = svgRef.current
       if (!svg) return
+      commitPendingViewport?.()
       const rect = svg.getBoundingClientRect()
-      const mx = clientX - rect.left
-      const my = clientY - rect.top
+      const mx = clamp(clientX - rect.left, 0, MINIMAP_W)
+      const my = clamp(clientY - rect.top, 0, MINIMAP_H)
 
       // Convert minimap coord → canvas coord
       const canvasX = (mx - MINIMAP_PAD) / scale + bounds.minX
@@ -299,7 +302,7 @@ function CanvasMinimapComponent({
       const newVpY = -(canvasY * liveZoom - containerHeight / 2)
       setViewport({ x: newVpX, y: newVpY, zoom: liveZoom })
     },
-    [scale, bounds, viewport.zoom, containerWidth, containerHeight, setViewport]
+    [scale, bounds, viewport.zoom, containerWidth, containerHeight, setViewport, commitPendingViewport]
   )
 
   const handleMouseDown = useCallback(
@@ -336,13 +339,14 @@ function CanvasMinimapComponent({
   // measured (0×0) — the store keeps x/y then.
   const zoomAroundCenter = useCallback(
     (zoom: number) => {
+      commitPendingViewport?.()
       if (containerWidth > 0 && containerHeight > 0) {
         zoomTo(zoom, containerWidth / 2, containerHeight / 2)
       } else {
         zoomTo(zoom)
       }
     },
-    [containerWidth, containerHeight, zoomTo]
+    [containerWidth, containerHeight, zoomTo, commitPendingViewport]
   )
 
   const zoomPercent = Math.round(viewport.zoom * 100)
@@ -462,8 +466,7 @@ function CanvasMinimapComponent({
               className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
               onClick={(e) => {
                 e.stopPropagation()
-                // Live zoom — a wheel gesture may still be in flight and not
-                // yet committed to the store.
+                commitPendingViewport?.()
                 const liveZoom = getLiveViewport().zoom || viewport.zoom
                 zoomAroundCenter(liveZoom / 1.2)
               }}
@@ -492,6 +495,7 @@ function CanvasMinimapComponent({
               className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
               onClick={(e) => {
                 e.stopPropagation()
+                commitPendingViewport?.()
                 const liveZoom = getLiveViewport().zoom || viewport.zoom
                 zoomAroundCenter(liveZoom * 1.2)
               }}
@@ -504,7 +508,11 @@ function CanvasMinimapComponent({
 
             <button
               className="h-5 w-5 rounded flex items-center justify-center text-muted-foreground/40 hover:text-muted-foreground hover:bg-white/5 transition-colors"
-              onClick={(e) => { e.stopPropagation(); fitToContent(containerWidth, containerHeight, figuresBounds) }}
+              onClick={(e) => {
+                e.stopPropagation()
+                commitPendingViewport?.()
+                fitToContent(containerWidth, containerHeight, figuresBounds)
+              }}
               title="Fit all content"
             >
               <Maximize2 className="h-3 w-3" />

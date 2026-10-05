@@ -12,6 +12,7 @@ import { useUIStore } from '@/stores/ui-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useDrawingStore } from '@/stores/drawing-store'
 import type { DrawingTool } from './drawing/types'
+import { unionBox } from './drawing/figure-geometry'
 import { DrawingLayer, pasteImageAt } from './drawing/DrawingLayer'
 import { DrawingToolbar } from './drawing/DrawingToolbar'
 import { DrawingProperties } from './drawing/DrawingProperties'
@@ -19,7 +20,7 @@ import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
 import { CanvasMinimap } from './CanvasMinimap'
-import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Move, ZoomIn, ZoomOut, RotateCcw, Plus } from 'lucide-react'
+import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Move, ZoomIn, ZoomOut, RotateCcw, Maximize2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskStatus } from '@/types'
 import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
@@ -440,31 +441,6 @@ export function InfiniteCanvas() {
   // component knows. A caller without an element (an agent tool, a voice
   // command) leaves the intent in the store and it is carried out here.
   const pendingViewCommand = useCanvasStore((s) => s.pendingViewCommand)
-  useEffect(() => {
-    if (!pendingViewCommand) return
-    useCanvasStore.getState().clearViewCommand()
-
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect) return
-
-    switch (pendingViewCommand.kind) {
-      case 'fit_all':
-        fitToContent(rect.width, rect.height)
-        return
-      case 'reset':
-        resetViewport()
-        return
-      case 'zoom':
-        zoomTo(pendingViewCommand.zoom, rect.width / 2, rect.height / 2)
-        return
-      case 'focus_task': {
-        const target = useCanvasStore
-          .getState()
-          .panels.find((p) => p.type === 'task' && p.refId === pendingViewCommand.taskId)
-        if (target) focusPanel(target.id, rect.width, rect.height)
-      }
-    }
-  }, [pendingViewCommand, fitToContent, resetViewport, zoomTo, focusPanel])
 
   // ── Consume pending app from "Open in Canvas" button ────
   useEffect(() => {
@@ -625,6 +601,33 @@ export function InfiniteCanvas() {
     useCanvasStore.getState().setViewport(liveViewportRef.current)
   }, [flushViewportUpdate])
 
+  useEffect(() => {
+    if (!pendingViewCommand) return
+    useCanvasStore.getState().clearViewCommand()
+    commitViewport()
+
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+
+    switch (pendingViewCommand.kind) {
+      case 'fit_all':
+        fitToContent(rect.width, rect.height)
+        return
+      case 'reset':
+        resetViewport()
+        return
+      case 'zoom':
+        zoomTo(pendingViewCommand.zoom, rect.width / 2, rect.height / 2)
+        return
+      case 'focus_task': {
+        const target = useCanvasStore
+          .getState()
+          .panels.find((p) => p.type === 'task' && p.refId === pendingViewCommand.taskId)
+        if (target) focusPanel(target.id, rect.width, rect.height)
+      }
+    }
+  }, [pendingViewCommand, fitToContent, resetViewport, zoomTo, focusPanel, commitViewport])
+
   const scheduleViewportUpdate = useCallback(() => {
     if (viewportRafRef.current != null) return
     viewportRafRef.current = requestAnimationFrame(flushViewportUpdate)
@@ -651,6 +654,15 @@ export function InfiniteCanvas() {
     },
     [commitViewport, containerSize, zoomTo]
   )
+
+  const fitCanvas = useCallback(() => {
+    commitViewport()
+    const box = unionBox(useDrawingStore.getState().objects)
+    const figureBounds = box
+      ? { minX: box.x, minY: box.y, maxX: box.x + box.width, maxY: box.y + box.height }
+      : undefined
+    fitToContent(containerSize.width, containerSize.height, figureBounds)
+  }, [commitViewport, containerSize, fitToContent])
 
   const queuePan = useCallback(
     (dx: number, dy: number) => {
@@ -879,7 +891,10 @@ export function InfiniteCanvas() {
         e.preventDefault()
         zoomStep(1 / 1.2)
       }
-      if (e.code === 'Digit0' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
+      if (e.code === 'Digit0' && (e.ctrlKey || e.metaKey) && e.shiftKey && !isInputFocused) {
+        e.preventDefault()
+        fitCanvas()
+      } else if (e.code === 'Digit0' && (e.ctrlKey || e.metaKey) && !isInputFocused) {
         e.preventDefault()
         commitViewport()
         resetViewport()
@@ -981,7 +996,7 @@ export function InfiniteCanvas() {
       window.removeEventListener('keyup', handleKeyUp)
       window.removeEventListener('blur', handleBlur)
     }
-  }, [zoomStep, resetViewport, focusedPanelIndex, commitViewport, setConnectingFromId])
+  }, [zoomStep, fitCanvas, resetViewport, focusedPanelIndex, commitViewport, setConnectingFromId])
 
   const zoomPercent = Math.round(viewport.zoom * 100)
 
@@ -1040,6 +1055,7 @@ export function InfiniteCanvas() {
             <CanvasPanel
               key={panel.id}
               panel={panel}
+              commitPendingViewport={commitViewport}
               frozen={!visiblePanelIds.has(panel.id) && !(panel.type === 'task' && panel.id === selectedPanelId)}
             />
           ))}
@@ -1081,6 +1097,7 @@ export function InfiniteCanvas() {
               className="canvas-status-jump-popup flex h-9 w-9 items-center justify-center rounded-full border border-white/20 text-white shadow-lg backdrop-blur-sm"
               onClick={(e) => {
                 e.stopPropagation()
+                commitViewport()
                 focusPanel(highlight.panelId, containerSize.width, containerSize.height)
                 setStatusHighlights((current) => current.filter((item) => item.id !== highlight.id))
               }}
@@ -1120,10 +1137,22 @@ export function InfiniteCanvas() {
           variant="ghost"
           size="sm"
           className="h-7 w-7 p-0"
-          onClick={resetViewport}
+          onClick={() => {
+            commitViewport()
+            resetViewport()
+          }}
           title="Reset view (Ctrl+0)"
         >
           <RotateCcw className="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 w-7 p-0"
+          onClick={fitCanvas}
+          title="Fit all content (Ctrl+Shift+0)"
+        >
+          <Maximize2 className="h-3.5 w-3.5" />
         </Button>
       </div>
 
@@ -1164,6 +1193,7 @@ export function InfiniteCanvas() {
       <CanvasMinimap
         containerWidth={containerSize.width}
         containerHeight={containerSize.height}
+        commitPendingViewport={commitViewport}
       />
 
       {/* ── Drawing: toolbar (bottom-center) + selection properties (top-center) ──
