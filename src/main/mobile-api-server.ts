@@ -335,6 +335,11 @@ async function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathnam
 async function routeGet(pathname: string, url: URL): Promise<unknown> {
   const db = dbRef!
 
+  // GET /api/pr-watch — the global PR watch switch, so the phone can show what a task inherits
+  if (pathname === '/api/pr-watch') {
+    return { enabled: db.getSetting('pr_watch.enabled') !== 'false' }
+  }
+
   // GET /api/tasks
   if (pathname === '/api/tasks') {
     let tasks = db.getTasks()

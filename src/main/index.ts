@@ -276,7 +276,7 @@ async function shutdownAppServices(): Promise<void> {
   voiceSessionManager?.shutdown()
   enterpriseHeartbeatInstance?.stop()
   heartbeatScheduler?.stop()
-  pullRequestWatcher?.stop()
+  await pullRequestWatcher?.stop()
   taskAutomationScheduler?.stop()
   workspaceCleanupScheduler?.stop()
 

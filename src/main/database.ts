@@ -979,6 +979,7 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  * they build the schema from `CREATE TABLE`, not from the migration path.
  *
  * 8 → 9: tasks.complete_at_source
+ * 9 → 10: tasks.pr_watch_enabled and the pr_watches table (pull request watching)
  */
 const SCHEMA_VERSION = 10
 

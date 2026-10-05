@@ -89,6 +89,14 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const [completeModal, setCompleteModal] = useState<{ withFeedback: boolean } | null>(null)
   const [activeSection, setActiveSection] = useState<'details' | 'artifacts'>('details')
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
+  const [prWatchGlobal, setPrWatchGlobal] = useState(true)
+  useEffect(() => {
+    let cancelled = false
+    api.prWatch.settings()
+      .then((result) => { if (!cancelled) setPrWatchGlobal(result.enabled) })
+      .catch(() => { /* keep the default: enabled */ })
+    return () => { cancelled = true }
+  }, [])
   const agentMenuRef = useRef<HTMLDivElement>(null)
   const artifactsByTask = useArtifactStore((s) => s.artifactsByTask)
   const hydrateArtifacts = useArtifactStore((s) => s.hydrate)
@@ -693,17 +701,20 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                   Watch PR
                 </span>
                 <div className="flex items-center gap-2">
-                  <Badge variant={task.pr_watch_enabled === false ? 'default' : 'green'}>
-                    {task.pr_watch_enabled === null || task.pr_watch_enabled === undefined ? 'Default' : task.pr_watch_enabled ? 'On' : 'Off'}
+                  <Badge variant={(task.pr_watch_enabled ?? prWatchGlobal) ? 'green' : 'default'}>
+                    {task.pr_watch_enabled == null
+                      ? `Default (${(task.pr_watch_enabled ?? prWatchGlobal) ? 'on' : 'off'})`
+                      : (task.pr_watch_enabled ?? prWatchGlobal) ? 'On' : 'Off'}
                   </Badge>
                   <button
                     onClick={async () => {
-                      const current = task.pr_watch_enabled ?? true
-                      await updateTask(task.id, { pr_watch_enabled: !current })
+                      // Setting the opposite of what is shown: a task without its own switch
+                      // follows the global one, so the first tap always changes the result.
+                      await updateTask(task.id, { pr_watch_enabled: !(task.pr_watch_enabled ?? prWatchGlobal) })
                     }}
                     className="text-xs text-primary active:opacity-60 ml-auto"
                   >
-                    {(task.pr_watch_enabled ?? true) ? 'Turn off' : 'Turn on'}
+                    {(task.pr_watch_enabled ?? prWatchGlobal) ? 'Turn off' : 'Turn on'}
                   </button>
                 </div>
               </>

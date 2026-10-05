@@ -113,6 +113,10 @@ export const api = {
     /** What this client can do. Voice capture is desktop-only in phase 1. */
     get: () => get<{ voice: VoiceCapabilities }>('/api/capabilities')
   },
+  prWatch: {
+    /** The global "Watch pull requests" switch. A task without its own switch follows it. */
+    settings: () => get<{ enabled: boolean }>('/api/pr-watch')
+  },
   sessions: {
     list: () => get<unknown[]>('/api/sessions'),
     start: (agentId: string, taskId: string, skipInitialPrompt?: boolean) =>

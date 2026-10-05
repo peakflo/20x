@@ -2,7 +2,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PullRequestWatcher, resolvePullRequestWatchEnabled, type PullRequestWatchAgents, type PullRequestWatchSource } from './pull-request-watcher'
 import type { DatabaseManager, PullRequestWatchRecord } from './database'
 import type { PullRequestWatchSnapshot } from './pull-request-watch'
-import { PR_WATCH_ENABLED_SETTING, PR_WATCH_READY_SETTING } from './pull-request-watch'
+import {
+  PR_WATCH_ENABLED_SETTING,
+  PR_WATCH_IDLE_AFTER_MS,
+  PR_WATCH_IDLE_INTERVAL_MS,
+  PR_WATCH_INTERVAL_MS,
+  PR_WATCH_READY_SETTING
+} from './pull-request-watch'
+
+/** A fake clock the watcher reads through its `now` option. */
+function createClock(start = Date.parse('2026-10-05T10:00:00.000Z')) {
+  let current = start
+  return {
+    now: () => new Date(current),
+    advance: (ms: number) => { current += ms }
+  }
+}
 
 const URL_PR = 'https://github.com/acme/app/pull/42'
 
@@ -57,9 +72,9 @@ function openSnapshot(overrides: Partial<PullRequestWatchSnapshot> = {}): PullRe
     state: 'OPEN',
     isDraft: false,
     headSha: 'abcdef1234567',
-    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
     reviewDecision: '',
-    checks: [{ name: 'build', completed: true, conclusion: 'FAILURE', url: 'https://ci/1' }],
+    checks: [{ name: 'build', completed: true, conclusion: 'FAILURE', runId: 'run-1', url: 'https://ci/1' }],
     comments: [],
     ...overrides
   }
@@ -80,6 +95,7 @@ describe('PullRequestWatcher', () => {
   let agentStatus: string | null
   let sendByTaskId: ReturnType<typeof vi.fn<(taskId: string, message: string) => Promise<unknown>>>
   let watcher: PullRequestWatcher
+  let clock: ReturnType<typeof createClock>
   const agents = (): PullRequestWatchAgents => ({
     findSessionByTaskId: (taskId: string) => (agentStatus === null ? undefined : { sessionId: `s-${taskId}`, session: { status: agentStatus } }),
     sendByTaskId
@@ -92,8 +108,9 @@ describe('PullRequestWatcher', () => {
     fetchSnapshot = vi.fn<(url: string) => Promise<PullRequestWatchSnapshot>>(async () => openSnapshot())
     agentStatus = 'idle'
     sendByTaskId = vi.fn(async () => ({ sessionId: 's-task-1' }))
+    clock = createClock()
     watcher = new PullRequestWatcher(fake.db as unknown as DatabaseManager, agents(), source(), {
-      now: () => new Date('2026-10-05T10:00:00.000Z')
+      now: clock.now
     })
   })
 
@@ -156,8 +173,9 @@ describe('PullRequestWatcher', () => {
       expect(fake.watches.get('task-1|' + URL_PR)?.pending_events).toHaveLength(1)
 
       agentStatus = 'idle'
+      clock.advance(PR_WATCH_INTERVAL_MS)
       fetchSnapshot.mockResolvedValueOnce(openSnapshot({
-        comments: [{ kind: 'review_comment', id: '7', author: 'alice', body: 'Please rename', path: 'a.ts', line: 1 }]
+        comments: [{ kind: 'review_comment', id: '7', author: 'alice', authorAssociation: 'MEMBER', isBot: false, body: 'Please rename', path: 'a.ts', line: 1 }]
       }))
       await watcher.tick()
       expect(sendByTaskId).toHaveBeenCalledTimes(1)
@@ -173,6 +191,7 @@ describe('PullRequestWatcher', () => {
       await watcher.tick()
       expect(fake.watches.get('task-1|' + URL_PR)?.pending_events).toHaveLength(1)
 
+      clock.advance(PR_WATCH_INTERVAL_MS)
       await watcher.tick()
       expect(sendByTaskId).toHaveBeenCalledTimes(2)
       expect(fake.watches.get('task-1|' + URL_PR)?.pending_events).toEqual([])
@@ -191,6 +210,7 @@ describe('PullRequestWatcher', () => {
       watcher.register('task-1', URL_PR, { explicit: false })
       agentStatus = 'working'
       await watcher.tick()
+      clock.advance(PR_WATCH_INTERVAL_MS)
       fetchSnapshot.mockResolvedValueOnce(openSnapshot({ state: 'MERGED' }))
       await watcher.tick()
       const watch = fake.watches.get('task-1|' + URL_PR)!
@@ -200,12 +220,95 @@ describe('PullRequestWatcher', () => {
       expect(sendByTaskId).not.toHaveBeenCalled()
     })
 
-    it('stops watching when the task completes, without polling GitHub', async () => {
+    it('pauses a completed task without polling GitHub, and resumes when it is reopened', async () => {
       watcher.register('task-1', URL_PR, { explicit: false })
       fake.tasks.get('task-1')!.status = 'completed'
       await watcher.tick()
       expect(fetchSnapshot).not.toHaveBeenCalled()
-      expect(fake.watches.get('task-1|' + URL_PR)?.stopped_reason).toBe('task_completed')
+      expect(fake.watches.get('task-1|' + URL_PR)?.state).toBe('active')
+
+      fake.tasks.get('task-1')!.status = 'agent_working'
+      // The pause sets a poll interval, so force the next due poll through the fake clock.
+      clock.advance(PR_WATCH_INTERVAL_MS + 1)
+      await watcher.tick()
+      expect(fetchSnapshot).toHaveBeenCalledTimes(1)
+      expect(sendByTaskId).toHaveBeenCalledTimes(1)
+    })
+
+    it('saves the cursor before sending, so a crash after the send cannot lose the record', async () => {
+      watcher.register('task-1', URL_PR, { explicit: false })
+      let cursorAtSend: string[] | undefined
+      sendByTaskId.mockImplementationOnce(async () => {
+        cursorAtSend = fake.watches.get('task-1|' + URL_PR)?.seen_keys
+        return {}
+      })
+      await watcher.tick()
+      expect(cursorAtSend).toEqual(['check:abcdef1234567:build:run-1:FAILURE'])
+    })
+
+    it('backs off after a rate-limited read and does not poll again until it expires', async () => {
+      watcher.register('task-1', URL_PR, { explicit: false })
+      fetchSnapshot.mockRejectedValueOnce(new Error('HTTP 403: API rate limit exceeded'))
+      await watcher.tick()
+      expect(fetchSnapshot).toHaveBeenCalledTimes(1)
+
+      // First failure: retry after one interval.
+      clock.advance(PR_WATCH_INTERVAL_MS - 1000)
+      await watcher.tick()
+      expect(fetchSnapshot).toHaveBeenCalledTimes(1)
+
+      clock.advance(1000)
+      fetchSnapshot.mockRejectedValueOnce(new Error('HTTP 429 Too Many Requests'))
+      await watcher.tick()
+      expect(fetchSnapshot).toHaveBeenCalledTimes(2)
+
+      // Second failure: the wait doubles to two intervals.
+      clock.advance(PR_WATCH_INTERVAL_MS)
+      await watcher.tick()
+      expect(fetchSnapshot).toHaveBeenCalledTimes(2)
+      clock.advance(PR_WATCH_INTERVAL_MS)
+      await watcher.tick()
+      expect(fetchSnapshot).toHaveBeenCalledTimes(3)
+    })
+
+    it('polls a quiet PR less often than an active one', async () => {
+      fetchSnapshot.mockResolvedValue(openSnapshot({ checks: [] }))
+      watcher.register('task-1', URL_PR, { explicit: false })
+      await watcher.tick()
+      expect(fetchSnapshot).toHaveBeenCalledTimes(1)
+
+      // Still active: due one interval later.
+      clock.advance(PR_WATCH_INTERVAL_MS)
+      await watcher.tick()
+      expect(fetchSnapshot).toHaveBeenCalledTimes(2)
+
+      // Quiet for 30 minutes: the next poll waits five minutes, not one.
+      clock.advance(PR_WATCH_IDLE_AFTER_MS)
+      await watcher.tick()
+      expect(fetchSnapshot).toHaveBeenCalledTimes(3)
+      clock.advance(PR_WATCH_INTERVAL_MS)
+      await watcher.tick()
+      expect(fetchSnapshot).toHaveBeenCalledTimes(3)
+      clock.advance(PR_WATCH_IDLE_INTERVAL_MS - PR_WATCH_INTERVAL_MS)
+      await watcher.tick()
+      expect(fetchSnapshot).toHaveBeenCalledTimes(4)
+    })
+
+    it('stop() waits for the poll in flight before it resolves', async () => {
+      watcher.register('task-1', URL_PR, { explicit: false })
+      let release!: () => void
+      fetchSnapshot.mockImplementationOnce(() => new Promise<PullRequestWatchSnapshot>((resolve) => {
+        release = () => resolve(openSnapshot())
+      }))
+      const poll = watcher.tick()
+      let stopped = false
+      const stopping = watcher.stop().then(() => { stopped = true })
+      await Promise.resolve()
+      expect(stopped).toBe(false)
+      release()
+      await poll
+      await stopping
+      expect(stopped).toBe(true)
     })
 
     it('makes no requests while the task has switched watching off, and resumes when it is switched on', async () => {
@@ -215,6 +318,7 @@ describe('PullRequestWatcher', () => {
       expect(fetchSnapshot).not.toHaveBeenCalled()
 
       fake.tasks.get('task-1')!.pr_watch_enabled = true
+      clock.advance(PR_WATCH_INTERVAL_MS)
       await watcher.tick()
       expect(fetchSnapshot).toHaveBeenCalledTimes(1)
       expect(sendByTaskId).toHaveBeenCalledTimes(1)
@@ -227,20 +331,21 @@ describe('PullRequestWatcher', () => {
       expect(fetchSnapshot).not.toHaveBeenCalled()
 
       fake.tasks.get('task-1')!.pr_watch_enabled = true
+      clock.advance(PR_WATCH_INTERVAL_MS)
       await watcher.tick()
       expect(fetchSnapshot).toHaveBeenCalledTimes(1)
     })
 
     it('omits the ready notice when the setting turns it off', async () => {
       fake.settings.set(PR_WATCH_READY_SETTING, 'false')
-      fetchSnapshot.mockResolvedValue(openSnapshot({ checks: [{ name: 'build', completed: true, conclusion: 'SUCCESS' }] }))
+      fetchSnapshot.mockResolvedValue(openSnapshot({ checks: [{ name: 'build', completed: true, conclusion: 'SUCCESS', runId: 'run-1' }] }))
       watcher.register('task-1', URL_PR, { explicit: false })
       await watcher.tick()
       expect(sendByTaskId).not.toHaveBeenCalled()
     })
 
     it('sends a ready notice when every check passes', async () => {
-      fetchSnapshot.mockResolvedValue(openSnapshot({ checks: [{ name: 'build', completed: true, conclusion: 'SUCCESS' }] }))
+      fetchSnapshot.mockResolvedValue(openSnapshot({ checks: [{ name: 'build', completed: true, conclusion: 'SUCCESS', runId: 'run-1' }] }))
       watcher.register('task-1', URL_PR, { explicit: false })
       await watcher.tick()
       expect(sendByTaskId).toHaveBeenCalledTimes(1)
@@ -262,7 +367,7 @@ describe('PullRequestWatcher', () => {
         release = () => resolve(openSnapshot())
       }))
       const first = watcher.tick()
-      await watcher.tick()
+      void watcher.tick()
       expect(fetchSnapshot).toHaveBeenCalledTimes(1)
       release()
       await first

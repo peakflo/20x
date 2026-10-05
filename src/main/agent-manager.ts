@@ -40,6 +40,7 @@ import {
 } from '../shared/usage'
 import { inspectTaskArtifact } from './artifacts'
 import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
+import { createdPullRequestUrlFromTool } from './pull-request-watch'
 import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../shared/system-authority'
 
 // Coding agent backend type enum
@@ -5681,12 +5682,23 @@ Important:
       const url = pullRequestUrlFromTool(part.tool)
       if (url) prUrls.add(url)
     }
-    for (const url of prUrls) {
-      try {
-        this.pullRequestDetectedHandler?.(taskId, url)
-      } catch (err) {
-        console.error('[AgentManager] Pull request watch registration failed:', (err as Error).message)
+    // Only a pull request this task created is watched. A PR that the task
+    // merely reads (gh pr view, a colleague's PR) is not the agent's to fix.
+    if (this.pullRequestDetectedHandler) {
+      const createdUrls = new Set<string>()
+      for (const part of parts) {
+        const created = createdPullRequestUrlFromTool(part.tool)
+        if (created) createdUrls.add(created)
       }
+      for (const url of createdUrls) {
+        try {
+          this.pullRequestDetectedHandler(taskId, url)
+        } catch (err) {
+          console.error('[AgentManager] Pull request watch registration failed:', (err as Error).message)
+        }
+      }
+    }
+    for (const url of prUrls) {
       const number = url.match(/\/(\d+)$/)?.[1]
       this.sendArtifactUpdated({
         id: `${taskId}:${ArtifactType.PR}:${encodeURIComponent(url)}`,
