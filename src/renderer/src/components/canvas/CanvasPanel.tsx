@@ -35,7 +35,6 @@ const FROZEN_CONTENT_STYLE: CSSProperties = { visibility: 'hidden', contain: 'la
 
 interface CanvasPanelProps {
   panel: CanvasPanelData
-  zoom: number
   /** When true, the panel is off-viewport — heavy content (iframes, terminals) is hidden */
   frozen?: boolean
 }
@@ -47,7 +46,7 @@ interface CanvasPanelProps {
  * Memoized so that only the panel whose data changed re-renders — prevents
  * iframes/terminals from being remounted when a *different* panel moves.
  */
-export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = false }: CanvasPanelProps) {
+export const CanvasPanel = memo(function CanvasPanel({ panel, frozen = false }: CanvasPanelProps) {
   const bringToFront = useCanvasStore((s) => s.bringToFront)
   const updatePanel = useCanvasStore((s) => s.updatePanel)
   const removePanel = useCanvasStore((s) => s.removePanel)
@@ -74,8 +73,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
   const dragStart = useRef({ x: 0, y: 0, panelX: 0, panelY: 0 })
   const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 })
   // Latest imperative geometry, committed to the store on mouseup. Held in
-  // refs (not effect-local vars) so an effect re-run mid-gesture — a zoom
-  // commit changes the `zoom` prop — can't lose the in-progress position.
+  // Refs keep in-progress geometry across unrelated renders.
   const dragCommit = useRef({ x: 0, y: 0 })
   const resizeCommit = useRef({ w: 0, h: 0 })
   const previousTaskStatusRef = useRef<TaskStatus | undefined>(undefined)
@@ -125,7 +123,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       if (!e) return
       // Read the zoom from the live viewport — during a simultaneous pinch-zoom
       // the store value lags until the gesture commits.
-      const liveZoom = getLiveViewport().zoom || zoom || 1
+      const liveZoom = getLiveViewport().zoom || 1
       const dx = (e.clientX - dragStart.current.x) / liveZoom
       const dy = (e.clientY - dragStart.current.y) / liveZoom
       const newX = dragStart.current.panelX + dx
@@ -221,7 +219,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
     }
-  }, [isDragging, panel.id, panel.width, panel.height, zoom, updatePanel, setDraggingPanelId, setSnapGuides, setLiveDrag])
+  }, [isDragging, panel.id, panel.width, panel.height, updatePanel, setDraggingPanelId, setSnapGuides, setLiveDrag])
 
   // ── Resize handling ───────────────────────────────────────
   const handleResizeStart = useCallback(
@@ -256,7 +254,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       rafId = null
       const e = lastEvent
       if (!e) return
-      const liveZoom = getLiveViewport().zoom || zoom || 1
+      const liveZoom = getLiveViewport().zoom || 1
       const dx = (e.clientX - resizeStart.current.x) / liveZoom
       const dy = (e.clientY - resizeStart.current.y) / liveZoom
       const minW = panel.minWidth ?? 200
@@ -294,7 +292,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, zoom, frozen = fal
       window.removeEventListener('mousemove', handleMove)
       window.removeEventListener('mouseup', handleUp)
     }
-  }, [isResizing, panel.id, panel.minWidth, panel.minHeight, zoom, updatePanel])
+  }, [isResizing, panel.id, panel.minWidth, panel.minHeight, updatePanel])
 
   // ── Connect (edge drawing) ─────────────────────────────────
   // Local state tracks whether THIS panel initiated connecting — avoids global subscription

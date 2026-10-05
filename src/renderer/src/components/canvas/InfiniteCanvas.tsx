@@ -33,7 +33,8 @@ function isPanelVisible(
   panel: CanvasPanelData,
   viewport: Viewport,
   containerWidth: number,
-  containerHeight: number
+  containerHeight: number,
+  wasVisible = false
 ): boolean {
   // Keep only lightweight shells mounted until the first measurement. Assuming
   // everything is visible here briefly mounted and hydrated every transcript
@@ -41,7 +42,9 @@ function isPanelVisible(
   if (!containerWidth || !containerHeight) return false
 
   // Visible region in canvas coordinates
-  const margin = 200 // generous margin to avoid flickering at edges
+  // A panel that was already live gets a wider exit margin. Small zoom
+  // reversals near an edge then cannot repeatedly unmount its task tree.
+  const margin = wasVisible ? 400 : 200
   const visibleLeft = -viewport.x / viewport.zoom - margin
   const visibleTop = -viewport.y / viewport.zoom - margin
   const visibleRight = visibleLeft + containerWidth / viewport.zoom + margin * 2
@@ -66,6 +69,9 @@ const GRID_SIZE = 40
  * store this long after the last wheel event.
  */
 const WHEEL_IDLE_MS = 150
+// Keep the compositor layer briefly after a wheel pause. Repeated promotion
+// of a canvas full of task content can visibly flash on the next zoom event.
+const LAYER_RELEASE_MS = 300
 
 /** Drawing tool shortcuts (plain keypresses, guarded by isInputFocused). */
 const TOOL_SHORTCUTS: Record<string, DrawingTool> = {
@@ -301,6 +307,7 @@ export function InfiniteCanvas() {
 
   // Track container size for viewport visibility culling
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
+  const visiblePanelIdsRef = useRef(new Set<string>())
   // Measure before child passive effects run. This prevents the initial
   // zero-size fallback from hydrating every canvas transcript for one frame
   // before off-screen culling becomes active.
@@ -322,12 +329,15 @@ export function InfiniteCanvas() {
   const visiblePanelIds = useMemo(() => {
     const set = new Set<string>()
     for (const p of panels) {
-      if (isPanelVisible(p, viewport, containerSize.width, containerSize.height)) {
+      if (isPanelVisible(p, viewport, containerSize.width, containerSize.height, visiblePanelIdsRef.current.has(p.id))) {
         set.add(p.id)
       }
     }
     return set
   }, [panels, viewport, containerSize])
+  useLayoutEffect(() => {
+    visiblePanelIdsRef.current = visiblePanelIds
+  }, [visiblePanelIds])
 
   // The selected task panel is never frozen: its TaskWorkspace must stay
   // mounted (though possibly off-screen) so the global task shortcuts keep
@@ -509,6 +519,7 @@ export function InfiniteCanvas() {
   const gestureActiveRef = useRef(false)
   const viewportDirtyRef = useRef(false)
   const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const layerReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const pendingPanRef = useRef({ dx: 0, dy: 0 })
   const pendingZoomRef = useRef<{ deltaY: number; clientX: number; clientY: number; rect: DOMRect } | null>(null)
@@ -554,6 +565,10 @@ export function InfiniteCanvas() {
   })
 
   const beginGesture = useCallback(() => {
+    if (layerReleaseTimerRef.current != null) {
+      clearTimeout(layerReleaseTimerRef.current)
+      layerReleaseTimerRef.current = null
+    }
     if (gestureActiveRef.current) return
     gestureActiveRef.current = true
     // Promote the layer for the duration of the gesture only — a permanent
@@ -585,6 +600,7 @@ export function InfiniteCanvas() {
 
   /** End the gesture and commit the live viewport to the store (once). */
   const commitViewport = useCallback(() => {
+    const wasGestureActive = gestureActiveRef.current
     if (wheelIdleTimerRef.current != null) {
       clearTimeout(wheelIdleTimerRef.current)
       wheelIdleTimerRef.current = null
@@ -594,8 +610,14 @@ export function InfiniteCanvas() {
       flushViewportUpdate()
     }
     gestureActiveRef.current = false
-    const layer = transformLayerRef.current
-    if (layer) layer.style.willChange = ''
+    if (wasGestureActive) {
+      const layer = transformLayerRef.current
+      if (layerReleaseTimerRef.current != null) clearTimeout(layerReleaseTimerRef.current)
+      layerReleaseTimerRef.current = setTimeout(() => {
+        if (layer) layer.style.willChange = ''
+        layerReleaseTimerRef.current = null
+      }, LAYER_RELEASE_MS)
+    }
 
     if (!viewportDirtyRef.current) return
     viewportDirtyRef.current = false
@@ -652,6 +674,7 @@ export function InfiniteCanvas() {
     return () => {
       if (viewportRafRef.current != null) cancelAnimationFrame(viewportRafRef.current)
       if (wheelIdleTimerRef.current != null) clearTimeout(wheelIdleTimerRef.current)
+      if (layerReleaseTimerRef.current != null) clearTimeout(layerReleaseTimerRef.current)
     }
   }, [])
 
@@ -1017,7 +1040,6 @@ export function InfiniteCanvas() {
             <CanvasPanel
               key={panel.id}
               panel={panel}
-              zoom={viewport.zoom}
               frozen={!visiblePanelIds.has(panel.id) && !(panel.type === 'task' && panel.id === selectedPanelId)}
             />
           ))}

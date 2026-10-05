@@ -193,6 +193,47 @@ describe('InfiniteCanvas', () => {
     }
   })
 
+  it('keeps a task mounted across small zoom changes at the viewport edge', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver
+    globalThis.ResizeObserver = class {
+      private callback: ResizeObserverCallback
+      constructor(callback: ResizeObserverCallback) {
+        this.callback = callback
+      }
+      observe() {
+        this.callback([{ contentRect: { width: 800, height: 600 } } as ResizeObserverEntry], this as ResizeObserver)
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+
+    try {
+      useCanvasStore.getState().addPanel({
+        type: 'task',
+        title: 'Edge Task',
+        refId: 'task-123',
+        x: 980,
+        y: 100,
+        width: 400,
+        height: 300,
+      })
+      const { container } = render(<InfiniteCanvas />)
+      const content = container.querySelector('[data-canvas-content-mounted]') as HTMLElement
+      await waitFor(() => expect(content.dataset.canvasContentMounted).toBe('true'))
+
+      await act(async () => useCanvasStore.getState().setViewport({ zoom: 1.1 }))
+      expect(content.dataset.canvasContentMounted).toBe('true')
+
+      await act(async () => useCanvasStore.getState().setViewport({ zoom: 1 }))
+      expect(content.dataset.canvasContentMounted).toBe('true')
+
+      await act(async () => useCanvasStore.getState().setViewport({ zoom: 2.5 }))
+      expect(content.dataset.canvasContentMounted).toBe('false')
+    } finally {
+      globalThis.ResizeObserver = originalResizeObserver
+    }
+  })
+
   it('uses task status color coding for task panels and minimap rectangles', () => {
     taskStoreState.tasks = [
       makeTask({ id: 'task-123', title: 'Working Task', status: TaskStatus.AgentWorking }),
@@ -499,6 +540,18 @@ describe('InfiniteCanvas', () => {
         await new Promise((resolve) => setTimeout(resolve, 200))
       })
       expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -40, zoom: 1 })
+      expect(layer.style.willChange).toBe('transform')
+      // A second wheel event inside the release window keeps the same layer.
+      fireEvent.wheel(canvas, { deltaY: 10 })
+      await flushFrames()
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      })
+      expect(layer.style.willChange).toBe('transform')
+      expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -50, zoom: 1 })
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 250))
+      })
       expect(layer.style.willChange).toBe('')
     })
 
