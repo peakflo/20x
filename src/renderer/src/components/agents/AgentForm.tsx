@@ -14,7 +14,7 @@ import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
 import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
-import { AUTO_COMPACT_TOKENS_MAX, AUTO_COMPACT_TOKENS_MIN, normalizeAutoCompactTokens } from '@shared/context-usage'
+import { AUTO_COMPACT_TOKENS_MIN, contextWindowCapForModel, normalizeAutoCompactTokens } from '@shared/context-usage'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode, AgentSandboxMode } from '@/types'
 import type { ReasoningEffort } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS } from '@/types'
@@ -255,7 +255,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         system_prompt: systemPrompt.trim() || undefined,
         // Claude Code only; other agents leave the key out entirely.
         auto_compact_tokens: codingAgent === CodingAgentType.CLAUDE_CODE
-          ? (autoCompactEnabled ? normalizeAutoCompactTokens(autoCompactTokens) : null)
+          ? (autoCompactEnabled ? normalizeAutoCompactTokens(autoCompactTokens, model) : null)
           : undefined,
         max_parallel_sessions: maxParallelSessions,
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
@@ -674,18 +674,18 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
 
           {autoCompactEnabled && (
             <div className="space-y-1.5">
-              <Label htmlFor="claude-auto-compact-tokens">Auto-compact after N tokens</Label>
+              <Label htmlFor="claude-auto-compact-tokens">Context window for auto-compact</Label>
               <Input
                 id="claude-auto-compact-tokens"
                 type="number"
                 min={AUTO_COMPACT_TOKENS_MIN}
-                max={AUTO_COMPACT_TOKENS_MAX}
+                max={contextWindowCapForModel(model)}
                 step={10_000}
                 value={autoCompactTokens}
                 onChange={(e) => setAutoCompactTokens(Number(e.target.value))}
               />
               <p className="text-xs text-muted-foreground">
-                Claude compacts the conversation once it reaches this many tokens.
+                Claude measures the context against this size and compacts as it nears it. Capped at the model's window: {contextWindowCapForModel(model) === 1_000_000 ? '1M for [1m] models' : '200k for standard models'}.
               </p>
             </div>
           )}

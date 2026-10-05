@@ -41,6 +41,8 @@ function createSession(overrides: Record<string, unknown> = {}) {
     codexAuthSummary: '',
     createdInApp: true,
     pendingUsage: null,
+    compacting: false,
+    compactionTimer: null,
     ...overrides
   }
 }
@@ -99,19 +101,48 @@ describe('CodexAppServerAdapter context usage', () => {
     expect(contextReports).toEqual([expect.objectContaining({ compacting: true, canCompact: true })])
   })
 
-  it('clears the compacting flag on thread/compacted and on a contextCompaction item', () => {
-    const { priv, session, contextReports } = setup()
+  it('stays BUSY during compaction and returns to IDLE on thread/compacted', async () => {
+    const { adapter, priv, session, contextReports } = setup()
+    await adapter.sendPrompt('thread-1', [{ type: 'text', text: '/compact' } as any], session.config as any)
+    expect(session.status).toBe(SessionStatusType.BUSY)
+
     priv.handleRpcMessage(session, { jsonrpc: '2.0', method: 'thread/compacted', params: { threadId: 'thread-1' } })
+
+    expect(session.status).toBe(SessionStatusType.IDLE)
+    expect(session.compactionTimer).toBeNull()
+    expect(contextReports.at(-1)).toEqual(expect.objectContaining({ compacting: false }))
+  })
+
+  it('clears the compacting flag on a contextCompaction item', async () => {
+    const { adapter, priv, session, contextReports } = setup()
+    await adapter.sendPrompt('thread-1', [{ type: 'text', text: '/compact' } as any], session.config as any)
     priv.handleRpcMessage(session, {
       jsonrpc: '2.0',
       method: 'item/completed',
       params: { threadId: 'thread-1', turnId: 'turn-1', item: { id: 'c1', type: 'contextCompaction' } }
     })
 
-    expect(contextReports).toEqual([
-      expect.objectContaining({ compacting: false }),
-      expect.objectContaining({ compacting: false })
-    ])
+    expect(contextReports.map((r) => r.compacting)).toEqual([true, false])
+  })
+
+  it('releases the session when completion never arrives', async () => {
+    vi.useFakeTimers()
+    try {
+      const { adapter, session, contextReports } = setup()
+      await adapter.sendPrompt('thread-1', [{ type: 'text', text: '/compact' } as any], session.config as any)
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1)
+
+      expect(session.status).toBe(SessionStatusType.IDLE)
+      expect(contextReports.at(-1)).toEqual(expect.objectContaining({ compacting: false }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('refuses to compact while a turn is running', async () => {
+    const { adapter, priv, session } = setup(createSession({ activeTurnId: 'turn-9' }))
+    await expect(adapter.sendPrompt('thread-1', [{ type: 'text', text: '/compact' } as any], session.config as any)).rejects.toThrow('running')
+    expect(priv.sendRpcRequest).not.toHaveBeenCalled()
   })
 
   it('clears the compacting flag when the compact request fails', async () => {
@@ -120,5 +151,6 @@ describe('CodexAppServerAdapter context usage', () => {
 
     await expect(adapter.sendPrompt('thread-1', [{ type: 'text', text: '/compact' } as any], session.config as any)).rejects.toThrow('boom')
     expect(contextReports.map((r) => r.compacting)).toEqual([true, false])
+    expect(session.status).toBe(SessionStatusType.IDLE)
   })
 })

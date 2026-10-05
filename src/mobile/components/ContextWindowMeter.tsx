@@ -30,7 +30,16 @@ function formatUpdatedAt(iso: string): string {
  * details panel; the panel offers "Compact context" when the harness supports it.
  * Renders nothing until the snapshot reports how many tokens are in use.
  */
-export function ContextWindowMeter({ usage, onCompact }: { usage: ContextUsageSnapshot | null; onCompact?: () => void }) {
+export function ContextWindowMeter({
+  usage,
+  onCompact,
+  busy = false
+}: {
+  usage: ContextUsageSnapshot | null
+  onCompact?: () => void
+  /** Mid-turn: compaction waits until the agent is idle, so the action is disabled. */
+  busy?: boolean
+}) {
   const [open, setOpen] = useState(false)
 
   if (!usage || usage.usedTokens == null) return null
@@ -90,7 +99,7 @@ export function ContextWindowMeter({ usage, onCompact }: { usage: ContextUsageSn
             <button
               type="button"
               onClick={onCompact}
-              disabled={usage.compacting}
+              disabled={usage.compacting || busy}
               className="w-full min-h-10 inline-flex items-center justify-center gap-2 rounded-md bg-primary text-primary-foreground text-xs font-medium active:opacity-80 disabled:opacity-50 transition-opacity"
             >
               {usage.compacting ? (

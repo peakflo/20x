@@ -14,6 +14,8 @@ export const AGENT_CONTEXT_USAGE_CHANNEL = 'agent:context-usage'
 /** Bounds for the Claude auto-compact threshold setting (tokens). */
 export const AUTO_COMPACT_TOKENS_MIN = 100_000
 export const AUTO_COMPACT_TOKENS_MAX = 1_000_000
+/** Window of standard (non `[1m]`) models. */
+export const AUTO_COMPACT_TOKENS_STANDARD_MAX = 200_000
 
 /** Slash command that asks the harness to compact the conversation. */
 export const COMPACT_COMMAND = '/compact'
@@ -30,6 +32,8 @@ export const CONTEXT_CRITICAL_PERCENT = 90
 export interface ContextUsageReport {
   /** Tokens currently occupying the context window. */
   usedTokens?: number | null
+  /** The harness no longer knows how full the window is (e.g. compaction without a post-size). Clears `usedTokens`. */
+  unknownUsage?: boolean
   /** Size of the context window the usage is measured against. */
   maxTokens?: number | null
   /** Model the window belongs to. */
@@ -91,11 +95,28 @@ export function formatContextTokens(value: number | null | undefined): string {
   return `${millions.toFixed(millions < 10 ? 1 : 0).replace(/\.0$/, '')}M`
 }
 
-/** Persisted auto-compact threshold: a whole number of tokens within bounds, or null (off). */
-export function normalizeAutoCompactTokens(value: unknown): number | null {
+/** Largest window a model can use: 1M for `[1m]` variants, 200k otherwise. */
+export function contextWindowCapForModel(model: string | null | undefined): number {
+  return model && model.includes('[1m]') ? AUTO_COMPACT_TOKENS_MAX : AUTO_COMPACT_TOKENS_STANDARD_MAX
+}
+
+/**
+ * Persisted auto-compact threshold: a whole number of tokens within bounds, or
+ * null (off). When the model is known the value is also capped at that model's
+ * real window, so a 200k model never gets a 1M threshold.
+ */
+export function normalizeAutoCompactTokens(value: unknown, model?: string | null): number | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null
   const rounded = Math.round(value / 1_000) * 1_000
-  return Math.min(AUTO_COMPACT_TOKENS_MAX, Math.max(AUTO_COMPACT_TOKENS_MIN, rounded))
+  const cap = model ? Math.min(AUTO_COMPACT_TOKENS_MAX, contextWindowCapForModel(model)) : AUTO_COMPACT_TOKENS_MAX
+  return Math.min(cap, Math.max(AUTO_COMPACT_TOKENS_MIN, rounded))
+}
+
+/** Harnesses that can compact on request (`/compact`). Other harnesses receive it as plain text. */
+const COMPACT_CAPABLE_HARNESSES: ReadonlySet<string> = new Set(['claude-code', 'codex'])
+
+export function harnessCanCompact(codingAgent: string | null | undefined): boolean {
+  return !!codingAgent && COMPACT_CAPABLE_HARNESSES.has(codingAgent)
 }
 
 export function isCompactCommand(text: string | null | undefined): boolean {
@@ -111,7 +132,7 @@ export function mergeContextUsage(
   report: ContextUsageReport,
   meta: { taskId: string; agentId?: string | null; codingAgent?: string | null; now?: string }
 ): ContextUsageSnapshot {
-  const usedTokens = report.usedTokens ?? previous?.usedTokens ?? null
+  const usedTokens = report.unknownUsage ? null : (report.usedTokens ?? previous?.usedTokens ?? null)
   const maxTokens = report.maxTokens ?? previous?.maxTokens ?? null
   return {
     taskId: meta.taskId,

@@ -55,6 +55,39 @@ export function claudeFallbackContextWindow(model: string | null | undefined): n
   return model && model.includes('[1m]') ? CLAUDE_1M_CONTEXT_WINDOW : DEFAULT_CLAUDE_CONTEXT_WINDOW
 }
 
+/**
+ * Model id without its `[1m]` marker or dated suffix:
+ * `claude-opus-4-7[1m]` and `claude-opus-4-7-20260101` both → `claude-opus-4-7`.
+ */
+export function claudeModelBase(model: string): string {
+  return model.replace(/\[[^\]]*\]$/, '').replace(/-\d{8}$/, '')
+}
+
+/**
+ * Window for a model, from the SDK's reported `modelUsage` windows. The API
+ * message model id usually lacks the `[1m]` marker the configured model carries,
+ * so an exact key is preferred, then a key with the same base id — the variant
+ * whose `[1m]` marker matches the configured model wins.
+ */
+export function resolveClaudeContextWindow(
+  windows: Record<string, number>,
+  model: string | null | undefined,
+  configuredModel?: string | null
+): number | null {
+  if (model && windows[model]) return windows[model]
+  const wanted = configuredModel || model
+  if (!wanted) return null
+  const base = claudeModelBase(wanted)
+  const wants1m = wanted.includes('[1m]')
+  let fallback: number | null = null
+  for (const [key, window] of Object.entries(windows)) {
+    if (claudeModelBase(key) !== base) continue
+    if (key.includes('[1m]') === wants1m) return window
+    fallback ??= window
+  }
+  return fallback
+}
+
 /** `system/compact_boundary` → tokens left in the context after compaction. */
 export function claudeCompactBoundaryTokens(message: unknown): number | null {
   if (!isObject(message) || !isObject(message.compact_metadata)) return null

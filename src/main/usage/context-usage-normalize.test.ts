@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
+  claudeModelBase,
+  resolveClaudeContextWindow,
   acpUsageUpdateContextUsage,
   claudeAssistantContextTokens,
   claudeCompactBoundaryTokens,
@@ -91,5 +93,23 @@ describe('acpUsageUpdateContextUsage', () => {
     expect(acpUsageUpdateContextUsage({ used: 10 })).toBeNull()
     expect(acpUsageUpdateContextUsage({ used: 10, size: 0 })).toBeNull()
     expect(acpUsageUpdateContextUsage({ used: '10', size: 100 })).toBeNull()
+  })
+})
+
+describe('claude context window resolution', () => {
+  it('strips the [1m] marker and dated suffix to a base id', () => {
+    expect(claudeModelBase('claude-opus-4-7[1m]')).toBe('claude-opus-4-7')
+    expect(claudeModelBase('claude-haiku-4-5-20251001')).toBe('claude-haiku-4-5')
+  })
+
+  it('prefers an exact modelUsage key, then the variant matching the configured marker', () => {
+    const windows = { 'claude-opus-4-7': 200_000, 'claude-opus-4-7[1m]': 1_000_000 }
+    expect(resolveClaudeContextWindow(windows, 'claude-opus-4-7', 'claude-opus-4-7[1m]')).toBe(200_000)
+    expect(resolveClaudeContextWindow({ 'claude-opus-4-7[1m]': 1_000_000 }, 'claude-opus-4-7', 'claude-opus-4-7[1m]')).toBe(1_000_000)
+    expect(resolveClaudeContextWindow(windows, 'claude-opus-4-7', 'claude-opus-4-7')).toBe(200_000)
+  })
+
+  it('returns null when no reported window shares the base id', () => {
+    expect(resolveClaudeContextWindow({ 'claude-haiku-4-5': 200_000 }, 'claude-opus-4-7', null)).toBeNull()
   })
 })

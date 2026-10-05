@@ -475,6 +475,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             <ContextWindowMeter
               usage={contextUsage}
               onCompact={canSendInput && !isQuestion ? handleCompact : undefined}
+              busy={isWorking || isWaitingApproval || isStarting}
             />
           )}
           {/* Status indicator — matches desktop */}

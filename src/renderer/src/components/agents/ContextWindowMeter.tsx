@@ -14,6 +14,8 @@ interface ContextWindowMeterProps {
   usage: ContextUsageSnapshot | null
   /** Asks the harness to compact the conversation. Omit to hide the action. */
   onCompact?: () => void
+  /** The agent is mid-turn: compaction waits until it is idle, so the action is disabled. */
+  busy?: boolean
 }
 
 function formatUpdatedAt(value: string): string {
@@ -32,7 +34,7 @@ function codingAgentLabel(codingAgent: string | null): string {
  * shows a bar and the percentage; hover or focus opens the details card, which
  * holds the compact action.
  */
-export function ContextWindowMeter({ usage, onCompact }: ContextWindowMeterProps) {
+export function ContextWindowMeter({ usage, onCompact, busy = false }: ContextWindowMeterProps) {
   const [open, setOpen] = useState(false)
 
   if (!usage || usage.usedTokens == null) return null
@@ -110,7 +112,8 @@ export function ContextWindowMeter({ usage, onCompact }: ContextWindowMeterProps
                 variant="outline"
                 size="sm"
                 className="mt-1 h-7 w-full text-xs"
-                disabled={compacting}
+                disabled={compacting || busy}
+                title={busy && !compacting ? 'Available once the agent is idle' : undefined}
                 onClick={onCompact}
               >
                 {compacting ? 'Compacting…' : 'Compact context'}

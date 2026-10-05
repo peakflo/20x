@@ -92,6 +92,18 @@ describe('ContextWindowMeter', () => {
     expect(onCompact).not.toHaveBeenCalled()
   })
 
+  it('disables compaction while the agent is mid-turn', () => {
+    const onCompact = vi.fn()
+    render(<ContextWindowMeter usage={snapshot({ canCompact: true })} onCompact={onCompact} busy />)
+
+    fireEvent.click(pill())
+    const button = screen.getByRole('button', { name: 'Compact context' })
+    expect(button).toBeDisabled()
+    expect(button).toHaveAttribute('title', 'Available once the agent is idle')
+    fireEvent.click(button)
+    expect(onCompact).not.toHaveBeenCalled()
+  })
+
   it('shows the compact action only when the harness can compact and a handler is given', () => {
     const onCompact = vi.fn()
     const { unmount } = render(<ContextWindowMeter usage={snapshot({ canCompact: true })} onCompact={onCompact} />)

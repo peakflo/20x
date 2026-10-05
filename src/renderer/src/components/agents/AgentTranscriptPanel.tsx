@@ -1251,7 +1251,11 @@ export function AgentTranscriptPanel({
         </div>
         <div className="flex items-center gap-3">
           {contextUsage && (
-            <ContextWindowMeter usage={contextUsage} onCompact={taskId ? handleCompact : undefined} />
+            <ContextWindowMeter
+              usage={contextUsage}
+              onCompact={taskId ? handleCompact : undefined}
+              busy={isStarting || status === SessionStatus.WORKING || status === SessionStatus.WAITING_APPROVAL}
+            />
           )}
           <span className={`text-xs flex items-center gap-1 ${getStatusColor()}`}>
             {(isStarting || status === SessionStatus.WORKING) && <Loader2 className="h-3 w-3 animate-spin" />}

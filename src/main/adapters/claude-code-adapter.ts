@@ -17,7 +17,7 @@ import type {
   MessagePart,
 } from './coding-agent-adapter'
 import type { AdapterUsageLimitsEvent, AdapterUsageReport, UsageLimitStop } from './coding-agent-adapter'
-import type { AdapterContextUsageReport } from '../../shared/context-usage'
+import { normalizeAutoCompactTokens, type AdapterContextUsageReport } from '../../shared/context-usage'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 import { pickWindowsWhichMatch, resolveWindowsClaudeShim } from './claude-executable'
 import { homedir } from 'os'
@@ -32,16 +32,22 @@ import {
   claudeAssistantContextTokens,
   claudeCompactBoundaryTokens,
   claudeContextWindowsFromModelUsage,
-  claudeFallbackContextWindow
+  claudeFallbackContextWindow,
+  resolveClaudeContextWindow
 } from '../usage/context-usage-normalize'
 
 /**
  * SDK `settings.autoCompactWindow` for the Claude auto-compact threshold. Empty
  * when the user left auto-compact off, so the CLI default applies.
  */
-export function claudeAutoCompactOptions(autoCompactTokens: number | null | undefined): Pick<Options, 'settings'> | Record<string, never> {
+export function claudeAutoCompactOptions(
+  autoCompactTokens: number | null | undefined,
+  model?: string | null
+): Pick<Options, 'settings'> | Record<string, never> {
   if (typeof autoCompactTokens !== 'number' || !Number.isFinite(autoCompactTokens) || autoCompactTokens <= 0) return {}
-  return { settings: { autoCompactWindow: Math.round(autoCompactTokens) } }
+  const threshold = normalizeAutoCompactTokens(autoCompactTokens, model)
+  if (threshold === null) return {}
+  return { settings: { autoCompactWindow: threshold } }
 }
 
 type ClaudeSDK = typeof import('@anthropic-ai/claude-agent-sdk')
@@ -842,7 +848,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)
       allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
       ...(secretHooks ? { hooks: secretHooks } : {}),
-      ...claudeAutoCompactOptions(config.autoCompactTokens),
+      ...claudeAutoCompactOptions(config.autoCompactTokens, config.model),
     }
 
     // Determine session continuation mode
@@ -1649,18 +1655,23 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         const usedTokens = claudeAssistantContextTokens(msg)
         if (usedTokens === null) return
         session.contextModel = model ?? session.contextModel
-        const maxTokens = (model && session.contextWindows?.[model]) || claudeFallbackContextWindow(model)
+        const maxTokens = resolveClaudeContextWindow(session.contextWindows ?? {}, model, session.config.model)
+          ?? claudeFallbackContextWindow(session.config.model ?? model)
         this.onContextUsage({ ...base, usedTokens, maxTokens, model: model ?? null })
       } else if (msg.type === 'result') {
         const windows = claudeContextWindowsFromModelUsage(msg.modelUsage)
         session.contextWindows = { ...session.contextWindows, ...windows }
         const model = session.contextModel ?? Object.keys(windows)[0] ?? null
-        const maxTokens = model ? windows[model] ?? session.contextWindows[model] : undefined
+        const maxTokens = resolveClaudeContextWindow(session.contextWindows, model, session.config.model)
         if (maxTokens) this.onContextUsage({ ...base, maxTokens, model })
       } else if (msg.type === 'system' && msg.subtype === 'compact_boundary') {
+        // Without post_tokens the size after compaction is unknown: clear it
+        // rather than keep the pre-compaction figure.
+        const postTokens = claudeCompactBoundaryTokens(msg)
         this.onContextUsage({
           ...base,
-          usedTokens: claudeCompactBoundaryTokens(msg) ?? undefined,
+          usedTokens: postTokens ?? undefined,
+          unknownUsage: postTokens === null,
           compacting: false
         })
       } else if (msg.type === 'system' && msg.subtype === 'status') {

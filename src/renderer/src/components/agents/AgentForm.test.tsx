@@ -32,22 +32,33 @@ describe('AgentForm auto-compact', () => {
 
     const toggle = screen.getByRole('switch')
     expect(toggle).toHaveAttribute('aria-checked', 'false')
-    expect(screen.queryByLabelText('Auto-compact after N tokens')).toBeNull()
+    expect(screen.queryByLabelText('Context window for auto-compact')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(savedConfig(onSubmit).auto_compact_tokens).toBeNull()
   })
 
-  it('saves the normalised threshold when enabled', async () => {
+  it('saves the normalised threshold when enabled, capped at the model window', async () => {
     const onSubmit = await renderForm(agent({ coding_agent: CodingAgentType.CLAUDE_CODE, model: 'claude-sonnet-5' }))
 
     fireEvent.click(screen.getByRole('switch'))
-    const input = screen.getByLabelText('Auto-compact after N tokens') as HTMLInputElement
+    const input = screen.getByLabelText('Context window for auto-compact') as HTMLInputElement
     expect(input).toHaveAttribute('min', '100000')
-    expect(input).toHaveAttribute('max', '1000000')
+    expect(input).toHaveAttribute('max', '200000')
     expect(input).toHaveAttribute('step', '10000')
-    expect(screen.getByText('Claude compacts the conversation once it reaches this many tokens.')).toBeInTheDocument()
+    expect(screen.getByText(/Capped at the model's window: 200k/)).toBeInTheDocument()
 
+    fireEvent.change(input, { target: { value: '150000' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(savedConfig(onSubmit).auto_compact_tokens).toBe(150_000)
+  })
+
+  it('allows up to 1M for [1m] models', async () => {
+    const onSubmit = await renderForm(agent({ coding_agent: CodingAgentType.CLAUDE_CODE, model: 'claude-opus-4-7[1m]' }))
+
+    fireEvent.click(screen.getByRole('switch'))
+    const input = screen.getByLabelText('Context window for auto-compact') as HTMLInputElement
+    expect(input).toHaveAttribute('max', '1000000')
     fireEvent.change(input, { target: { value: '340000' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     expect(savedConfig(onSubmit).auto_compact_tokens).toBe(340_000)
@@ -57,7 +68,7 @@ describe('AgentForm auto-compact', () => {
     await renderForm(agent({ coding_agent: CodingAgentType.CLAUDE_CODE, auto_compact_tokens: 250_000 }))
 
     expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByLabelText('Auto-compact after N tokens')).toHaveValue(250_000)
+    expect(screen.getByLabelText('Context window for auto-compact')).toHaveValue(250_000)
   })
 
   it('does not add the key for other coding agents', async () => {

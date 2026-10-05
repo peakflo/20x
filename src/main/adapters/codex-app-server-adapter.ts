@@ -41,6 +41,8 @@ const MAX_IPC_TOOL_OUTPUT_CHARS = 100_000
 const MIN_THREAD_LEVEL_ASSISTANT_DEDUPE_CHARS = 40
 /** Minimum interval between automatic `account/rateLimits/read` calls. */
 const RATE_LIMITS_REFRESH_INTERVAL_MS = 5 * 60 * 1000
+/** Upper bound on a `/compact` run before the session is released anyway. */
+const COMPACTION_TIMEOUT_MS = 5 * 60 * 1000
 
 type CodexSandboxPolicy =
   | { type: 'readOnly'; networkAccess: boolean }
@@ -128,6 +130,9 @@ interface AppServerSession {
   pendingUsage: { bucket: UsageBucket; threadId: string } | null
   /** Set when the turn stopped on a usage limit (`usageLimitExceeded` / `rateLimitExceeded`). */
   usageLimit?: UsageLimitStop | null
+  /** A `/compact` request is running; the session stays BUSY until it completes. */
+  compacting: boolean
+  compactionTimer: ReturnType<typeof setTimeout> | null
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -585,13 +590,37 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     }
   }
 
+  /**
+   * `thread/compact/start` returns before compaction finishes; `thread/compacted`
+   * (or a `contextCompaction` item) ends it. The session stays BUSY meanwhile so
+   * the poller does not treat the thread as idle mid-compaction. A timer releases
+   * it if completion never arrives.
+   */
   private async compactThread(session: AppServerSession): Promise<void> {
+    if (session.activeTurnId) {
+      throw new Error('Cannot compact while a turn is running')
+    }
+    session.compacting = true
+    session.status = SessionStatusType.BUSY
+    session.lastError = null
     this.reportContextUsageState(session, { compacting: true })
+    session.compactionTimer = setTimeout(() => this.finishCompaction(session), COMPACTION_TIMEOUT_MS)
     try {
       await this.sendRpcRequest(session, 'thread/compact/start', { threadId: session.threadId })
     } catch (error) {
-      this.reportContextUsageState(session, { compacting: false })
+      this.finishCompaction(session)
       throw error
+    }
+  }
+
+  private finishCompaction(session: AppServerSession): void {
+    if (session.compactionTimer) clearTimeout(session.compactionTimer)
+    session.compactionTimer = null
+    if (!session.compacting) return
+    session.compacting = false
+    this.reportContextUsageState(session, { compacting: false })
+    if (!session.activeTurnId && session.status === SessionStatusType.BUSY) {
+      session.status = SessionStatusType.IDLE
     }
   }
 
@@ -834,7 +863,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       codexUseApiKey: authEnv.usesApiKey,
       codexAuthSummary: authEnv.summary,
       createdInApp: false,
-      pendingUsage: null
+      pendingUsage: null,
+      compacting: false,
+      compactionTimer: null
     }
 
     this.setupStdoutParser(child, session)
@@ -1107,12 +1138,12 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     }
 
     if (notification.method === 'thread/compacted') {
-      this.reportContextUsageState(session, { compacting: false })
+      this.finishCompaction(session)
       return
     }
 
     if (notification.method === 'item/completed' && isObject(params.item) && params.item.type === 'contextCompaction') {
-      this.reportContextUsageState(session, { compacting: false })
+      this.finishCompaction(session)
     }
 
     if (notification.method === 'account/rateLimits/updated') {

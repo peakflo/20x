@@ -100,4 +100,85 @@ describe('AgentManager context usage', () => {
     const updated = db.updateAgent(agent.id, { config: { coding_agent: 'claude-code', auto_compact_tokens: 10 } })!
     expect(updated.config.auto_compact_tokens).toBe(100_000)
   })
+
+  it('starts a fresh meter when the agent or harness changes', () => {
+    const codex = db.createAgent(makeAgent({ config: { coding_agent: 'codex' } }))!
+    const claude = db.createAgent(makeAgent({ config: { coding_agent: 'claude-code' } }))!
+
+    adapterFor(codex.id).onContextUsage?.({ taskId: 'task-1', agentId: codex.id, usedTokens: 90, maxTokens: 100, model: 'gpt-x', canCompact: true })
+    adapterFor(claude.id).onContextUsage?.({ taskId: 'task-1', agentId: claude.id, usedTokens: 10 })
+
+    expect(manager.getContextUsage('task-1')).toMatchObject({
+      agentId: claude.id,
+      codingAgent: 'claude-code',
+      usedTokens: 10,
+      maxTokens: null,
+      percent: null,
+      model: null,
+      canCompact: false
+    })
+  })
+
+  it('keeps the window within one agent when reports continue', () => {
+    const claude = db.createAgent(makeAgent({ config: { coding_agent: 'claude-code' } }))!
+    const adapter = adapterFor(claude.id)
+    adapter.onContextUsage?.({ taskId: 'task-1', agentId: claude.id, usedTokens: 10, maxTokens: 200_000 })
+    adapter.onContextUsage?.({ taskId: 'task-1', agentId: claude.id, usedTokens: 20 })
+
+    expect(manager.getContextUsage('task-1')).toMatchObject({ usedTokens: 20, maxTokens: 200_000 })
+  })
+
+  it('clears compacting when the session leaves the working state, but not while it works', () => {
+    const claude = db.createAgent(makeAgent({ config: { coding_agent: 'claude-code' } }))!
+    adapterFor(claude.id).onContextUsage?.({ taskId: 'task-1', agentId: claude.id, compacting: true })
+
+    const emit = (manager as unknown as { sendToRenderer(channel: string, data: unknown): void }).sendToRenderer.bind(manager)
+    emit('agent:status', { taskId: 'task-1', status: 'working' })
+    expect(manager.getContextUsage('task-1')?.compacting).toBe(true)
+
+    emit('agent:status', { taskId: 'task-1', status: 'error' })
+    expect(manager.getContextUsage('task-1')?.compacting).toBe(false)
+  })
+
+  it('clears the meter on session start, so the next context begins empty', () => {
+    const claude = db.createAgent(makeAgent({ config: { coding_agent: 'claude-code' } }))!
+    adapterFor(claude.id).onContextUsage?.({ taskId: 'task-1', agentId: claude.id, usedTokens: 150_000, maxTokens: 200_000, compacting: true })
+
+    ;(manager as unknown as { clearContextUsage(taskId: string): void }).clearContextUsage('task-1')
+
+    expect(manager.getContextUsage('task-1')).toMatchObject({ usedTokens: null, maxTokens: null, percent: null, compacting: false })
+    expect(contextEvents().at(-1)).toMatchObject({ taskId: 'task-1', usedTokens: null })
+  })
+
+  it('sends /compact to a compact-capable harness as the bare command', async () => {
+    const claude = db.createAgent(makeAgent({ config: { coding_agent: 'claude-code' } }))!
+    const task = db.createTask(makeTask())!
+    const sendPrompt = vi.fn(async () => {})
+    const session = {
+      sessionId: 'sess-1', agentId: claude.id, taskId: task.id, workspaceDir: '/tmp', status: 'idle',
+      adapter: { sendPrompt, getStatus: vi.fn() }, seenMessageIds: new Set(), seenPartIds: new Set(), partContentLengths: new Map()
+    } as any
+    const send = (manager as unknown as { doSendAdapterMessage(s: unknown, id: string, m: string): Promise<void> }).doSendAdapterMessage.bind(manager)
+
+    await send(session, 'sess-1', '/compact')
+
+    expect(sendPrompt).toHaveBeenCalledWith('sess-1', [expect.objectContaining({ text: '/compact' })], expect.anything())
+    expect(sent.some((e) => e.channel === 'agent:output' && JSON.stringify(e.data).includes('"role":"user"'))).toBe(false)
+  })
+
+  it('sends /compact to other harnesses as an ordinary user message', async () => {
+    const opencode = db.createAgent(makeAgent({ config: { coding_agent: 'opencode' } }))!
+    const task = db.createTask(makeTask())!
+    const sendPrompt = vi.fn(async (_sessionId: string, _parts: Array<{ text?: string }>, _config: unknown) => {})
+    const session = {
+      sessionId: 'sess-2', agentId: opencode.id, taskId: task.id, workspaceDir: '/tmp', status: 'idle',
+      adapter: { sendPrompt, getStatus: vi.fn() }, seenMessageIds: new Set(), seenPartIds: new Set(), partContentLengths: new Map()
+    } as any
+    const send = (manager as unknown as { doSendAdapterMessage(s: unknown, id: string, m: string): Promise<void> }).doSendAdapterMessage.bind(manager)
+
+    await send(session, 'sess-2', '/compact')
+
+    expect(sent.some((e) => e.channel === 'agent:output' && JSON.stringify(e.data).includes('"role":"user"'))).toBe(true)
+    expect(sendPrompt.mock.calls[0]?.[1]?.[0]?.text).not.toBe('/compact')
+  })
 })

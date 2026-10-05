@@ -49,6 +49,7 @@ import {
 } from '../shared/usage'
 import {
   AGENT_CONTEXT_USAGE_CHANNEL,
+  harnessCanCompact,
   isCompactCommand,
   mergeContextUsage,
   normalizeAutoCompactTokens,
@@ -947,12 +948,20 @@ export class AgentManager extends EventEmitter {
   private applyContextUsageReport(report: AdapterContextUsageReport): void {
     const taskId = report.taskId
     if (!taskId) return
-    const previous = this.contextUsage.get(taskId)
+    const stored = this.contextUsage.get(taskId)
     const agent = report.agentId ? this.db.getAgent(report.agentId) : undefined
+    const codingAgent = agent?.config?.coding_agent ?? null
+    // A different agent or harness starts a fresh meter: the previous figures
+    // (window size, model, compacting) describe another context.
+    const switched = !!stored && (
+      (!!stored.agentId && !!report.agentId && stored.agentId !== report.agentId)
+      || (!!stored.codingAgent && !!codingAgent && stored.codingAgent !== codingAgent)
+    )
+    const previous = switched ? undefined : stored
     const next = mergeContextUsage(previous, report, {
       taskId,
       agentId: report.agentId ?? null,
-      codingAgent: agent?.config?.coding_agent ?? null
+      codingAgent
     })
     if (previous && previous.usedTokens === next.usedTokens
       && previous.maxTokens === next.maxTokens
@@ -968,6 +977,30 @@ export class AgentManager extends EventEmitter {
   /** Latest context-window meter state for a task, or null when no adapter has reported one. */
   getContextUsage(taskId: string): ContextUsageSnapshot | null {
     return this.contextUsage.get(taskId) ?? null
+  }
+
+  /**
+   * Replaces a task's meter with an empty snapshot and tells clients. Used when a
+   * session starts or the task's last session is stopped, so no stale window size,
+   * model or compacting flag survives into the next context.
+   */
+  private clearContextUsage(taskId: string): void {
+    const cleared = mergeContextUsage(undefined, {
+      usedTokens: null,
+      maxTokens: null,
+      model: null,
+      compacting: false,
+      canCompact: false
+    }, { taskId, agentId: null, codingAgent: null })
+    this.contextUsage.set(taskId, cleared)
+    this.sendToRenderer(AGENT_CONTEXT_USAGE_CHANNEL, cleared)
+  }
+
+  private hasSessionForTask(taskId: string): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.taskId === taskId) return true
+    }
+    return false
   }
 
   /** Lets the user allow (or revoke) reading the Cursor CLI login from the macOS Keychain. */
@@ -1195,7 +1228,7 @@ export class AgentManager extends EventEmitter {
       workspaceDir: workspaceDir || this.db.getWorkspaceDir(taskId),
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
-      autoCompactTokens: normalizeAutoCompactTokens(agent.config?.auto_compact_tokens),
+      autoCompactTokens: normalizeAutoCompactTokens(agent.config?.auto_compact_tokens, agent.config?.model),
       systemPrompt: baseSystemPrompt,
       mcpServers,
       authMethod: agent.config?.auth_method,
@@ -1825,6 +1858,8 @@ export class AgentManager extends EventEmitter {
     skipInitialPrompt?: boolean
   ): Promise<string> {
     this.assertLocalHelpAllowed(taskId)
+    // A new harness context starts with an empty meter; the adapter reports fresh figures.
+    this.clearContextUsage(taskId)
     // Helper: yield event loop between bursts of synchronous DB / FS calls
     // so the renderer can process IPC and paint frames during session setup.
     const yieldEL = (): Promise<void> => new Promise((r) => setImmediate(r))
@@ -1865,7 +1900,7 @@ export class AgentManager extends EventEmitter {
       workspaceDir,
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
-      autoCompactTokens: normalizeAutoCompactTokens(agent.config?.auto_compact_tokens),
+      autoCompactTokens: normalizeAutoCompactTokens(agent.config?.auto_compact_tokens, agent.config?.model),
       systemPrompt: agent.config?.system_prompt,
       mcpServers,
       authMethod: agent.config?.auth_method,
@@ -3188,7 +3223,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       workspaceDir,
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
-      autoCompactTokens: normalizeAutoCompactTokens(agent.config?.auto_compact_tokens),
+      autoCompactTokens: normalizeAutoCompactTokens(agent.config?.auto_compact_tokens, agent.config?.model),
       systemPrompt: baseSystemPrompt,
       mcpServers,
       authMethod: agent.config?.auth_method,
@@ -4426,6 +4461,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     this.sessions.delete(sessionId)
     this.lastSentStatus.delete(sessionId)
+    if (this.contextUsage.get(session.taskId)?.compacting) {
+      this.applyContextUsageReport({ taskId: session.taskId, compacting: false })
+    }
+    if (!this.hasSessionForTask(session.taskId)) this.clearContextUsage(session.taskId)
     this.schedulePowerSaveBlockerUpdate()
     console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} resetStatus=${resetTaskStatus} reason=stop_session`)
 
@@ -4662,7 +4701,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     // `/compact` is a harness request: no user bubble and no task or attachment
     // context, so the adapter receives the bare command.
-    const isCompactRequest = isCompactCommand(message)
+    // Only harnesses that can compact take the command as a request; any other
+    // harness receives "/compact" as ordinary text, shown as a normal bubble.
+    const isCompactRequest = isCompactCommand(message) && harnessCanCompact(getAgentProvider(this.db.getAgent(session.agentId)))
     const userFacingMessage = this.buildDisplayMessage(message, attachments)
 
     // First message of a session that took over a reassigned task: announce the carried-over context.
@@ -6101,6 +6142,15 @@ Important:
   }
 
   private sendToRenderer(channel: string, data: unknown): void {
+    // A compaction ends with the turn it belongs to: any status other than
+    // "working" releases the meter's compacting flag, however the turn ended.
+    if (channel === 'agent:status' && data && typeof data === 'object') {
+      const { sessionId, status, taskId } = data as { sessionId?: string; status?: string; taskId?: string }
+      const resolvedTaskId = taskId ?? (sessionId ? this.sessions.get(sessionId)?.taskId : undefined)
+      if (resolvedTaskId && status !== 'working' && this.contextUsage.get(resolvedTaskId)?.compacting) {
+        this.applyContextUsageReport({ taskId: resolvedTaskId, compacting: false })
+      }
+    }
     if (channel === 'task:updated' && data && typeof data === 'object') {
       const event = data as { taskId?: string; updates?: Record<string, unknown> }
       if (event.taskId && event.updates && serverTaskSnapshot(this.db, event.taskId)) {

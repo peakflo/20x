@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   AUTO_COMPACT_TOKENS_MAX,
   AUTO_COMPACT_TOKENS_MIN,
+  contextWindowCapForModel,
+  harnessCanCompact,
   contextUsageLevel,
   contextUsagePercent,
   formatContextTokens,
@@ -131,5 +133,35 @@ describe('mergeContextUsage', () => {
     expect(first.percent).toBeNull()
     const second = mergeContextUsage(first, { usedTokens: 2_000, maxTokens: 1_000_000 }, meta)
     expect(second.percent).toBeCloseTo(0.2)
+  })
+})
+
+describe('auto-compact cap per model', () => {
+  it('caps standard models at 200k and [1m] models at 1M', () => {
+    expect(contextWindowCapForModel('claude-sonnet-4-5')).toBe(200_000)
+    expect(contextWindowCapForModel('claude-opus-4-7[1m]')).toBe(1_000_000)
+    expect(normalizeAutoCompactTokens(500_000, 'claude-sonnet-4-5')).toBe(200_000)
+    expect(normalizeAutoCompactTokens(500_000, 'claude-opus-4-7[1m]')).toBe(500_000)
+    expect(normalizeAutoCompactTokens(500_000)).toBe(500_000)
+  })
+})
+
+describe('harnessCanCompact', () => {
+  it('is true only for harnesses that accept /compact', () => {
+    expect(harnessCanCompact('claude-code')).toBe(true)
+    expect(harnessCanCompact('codex')).toBe(true)
+    expect(harnessCanCompact('opencode')).toBe(false)
+    expect(harnessCanCompact('cursor')).toBe(false)
+    expect(harnessCanCompact(null)).toBe(false)
+  })
+})
+
+describe('unknownUsage', () => {
+  it('clears used tokens instead of keeping the previous figure', () => {
+    const before = mergeContextUsage(undefined, { usedTokens: 180_000, maxTokens: 200_000 }, { taskId: 't' })
+    const after = mergeContextUsage(before, { unknownUsage: true }, { taskId: 't' })
+    expect(after.usedTokens).toBeNull()
+    expect(after.percent).toBeNull()
+    expect(after.maxTokens).toBe(200_000)
   })
 })
