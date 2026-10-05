@@ -101,19 +101,36 @@ export interface ContinuationAgent {
 export interface ContinuationOptions {
   /** True when the task has transcript content that could be handed over. */
   hasHistory: boolean
-  /** True when the backend session of the task can still be resumed. */
+  /**
+   * True when the backend session can still be resumed. False after a resume
+   * failed with INCOMPATIBLE_SESSION_ID, "No conversation found" or a missing
+   * session file.
+   */
   sessionReachable: boolean
+  /**
+   * False when this harness instance does not share its sessions with the
+   * one the task came from (for example a separate account home). Then a
+   * same-harness session cannot be resumed and the handoff is used. Defaults to true.
+   */
+  sessionsShared?: boolean
 }
 
 export type ContinuationPlan = 'native-resume' | 'handoff' | 'fresh'
+
+/** True when two `coding_agent` config values name the same harness. */
+export function isSameHarness(a: string | undefined, b: string | undefined): boolean {
+  return (a ?? '') === (b ?? '')
+}
 
 /**
  * Decides how a task continues on an agent. Pure, so the agent switch and the
  * account switch can share it.
  *
- * - `native-resume`: same harness, the task still has its session, and that
- *   session is reachable. The backend keeps the conversation, so nothing is carried.
- * - `handoff`: a different harness, or the session is not reachable, and there is history.
+ * - `native-resume`: same harness type, the task still has its session id,
+ *   and that session is reachable and shared. The new agent continues the same
+ *   session id with its own configuration. Nothing is carried.
+ * - `handoff`: a different harness type, or the session is not reachable or not
+ *   shared, and there is history to carry.
  * - `fresh`: no history to carry, and no session to resume.
  */
 export function planContinuation(
@@ -122,8 +139,9 @@ export function planContinuation(
   to: ContinuationAgent,
   opts: ContinuationOptions
 ): ContinuationPlan {
-  const sameHarness = !!from && (from.codingAgent ?? '') === (to.codingAgent ?? '')
-  if (task.session_id && sameHarness && opts.sessionReachable) return 'native-resume'
+  const sameHarness = !!from && isSameHarness(from.codingAgent, to.codingAgent)
+  const sessionsShared = opts.sessionsShared !== false
+  if (task.session_id && sameHarness && opts.sessionReachable && sessionsShared) return 'native-resume'
   return opts.hasHistory ? 'handoff' : 'fresh'
 }
 

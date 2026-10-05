@@ -3197,6 +3197,15 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         errorMessage.includes('SESSION_FILE_NOT_FOUND') ||
         errorMessage.includes('Session no longer exists on server')
       ) {
+        // The task has a pending handoff, so the conversation is not lost: drop the
+        // dead session and leave the marker in place. The next session of this agent
+        // receives the handoff block. No dialog is needed.
+        if (parseContextHandoffMarker(this.db.getSetting(contextHandoffSettingKey(taskId)))) {
+          console.warn(`[AgentManager] Session ${adapterSessionId} is gone; task ${taskId} continues by handoff`)
+          this.updateTaskFromLocalAgent(taskId, { session_id: null })
+          return ''
+        }
+
         console.warn(`[AgentManager] Session not found or incompatible: ${adapterSessionId}`)
 
         // For completed/review tasks, the session may have ended normally.
@@ -5957,15 +5966,16 @@ Important:
       return null
     }
 
-    // A new session starts without the old backend session, so the plan is a handoff or nothing.
+    // A same-harness session that is still on the task continues natively, with no block.
+    // A task without a session starts from the handoff.
     const previous = marker.fromAgentId ? this.db.getAgent(marker.fromAgentId) : undefined
     const current = this.db.getAgent(agentId)
     const transcript = this.db.getTranscriptParts(taskId)
     const plan = planContinuation(
-      { session_id: null },
+      { session_id: task.session_id ?? null },
       previous ? this.continuationAgent(previous.id, previous.config?.coding_agent) : null,
       this.continuationAgent(agentId, current?.config?.coding_agent),
-      { hasHistory: transcript.length > 0, sessionReachable: false }
+      { hasHistory: transcript.length > 0, sessionReachable: !!task.session_id }
     )
     if (plan !== 'handoff') {
       this.db.deleteSetting(key)

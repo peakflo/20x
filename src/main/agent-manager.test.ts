@@ -4187,7 +4187,7 @@ describe('AgentManager context handoff on agent reassignment', () => {
   ]
   const KEY = 'context-handoff:task-1'
 
-  function makeHandoffDb(opts: { taskAgentId?: string; marker?: { fromAgentId: string | null } | null; transcript?: unknown[] }) {
+  function makeHandoffDb(opts: { taskAgentId?: string; marker?: { fromAgentId: string | null } | null; transcript?: unknown[]; sessionId?: string | null; currentHarness?: string }) {
     const settings = new Map<string, string>()
     if (opts.marker !== null) {
       settings.set(KEY, JSON.stringify({ fromAgentId: 'agent-old', recordedAt: 1, ...(opts.marker ?? {}) }))
@@ -4201,8 +4201,12 @@ describe('AgentManager context handoff on agent reassignment', () => {
       skill_ids: [],
       status: 'agent_working',
       agent_id: opts.taskAgentId ?? 'agent-1',
+      session_id: opts.sessionId ?? null,
     }))
-    db.getAgent = vi.fn((id: string) => (id === 'agent-old' ? PREVIOUS_AGENT : CURRENT_AGENT))
+    const current = opts.currentHarness
+      ? { ...CURRENT_AGENT, config: { ...CURRENT_AGENT.config, coding_agent: opts.currentHarness } }
+      : CURRENT_AGENT
+    db.getAgent = vi.fn((id: string) => (id === 'agent-old' ? PREVIOUS_AGENT : current))
     db.getSetting = vi.fn((key: string) => settings.get(key) ?? null)
     db.setSetting = vi.fn((key: string, value: string) => { settings.set(key, value) })
     db.deleteSetting = vi.fn((key: string) => { settings.delete(key) })
@@ -4353,5 +4357,97 @@ describe('AgentManager context handoff on agent reassignment', () => {
     await expect((manager as any).doSendAdapterMessage(session, 'session-1', 'hello')).rejects.toThrow('transport down')
 
     expect(settings.has(KEY)).toBe(true)
+  })
+})
+
+describe('AgentManager resume after a reassignment from the agent dropdown', () => {
+  const KEY_ = 'context-handoff:task-1'
+  const TRANSCRIPT_ = [
+    { taskId: 'task-1', partId: 'p1', seq: 1, role: 'user', content: 'Fix the login bug', partType: 'text', createdAt: 1, updatedAt: 1, rev: 1 },
+    { taskId: 'task-1', partId: 'p2', seq: 2, role: 'assistant', content: 'Checking auth.ts', partType: 'text', createdAt: 2, updatedAt: 2, rev: 2 },
+  ]
+
+  /** A task whose session id and marker are shared state, as in the database. */
+  function setup(opts: { sameHarness: boolean; resumeError?: string }) {
+    const settings = new Map<string, string>()
+    settings.set(KEY_, JSON.stringify({ fromAgentId: 'agent-old', recordedAt: 1, announced: false }))
+    const task: Record<string, unknown> = { id: 'task-1', title: 'Ship the feature', description: '', status: 'agent_working', agent_id: 'agent-1', session_id: 'backend-session-1' }
+    const agents: Record<string, unknown> = {
+      'agent-old': { id: 'agent-old', name: 'Claude Lead', config: { coding_agent: 'claude-code' } },
+      'agent-1': { id: 'agent-1', name: 'Next Lead', config: { coding_agent: opts.sameHarness ? 'claude-code' : 'codex' } },
+    }
+    const mockDb = {
+      getTask: vi.fn(() => ({ ...task })),
+      getAgent: vi.fn((id: string) => agents[id]),
+      getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
+      updateTask: vi.fn((_id: string, data: Record<string, unknown>) => { Object.assign(task, data) }),
+      getMcpServer: vi.fn(() => null),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn((key: string) => settings.get(key) ?? null),
+      setSetting: vi.fn((key: string, value: string) => { settings.set(key, value) }),
+      deleteSetting: vi.fn((key: string) => { settings.delete(key) }),
+      getTranscriptParts: vi.fn(() => TRANSCRIPT_),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const adapter = {
+      initialize: vi.fn(async () => undefined),
+      resumeSession: vi.fn(async () => {
+        if (opts.resumeError) throw new Error(opts.resumeError)
+        return [{ id: 'msg-1', role: MessageRole.ASSISTANT, parts: [{ id: 'part-1', type: MessagePartType.TEXT, text: 'Earlier reply' }] }]
+      })
+    }
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+    const emitted: Array<[string, unknown]> = []
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation((channel: unknown, data: unknown) => { emitted.push([channel as string, data]) })
+    return { manager, adapter, task, settings, emitted }
+  }
+
+  it('continues the same harness session on the new agent, with no handoff block', async () => {
+    const { manager, adapter, task, settings } = setup({ sameHarness: true })
+
+    const resumed = await (manager as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'backend-session-1')
+
+    expect(resumed).toBeTruthy()
+    expect(adapter.resumeSession).toHaveBeenCalledWith('backend-session-1', expect.anything())
+    expect(task.session_id).toBe('backend-session-1')
+    // The native resume holds the conversation, so the marker is consumed and no block is prepared.
+    expect(settings.has(KEY_)).toBe(false)
+    expect((manager as any).prepareContextHandoff('task-1', 'agent-1')).toBeNull()
+  })
+
+  it('falls back to the handoff when a same-harness resume fails, without losing the context', async () => {
+    const { manager, adapter, task, settings, emitted } = setup({
+      sameHarness: true,
+      resumeError: 'INCOMPATIBLE_SESSION_ID: session not found on this account'
+    })
+
+    const resumed = await (manager as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'backend-session-1')
+
+    // The dead session is dropped, no "start new session?" dialog is shown, and the marker stays.
+    expect(resumed).toBe('')
+    expect(task.session_id).toBeNull()
+    expect(emitted.some(([channel]) => channel === 'agent:incompatible-session')).toBe(false)
+    expect(settings.has(KEY_)).toBe(true)
+
+    // The next session of the agent receives the carried-over conversation.
+    const handoff = (manager as any).prepareContextHandoff('task-1', 'agent-1')
+    expect(handoff.block).toContain('[#1 request] Ship the feature')
+    expect(handoff.block).toContain('Checking auth.ts')
+  })
+
+  it('hands a different harness over, and never resumes its old session', async () => {
+    const { manager, adapter, task } = setup({ sameHarness: false })
+
+    const resumed = await (manager as any).resumeAdapterSession(adapter, 'agent-1', 'task-1', 'backend-session-1')
+
+    expect(resumed).toBe('')
+    expect(adapter.resumeSession).not.toHaveBeenCalled()
+    expect(task.session_id).toBeNull()
+    expect((manager as any).prepareContextHandoff('task-1', 'agent-1').block).toContain('## Conversation so far with Claude Lead')
   })
 })

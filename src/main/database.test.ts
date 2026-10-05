@@ -856,13 +856,38 @@ describe('Context handoff marker on agent reassignment', () => {
     expect(JSON.parse(db.getSetting(key(task.id))!)).toMatchObject({ fromAgentId: first.id, announced: false })
   })
 
-  it('clears the session of the task when it is reassigned to another agent', () => {
-    const first = db.createAgent(makeAgent({ name: 'First' }))!
-    const second = db.createAgent(makeAgent({ name: 'Second' }))!
+  it('clears the session of the task when it is reassigned to another harness', () => {
+    const first = db.createAgent(makeAgent({ name: 'First', config: { coding_agent: 'claude-code' } }))!
+    const second = db.createAgent(makeAgent({ name: 'Second', config: { coding_agent: 'codex' } }))!
     const task = assigned(first.id)
     db.updateTask(task.id, { session_id: 'backend-session-1' })
 
     const updated = db.updateTask(task.id, { agent_id: second.id })
+
+    expect(updated?.session_id).toBeNull()
+  })
+
+  it('keeps the session when the task moves to another agent of the same harness', () => {
+    const first = db.createAgent(makeAgent({ name: 'First', config: { coding_agent: 'claude-code' } }))!
+    const second = db.createAgent(makeAgent({ name: 'Second', config: { coding_agent: 'claude-code', model: 'other' } }))!
+    const task = assigned(first.id)
+    db.upsertTranscriptParts(task.id, [{ id: 'p1', role: 'user', content: 'hello' }])
+    db.updateTask(task.id, { session_id: 'backend-session-1' })
+
+    const updated = db.updateTask(task.id, { agent_id: second.id })
+
+    expect(updated?.session_id).toBe('backend-session-1')
+    expect(updated?.agent_id).toBe(second.id)
+    // The marker is still written, so a failed native resume can fall back to the handoff.
+    expect(JSON.parse(db.getSetting(key(task.id))!)).toMatchObject({ fromAgentId: first.id, announced: false })
+  })
+
+  it('clears the session when the task is unassigned', () => {
+    const first = db.createAgent(makeAgent({ name: 'First', config: { coding_agent: 'claude-code' } }))!
+    const task = assigned(first.id)
+    db.updateTask(task.id, { session_id: 'backend-session-1' })
+
+    const updated = db.updateTask(task.id, { agent_id: null })
 
     expect(updated?.session_id).toBeNull()
   })

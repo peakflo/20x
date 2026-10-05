@@ -387,6 +387,16 @@ describe('planContinuation', () => {
     expect(planContinuation(withSession, claude, codex, { hasHistory: false, sessionReachable: false })).toBe('fresh')
   })
 
+  it('hands over on the same harness when that instance does not share its sessions', () => {
+    expect(planContinuation(withSession, claude, claudeOther, { hasHistory: true, sessionReachable: true, sessionsShared: false })).toBe('handoff')
+    expect(planContinuation(withSession, claude, claudeOther, { hasHistory: true, sessionReachable: true, sessionsShared: true })).toBe('native-resume')
+  })
+
+  it('does not resume without a session id, even on the same harness', () => {
+    expect(planContinuation({ session_id: null }, claude, claudeOther, { hasHistory: true, sessionReachable: true })).toBe('handoff')
+    expect(planContinuation({ session_id: null }, claude, claudeOther, { hasHistory: false, sessionReachable: true })).toBe('fresh')
+  })
+
   it('hands over from an unassigned task that has history', () => {
     expect(planContinuation({ session_id: null }, null, claude, { hasHistory: true, sessionReachable: false })).toBe('handoff')
   })

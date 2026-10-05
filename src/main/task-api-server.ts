@@ -29,7 +29,7 @@ import {
 } from '../shared/ui-commands'
 import { buildSimilarTasksQuery } from './task-search'
 import { limitsByProvider, summarizeAgentUsage } from './usage/agent-usage-summary'
-import { toolOutputText } from './context-handoff'
+import { isSameHarness, toolOutputText } from './context-handoff'
 import {
   createRegisteredTaskArtifact,
   editRegisteredTaskArtifactFile,
@@ -467,9 +467,12 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const previousAgentId = params.agent_id !== undefined
         ? (rawDb.prepare('SELECT agent_id FROM tasks WHERE id = ?').get(params.task_id) as { agent_id: string | null } | undefined)?.agent_id ?? null
         : undefined
-      // A new agent does not resume the old agent's session. DatabaseManager.updateTask does the same.
+      // A new agent of another harness does not resume the old session. DatabaseManager.updateTask does the same.
       if (previousAgentId !== undefined && params.agent_id !== previousAgentId && params.session_id === undefined) {
-        updates.push('session_id = ?'); qParams.push(null)
+        const fromAgent = previousAgentId ? db.getAgent(previousAgentId) : undefined
+        const toAgent = params.agent_id ? db.getAgent(String(params.agent_id)) : undefined
+        const keepSession = !!fromAgent && !!toAgent && isSameHarness(fromAgent.config?.coding_agent, toAgent.config?.coding_agent)
+        if (!keepSession) { updates.push('session_id = ?'); qParams.push(null) }
       }
       // Lets a caller with no window hand the task straight to its agent.
       if (params.auto_start_agent !== undefined) {

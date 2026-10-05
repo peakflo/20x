@@ -8,7 +8,7 @@ import { TaskStatus } from '../shared/constants'
 import type { ReasoningEffort } from '../shared/reasoning-effort'
 import { startTaskApiServer } from './task-api-server'
 import { UsageStore } from './usage/usage-store'
-import { contextHandoffSettingKey, parseContextHandoffMarker, type ContextHandoffMarker } from './context-handoff'
+import { contextHandoffSettingKey, isSameHarness, parseContextHandoffMarker, type ContextHandoffMarker } from './context-handoff'
 
 export interface AgentRow {
   id: string
@@ -2410,11 +2410,15 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       throw new Error('Only the sync service can change a task source link.')
     }
     const currentTask = this.getTask(id)
-    // Reassigning to another agent ends the old backend session: the new agent
-    // starts from a handoff, not from a resume of a session it does not own.
+    // Reassigning to an agent of another harness ends the backend session: the
+    // new agent starts from a handoff. Within the same harness the session id
+    // is kept, and the new agent continues it with its own configuration.
     const agentChanged = !!currentTask && data.agent_id !== undefined && data.agent_id !== currentTask.agent_id
     if (agentChanged && data.session_id === undefined) {
-      data = { ...data, session_id: null }
+      const fromAgent = currentTask!.agent_id ? this.getAgent(currentTask!.agent_id) : undefined
+      const toAgent = data.agent_id ? this.getAgent(data.agent_id) : undefined
+      const keepSession = !!fromAgent && !!toAgent && isSameHarness(fromAgent.config?.coding_agent, toAgent.config?.coding_agent)
+      if (!keepSession) data = { ...data, session_id: null }
     }
     const approvedStatusWrite = origin === 'session-feedback' || origin === 'task-source'
     if (!approvedStatusWrite && currentTask?.status === TaskStatus.AgentLearning && this.getSetting(`session-feedback-completion:${id}`) && !(data.status === TaskStatus.Completed && data.complete_at_source === false)) {
