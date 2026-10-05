@@ -992,7 +992,8 @@ export class AgentManager extends EventEmitter {
       compacting: false,
       canCompact: false
     }, { taskId, agentId: null, codingAgent: null })
-    this.contextUsage.set(taskId, cleared)
+    // Forget the entry (getContextUsage → null) and tell clients to hide the meter.
+    this.contextUsage.delete(taskId)
     this.sendToRenderer(AGENT_CONTEXT_USAGE_CHANNEL, cleared)
   }
 
@@ -4189,7 +4190,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       // Release it through the adapter first: otherwise the agent CLI process and
       // its task-management MCP child stay alive with no handle left to stop them.
       await this.releaseAdapterSession(sessionId, 'triage_completed')
+      const meterTaskId = this.sessions.get(sessionId)?.taskId
       this.sessions.delete(sessionId)
+      if (meterTaskId && !this.hasSessionForTask(meterTaskId)) this.clearContextUsage(meterTaskId)
       this.schedulePowerSaveBlockerUpdate()
       console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} reason=triage_completed`)
       return
@@ -5791,7 +5794,9 @@ Important:
     // too, so the agent CLI process and its MCP stdio children stop instead of
     // running on untracked until the app quits.
     await this.releaseAdapterSession(sessionId, 'learn_from_session')
+    const meterTaskId = this.sessions.get(sessionId)?.taskId
     this.sessions.delete(sessionId)
+    if (meterTaskId && !this.hasSessionForTask(meterTaskId)) this.clearContextUsage(meterTaskId)
     this.schedulePowerSaveBlockerUpdate()
     console.log(`[AgentManager] Learning complete for session ${sessionId}:`, result)
     return result

@@ -12,6 +12,7 @@ vi.mock('child_process', () => ({
 interface AdapterPrivate {
   sessions: Map<string, any>
   handleRpcMessage(session: any, message: unknown): void
+  markIdleIfSettled(session: any): void
   sendRpcRequest(session: any, method: string, params?: unknown): Promise<unknown>
 }
 
@@ -152,5 +153,35 @@ describe('CodexAppServerAdapter context usage', () => {
     await expect(adapter.sendPrompt('thread-1', [{ type: 'text', text: '/compact' } as any], session.config as any)).rejects.toThrow('boom')
     expect(contextReports.map((r) => r.compacting)).toEqual([true, false])
     expect(session.status).toBe(SessionStatusType.IDLE)
+  })
+
+  it('does not go IDLE from a thread-idle signal while compacting', async () => {
+    const { adapter, priv, session } = setup()
+    await adapter.sendPrompt('thread-1', [{ type: 'text', text: '/compact' } as any], session.config as any)
+
+    priv.handleRpcMessage(session, { jsonrpc: '2.0', method: 'thread/status/changed', params: { threadId: 'thread-1', status: 'idle' } })
+    priv.markIdleIfSettled(session)
+
+    expect(session.compacting).toBe(true)
+    expect(session.status).toBe(SessionStatusType.BUSY)
+  })
+
+  it('emits no compacting:false after destroySession', async () => {
+    vi.useFakeTimers()
+    try {
+      const { adapter, session, contextReports } = setup()
+      ;(session.process as unknown as { kill: () => void }).kill = vi.fn()
+      await adapter.sendPrompt('thread-1', [{ type: 'text', text: '/compact' } as any], session.config as any)
+      const reportsBefore = contextReports.length
+
+      await adapter.destroySession('thread-1', session.config as any)
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1)
+
+      expect(contextReports.length).toBe(reportsBefore)
+      expect(session.compactionTimer).toBeNull()
+      expect(session.compacting).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

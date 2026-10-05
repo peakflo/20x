@@ -146,8 +146,8 @@ describe('AgentManager context usage', () => {
 
     ;(manager as unknown as { clearContextUsage(taskId: string): void }).clearContextUsage('task-1')
 
-    expect(manager.getContextUsage('task-1')).toMatchObject({ usedTokens: null, maxTokens: null, percent: null, compacting: false })
-    expect(contextEvents().at(-1)).toMatchObject({ taskId: 'task-1', usedTokens: null })
+    expect(manager.getContextUsage('task-1')).toBeNull()
+    expect(contextEvents().at(-1)).toMatchObject({ taskId: 'task-1', usedTokens: null, compacting: false })
   })
 
   it('sends /compact to a compact-capable harness as the bare command', async () => {

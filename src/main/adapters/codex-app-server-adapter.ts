@@ -742,6 +742,10 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) return
+    // Drop the compaction timer silently: no compacting:false may reach clients after destroy.
+    if (session.compactionTimer) clearTimeout(session.compactionTimer)
+    session.compactionTimer = null
+    session.compacting = false
     this.flushPendingUsage(session)
     session.process.kill('SIGTERM')
     setTimeout(() => {
@@ -1153,7 +1157,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
     if (notification.method === 'thread/status/changed') {
       const status = asString(params.status)
-      session.status = status === 'running' || status === 'busy' ? SessionStatusType.BUSY : SessionStatusType.IDLE
+      // Idle reported mid-compaction does not end the run; finishCompaction releases it.
+      const busy = status === 'running' || status === 'busy' || session.compacting
+      session.status = busy ? SessionStatusType.BUSY : SessionStatusType.IDLE
     }
 
     if (notification.method === 'turn/started') {
@@ -1628,6 +1634,9 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
 
   private markIdleIfSettled(session: AppServerSession): void {
     if (session.status === SessionStatusType.ERROR) return
+    // A thread going idle during /compact is not the end of the turn: compaction
+    // finishes via thread/compacted (or its timeout), which releases the session.
+    if (session.compacting) return
     if (session.pendingCompletionRefreshes > 0) return
     if (session.activeTurnId) return
     if (session.sawThreadStatusNotification && !session.pendingThreadIdle) return
