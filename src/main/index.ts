@@ -1310,6 +1310,9 @@ app.whenReady().then(async () => {
   })
 
   createWindow()
+  void agentManager.drainQueuedMessages().catch((error) => {
+    console.error('[Main] Failed to drain saved message queues after startup:', error)
+  })
 
   // OpenCode server starts lazily on first agent session (avoids macOS permission
   // prompts for ~/Documents, ~/Downloads etc. on app launch).

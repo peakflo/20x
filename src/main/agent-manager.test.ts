@@ -152,13 +152,31 @@ describe('Queued follow-ups', () => {
     expect(send).not.toHaveBeenCalled()
   })
 
-  it.each(['claude-code', 'pi'])('steers an active %s turn', async (codingAgent) => {
-    const db = createMockDb({ coding_agent: codingAgent })
+  it('queues a Claude follow-up, then dispatches it after the first result settles idle', async () => {
+    const db = createMockDb({ coding_agent: 'claude-code' })
+    const item = { id: 'one', task_id: 'task-1', text: 'now', attachments: [], position: 0, created_at: '' }
+    Object.assign(db, {
+      addQueuedMessage: vi.fn(), listQueuedMessages: vi.fn(() => [item]), deleteQueuedMessage: vi.fn()
+    })
+    manager = new AgentManager(db)
+    const session = { agentId: 'agent-1', taskId: 'task-1', status: 'working' }
+    vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue({ sessionId: 'session-1', session })
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const send = vi.spyOn(manager, 'sendByTaskId').mockResolvedValue({ sessionId: 'session-1' })
+    expect(await manager.sendWhileBusy('task-1', 'now', [], 'steer')).toBe('queued')
+    expect(send).not.toHaveBeenCalled()
+    session.status = 'idle'
+    expect(await (manager as any).dispatchNextQueuedMessage('task-1')).toBe(true)
+    expect(send).toHaveBeenCalledOnce()
+  })
+
+  it('steers an active Pi turn', async () => {
+    const db = createMockDb({ coding_agent: 'pi' })
     manager = new AgentManager(db)
     vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue({ sessionId: 'session-1', session: { agentId: 'agent-1', status: 'working' } })
     const send = vi.spyOn(manager, 'sendByTaskId').mockResolvedValue({ sessionId: 'session-1' })
     expect(await manager.sendWhileBusy('task-1', 'now', [], 'steer')).toBe('steered')
-    expect(send).toHaveBeenCalledWith('task-1', 'now', [], true, false)
+    expect(send).toHaveBeenCalledWith('task-1', 'now', [], true, false, true)
   })
 
   it('dispatches just the first queued message on idle', async () => {
@@ -178,13 +196,75 @@ describe('Queued follow-ups', () => {
     expect(remove).toHaveBeenCalledWith('task-1', 'one')
   })
 
+  it('sends a queued message added while idle', async () => {
+    const db = createMockDb()
+    const item = { id: 'one', task_id: 'task-1', text: 'start now', attachments: [], position: 0, created_at: '' }
+    Object.assign(db, {
+      addQueuedMessage: vi.fn(), listQueuedMessages: vi.fn(() => [item]), deleteQueuedMessage: vi.fn()
+    })
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue({ sessionId: 'session-1', session: { agentId: 'agent-1', status: 'idle' } })
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const send = vi.spyOn(manager, 'sendByTaskId').mockResolvedValue({ sessionId: 'session-1' })
+    manager.addQueuedMessage('task-1', 'start now')
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce())
+  })
+
+  it('drains saved messages when the manager starts after a restart', async () => {
+    const db = createMockDb()
+    const item = { id: 'one', task_id: 'task-1', text: 'saved', attachments: [], position: 0, created_at: '' }
+    Object.assign(db, {
+      getTaskIdsWithQueuedMessages: vi.fn(() => ['task-1']),
+      listQueuedMessages: vi.fn(() => [item]), deleteQueuedMessage: vi.fn()
+    })
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue(undefined)
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const send = vi.spyOn(manager, 'sendByTaskId').mockResolvedValue({ sessionId: null })
+    await manager.drainQueuedMessages()
+    expect(send).toHaveBeenCalledWith('task-1', 'saved', [], true)
+  })
+
+  it('checks the queue after an abort', async () => {
+    manager = new AgentManager(createMockDb())
+    const session = { agentId: 'agent-1', taskId: 'task-1', status: 'working', workspaceDir: '/tmp/ws' }
+    ;(manager as any).sessions.set('session-1', session)
+    vi.spyOn(manager as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue({ abortPrompt: vi.fn().mockResolvedValue(undefined) })
+    vi.spyOn(manager as any, 'buildSessionConfig').mockResolvedValue({})
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const dispatch = vi.spyOn(manager as any, 'dispatchNextQueuedMessage').mockResolvedValue(false)
+    await manager.abortSession('session-1')
+    expect(session.status).toBe('idle')
+    expect(dispatch).toHaveBeenCalledWith('task-1')
+  })
+
+  it('pauses and warns if a queued attachment is missing', async () => {
+    const db = createMockDb()
+    const attachment = { id: 'missing', filename: 'lost.txt', size: 4, mime_type: 'text/plain' }
+    const item = { id: 'one', task_id: 'task-1', text: 'read this', attachments: [attachment], position: 0, created_at: '' }
+    Object.assign(db, {
+      listQueuedMessages: vi.fn(() => [item]), getAttachmentsDir: vi.fn(() => '/tmp/attachments')
+    })
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue({ sessionId: 'session-1', session: { agentId: 'agent-1', status: 'idle' } })
+    const output = vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const send = vi.spyOn(manager, 'sendByTaskId').mockResolvedValue({ sessionId: 'session-1' })
+    expect(await (manager as any).dispatchNextQueuedMessage('task-1')).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+    expect(db.setSetting).toHaveBeenCalledWith('message-queue-paused:task-1', 'true')
+    expect(output).toHaveBeenCalledWith('agent:output', expect.objectContaining({
+      data: expect.objectContaining({ content: expect.stringContaining('lost.txt') })
+    }))
+  })
+
   it('holds an errored session until Resume queue is used', async () => {
     const db = createMockDb()
     const item = { id: 'one', task_id: 'task-1', text: 'retry', attachments: [], position: 0, created_at: '' }
     Object.assign(db, {
       listQueuedMessages: vi.fn(() => [item]),
       deleteQueuedMessage: vi.fn(),
-      setSetting: vi.fn()
+      setSetting: vi.fn(), deleteSetting: vi.fn()
     })
     manager = new AgentManager(db)
     vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue({ sessionId: 'session-1', session: { agentId: 'agent-1', status: 'error' } })
@@ -194,6 +274,46 @@ describe('Queued follow-ups', () => {
     expect(send).not.toHaveBeenCalled()
     await manager.resumeMessageQueue('task-1')
     expect(send).toHaveBeenCalledWith('task-1', 'retry', [], true)
+  })
+
+  it('prevents idle dispatch from sending a promoted message twice', async () => {
+    const db = createMockDb({ coding_agent: 'pi' })
+    const item = { id: 'one', task_id: 'task-1', text: 'change course', attachments: [], position: 0, created_at: '' }
+    Object.assign(db, { listQueuedMessages: vi.fn(() => [item]), deleteQueuedMessage: vi.fn() })
+    manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'findSessionByTaskId').mockReturnValue({ sessionId: 'session-1', session: { agentId: 'agent-1', status: 'working' } })
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+    let release!: () => void
+    const pending = new Promise<void>((resolve) => { release = resolve })
+    vi.spyOn(manager, 'sendByTaskId').mockImplementation(async () => { await pending; return { sessionId: 'session-1' } })
+    const promoting = manager.promoteQueuedMessage('task-1', 'one')
+    expect(await (manager as any).dispatchNextQueuedMessage('task-1')).toBe(false)
+    release()
+    await promoting
+    expect(manager.sendByTaskId).toHaveBeenCalledOnce()
+    expect(db.deleteQueuedMessage).toHaveBeenCalledOnce()
+  })
+
+  it('rejects steering while the agent needs approval or has an error', async () => {
+    manager = new AgentManager(createMockDb({ coding_agent: 'pi' }))
+    const found = vi.spyOn(manager as any, 'findSessionByTaskId')
+    found.mockReturnValue({ sessionId: 'session-1', session: { agentId: 'agent-1', status: 'waiting_approval' } })
+    await expect(manager.sendWhileBusy('task-1', 'change', [], 'steer')).rejects.toThrow('waiting for approval')
+    found.mockReturnValue({ sessionId: 'session-1', session: { agentId: 'agent-1', status: 'error' } })
+    await expect(manager.sendWhileBusy('task-1', 'change', [], 'steer')).rejects.toThrow('in error')
+  })
+
+  it('routes an overlapping ordinary Codex send into the queue', async () => {
+    const db = createMockDb({ coding_agent: 'codex' })
+    manager = new AgentManager(db)
+    const session = { agentId: 'agent-1', taskId: 'task-1', status: 'working' }
+    ;(manager as any).sessions.set('session-1', session)
+    const add = vi.spyOn(manager, 'addQueuedMessage').mockReturnValue({ messages: [], paused: false })
+    const send = vi.spyOn(manager as any, 'doSendAdapterMessage')
+    await manager.sendMessage('session-1', 'follow up', 'task-1')
+    expect(add).toHaveBeenCalledWith('task-1', 'follow up', undefined)
+    expect(send).not.toHaveBeenCalled()
+    expect(session.status).toBe('working')
   })
 })
 
@@ -830,6 +950,19 @@ describe('AgentManager skill file paths', () => {
         expect(sessionConfig.systemPrompt).not.toContain('Task id: task-1')
 
         expect((session as any).taskContextMode).toBe('lean')
+      })
+
+      it('records a new run for a follow-up but not for a steer', async () => {
+        manager = new AgentManager(makeTaskDb())
+        vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+        const started = vi.fn()
+        manager.setEnterpriseStateSync({ recordAgentRunStarted: started } as never)
+        const session = makeSession()
+        ;(session as any).pollingStarted = true
+        await (manager as any).doSendAdapterMessage(session, 'session-1', 'next turn', [], true, false)
+        expect(started).toHaveBeenCalledOnce()
+        await (manager as any).doSendAdapterMessage(session, 'session-1', 'steer', [], true, true)
+        expect(started).toHaveBeenCalledOnce()
       })
 
       it('escalates to the full reminder in the message when task-management MCP failed to attach — still without touching systemPrompt', async () => {
@@ -1657,6 +1790,18 @@ describe('AgentManager transitionToIdle — completing without review', () => {
     expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1',{status:TaskStatus.Completed})
     expect(mockDb.updateTask).toHaveBeenCalledWith('task-1',{status:TaskStatus.ReadyForReview})
     expect(executeAction).not.toHaveBeenCalled()
+  })
+  it('records the completed run before sending the next queued message', async () => {
+    const mockDb = makeDb() as any
+    const item = { id: 'one', task_id: 'task-1', text: 'next', attachments: [], position: 0, created_at: '' }
+    mockDb.listQueuedMessages = vi.fn(() => [item])
+    mockDb.deleteQueuedMessage = vi.fn()
+    const { mgr, session } = setup(mockDb)
+    const order: string[] = []
+    mgr.setEnterpriseStateSync({ recordAgentRunCompleted: vi.fn(() => order.push('completed')) } as never)
+    vi.spyOn(mgr, 'sendByTaskId').mockImplementation(async () => { order.push('sent'); return { sessionId: 'session-1' } })
+    await (mgr as any).transitionToIdle('session-1', session)
+    expect(order).toEqual(['completed', 'sent'])
   })
   it('cannot complete from a desktop agent without a server credential', async()=>{
     const mockDb=makeDb();const {mgr}=setup(mockDb)

@@ -839,7 +839,7 @@ export function AgentTranscriptPanel({
     void messageQueueApi.list(taskId).then((value) => { if (active) setMessageQueue(value) })
     void window.electronAPI.settings.get('message_queue_default').then((value) => { if (active) setFollowupDefault(value === 'steer' ? 'steer' : 'queue') })
     if (agentId) void window.electronAPI.agents.get(agentId).then((agent) => {
-      if (active) setCanSteer(['claude-code', 'codex', 'pi'].includes(agent?.config?.coding_agent || ''))
+      if (active) setCanSteer(['codex', 'pi'].includes(agent?.config?.coding_agent || ''))
     })
     const unsubscribe = messageQueueApi.onChanged((event) => { if (event.taskId === taskId) setMessageQueue(event) })
     return () => { active = false; unsubscribe() }

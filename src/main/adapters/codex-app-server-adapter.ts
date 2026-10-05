@@ -552,12 +552,6 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
         }
       }
     }
-    this.addEvent(session, userItem)
-
-    session.status = SessionStatusType.BUSY
-    session.lastError = null
-    session.usageLimit = null
-
     const result = await this.sendRpcRequest(session, session.activeTurnId ? 'turn/steer' : 'turn/start', session.activeTurnId ? {
       threadId: session.threadId,
       expectedTurnId: session.activeTurnId,
@@ -575,6 +569,11 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       runtimeWorkspaceRoots: this.buildRuntimeWorkspaceRoots(config.workspaceDir),
       config: this.buildConfigOverrides(config)
     })
+
+    this.addEvent(session, userItem)
+    session.status = SessionStatusType.BUSY
+    session.lastError = null
+    session.usageLimit = null
 
     if (isObject(result)) {
       session.activeTurnId = asString(result.turnId) || asString(result.turn_id) || session.activeTurnId

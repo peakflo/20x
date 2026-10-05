@@ -880,6 +880,22 @@ describe('CodexAppServerAdapter', () => {
     })
   })
 
+  it('does not add a user item when steering is rejected', async () => {
+    const instance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(instance)
+    const session = createSession()
+    session.activeTurnId = 'active-turn'
+    session.status = SessionStatusType.BUSY
+    adapter.sessions.set('thread-1', session)
+    adapter.sendRpcRequest = vi.fn().mockRejectedValue(new Error('turn no longer active'))
+
+    await expect(instance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'change course' }], {
+      agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/workspace'
+    })).rejects.toThrow('turn no longer active')
+    expect(session.messageBuffer).toEqual([])
+    expect(session.status).toBe(SessionStatusType.BUSY)
+  })
+
   it('defaults missing codex sandbox mode to danger full access', async () => {
     const adapterInstance = new CodexAppServerAdapter()
     const adapter = adapterPrivate(adapterInstance)

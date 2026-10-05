@@ -2701,7 +2701,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
       // Check for errors first (higher priority than idle)
       if (status.type === SessionStatusType.ERROR) {
-        if (typeof this.db.listQueuedMessages === 'function') {
+        if (typeof this.db.listQueuedMessages === 'function' && this.db.listQueuedMessages(config.taskId).length > 0) {
           this.db.setSetting(`message-queue-paused:${config.taskId}`, 'true')
           this.publishMessageQueue(config.taskId)
         }
@@ -4165,8 +4165,6 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       return
     }
 
-    if (task.status !== TaskStatus.Completed && task.status !== TaskStatus.AgentLearning && await this.dispatchNextQueuedMessage(session.taskId)) return
-
     console.log(`[AgentManager] transitionToIdle checking task status: ${task.status} (looking for ${TaskStatus.AgentLearning})`)
     if (task.status === TaskStatus.AgentLearning) {
       console.log(`[AgentManager] Task in learning mode, syncing skills and marking as completed`)
@@ -4272,6 +4270,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         success: true
       })
     }
+    await this.dispatchNextQueuedMessage(session.taskId)
   }
 
   /**
@@ -4317,6 +4316,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       taskId: session.taskId,
       status: 'idle'
     })
+    await this.dispatchNextQueuedMessage(session.taskId)
   }
 
   /**
@@ -4441,18 +4441,19 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     message: string,
     attachments?: MessageAttachmentRef[],
     awaitAccepted = false,
-    suppressError = false
+    suppressError = false,
+    isSteer = false
   ): Promise<{ sessionId: string | null; newSessionId?: string }> {
     const found = this.findSessionByTaskId(taskId)
     if (found) {
       console.log(`[AgentManager] sendByTaskId: found live session ${found.sessionId} for task ${taskId}`)
-      const result = await this.sendMessage(found.sessionId, message, taskId, found.session.agentId, attachments, awaitAccepted, suppressError)
+      const result = await this.sendMessage(found.sessionId, message, taskId, found.session.agentId, attachments, awaitAccepted, suppressError, isSteer)
       return { sessionId: found.sessionId, ...result }
     }
     // No live session — delegate to sendMessage with empty sessionId.
     // Its internal logic will try resume from persisted session_id, or create a new one.
     console.log(`[AgentManager] sendByTaskId: no live session for task ${taskId}, delegating to sendMessage for recovery`)
-    const result = await this.sendMessage('', message, taskId, undefined, attachments, awaitAccepted, suppressError)
+    const result = await this.sendMessage('', message, taskId, undefined, attachments, awaitAccepted, suppressError, isSteer)
     return { sessionId: null, ...result }
   }
 
@@ -4471,7 +4472,14 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
   addQueuedMessage(taskId: string, text: string, attachments: QueuedMessageAttachment[] = []): MessageQueueSnapshot {
     this.db.addQueuedMessage(taskId, text, attachments)
-    return this.publishMessageQueue(taskId)
+    if (this.findSessionByTaskId(taskId)?.session.status === 'error') {
+      this.db.setSetting(`message-queue-paused:${taskId}`, 'true')
+    }
+    const snapshot = this.publishMessageQueue(taskId)
+    void this.dispatchNextQueuedMessage(taskId).catch((error) => {
+      console.error(`[AgentManager] Could not dispatch queued message for ${taskId}:`, error)
+    })
+    return snapshot
   }
 
   updateQueuedMessage(taskId: string, id: string, text: string, attachments: QueuedMessageAttachment[]): MessageQueueSnapshot {
@@ -4489,20 +4497,27 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
   deleteQueuedMessage(taskId: string, id: string): MessageQueueSnapshot {
     if (this.queueDispatching.has(taskId)) throw new Error('Wait for the queued message to finish sending')
     this.db.deleteQueuedMessage(taskId, id)
+    if (!this.db.listQueuedMessages(taskId).length) this.db.deleteSetting(`message-queue-paused:${taskId}`)
     return this.publishMessageQueue(taskId)
   }
 
   async promoteQueuedMessage(taskId: string, id: string): Promise<MessageQueueSnapshot> {
     if (this.queueDispatching.has(taskId)) throw new Error('Wait for the queued message to finish sending')
-    const item = this.db.listQueuedMessages(taskId).find((entry) => entry.id === id)
-    if (!item) throw new Error('Queued message not found')
-    await this.sendWhileBusy(taskId, item.text, item.attachments, 'steer', false)
-    this.db.deleteQueuedMessage(taskId, id)
-    return this.publishMessageQueue(taskId)
+    this.queueDispatching.add(taskId)
+    try {
+      const item = this.db.listQueuedMessages(taskId).find((entry) => entry.id === id)
+      if (!item) throw new Error('Queued message not found')
+      await this.sendWhileBusy(taskId, item.text, item.attachments, 'steer', false)
+      this.db.deleteQueuedMessage(taskId, id)
+      if (!this.db.listQueuedMessages(taskId).length) this.db.deleteSetting(`message-queue-paused:${taskId}`)
+      return this.publishMessageQueue(taskId)
+    } finally {
+      this.queueDispatching.delete(taskId)
+    }
   }
 
   async resumeMessageQueue(taskId: string): Promise<MessageQueueSnapshot> {
-    this.db.setSetting(`message-queue-paused:${taskId}`, 'false')
+    this.db.deleteSetting(`message-queue-paused:${taskId}`)
     this.publishMessageQueue(taskId)
     await this.dispatchNextQueuedMessage(taskId, true)
     return this.getMessageQueue(taskId)
@@ -4510,12 +4525,14 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
   async sendWhileBusy(taskId: string, text: string, attachments: QueuedMessageAttachment[] = [], action: 'steer' | 'queue', allowQueueFallback = true): Promise<'steered' | 'queued' | 'sent'> {
     const found = this.findSessionByTaskId(taskId)
+    if (action === 'steer' && found?.session.status === 'error') throw new Error('The agent is in error. Resume the queue or retry the session before steering.')
+    if (action === 'steer' && found?.session.status === 'waiting_approval') throw new Error('The agent is waiting for approval. Respond to the approval before steering.')
     if (!found || found.session.status === 'idle') {
-      await this.sendByTaskId(taskId, text, attachments)
+      await this.sendByTaskId(taskId, text, attachments, true)
       return 'sent'
     }
     const codingAgent = this.db.getAgent(found?.session.agentId || this.db.getTask(taskId)?.agent_id || '')?.config.coding_agent
-    const canSteer = codingAgent === 'claude-code' || codingAgent === 'pi' || codingAgent === 'codex'
+    const canSteer = codingAgent === 'pi' || codingAgent === 'codex'
     const codexReady = codingAgent !== 'codex' || (found?.session.adapter instanceof CodexAppServerAdapter && found.session.adapter.canSteer(found.sessionId))
     if (action === 'queue' || !found || found.session.status !== 'working' || !canSteer || !codexReady) {
       if (action === 'steer' && !allowQueueFallback) throw new Error('This agent cannot steer the active turn')
@@ -4523,13 +4540,19 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       return 'queued'
     }
     try {
-      await this.sendByTaskId(taskId, text, attachments, true, codingAgent === 'codex')
+      await this.sendByTaskId(taskId, text, attachments, true, codingAgent === 'codex', true)
     } catch (error) {
       if (codingAgent !== 'codex' || !allowQueueFallback) throw error
       this.addQueuedMessage(taskId, text, attachments)
       return 'queued'
     }
     return 'steered'
+  }
+
+  async drainQueuedMessages(): Promise<void> {
+    for (const taskId of this.db.getTaskIdsWithQueuedMessages()) {
+      await this.dispatchNextQueuedMessage(taskId)
+    }
   }
 
   private async dispatchNextQueuedMessage(taskId: string, allowError = false): Promise<boolean> {
@@ -4543,8 +4566,22 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     if (found && (found.session.status === 'working' || found.session.status === 'waiting_approval' || (found.session.status === 'error' && !allowError))) return false
     this.queueDispatching.add(taskId)
     try {
+      const missing = item.attachments.filter((attachment) =>
+        !task.attachments?.some((saved) => saved.id === attachment.id) ||
+        !existsSync(join(this.db.getAttachmentsDir(taskId), `${attachment.id}-${attachment.filename}`))
+      )
+      if (missing.length) {
+        this.db.setSetting(`message-queue-paused:${taskId}`, 'true')
+        this.publishMessageQueue(taskId)
+        this.sendToRenderer('agent:output', {
+          sessionId: found?.sessionId ?? task.session_id ?? '', taskId, type: 'message',
+          data: { id: `queue-attachment-error-${item.id}`, role: 'system', partType: 'error', content: `Queued message paused: missing attachment${missing.length > 1 ? 's' : ''} ${missing.map((entry) => entry.filename).join(', ')}. Edit the queued message, then resume the queue.` }
+        })
+        return false
+      }
       await this.sendByTaskId(taskId, item.text, item.attachments, true)
       this.db.deleteQueuedMessage(taskId, item.id)
+      if (!this.db.listQueuedMessages(taskId).length) this.db.deleteSetting(`message-queue-paused:${taskId}`)
       this.publishMessageQueue(taskId)
       return true
     } catch (error) {
@@ -4564,7 +4601,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     agentId?: string,
     attachments?: MessageAttachmentRef[],
     awaitAccepted = false,
-    suppressError = false
+    suppressError = false,
+    isSteer = false
   ): Promise<{ newSessionId?: string }> {
     let session = this.sessions.get(sessionId)
 
@@ -4628,7 +4666,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
         // Send the user's message (fire-and-forget to avoid blocking IPC response)
         if (awaitAccepted) {
-          try { await this.doSendAdapterMessage(session, sessionId, message, attachments, true) }
+          try { await this.doSendAdapterMessage(session, sessionId, message, attachments, true, isSteer) }
           catch (err) { if (!suppressError) this.handleSessionError(sessionId, session, err); throw err }
         } else this.doSendAdapterMessage(session, sessionId, message, attachments).catch((err) => {
           console.error(`[AgentManager] doSendAdapterMessage failed for session ${sessionId}:`, err)
@@ -4640,9 +4678,16 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     if (!session) throw new Error(`Session not found: ${sessionId}`)
 
+    // Older send surfaces can still call sendMessage directly during a Codex
+    // turn. Preserve the follow-up instead of starting an overlapping turn.
+    if (session.status === 'working' && !isSteer && taskId && this.db.getAgent(session.agentId)?.config.coding_agent === 'codex') {
+      this.addQueuedMessage(taskId, message, attachments)
+      return {}
+    }
+
     // Fire-and-forget to avoid blocking IPC response and freezing the renderer
     if (awaitAccepted) {
-      try { await this.doSendAdapterMessage(session, sessionId, message, attachments, true) }
+      try { await this.doSendAdapterMessage(session, sessionId, message, attachments, true, isSteer) }
       catch (err) { if (!suppressError) this.handleSessionError(sessionId, session, err); throw err }
     } else this.doSendAdapterMessage(session, sessionId, message, attachments).catch((err) => {
       console.error(`[AgentManager] doSendAdapterMessage failed for session ${sessionId}:`, err)
@@ -4662,8 +4707,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const message = err instanceof Error ? err.message : String(err)
     console.error(`[AgentManager] Session ${sessionId} error:`, message)
     session.status = 'error'
-    this.db.setSetting(`message-queue-paused:${session.taskId}`, 'true')
-    this.publishMessageQueue(session.taskId)
+    if (this.db.listQueuedMessages(session.taskId).length) {
+      this.db.setSetting(`message-queue-paused:${session.taskId}`, 'true')
+      this.publishMessageQueue(session.taskId)
+    }
     this.sendToRenderer('agent:output', {
       sessionId,
       taskId: session.taskId,
@@ -4688,7 +4735,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     sessionId: string,
     message: string,
     attachments?: MessageAttachmentRef[],
-    showAfterAcceptance = false
+    showAfterAcceptance = false,
+    isSteer = false
   ): Promise<void> {
     session.autoAbortNotified = false
 
@@ -4731,7 +4779,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // Record enterprise sync event: agent run started (follow-up message)
     // Each working→idle cycle is a separate agent run. Without this,
     // follow-up messages produce agent_run_completed without a matching started.
-    if (this.enterpriseStateSync && currentTask && !session.isTriageSession && session.taskId !== 'mastermind-session' && !session.taskId.startsWith('heartbeat-')) {
+    if (!isSteer && this.enterpriseStateSync && currentTask && !session.isTriageSession && session.taskId !== 'mastermind-session' && !session.taskId.startsWith('heartbeat-')) {
       const agent = this.db.getAgent(session.agentId)
       this.enterpriseStateSync.recordAgentRunStarted(currentTask, agent?.name)
     }

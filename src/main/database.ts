@@ -962,7 +962,7 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  *
  * 8 → 9: tasks.complete_at_source
  */
-const SCHEMA_VERSION = 10
+const SCHEMA_VERSION = 9
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -1320,6 +1320,10 @@ export class DatabaseManager {
   listQueuedMessages(taskId: string): QueuedMessage[] {
     const rows = this.db.prepare('SELECT * FROM task_message_queue WHERE task_id = ? ORDER BY position, created_at, id').all(taskId) as Array<Omit<QueuedMessage, 'attachments'> & { attachments: string }>
     return rows.map((row) => ({ ...row, attachments: JSON.parse(row.attachments) as QueuedMessageAttachment[] }))
+  }
+
+  getTaskIdsWithQueuedMessages(): string[] {
+    return (this.db.prepare('SELECT DISTINCT task_id FROM task_message_queue').all() as Array<{ task_id: string }>).map((row) => row.task_id)
   }
 
   addQueuedMessage(taskId: string, text: string, attachments: QueuedMessageAttachment[] = []): QueuedMessage {
@@ -2569,6 +2573,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   deleteTask(id: string): boolean {
     this.deleteTaskAttachments(id)
     this.deleteTranscriptParts(id)
+    this.deleteSetting(`message-queue-paused:${id}`)
     const result = this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
     return result.changes > 0
   }

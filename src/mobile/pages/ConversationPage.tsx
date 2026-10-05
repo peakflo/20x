@@ -153,7 +153,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     let active = true
     void api.agents.get(task.agent_id).then((value) => {
       const agent = value as { config?: { coding_agent?: string } } | null
-      if (active) setCanSteer(['claude-code', 'codex', 'pi'].includes(agent?.config?.coding_agent || ''))
+      if (active) setCanSteer(['codex', 'pi'].includes(agent?.config?.coding_agent || ''))
     })
     return () => { active = false }
   }, [task?.agent_id])

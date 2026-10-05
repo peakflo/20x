@@ -913,6 +913,16 @@ describe('ClaudeCodeAdapter persistent session input', () => {
     expect(session.queryIterator).not.toBeNull()
     expect(session.status).toBe('busy')
   })
+
+  it('reports idle when the first turn returns after another prompt was enqueued', async () => {
+    const { adapter, session } = createAdapterWithSession('s1', [], { status: 'busy' })
+    await adapter.initialize()
+    session.queryIterator = {} as any
+    ;(session as any).enqueuePrompt = vi.fn()
+    await adapter.sendPrompt('s1', [{ type: MessagePartType.TEXT, text: 'follow-up' }], {} as any)
+    session.sawResult = true
+    expect((await adapter.getStatus('s1', {} as any)).type).toBe('idle')
+  })
 })
 
 /**

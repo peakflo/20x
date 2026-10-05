@@ -36,15 +36,18 @@ export function MessageQueueList({ taskId, snapshot, actions, canSteer, onChange
     useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
-  const apply = async (operation: Promise<MessageQueueSnapshot>): Promise<void> => {
-    try { onChange(await operation); setError(null) } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) }
+  const apply = async (operation: Promise<MessageQueueSnapshot>): Promise<boolean> => {
+    try { onChange(await operation); setError(null); return true } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); return false }
+  }
+  const saveEdit = async (id: string): Promise<void> => {
+    if (await apply(actions.update(taskId, id, draft, draftAttachments))) setEditingId(null)
   }
   if (!snapshot.messages.length) return null
   return <div className="border-t border-border px-3 py-2 text-xs" aria-label="Queued messages">
     <div className="mb-2 flex items-center justify-between gap-2">
       <strong>Queued messages ({snapshot.messages.length})</strong>
       {snapshot.paused && <span className="text-amber-500">Paused after error</span>}
-      <button type="button" className="text-primary underline" onClick={() => void apply(actions.resume(taskId))}>Resume queue</button>
+      {snapshot.paused && <button type="button" className="text-primary underline" onClick={() => void apply(actions.resume(taskId))}>Resume queue</button>}
     </div>
     {error && <div role="alert" className="mb-1 text-destructive">{error}</div>}
     <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(event: DragEndEvent) => {
@@ -53,8 +56,8 @@ export function MessageQueueList({ taskId, snapshot, actions, canSteer, onChange
       void apply(actions.reorder(taskId, arrayMove(ids, ids.indexOf(String(event.active.id)), ids.indexOf(String(event.over.id)))))
     }}><SortableContext items={snapshot.messages.map((item) => item.id)} strategy={verticalListSortingStrategy}><ol className="space-y-1">
       {snapshot.messages.map((item) => <SortableQueueItem key={item.id} id={item.id}>
-        {editingId === item.id ? <div className="min-w-0 flex-1"><input autoFocus className="w-full rounded border bg-background px-1" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { void apply(actions.update(taskId, item.id, draft, draftAttachments)); setEditingId(null) } }} />{draftAttachments.map((attachment) => <button key={attachment.id} type="button" className="mr-1 text-muted-foreground" title={`Remove ${attachment.filename}`} onClick={() => setDraftAttachments((current) => current.filter((entry) => entry.id !== attachment.id))}>{attachment.filename} ×</button>)}</div> : <span className="min-w-0 flex-1 truncate">{item.text || '(attachments)'}{item.attachments.length > 0 && ` · ${item.attachments.length} file(s)`}</span>}
-        {editingId === item.id ? <button type="button" onClick={() => { void apply(actions.update(taskId, item.id, draft, draftAttachments)); setEditingId(null) }}>Save</button> : <button type="button" onClick={() => { setEditingId(item.id); setDraft(item.text); setDraftAttachments(item.attachments) }}>Edit</button>}
+        {editingId === item.id ? <div className="min-w-0 flex-1"><input autoFocus className="w-full rounded border bg-background px-1" value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void saveEdit(item.id) }} />{draftAttachments.map((attachment) => <button key={attachment.id} type="button" className="mr-1 text-muted-foreground" title={`Remove ${attachment.filename}`} onClick={() => setDraftAttachments((current) => current.filter((entry) => entry.id !== attachment.id))}>{attachment.filename} ×</button>)}</div> : <span className="min-w-0 flex-1 truncate">{item.text || '(attachments)'}{item.attachments.length > 0 && ` · ${item.attachments.length} file(s)`}</span>}
+        {editingId === item.id ? <button type="button" onClick={() => void saveEdit(item.id)}>Save</button> : <button type="button" onClick={() => { setEditingId(item.id); setDraft(item.text); setDraftAttachments(item.attachments) }}>Edit</button>}
         {editingId === item.id && <button type="button" onClick={() => setEditingId(null)}>Cancel</button>}
         <button type="button" aria-label="Move up" disabled={item.id === snapshot.messages[0]?.id} onClick={() => { const ids = snapshot.messages.map((entry) => entry.id); const index = ids.indexOf(item.id); if (index > 0) { [ids[index - 1], ids[index]] = [ids[index], ids[index - 1]]; void apply(actions.reorder(taskId, ids)) } }}>↑</button>
         <button type="button" aria-label="Move down" disabled={item.id === snapshot.messages.at(-1)?.id} onClick={() => { const ids = snapshot.messages.map((entry) => entry.id); const index = ids.indexOf(item.id); if (index < ids.length - 1) { [ids[index + 1], ids[index]] = [ids[index], ids[index + 1]]; void apply(actions.reorder(taskId, ids)) } }}>↓</button>

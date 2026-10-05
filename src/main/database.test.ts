@@ -21,6 +21,7 @@ describe('Task message queue', () => {
     const attachment = { id: 'file-1', filename: 'note.txt', size: 4, mime_type: 'text/plain' }
     const first = db.addQueuedMessage(task.id, 'first', [attachment])
     const second = db.addQueuedMessage(task.id, 'second')
+    expect(db.getTaskIdsWithQueuedMessages()).toContain(task.id)
     expect(db.listQueuedMessages(task.id).map((item) => item.id)).toEqual([first.id, second.id])
     expect(db.listQueuedMessages(task.id)[0].attachments).toEqual([attachment])
     db.updateQueuedMessage(task.id, second.id, 'edited', [])
@@ -29,6 +30,15 @@ describe('Task message queue', () => {
     expect(() => db.reorderQueuedMessages(task.id, [first.id, first.id])).toThrow()
     expect(db.deleteQueuedMessage(task.id, second.id)).toBe(true)
     expect(db.listQueuedMessages(task.id)).toHaveLength(1)
+  })
+
+  it('removes queue pause state when a task is deleted', () => {
+    const task = db.createTask(makeTask())!
+    db.addQueuedMessage(task.id, 'later')
+    db.setSetting(`message-queue-paused:${task.id}`, 'true')
+    db.deleteTask(task.id)
+    expect(db.getTaskIdsWithQueuedMessages()).not.toContain(task.id)
+    expect(db.getSetting(`message-queue-paused:${task.id}`)).toBeUndefined()
   })
 })
 
