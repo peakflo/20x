@@ -1,6 +1,6 @@
 import React from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { BrowserPanelContent } from './BrowserPanelContent'
 import { useCanvasStore } from '@/stores/canvas-store'
 
@@ -35,6 +35,7 @@ describe('browser recording controls', () => {
       startRecording: mocks.start,
       stopRecording: mocks.stop,
       recordingStatus: mocks.status,
+      listImportSources: vi.fn().mockResolvedValue([]),
     } })
     Object.assign(globalThis, { React })
   })
@@ -59,6 +60,20 @@ describe('browser recording controls', () => {
     complete({ ok: true, recording: { ...active, status: 'saved' } })
     await screen.findByText('Recording saved: 2 steps. No task agent is connected.')
     expect(mocks.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens import beside Record for the current page domain', async () => {
+    const result = mount()
+    Object.assign(result.container.querySelector('webview')!, { getURL: () => 'https://portal.example.com/account' })
+    fireEvent.click(screen.getByRole('button', { name: 'Import session' }))
+    await screen.findByText('No supported browser profiles were found.')
+    expect(screen.getByRole('region', { name: 'Import browser session' })).toHaveTextContent('portal.example.com')
+    expect((screen.getByLabelText('Domains') as HTMLInputElement).value).toBe('portal.example.com')
+    const webview = result.container.querySelector('webview')!
+    act(() => { webview.dispatchEvent(Object.assign(new Event('did-navigate'), { url: 'https://portal.example.com/account' })) })
+    expect(screen.getByRole('region', { name: 'Import browser session' })).toBeTruthy()
+    act(() => { webview.dispatchEvent(Object.assign(new Event('did-navigate'), { url: 'https://other.example.com/' })) })
+    expect(screen.queryByRole('region', { name: 'Import browser session' })).toBeNull()
   })
 
   it('ignores a stale status result after recording starts', async () => {
