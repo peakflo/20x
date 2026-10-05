@@ -10,7 +10,7 @@ import { ArtifactCard } from '../components/ArtifactCard'
 import { ChatInput, type ChatInputAttachment } from '../components/ChatInput'
 import { MessageQueueList } from '@/components/agents/MessageQueueList'
 import { onEvent } from '../api/websocket'
-import { resolveFollowupAction, type MessageQueueSnapshot } from '@shared/message-queue'
+import { DEFAULT_FOLLOWUP_ACTION, resolveFollowupAction, type MessageQueueSnapshot } from '@shared/message-queue'
 import { useArtifactStore } from '../stores/artifact-store'
 import { cn } from '../lib/utils'
 import { captureAnalyticsEvent } from '@/lib/analytics'
@@ -136,7 +136,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const [showAttachmentPicker, setShowAttachmentPicker] = useState(false)
   const [messageAttachments, setMessageAttachments] = useState<ChatInputAttachment[]>([])
   const [messageQueue, setMessageQueue] = useState<MessageQueueSnapshot>({ messages: [], paused: false })
-  const [followupDefault, setFollowupDefault] = useState<'steer' | 'queue'>('queue')
+  const [followupDefault, setFollowupDefault] = useState<'steer' | 'queue'>(DEFAULT_FOLLOWUP_ACTION)
   const [canSteer, setCanSteer] = useState(false)
   useEffect(() => {
     let active = true
@@ -857,7 +857,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         {isWorking && !isQuestion && !canSteer && <p className="px-3 text-xs text-muted-foreground">This agent cannot steer a running turn. Messages will be queued.</p>}
         <ChatInput
           onSend={handleSend}
-          sendLabel={isWorking && !isQuestion ? (canSteer ? (followupDefault === 'steer' ? 'Steer' : 'Queue') : 'Queue') : undefined}
+          sendLabel={isWorking && !isQuestion ? (canSteer ? (followupDefault === 'steer' ? 'Send' : 'Queue') : 'Queue') : undefined}
           disabled={!canSendInput}
           placeholder={placeholder}
           attachments={messageAttachments}

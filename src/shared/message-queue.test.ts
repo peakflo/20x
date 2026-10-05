@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { resolveFollowupAction } from './message-queue'
+import { DEFAULT_FOLLOWUP_ACTION, resolveFollowupAction } from './message-queue'
 
 describe('resolveFollowupAction', () => {
+  it('sends now by default and queues with the alternate shortcut', () => {
+    expect(resolveFollowupAction(DEFAULT_FOLLOWUP_ACTION, true)).toBe('steer')
+    expect(resolveFollowupAction(DEFAULT_FOLLOWUP_ACTION, true, true)).toBe('queue')
+  })
   it('uses the saved default and reverses it for the modifier shortcut', () => {
     expect(resolveFollowupAction('queue', true)).toBe('queue')
     expect(resolveFollowupAction('queue', true, true)).toBe('steer')

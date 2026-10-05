@@ -15,7 +15,7 @@ import { SpeakMessageButton } from '@/components/voice/SpeakMessageButton'
 import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
 import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
 import { MessageQueueList } from './MessageQueueList'
-import { resolveFollowupAction, type MessageQueueSnapshot } from '@shared/message-queue'
+import { DEFAULT_FOLLOWUP_ACTION, resolveFollowupAction, type MessageQueueSnapshot } from '@shared/message-queue'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -831,13 +831,13 @@ export function AgentTranscriptPanel({
   const [activeSearchResult, setActiveSearchResult] = useState(0)
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([])
   const [messageQueue, setMessageQueue] = useState<MessageQueueSnapshot>({ messages: [], paused: false })
-  const [followupDefault, setFollowupDefault] = useState<'steer' | 'queue'>('queue')
+  const [followupDefault, setFollowupDefault] = useState<'steer' | 'queue'>(DEFAULT_FOLLOWUP_ACTION)
   const [canSteer, setCanSteer] = useState(false)
   useEffect(() => {
     if (!taskId || !window.electronAPI?.messageQueue) return
     let active = true
     void messageQueueApi.list(taskId).then((value) => { if (active) setMessageQueue(value) })
-    void window.electronAPI.settings.get('message_queue_default').then((value) => { if (active) setFollowupDefault(value === 'steer' ? 'steer' : 'queue') })
+    void window.electronAPI.settings.get('message_queue_default').then((value) => { if (active) setFollowupDefault(value === 'queue' ? 'queue' : DEFAULT_FOLLOWUP_ACTION) })
     if (agentId) void window.electronAPI.agents.get(agentId).then((agent) => {
       if (active) setCanSteer(['codex', 'pi'].includes(agent?.config?.coding_agent || ''))
     })
@@ -1139,6 +1139,13 @@ export function AgentTranscriptPanel({
       default: return 'Idle'
     }
   }
+
+  const busySendLabel = canSteer && followupDefault === 'steer' ? 'Send' : 'Queue'
+  const busySendTitle = !canSteer
+    ? 'Queue message for after this turn'
+    : followupDefault === 'steer'
+      ? 'Send now · Cmd/Ctrl+Enter to queue'
+      : 'Queue for later · Cmd/Ctrl+Enter to send now'
 
   const handleSend = (alternate = false) => {
     const value = inputRef.current?.value.trim()
@@ -1512,8 +1519,8 @@ export function AgentTranscriptPanel({
                 <Paperclip className="h-4 w-4" />
               </Button>
             )}
-              <Button variant="default" size="icon" onClick={() => handleSend()} className={`h-[32px] shrink-0 rounded-lg ${status === SessionStatus.WORKING && !activeQuestionId ? 'min-w-[58px] px-2' : 'w-[32px]'}`} aria-label={status === SessionStatus.WORKING && !activeQuestionId ? (canSteer ? followupDefault : 'Queue') + ' message' : 'Send message'} title={status === SessionStatus.WORKING && !activeQuestionId ? (canSteer ? followupDefault : 'queue') + ' · Cmd/Ctrl+Enter for alternate' : 'Send message'}>
-                {status === SessionStatus.WORKING && !activeQuestionId ? <span className="text-[10px] font-semibold">{canSteer ? (followupDefault === 'steer' ? 'Steer' : 'Queue') : 'Queue'}</span> : <Send className="h-4 w-4" />}
+              <Button variant="default" size="icon" onClick={() => handleSend()} className={`h-[32px] shrink-0 rounded-lg ${status === SessionStatus.WORKING && !activeQuestionId ? 'min-w-[58px] px-2' : 'w-[32px]'}`} aria-label={status === SessionStatus.WORKING && !activeQuestionId ? (busySendLabel === 'Send' ? 'Send message now' : 'Queue message for later') : 'Send message'} title={status === SessionStatus.WORKING && !activeQuestionId ? busySendTitle : 'Send message'}>
+                {status === SessionStatus.WORKING && !activeQuestionId ? <span className="text-[10px] font-semibold">{busySendLabel}</span> : <Send className="h-4 w-4" />}
               </Button>
             </div>
           </div>

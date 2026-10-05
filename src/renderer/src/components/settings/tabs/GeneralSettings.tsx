@@ -11,6 +11,7 @@ import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard'
 import { settingsApi, mobileApi, updaterApi, worktreeApi, onWorkspaceCleanupProgress } from '@/lib/ipc-client'
 import { MASTERMIND_PREWARM_SETTING } from '@/components/orchestrator/OrchestratorPanel'
 import { PushNotificationSettings } from './PushNotificationSettings'
+import { DEFAULT_FOLLOWUP_ACTION } from '@shared/message-queue'
 
 /** Human-readable summary of a cleanup run, or null when there is nothing to report. */
 function describeCleanupOutcome(cleaned: number | undefined, nodeModulesCleaned: number | undefined): string | null {
@@ -25,8 +26,8 @@ function describeCleanupOutcome(cleaned: number | undefined, nodeModulesCleaned:
 }
 
 export function GeneralSettings() {
-  const [messageQueueDefault, setMessageQueueDefault] = useState<'steer' | 'queue'>('queue')
-  useEffect(() => { void settingsApi.get('message_queue_default').then((value) => setMessageQueueDefault(value === 'steer' ? 'steer' : 'queue')) }, [])
+  const [messageQueueDefault, setMessageQueueDefault] = useState<'steer' | 'queue'>(DEFAULT_FOLLOWUP_ACTION)
+  useEffect(() => { void settingsApi.get('message_queue_default').then((value) => setMessageQueueDefault(value === 'queue' ? 'queue' : DEFAULT_FOLLOWUP_ACTION)) }, [])
   const [setupDialogOpen, setSetupDialogOpen] = useState(false)
   const [launchAtStartup, setLaunchAtStartup] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
@@ -293,7 +294,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             const action = event.target.value as 'steer' | 'queue'
             setMessageQueueDefault(action)
             void settingsApi.set('message_queue_default', action)
-          }}><option value="queue">Queue</option><option value="steer">Steer</option></select>
+          }}><option value="steer">Send now</option><option value="queue">Queue for later</option></select>
         </div>
         <div className="flex items-center justify-between py-2 border-b border-border">
           <div className="space-y-0.5">

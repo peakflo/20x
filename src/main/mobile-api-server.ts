@@ -22,6 +22,7 @@ import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
 import type { Artifact, ArtifactFileEntry } from '../shared/artifacts'
 import { MOBILE_VOICE_CAPABILITIES } from '../shared/voice'
 import { TaskStatus } from '../shared/constants'
+import { DEFAULT_FOLLOWUP_ACTION } from '../shared/message-queue'
 import { sanitizeUsageSummaryQuery } from './usage/usage-query'
 import { guardStream } from './child-stream-guards'
 import type { ArtifactMcpCall } from '../shared/artifact-mcp'
@@ -338,7 +339,7 @@ async function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathnam
 async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Promise<unknown> {
   const db = dbRef!
 
-  if (pathname === '/api/message-queue/default') return { action: db.getSetting('message_queue_default') === 'steer' ? 'steer' : 'queue' }
+  if (pathname === '/api/message-queue/default') return { action: db.getSetting('message_queue_default') === 'queue' ? 'queue' : DEFAULT_FOLLOWUP_ACTION }
   const queueGetMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/message-queue$/)
   if (queueGetMatch) return agentRef!.getMessageQueue(queueGetMatch[1])
 

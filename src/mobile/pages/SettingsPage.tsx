@@ -3,6 +3,7 @@ import { api } from '../api/client'
 import type { Route } from '../App'
 import { SubscriptionUsageSection } from '../components/SubscriptionUsageSection'
 import { PushSettings } from '../components/PushSettings'
+import { DEFAULT_FOLLOWUP_ACTION } from '@shared/message-queue'
 
 interface TaskSource {
   id: string
@@ -26,7 +27,7 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage({ onNavigate }: SettingsPageProps) {
-  const [messageQueueDefault, setMessageQueueDefault] = useState<'steer' | 'queue'>('queue')
+  const [messageQueueDefault, setMessageQueueDefault] = useState<'steer' | 'queue'>(DEFAULT_FOLLOWUP_ACTION)
   useEffect(() => { void api.messageQueue.default().then((value) => setMessageQueueDefault(value.action)) }, [])
   const [sources, setSources] = useState<TaskSource[]>([])
   const [plugins, setPlugins] = useState<PluginMeta[]>([])
@@ -118,7 +119,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
             const action = event.target.value as 'steer' | 'queue'
             setMessageQueueDefault(action)
             void api.messageQueue.setDefault(action)
-          }}><option value="queue">Queue</option><option value="steer">Steer</option></select>
+          }}><option value="steer">Send now</option><option value="queue">Queue for later</option></select>
         </div>
 
         {/* Task Sources Section */}

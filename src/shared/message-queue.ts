@@ -19,6 +19,8 @@ export interface MessageQueueSnapshot {
   paused: boolean
 }
 
+export const DEFAULT_FOLLOWUP_ACTION = 'steer' as const
+
 export function resolveFollowupAction(defaultAction: 'steer' | 'queue', canSteer: boolean, alternate = false): 'steer' | 'queue' {
   if (!canSteer) return 'queue'
   return alternate ? (defaultAction === 'queue' ? 'steer' : 'queue') : defaultAction
