@@ -220,3 +220,19 @@ describe('saved browser recording tools', () => {
     expect(calls).toEqual([{ task_id: 'owner' }])
   })
 })
+
+describe('get_messages in a subtask scope', () => {
+  it('is advertised to a subtask session, as it is to a full-access session', () => {
+    expect(listToolsForScope(SCOPED).map((t) => t.name)).toContain('get_messages')
+    expect(listToolsForScope(FULL_ACCESS_SCOPE).map((t) => t.name)).toContain('get_messages')
+  })
+
+  it('reads only the subtask\'s own transcript, whatever task_id it names', async () => {
+    const calls: Array<{ route: string; params: Record<string, unknown> }> = []
+    await callToolForScope('get_messages', { task_id: 'another-task', include_tools: true, seq: 3 }, SCOPED, async (route, params) => {
+      calls.push({ route, params })
+      return { messages: [] }
+    })
+    expect(calls).toEqual([{ route: '/get_messages', params: { task_id: 'task-own', include_tools: true, seq: 3 } }])
+  })
+})

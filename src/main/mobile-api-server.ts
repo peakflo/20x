@@ -808,6 +808,12 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     const existing = db.getTask(taskId)
     if (!existing) throw Object.assign(new Error('Task not found'), { status: 404 })
     const updated = updateTaskFromUser(db, taskId, params as Parameters<DatabaseManager['updateTask']>[1])
+    // A reassignment from the agent dropdown stops the previous agent's live session.
+    if (updated && (params as Record<string, unknown>).agent_id !== undefined && (updated.agent_id ?? null) !== (existing.agent_id ?? null)) {
+      agentRef?.handleTaskAgentChanged(taskId).catch((error) => {
+        console.error(`[MobileAPI] Failed to stop the previous agent's session for task ${taskId}:`, error)
+      })
+    }
     if (updated) {
       broadcastToMobileClients('task:updated', { taskId, updates: updated })
       if (notifyDesktop) notifyDesktop('task:updated', { taskId, updates: updated })
@@ -866,6 +872,9 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     if (!agentId || !taskId) throw Object.assign(new Error('agentId and taskId are required'), { status: 400 })
     agent.noteUserTaskActivity(taskId)
     const newSessionId = await agent.resumeSession(agentId, taskId, sessionId)
+    // An empty id means the session is gone or belongs to another harness. Its
+    // context carries over to a new session, started from the Start action.
+    if (!newSessionId) throw Object.assign(new Error('This session is no longer available. Start a new session to continue; the earlier conversation carries over.'), { status: 409 })
     return { sessionId: newSessionId }
   }
 

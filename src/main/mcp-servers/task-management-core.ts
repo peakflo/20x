@@ -180,7 +180,27 @@ const sharedTools: Tool[] = [
 ]
 
 // Mastermind-only tools (full access to all tasks)
+/** Reads a task's transcript. Shared by mastermind and subtask scopes; a subtask is limited to its own task. */
+const getMessagesTool: Tool = {
+  name: 'get_messages',
+  description:
+    'Read the conversation of a task, newest first. Tool output is left out unless include_tools is true, because it is long and is rarely what a question is about. Page backwards with next_before_seq. Pass seq to read one message by its number, for example one listed as omitted in a context handoff.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      task_id: { type: 'string', description: 'Task ID' },
+      limit: { type: 'number', description: 'How many messages to return. Default 20, maximum 200.' },
+      before_seq: { type: 'number', description: 'Return messages older than this sequence number. Use next_before_seq from the previous call.' },
+      seq: { type: 'number', description: 'Return only the message with this sequence number.' },
+      role: { type: 'string', enum: ['user', 'assistant'], description: 'Return one side of the conversation only' },
+      include_tools: { type: 'boolean', description: 'Include tool calls and their output. Default false.' }
+    },
+    required: ['task_id']
+  }
+}
+
 const mastermindTools: Tool[] = [
+  getMessagesTool,
   {
     name: 'list_tasks',
     description:
@@ -383,23 +403,6 @@ const mastermindTools: Tool[] = [
   // These are deliberately absent from the subtask tool set: a scoped agent
   // must not answer a checkpoint or stop work on a task that is not its own.
 
-  {
-    name: 'get_messages',
-    description:
-      'Read the conversation of a task, newest first. Tool output is left out unless include_tools is true, because it is long and is rarely what a question is about. Page backwards with next_before_seq. Pass seq to read one message by its number, for example one listed as omitted in a context handoff.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        task_id: { type: 'string', description: 'Task ID' },
-        limit: { type: 'number', description: 'How many messages to return. Default 20, maximum 200.' },
-        before_seq: { type: 'number', description: 'Return messages older than this sequence number. Use next_before_seq from the previous call.' },
-        seq: { type: 'number', description: 'Return only the message with this sequence number.' },
-        role: { type: 'string', enum: ['user', 'assistant'], description: 'Return one side of the conversation only' },
-        include_tools: { type: 'boolean', description: 'Include tool calls and their output. Default false.' }
-      },
-      required: ['task_id']
-    }
-  },
   {
     name: 'get_session_status',
     description:
@@ -733,6 +736,7 @@ const browserTools: Tool[] = [
 
 // Subtask-scoped tools (can only access parent task + sibling subtasks)
 const subtaskTools: Tool[] = [
+  getMessagesTool,
   {
     name: 'get_parent_task',
     description: 'Get the parent task details including description, resolution, and output fields.',
@@ -985,6 +989,10 @@ async function handleScopedCall(
       }
       return invoke('/get_session_transcript', { task_id: args.task_id })
     }
+
+    // A subtask reads only its own transcript, whatever task_id it passes.
+    case 'get_messages':
+      return invoke('/get_messages', { ...args, task_id: scope.taskId })
 
     // Shared tools pass through directly
     default:

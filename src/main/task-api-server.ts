@@ -29,6 +29,7 @@ import {
 } from '../shared/ui-commands'
 import { buildSimilarTasksQuery } from './task-search'
 import { limitsByProvider, summarizeAgentUsage } from './usage/agent-usage-summary'
+import { toolOutputText } from './context-handoff'
 import {
   createRegisteredTaskArtifact,
   editRegisteredTaskArtifactFile,
@@ -466,6 +467,10 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const previousAgentId = params.agent_id !== undefined
         ? (rawDb.prepare('SELECT agent_id FROM tasks WHERE id = ?').get(params.task_id) as { agent_id: string | null } | undefined)?.agent_id ?? null
         : undefined
+      // A new agent does not resume the old agent's session. DatabaseManager.updateTask does the same.
+      if (previousAgentId !== undefined && params.agent_id !== previousAgentId && params.session_id === undefined) {
+        updates.push('session_id = ?'); qParams.push(null)
+      }
       // Lets a caller with no window hand the task straight to its agent.
       if (params.auto_start_agent !== undefined) {
         updates.push('auto_start_agent = ?')
@@ -802,7 +807,8 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
           seq: part.seq,
           role: part.role,
           type: part.partType ?? 'text',
-          content: part.content,
+          // Tool parts carry their real output in `tool`; `content` is often a placeholder.
+          content: part.partType === 'tool' ? toolOutputText(part) : part.content,
           created_at: new Date(part.createdAt).toISOString()
         })),
         next_before_seq: page.length === limit ? page[page.length - 1].seq : null,

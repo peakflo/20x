@@ -843,6 +843,40 @@ describe('Context handoff marker on agent reassignment', () => {
     expect(JSON.parse(db.getSetting(key(task.id))!)).toMatchObject({ fromAgentId: first.id })
   })
 
+  it('keeps the first agent through several reassignments before the handoff is delivered', () => {
+    const first = db.createAgent(makeAgent({ name: 'First' }))!
+    const second = db.createAgent(makeAgent({ name: 'Second' }))!
+    const third = db.createAgent(makeAgent({ name: 'Third' }))!
+    const task = assigned(first.id)
+    db.upsertTranscriptParts(task.id, [{ id: 'p1', role: 'user', content: 'hello' }])
+
+    db.updateTask(task.id, { agent_id: second.id })
+    db.updateTask(task.id, { agent_id: third.id })
+
+    expect(JSON.parse(db.getSetting(key(task.id))!)).toMatchObject({ fromAgentId: first.id, announced: false })
+  })
+
+  it('clears the session of the task when it is reassigned to another agent', () => {
+    const first = db.createAgent(makeAgent({ name: 'First' }))!
+    const second = db.createAgent(makeAgent({ name: 'Second' }))!
+    const task = assigned(first.id)
+    db.updateTask(task.id, { session_id: 'backend-session-1' })
+
+    const updated = db.updateTask(task.id, { agent_id: second.id })
+
+    expect(updated?.session_id).toBeNull()
+  })
+
+  it('keeps the session when the agent does not change', () => {
+    const first = db.createAgent(makeAgent({ name: 'First' }))!
+    const task = assigned(first.id)
+    db.updateTask(task.id, { session_id: 'backend-session-1' })
+
+    const updated = db.updateTask(task.id, { title: 'Renamed', agent_id: first.id })
+
+    expect(updated?.session_id).toBe('backend-session-1')
+  })
+
   it('does not record a change when the same agent is assigned again', () => {
     const first = db.createAgent(makeAgent({ name: 'First' }))!
     const task = assigned(first.id)

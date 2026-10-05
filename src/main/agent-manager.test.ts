@@ -4251,7 +4251,9 @@ describe('AgentManager context handoff on agent reassignment', () => {
     const text = await send(manager, session, 'Continue with the fix')
 
     expect(text.startsWith('## Conversation so far with Claude Lead (Claude Code)')).toBe(true)
-    expect(text).toContain('[#1 user] Fix the login bug')
+    // The startup prompt (first user message) is replaced by the task's own request.
+    expect(text).toContain('[#1 request] Ship the feature')
+    expect(text).not.toContain('Fix the login bug')
     expect(text).toContain('[#2 assistant] Checking auth.ts')
     expect(text.indexOf('## Conversation')).toBeLessThan(text.indexOf('Continue with the fix'))
     expect(text).toContain('Task id: task-1') // the lean task reminder is still appended
@@ -4312,6 +4314,31 @@ describe('AgentManager context handoff on agent reassignment', () => {
     const text = await send(manager, makeSession('agent-1'), 'hello')
 
     expect(text).not.toContain('## Conversation so far with')
+    expect(settings.has(KEY)).toBe(false)
+  })
+
+  it('shows the carried-over note once, even when the first send is retried', async () => {
+    const { db, settings } = makeHandoffDb({})
+    manager = new AgentManager(db)
+    const sent: Array<Record<string, unknown>> = []
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation((channel: unknown, data: unknown) => {
+      if (channel === 'agent:output') sent.push(data as Record<string, unknown>)
+    })
+
+    const session = makeSession('agent-1')
+    session.adapter.sendPrompt = vi.fn(async () => { throw new Error('transport down') }) as any
+    ;(manager as any).sessions.set('session-1', session)
+    await expect((manager as any).doSendAdapterMessage(session, 'session-1', 'hello')).rejects.toThrow('transport down')
+
+    session.adapter.sendPrompt = vi.fn(async () => undefined) as any
+    const retried = await (manager as any).doSendAdapterMessage(session, 'session-1', 'hello')
+    expect(retried).toBeUndefined()
+
+    const notes = sent.filter((data) => (data.data as { partType?: string })?.partType === 'context-handoff')
+    expect(notes).toHaveLength(1)
+    // The retry still carries the block, and the marker is cleared after the successful send.
+    const retryText = (session.adapter.sendPrompt as any).mock.calls.at(-1)[1][0].text as string
+    expect(retryText).toContain('## Conversation so far with')
     expect(settings.has(KEY)).toBe(false)
   })
 

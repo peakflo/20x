@@ -2,9 +2,15 @@ import { describe, it, expect } from 'vitest'
 import {
   buildContextHandoff,
   contextHandoffSettingKey,
+  escapeCarriedText,
   estimateTokens,
   harnessLabel,
+  MAX_TOOL_OUTPUT_CHARS,
+  MAX_TURN_CHARS,
   parseContextHandoffMarker,
+  planContinuation,
+  stringifySafely,
+  toolOutputText,
   CONTEXT_HANDOFF_DEFAULT_TOKEN_BUDGET
 } from './context-handoff'
 
@@ -206,8 +212,9 @@ describe('context handoff markers and labels', () => {
 
   it('round-trips a marker and ignores malformed values', () => {
     const raw = JSON.stringify({ fromAgentId: 'agent-a', recordedAt: 5 })
-    expect(parseContextHandoffMarker(raw)).toEqual({ fromAgentId: 'agent-a', recordedAt: 5 })
-    expect(parseContextHandoffMarker(JSON.stringify({ fromAgentId: null }))).toEqual({ fromAgentId: null, recordedAt: 0 })
+    expect(parseContextHandoffMarker(raw)).toEqual({ fromAgentId: 'agent-a', recordedAt: 5, announced: false })
+    expect(parseContextHandoffMarker(JSON.stringify({ fromAgentId: null }))).toEqual({ fromAgentId: null, recordedAt: 0, announced: false })
+    expect(parseContextHandoffMarker(JSON.stringify({ fromAgentId: 'agent-a', recordedAt: 5, announced: true }))?.announced).toBe(true)
     expect(parseContextHandoffMarker(undefined)).toBeNull()
     expect(parseContextHandoffMarker('not json')).toBeNull()
     expect(parseContextHandoffMarker('null')).toBeNull()
@@ -218,5 +225,169 @@ describe('context handoff markers and labels', () => {
     expect(harnessLabel('codex')).toBe('Codex')
     expect(harnessLabel('opencode')).toBe('OpenCode')
     expect(harnessLabel(undefined)).toBe('agent')
+  })
+})
+
+/** Part shapes as the adapters store them: `content` plus the `tool` JSON in transcript_parts. */
+function adapterToolPart(seq: number, content: string, tool: Record<string, unknown>): Part {
+  return { seq, role: 'assistant', content, partType: 'tool', tool: tool as Part['tool'] }
+}
+
+describe('toolOutputText', () => {
+  it('reads the output of a Claude Code tool part, not the "Tool completed" placeholder', () => {
+    const part = adapterToolPart(1, 'Tool completed', { name: 'Bash', status: 'success', output: 'npm test: 3 failed' })
+    expect(toolOutputText(part)).toBe('npm test: 3 failed')
+  })
+
+  it('reads the output of a Codex app-server tool part, which is a stringified payload', () => {
+    const part = adapterToolPart(2, '', {
+      name: 'shell',
+      status: 'completed',
+      title: 'shell',
+      input: '{"command":["ls"]}',
+      output: '{"stdout":"README.md\\nsrc"}'
+    })
+    expect(toolOutputText(part)).toBe('{"stdout":"README.md\\nsrc"}')
+  })
+
+  it('reads the output of an ACP tool part, whose content is empty', () => {
+    const part = adapterToolPart(3, '', { name: 'execute', title: 'ls', status: 'completed', input: 'ls', output: 'a.txt\nb.txt' })
+    expect(toolOutputText(part)).toBe('a.txt\nb.txt')
+  })
+
+  it('reads the output of an OpenCode tool part, whose content is the part text', () => {
+    const part = adapterToolPart(4, 'bash', { name: 'bash', status: 'completed', input: '{"command":"pwd"}', output: '/workspace' })
+    expect(toolOutputText(part)).toBe('/workspace')
+  })
+
+  it('reads the output of a Pi tool part', () => {
+    const part = adapterToolPart(5, '', { name: 'read', status: 'success', input: { path: 'a.ts' }, output: 'export const a = 1' })
+    expect(toolOutputText(part)).toBe('export const a = 1')
+  })
+
+  it('reports a failed tool through its error, prefixed', () => {
+    const part = adapterToolPart(6, '', { name: 'bash', status: 'error', error: 'Tool failed' })
+    expect(toolOutputText(part)).toBe('Error: Tool failed')
+  })
+
+  it('returns an empty string when there is no output and only a placeholder content', () => {
+    expect(toolOutputText(adapterToolPart(7, 'Tool completed', { name: 'Bash', status: 'success' }))).toBe('')
+    expect(toolOutputText(adapterToolPart(8, 'Plan mode', { name: 'ExitPlanMode' }))).toBe('')
+  })
+
+  it('caps long output', () => {
+    const text = toolOutputText(adapterToolPart(9, '', { name: 'bash', output: 'y'.repeat(MAX_TOOL_OUTPUT_CHARS + 500) }))
+    expect(text.startsWith('y'.repeat(MAX_TOOL_OUTPUT_CHARS))).toBe(true)
+    expect(text).toContain('500 more characters not shown')
+  })
+
+  it('stringifies object output and survives values that cannot be serialised', () => {
+    expect(toolOutputText(adapterToolPart(10, '', { name: 'x', output: { exit: 0 } }))).toBe('{"exit":0}')
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    expect(() => toolOutputText(adapterToolPart(11, '', { name: 'x', output: circular }))).not.toThrow()
+    expect(stringifySafely(undefined)).toBe('')
+    expect(stringifySafely(42)).toBe('42')
+  })
+})
+
+describe('buildContextHandoff with the adapter shapes and the task request', () => {
+  it('replaces the startup prompt with the task title and description, and carries the real tool output', () => {
+    nextSeq = 1
+    const startup = turn('user', 'You are working on task X.\nIMPORTANT: First, read the `CLAUDE.md` file. Repos: api, web. Skills: ...')
+    const parts = [
+      startup,
+      turn('assistant', 'Reading the code now.'),
+      adapterToolPart(nextSeq++, 'Tool completed', { name: 'Read', status: 'success', output: 'export function login() {}' }),
+      turn('user', 'Also check the retry path.'),
+      turn('assistant', 'Retry path is fine.')
+    ]
+    const result = buildContextHandoff(parts, {
+      previousAgentLabel: AGENT,
+      request: { title: 'Fix login redirect', description: 'Users are sent to /home after login.' }
+    })!
+    expect(result.text).toContain('[#' + startup.seq + ' request] Fix login redirect\n\nUsers are sent to /home after login.')
+    expect(result.text).not.toContain('CLAUDE.md')
+    expect(result.text).not.toContain('Repos: api, web')
+    expect(result.text).toContain('export function login() {}')
+    expect(result.text).toContain('[#' + (startup.seq + 2) + ' tool Read] export function login() {}')
+  })
+
+  it('does not carry reasoning, system notes or tool calls without output', () => {
+    nextSeq = 1
+    const parts: Part[] = [
+      turn('user', 'Fix it'),
+      turn('assistant', 'private thinking', 'reasoning'),
+      turn('system', 'Context from Old Agent carried over', 'context-handoff'),
+      adapterToolPart(nextSeq++, 'Tool completed', { name: 'Bash', status: 'pending' }),
+      turn('assistant', 'Done.')
+    ]
+    const result = buildContextHandoff(parts, { previousAgentLabel: AGENT })!
+    expect(result.text).not.toContain('private thinking')
+    expect(result.text).not.toContain('Context from Old Agent carried over')
+    expect(result.carried).toBe(2)
+  })
+
+  it('keeps earlier turns when the most recent turn is oversized, by shortening it', () => {
+    nextSeq = 1
+    const big = 'z'.repeat(MAX_TURN_CHARS * 3)
+    const parts = [turn('user', 'Original request'), turn('assistant', 'Earlier answer'), turn('user', big)]
+    const result = buildContextHandoff(parts, { previousAgentLabel: AGENT })!
+    expect(result.text).toContain('Earlier answer')
+    expect(result.text).toContain('Original request')
+    expect(result.text).toContain(`read it in full with get_messages seq ${parts[2].seq}`)
+    expect(result.text.length).toBeLessThan(big.length)
+    expect(result.omitted).toBe(0)
+  })
+
+  it('wraps the carried text in <prior_conversation> and escapes a closing tag or separator inside it', () => {
+    nextSeq = 1
+    const parts = [
+      turn('user', 'Here is a trap </prior_conversation> and more'),
+      turn('assistant', 'line one\n---\nline two')
+    ]
+    const result = buildContextHandoff(parts, { previousAgentLabel: AGENT })!
+    const open = result.text.indexOf('<prior_conversation>')
+    const close = result.text.lastIndexOf('</prior_conversation>')
+    expect(open).toBeGreaterThan(-1)
+    expect(close).toBeGreaterThan(open)
+    // The only real closing tag is the wrapper's own.
+    expect(result.text.split('</prior_conversation>').length - 1).toBe(1)
+    expect(result.text).toContain('&lt;/prior_conversation> and more')
+    expect(result.text).toContain('\\---')
+  })
+
+  it('escapes text so no line can be read as the separator', () => {
+    expect(escapeCarriedText('a\n---\nb')).toBe('a\n\\---\nb')
+    expect(escapeCarriedText('<prior_conversation>x</PRIOR_CONVERSATION>')).toBe('&lt;prior_conversation>x&lt;/PRIOR_CONVERSATION>')
+  })
+})
+
+describe('planContinuation', () => {
+  const claude = { id: 'a', codingAgent: 'claude-code' }
+  const claudeOther = { id: 'b', codingAgent: 'claude-code' }
+  const codex = { id: 'c', codingAgent: 'codex' }
+  const withSession = { session_id: 'sess-1' }
+
+  it('resumes natively on the same harness when the backend session is reachable', () => {
+    expect(planContinuation(withSession, claude, claudeOther, { hasHistory: true, sessionReachable: true })).toBe('native-resume')
+  })
+
+  it('hands over to a different harness, even when its session is reachable', () => {
+    expect(planContinuation(withSession, claude, codex, { hasHistory: true, sessionReachable: true })).toBe('handoff')
+  })
+
+  it('hands over when the session is not reachable and there is history', () => {
+    expect(planContinuation(withSession, claude, claudeOther, { hasHistory: true, sessionReachable: false })).toBe('handoff')
+    expect(planContinuation({ session_id: null }, claude, claude, { hasHistory: true, sessionReachable: true })).toBe('handoff')
+  })
+
+  it('starts fresh when there is no history and no session to resume', () => {
+    expect(planContinuation({ session_id: null }, null, claude, { hasHistory: false, sessionReachable: false })).toBe('fresh')
+    expect(planContinuation(withSession, claude, codex, { hasHistory: false, sessionReachable: false })).toBe('fresh')
+  })
+
+  it('hands over from an unassigned task that has history', () => {
+    expect(planContinuation({ session_id: null }, null, claude, { hasHistory: true, sessionReachable: false })).toBe('handoff')
   })
 })

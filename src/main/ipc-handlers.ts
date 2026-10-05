@@ -150,8 +150,15 @@ export function registerIpcHandlers(
         previousStatus = existing.status
       }
     }
+    // Previous agent, to detect a reassignment from the agent dropdown.
+    const previousAgentId = data.agent_id !== undefined ? (db.getTask(id)?.agent_id ?? null) : undefined
 
     const updated = updateTaskFromUser(db, id, data)
+    if (previousAgentId !== undefined && updated && (updated.agent_id ?? null) !== previousAgentId) {
+      agentManager.handleTaskAgentChanged(id).catch((error) => {
+        console.error(`[IPC] Failed to stop the previous agent's session for task ${id}:`, error)
+      })
+    }
 
     // Initialize recurring task schedule when recurrence is added or changed
     if (recurrenceScheduler && updated && updated.is_recurring && updated.recurrence_pattern) {

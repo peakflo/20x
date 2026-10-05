@@ -8,7 +8,7 @@ import { TaskStatus } from '../shared/constants'
 import type { ReasoningEffort } from '../shared/reasoning-effort'
 import { startTaskApiServer } from './task-api-server'
 import { UsageStore } from './usage/usage-store'
-import { contextHandoffSettingKey, parseContextHandoffMarker } from './context-handoff'
+import { contextHandoffSettingKey, parseContextHandoffMarker, type ContextHandoffMarker } from './context-handoff'
 
 export interface AgentRow {
   id: string
@@ -2294,8 +2294,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
    */
   markContextHandoff(taskId: string, fromAgentId: string | null): void {
     if (!this.hasTranscriptParts(taskId)) return
+    // The first agent that held the conversation stays the source until the
+    // handoff is delivered, however many times the task changes agent before then.
     const existing = parseContextHandoffMarker(this.getSetting(contextHandoffSettingKey(taskId)))
-    const marker = { fromAgentId: fromAgentId ?? existing?.fromAgentId ?? null, recordedAt: Date.now() }
+    const marker: ContextHandoffMarker = {
+      fromAgentId: existing ? existing.fromAgentId : fromAgentId,
+      recordedAt: Date.now(),
+      announced: false
+    }
     this.setSetting(contextHandoffSettingKey(taskId), JSON.stringify(marker))
   }
 
@@ -2404,8 +2410,11 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       throw new Error('Only the sync service can change a task source link.')
     }
     const currentTask = this.getTask(id)
-    if (currentTask && data.agent_id !== undefined && data.agent_id !== currentTask.agent_id) {
-      this.markContextHandoff(id, currentTask.agent_id)
+    // Reassigning to another agent ends the old backend session: the new agent
+    // starts from a handoff, not from a resume of a session it does not own.
+    const agentChanged = !!currentTask && data.agent_id !== undefined && data.agent_id !== currentTask.agent_id
+    if (agentChanged && data.session_id === undefined) {
+      data = { ...data, session_id: null }
     }
     const approvedStatusWrite = origin === 'session-feedback' || origin === 'task-source'
     if (!approvedStatusWrite && currentTask?.status === TaskStatus.AgentLearning && this.getSetting(`session-feedback-completion:${id}`) && !(data.status === TaskStatus.Completed && data.complete_at_source === false)) {
@@ -2469,6 +2478,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     this.db.prepare(
       `UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`
     ).run(...values)
+
+    // Recorded only once the change is written, so a failed update leaves no marker.
+    if (agentChanged && currentTask) this.markContextHandoff(id, currentTask.agent_id)
 
     return this.getTask(id)
   }

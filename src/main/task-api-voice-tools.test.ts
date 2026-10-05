@@ -362,3 +362,31 @@ describe('get_ui_state', () => {
     expect(result).toMatchObject({ available: true, view: 'canvas', selectedTaskId: 't1' })
   })
 })
+
+describe('get_messages tool output from the adapters', () => {
+  // Real part shapes: Claude stores its output in `tool` with a placeholder content;
+  // ACP and Codex leave content empty.
+  const ADAPTER_PARTS = [
+    { ...part(1, 'user', 'list the files'), partType: 'text' },
+    { ...part(2, 'assistant', 'Tool completed', 'tool'), tool: { name: 'Bash', status: 'success', output: 'README.md\nsrc' } },
+    { ...part(3, 'assistant', '', 'tool'), tool: { name: 'execute', status: 'completed', output: 'a.txt' } },
+  ]
+
+  it('returns the real output of a tool part instead of its placeholder content', async () => {
+    const db = { ...makeDb() as object, getTranscriptParts: vi.fn(() => ADAPTER_PARTS) } as never
+    const result = (await handleTaskApiRoute('/get_messages', { task_id: 't1', include_tools: true }, db)) as {
+      messages: Array<{ seq: number; type: string; content: string }>
+    }
+    const byseq = Object.fromEntries(result.messages.map((m) => [m.seq, m]))
+    expect(byseq[2].content).toBe('README.md\nsrc')
+    expect(byseq[3].content).toBe('a.txt')
+  })
+
+  it('reads one message by seq', async () => {
+    const db = { ...makeDb() as object, getTranscriptParts: vi.fn(() => ADAPTER_PARTS) } as never
+    const result = (await handleTaskApiRoute('/get_messages', { task_id: 't1', seq: 2, include_tools: true }, db)) as {
+      messages: Array<{ seq: number }>
+    }
+    expect(result.messages.map((m) => m.seq)).toEqual([2])
+  })
+})
