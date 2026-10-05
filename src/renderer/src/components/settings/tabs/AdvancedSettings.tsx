@@ -86,7 +86,7 @@ export function AdvancedSettings() {
             <Input id="branch-template" value={branchTemplate} onChange={(event) => { setBranchTemplate(event.target.value); setBranchSaved(false) }} placeholder="{type}/{slug}-{shortId}" />
             <p className="text-xs text-muted-foreground">Use {'{type}'}, {'{slug}'}, {'{id}'}, {'{shortId}'}, and {'{date}'}.</p>
           </div>}
-          {branchMode === 'ai' && <p className="text-xs text-muted-foreground">Uses the configured OpenAI API key. If unavailable or slow, uses type + title slug.</p>}
+          {branchMode === 'ai' && <p className="text-xs text-muted-foreground">Sends the task title and description to OpenAI using your stored API key. If unavailable or slow, uses type + title slug.</p>}
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" onClick={async () => {
               await settingsApi.set(WORKTREE_BRANCH_MODE_KEY, branchMode)

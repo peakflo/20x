@@ -98,6 +98,11 @@ describe('WorktreeManager', () => {
         return
       }
 
+      if (file === 'git' && args[0] === 'for-each-ref') {
+        callback(null, '', '')
+        return
+      }
+
       if (file === 'git' && args[0] === 'rev-parse') {
         callback(null, 'origin/main', '')
         return
@@ -154,6 +159,7 @@ describe('WorktreeManager', () => {
     const settings: Record<string, string> = { worktree_branch_mode: 'ai' }
     const db = {
       getSetting: (key: string) => settings[key] ?? null,
+      setSetting: (key: string, value: string) => { settings[key] = value },
       getTask: () => ({ id: 'task-12345678', title: 'Fix login', type: 'coding', labels: ['bug'] })
     }
     execFileMock.mockImplementation((file: string, args: string[], optionsOrCallback: unknown, maybeCallback?: (error: Error | null, stdout?: string, stderr?: string) => void) => {
@@ -162,7 +168,8 @@ describe('WorktreeManager', () => {
         : maybeCallback as (error: Error | null, stdout?: string, stderr?: string) => void
       if (file === 'git' && args[0] === 'show-ref') {
         callback(args[3] === 'refs/heads/fix/fix-login-12345678' ? null : new Error('Missing'))
-      } else if (file === 'git' && args[0] === 'rev-parse') callback(null, 'origin/main', '')
+      } else if (file === 'git' && args[0] === 'for-each-ref') callback(null, 'refs/heads/fix/fix-login-12345678\n', '')
+      else if (file === 'git' && args[0] === 'rev-parse') callback(null, 'origin/main', '')
       else callback(null, '', '')
     })
 
@@ -178,12 +185,98 @@ describe('WorktreeManager', () => {
     existsSyncMock.mockImplementation((candidate: string) => candidate === workspace)
     const db = {
       getSetting: (key: string) => key === 'worktree_branch_mode' ? 'type-title' : null,
+      setSetting: vi.fn(),
       getTask: () => ({ id: 'task-keep', title: 'Changed title', labels: ['feature'] })
     }
 
     await new WorktreeManager(db).setupWorkspaceForTask('task-keep', [{ fullName: 'peakflo/20x', defaultBranch: 'main' }], 'peakflo')
 
     expect(execFileMock.mock.calls.some(([file, args]) => file === 'git' && args[0] === 'worktree' && args[1] === 'add')).toBe(false)
+  })
+
+  it('re-attaches the stored branch when the directory is missing, even after title and settings change', async () => {
+    const settings: Record<string, string> = { worktree_branch_mode: 'type-title' }
+    let title = 'Fix login redirect'
+    const branches = new Set<string>()
+    const db = {
+      getSetting: (key: string) => settings[key] ?? null,
+      setSetting: (key: string, value: string) => { settings[key] = value },
+      getTask: () => ({ id: 'task-abcdefgh', title, labels: ['bug'] })
+    }
+    execFileMock.mockImplementation((file: string, args: string[], optionsOrCallback: unknown, maybeCallback?: (error: Error | null, stdout?: string, stderr?: string) => void) => {
+      const callback = typeof optionsOrCallback === 'function'
+        ? optionsOrCallback as (error: Error | null, stdout?: string, stderr?: string) => void
+        : maybeCallback as (error: Error | null, stdout?: string, stderr?: string) => void
+      if (file === 'git' && args[0] === 'show-ref') {
+        callback(branches.has(args[3]?.replace('refs/heads/', '')) ? null : new Error('Missing'))
+      } else if (file === 'git' && args[0] === 'for-each-ref') {
+        callback(null, [...branches].map((branch) => `refs/heads/${branch}`).join('\n'), '')
+      } else if (file === 'git' && args[0] === 'rev-parse') {
+        callback(null, 'origin/main', '')
+      } else if (file === 'git' && args[0] === 'worktree' && args[1] === 'add') {
+        if (args[3] === '-b') branches.add(args[4])
+        callback(null, '', '')
+      } else callback(null, '', '')
+    })
+
+    await new WorktreeManager(db).setupWorkspaceForTask('task-abcdefgh', [{ fullName: 'peakflo/20x', defaultBranch: 'main' }], 'peakflo')
+    const chosen = settings['worktree_branch:task-abcdefgh:peakflo/20x']
+    expect(chosen).toBe('fix/fix-login-redirect-abcdefgh')
+
+    title = 'Entirely different title'
+    settings.worktree_branch_mode = 'prefix'
+    settings.worktree_branch_prefix = 'other'
+    execFileMock.mockClear()
+    await new WorktreeManager(db).setupWorkspaceForTask('task-abcdefgh', [{ fullName: 'peakflo/20x', defaultBranch: 'main' }], 'peakflo')
+
+    expect(execFileMock).toHaveBeenCalledWith('git', [
+      'worktree', 'add', expect.any(String), chosen
+    ], expect.any(Object), expect.any(Function))
+    expect(execFileMock.mock.calls.some(([file, args]) => file === 'git' && args[0] === 'worktree' && args.includes('-b'))).toBe(false)
+  })
+
+  it('uses one AI proposal for all repositories in a task', async () => {
+    const settings: Record<string, string> = { worktree_branch_mode: 'ai', openai_api_key: 'test-key' }
+    const db = {
+      getSetting: (key: string) => settings[key] ?? null,
+      setSetting: (key: string, value: string) => { settings[key] = value },
+      getTask: () => ({ id: 'task-12345678', title: 'Fix login', description: 'Redirect fails' })
+    }
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content: 'fix/login-redirect' } }] }) })
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      await new WorktreeManager(db).setupWorkspaceForTask('task-12345678', [
+        { fullName: 'peakflo/first', defaultBranch: 'main' },
+        { fullName: 'peakflo/second', defaultBranch: 'main' }
+      ], 'peakflo')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(settings['worktree_branch:task-12345678:peakflo/first']).toBe('fix/login-redirect')
+      expect(settings['worktree_branch:task-12345678:peakflo/second']).toBe('fix/login-redirect')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('avoids a branch directory/file clash', async () => {
+    const settings: Record<string, string> = { worktree_branch_mode: 'template', worktree_branch_template: 'fix/login' }
+    const db = {
+      getSetting: (key: string) => settings[key] ?? null,
+      setSetting: (key: string, value: string) => { settings[key] = value },
+      getTask: () => ({ id: 'task-12345678', title: 'Login' })
+    }
+    execFileMock.mockImplementation((file: string, args: string[], optionsOrCallback: unknown, maybeCallback?: (error: Error | null, stdout?: string, stderr?: string) => void) => {
+      const callback = typeof optionsOrCallback === 'function'
+        ? optionsOrCallback as (error: Error | null, stdout?: string, stderr?: string) => void
+        : maybeCallback as (error: Error | null, stdout?: string, stderr?: string) => void
+      if (file === 'git' && args[0] === 'show-ref') callback(new Error('Missing'))
+      else if (file === 'git' && args[0] === 'for-each-ref') callback(null, 'refs/heads/fix\n', '')
+      else if (file === 'git' && args[0] === 'rev-parse') callback(null, 'origin/main', '')
+      else callback(null, '', '')
+    })
+
+    await new WorktreeManager(db).setupWorkspaceForTask('task-12345678', [{ fullName: 'peakflo/20x', defaultBranch: 'main' }], 'peakflo')
+
+    expect(settings['worktree_branch:task-12345678:peakflo/20x']).toBe('fix-login-12345678')
   })
 
   it('returns tracked and untracked files for the complete worktree inventory', async () => {
