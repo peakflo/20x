@@ -10,6 +10,7 @@ import {
   ExternalLink,
 } from 'lucide-react'
 import type { BrowserRecordingManifest } from '@shared/browser-recording'
+import { AGENT_BROWSER_PARTITION } from '@shared/agent-browser-session'
 import { browserRecordingApi } from '@/lib/ipc-client'
 import { notifyAgentsOfBrowserRecording } from '@/lib/browser-agent-notifications'
 import { useCanvasStore } from '@/stores/canvas-store'
@@ -508,6 +509,7 @@ export function BrowserPanelContent({
         <webview
           ref={webviewRef as any}
           src={initialSrc.current}
+          partition={AGENT_BROWSER_PARTITION}
           className="w-full h-full"
           /* @ts-expect-error — Electron webview attributes not typed in JSX */
           allowpopups="true"

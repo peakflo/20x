@@ -6,6 +6,7 @@ import { rmSync } from 'fs'
 // reload/navigation tests can hand the broker a fake WebContents.
 const electronMocks = vi.hoisted(() => ({
   fromId: vi.fn((): unknown => null),
+  agentSession: {},
   userData: `/tmp/20x-panel-browser-broker-test-${process.pid}-${Date.now()}`,
   getPath: vi.fn()
 }))
@@ -14,6 +15,7 @@ afterAll(() => rmSync(electronMocks.userData, { recursive: true, force: true }))
 
 vi.mock('electron', () => ({
   app: { getPath: electronMocks.getPath },
+  session: { fromPartition: () => electronMocks.agentSession },
   webContents: { fromId: electronMocks.fromId }
 }))
 
@@ -180,15 +182,20 @@ describe('unwrapEval', () => {
 })
 
 describe('registry lifecycle', () => {
-  it('register/unregister/list track linkage without touching live webContents', () => {
-    // listPanels tolerates dead webContents ids (returns empty url/title).
+  it('rejects a dead webContents instead of exposing it to agents', () => {
     panelBrowserBroker.registerPanel('px', 999_999, ['taskZ'])
-    expect(panelBrowserBroker.listPanels('taskZ')).toEqual([{ panelId: 'px', url: '', title: '' }])
+    expect(panelBrowserBroker.listPanels('taskZ')).toEqual([])
     expect(panelBrowserBroker.listPanels('other')).toEqual([])
     expect(panelBrowserBroker.setPanelTasks('missing', [])).toBe(false)
-    expect(panelBrowserBroker.unregisterPanel('px')).toBe(true)
+    expect(panelBrowserBroker.unregisterPanel('px')).toBe(false)
     expect(panelBrowserBroker.unregisterPanel('px')).toBe(false)
     panelBrowserBroker.stopAll()
+  })
+  it('rejects a webview from the application session', () => {
+    electronMocks.fromId.mockReturnValue({ isDestroyed: () => false, session: {} })
+    panelBrowserBroker.registerPanel('app', 88, ['taskZ'])
+    expect(panelBrowserBroker.listPanels('taskZ')).toEqual([])
+    electronMocks.fromId.mockReturnValue(null)
   })
 })
 
@@ -213,7 +220,7 @@ describe('reload hard flag', () => {
 
   it('bypasses the cache when hard is set', async () => {
     const wc = fakeWebContents('https://x.io/after-hard')
-    electronMocks.fromId.mockReturnValue(wc)
+    electronMocks.fromId.mockReturnValue(Object.assign(wc, { session: electronMocks.agentSession }))
     panelBrowserBroker.registerPanel('p-hard', 42, ['task-hard'])
     try {
       const result = await panelBrowserBroker.reload('task-hard', 'p-hard', true)
@@ -227,7 +234,7 @@ describe('reload hard flag', () => {
 
   it('defaults to a normal cached reload', async () => {
     const wc = fakeWebContents('https://x.io/after-soft')
-    electronMocks.fromId.mockReturnValue(wc)
+    electronMocks.fromId.mockReturnValue(Object.assign(wc, { session: electronMocks.agentSession }))
     panelBrowserBroker.registerPanel('p-soft', 43, ['task-soft'])
     try {
       const result = await panelBrowserBroker.reload('task-soft', 'p-soft')
@@ -317,7 +324,7 @@ describe('broker console buffering', () => {
 
   it('buffers console-message events per panel with level/line/source', async () => {
     const wc = fakeConsoleWebContents()
-    electronMocks.fromId.mockReturnValue(wc)
+    electronMocks.fromId.mockReturnValue(Object.assign(wc, { session: electronMocks.agentSession }))
     panelBrowserBroker.registerPanel('p-console', 44, ['task-console'])
     try {
       expect(wc.on).toHaveBeenCalledWith('console-message', expect.any(Function))
@@ -340,7 +347,7 @@ describe('broker console buffering', () => {
 
   it('drains the buffer when clear is set and isolates panels', async () => {
     const wc = fakeConsoleWebContents()
-    electronMocks.fromId.mockReturnValue(wc)
+    electronMocks.fromId.mockReturnValue(Object.assign(wc, { session: electronMocks.agentSession }))
     panelBrowserBroker.registerPanel('p-console-a', 45, ['task-console-a'])
     panelBrowserBroker.registerPanel('p-console-b', 46, ['task-console-b'])
     try {
@@ -374,7 +381,7 @@ describe('broker network', () => {
       removeListener: vi.fn(),
       executeJavaScript: vi.fn(async () => payload)
     }
-    electronMocks.fromId.mockReturnValue(wc)
+    electronMocks.fromId.mockReturnValue(Object.assign(wc, { session: electronMocks.agentSession }))
     panelBrowserBroker.registerPanel('p-network', 47, ['task-network'])
     try {
       const result = (await panelBrowserBroker.network('task-network', 'api', 50, 'p-network')) as unknown as {
@@ -421,7 +428,7 @@ describe('broker recording stop', () => {
     }
 
     const broker = new PanelBrowserBroker()
-    electronMocks.fromId.mockReturnValue(wc)
+    electronMocks.fromId.mockReturnValue(Object.assign(wc, { session: electronMocks.agentSession }))
     broker.registerPanel('p-record', wc.id, ['task-record'])
     const started = await broker.startRecording('p-record')
     expect(started).toHaveProperty('ok', true)
@@ -452,7 +459,7 @@ describe('broker recording stop', () => {
       )
     }
     const broker = new PanelBrowserBroker()
-    electronMocks.fromId.mockReturnValue(wc)
+    electronMocks.fromId.mockReturnValue(Object.assign(wc, { session: electronMocks.agentSession }))
     broker.registerPanel('p-write-failure', wc.id, ['task-write-failure'])
     await broker.startRecording('p-write-failure')
     const append = vi.spyOn(broker.recordings, 'append').mockImplementation(() => { throw new Error('disk full') })

@@ -1,11 +1,12 @@
 import { createDecipheriv, createHash, pbkdf2Sync } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { app, session } from 'electron'
+import { webContents } from 'electron'
 import Database from 'better-sqlite3'
 import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource, BrowserSourceId } from '../shared/browser-session-import'
+import { getAgentBrowserSession } from './agent-browser-session'
 
 interface Cookie {
   host: string
@@ -134,7 +135,7 @@ async function chromiumKeys(id: BrowserSourceId, root: string): Promise<{ v10?: 
   if (process.platform === 'win32') {
     const state = JSON.parse(readFileSync(join(root, 'Local State'), 'utf8')) as { os_crypt?: { encrypted_key?: string } }
     const wrapped = Buffer.from(state.os_crypt?.encrypted_key || '', 'base64')
-    if (wrapped.subarray(0, 5).toString() !== 'DPAPI') throw new Error('This browser uses unsupported app-bound encryption')
+    if (wrapped.subarray(0, 5).toString() !== 'DPAPI') return {}
     const script = '$b=[Convert]::FromBase64String([Console]::In.ReadToEnd());$p=[Security.Cryptography.ProtectedData]::Unprotect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser);[Console]::Out.Write([Convert]::ToBase64String($p))'
     const encoded = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { input: wrapped.subarray(5).toString('base64'), encoding: 'utf8', timeout: 15000 })
     return { gcm: Buffer.from(encoded, 'base64') }
@@ -143,20 +144,24 @@ async function chromiumKeys(id: BrowserSourceId, root: string): Promise<{ v10?: 
 }
 
 async function sqliteRows<T>(path: string, sql: (db: Database.Database) => T): Promise<T> {
-  const source = new Database(path, { readonly: true, fileMustExist: true })
-  const temp = join(tmpdir(), `20x-cookie-import-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`)
+  const directory = mkdtempSync(join(tmpdir(), '20x-cookie-import-'))
+  const temp = join(directory, 'snapshot.sqlite')
+  let source: Database.Database | undefined
   try {
+    chmodSync(directory, 0o700)
+    source = new Database(path, { readonly: true, fileMustExist: true })
     await source.backup(temp)
     const snapshot = new Database(temp, { readonly: true })
     try { return sql(snapshot) } finally { snapshot.close() }
   } finally {
-    source.close()
-    try { unlinkSync(temp) } catch { /* Cleanup best effort. */ }
+    source?.close()
+    rmSync(directory, { recursive: true, force: true })
   }
 }
 
 export async function readFirefox(path: string): Promise<{ cookies: Cookie[]; skipped: number }> {
   return sqliteRows(path, db => {
+    const schemaVersion = Number((db.pragma('user_version', { simple: true }) as number) || 0)
     const columns = db.prepare('PRAGMA table_info(moz_cookies)').all() as { name: string }[]
     const has = (name: string) => columns.some(column => column.name === name)
     const rows = db.prepare(`SELECT host, name, value, path, expiry, isSecure, isHttpOnly, ${has('sameSite') ? 'sameSite' : '256 AS sameSite'}, ${has('originAttributes') ? 'originAttributes' : "'' AS originAttributes"} FROM moz_cookies`).all() as Array<{ host: string; name: string; value: string; path: string; expiry: number; isSecure: number; isHttpOnly: number; sameSite: number; originAttributes: string }>
@@ -164,13 +169,13 @@ export async function readFirefox(path: string): Promise<{ cookies: Cookie[]; sk
     let skipped = 0
     for (const row of rows) {
       if (row.originAttributes?.includes('partitionKey=')) { skipped++; continue }
-      cookies.push({ host: row.host, name: row.name, value: row.value, path: row.path || '/', secure: !!row.isSecure, httpOnly: !!row.isHttpOnly, sameSite: sameSite(row.sameSite), expirationDate: row.expiry || undefined })
+      cookies.push({ host: row.host, name: row.name, value: row.value, path: row.path || '/', secure: !!row.isSecure, httpOnly: !!row.isHttpOnly, sameSite: sameSite(row.sameSite), expirationDate: row.expiry > 0 ? (schemaVersion >= 16 ? Math.floor(row.expiry / 1000) : row.expiry) : undefined })
     }
     return { cookies, skipped }
   })
 }
 
-async function readChromium(path: string, keys: { v10?: Buffer; v11?: Buffer; gcm?: Buffer }): Promise<{ cookies: Cookie[]; skipped: number }> {
+export async function readChromium(path: string, keys: { v10?: Buffer; v11?: Buffer; gcm?: Buffer }, platform: NodeJS.Platform = process.platform): Promise<{ cookies: Cookie[]; skipped: number; unsupportedWindowsCookies: number }> {
   return sqliteRows(path, db => {
     let version = 23
     try { version = Number((db.prepare("SELECT value FROM meta WHERE key='version'").get() as { value: number } | undefined)?.value || 23) } catch { /* Older schema. */ }
@@ -179,13 +184,15 @@ async function readChromium(path: string, keys: { v10?: Buffer; v11?: Buffer; gc
     const rows = db.prepare(`SELECT host_key, name, value, encrypted_value, path, expires_utc / 1000000 AS expires_seconds, is_secure, is_httponly, ${has('samesite') ? 'samesite' : '-1 AS samesite'}, ${has('top_frame_site_key') ? 'top_frame_site_key' : "'' AS top_frame_site_key"} FROM cookies`).all() as Array<{ host_key: string; name: string; value: string; encrypted_value: Buffer; path: string; expires_seconds: number; is_secure: number; is_httponly: number; samesite: number; top_frame_site_key: string }>
     const cookies: Cookie[] = []
     let skipped = 0
+    let unsupportedWindowsCookies = 0
     for (const row of rows) {
       if (row.top_frame_site_key) { skipped++; continue }
-      const value = row.encrypted_value?.length ? decryptChromiumCookie(row.encrypted_value, row.host_key, version, keys) : row.value
+      if (platform === 'win32' && row.encrypted_value?.subarray(0, 3).toString('latin1') === 'v20') { unsupportedWindowsCookies++; skipped++; continue }
+      const value = row.encrypted_value?.length ? decryptChromiumCookie(row.encrypted_value, row.host_key, version, keys, platform) : row.value
       if (value === null) { skipped++; continue }
       cookies.push({ host: row.host_key, name: row.name, value, path: row.path || '/', secure: !!row.is_secure, httpOnly: !!row.is_httponly, sameSite: sameSite(row.samesite), expirationDate: row.expires_seconds > 0 ? row.expires_seconds - 11644473600 : undefined })
     }
-    return { cookies, skipped }
+    return { cookies, skipped, unsupportedWindowsCookies }
   })
 }
 
@@ -244,28 +251,17 @@ export function shouldImportCookie(cookie: Cookie, domains: string[], now = Date
   return !!host && (!cookie.expirationDate || cookie.expirationDate > now) && (!domains.length || domains.some(domain => host === domain || host.endsWith(`.${domain}`)))
 }
 
-interface ImportedIdentity { url: string; name: string; path: string; domain?: string; hash: string }
-function manifestPath(): string { return join(app.getPath('userData'), 'imported-browser-sessions.json') }
-function readManifest(): ImportedIdentity[] {
-  try { return JSON.parse(readFileSync(manifestPath(), 'utf8')) as ImportedIdentity[] } catch { return [] }
-}
-function saveManifest(entries: ImportedIdentity[]): void {
-  const path = manifestPath()
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(entries), { mode: 0o600 })
-}
-
 export async function importBrowserSessions(input: BrowserImportRequest): Promise<BrowserImportResult> {
   const source = listBrowserImportSources().find(item => item.id === input?.browserId)
   if (!source || !source.profiles.some(profile => profile.id === input.profileId)) throw new Error('Select an available browser profile')
   const domains = normalizeDomains(input.domains)
   const root = sourceRoot(source.id)!
   const file = cookieDatabase(root, source.id, input.profileId)
-  let read: { cookies: Cookie[]; skipped: number }
+  let read: { cookies: Cookie[]; skipped: number; unsupportedWindowsCookies?: number }
   if (source.id === 'safari') read = { cookies: parseSafariCookies(readFileSync(file)), skipped: 0 }
   else if (source.id === 'firefox') read = await readFirefox(file)
   else read = await readChromium(file, await chromiumKeys(source.id, root))
-  const entries = readManifest()
+  const browserSession = getAgentBrowserSession()
   const byDomain: Record<string, number> = {}
   let skipped = read.skipped
   for (const cookie of read.cookies) {
@@ -275,33 +271,27 @@ export async function importBrowserSessions(input: BrowserImportRequest): Promis
     const url = `${cookie.secure ? 'https' : 'http'}://${host}${path}`
     const domain = cookie.host.startsWith('.') ? cookie.host : undefined
     try {
-      await session.defaultSession.cookies.set({ url, name: cookie.name, value: cookie.value, ...(domain ? { domain } : {}), path, secure: cookie.secure, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite, ...(cookie.expirationDate ? { expirationDate: cookie.expirationDate } : {}) })
-      const hash = createHash('sha256').update(cookie.value).digest('hex')
-      const identity = { url, name: cookie.name, path, domain, hash }
-      const previous = entries.findIndex(entry => entry.url === url && entry.name === cookie.name && entry.path === path && entry.domain === domain)
-      if (previous >= 0) entries[previous] = identity
-      else entries.push(identity)
+      await browserSession.cookies.set({ url, name: cookie.name, value: cookie.value, ...(domain ? { domain } : {}), path, secure: cookie.secure, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite, ...(cookie.expirationDate ? { expirationDate: cookie.expirationDate } : {}) })
       byDomain[host] = (byDomain[host] || 0) + 1
     } catch { skipped++ }
   }
-  saveManifest(entries)
-  await session.defaultSession.cookies.flushStore()
-  return { imported: Object.values(byDomain).reduce((sum, count) => sum + count, 0), skipped, byDomain }
+  await browserSession.cookies.flushStore()
+  return { imported: Object.values(byDomain).reduce((sum, count) => sum + count, 0), skipped, unsupportedWindowsCookies: read.unsupportedWindowsCookies || 0, byDomain }
 }
 
 export async function clearImportedBrowserSessions(): Promise<number> {
-  const entries = readManifest()
-  let removed = 0
-  for (const entry of entries) {
-    try {
-      const cookies = await session.defaultSession.cookies.get({ url: entry.url, name: entry.name })
-      const match = cookies.find(cookie => cookie.path === entry.path && cookie.domain === (entry.domain || new URL(entry.url).hostname) && createHash('sha256').update(cookie.value).digest('hex') === entry.hash)
-      if (!match) continue
-      await session.defaultSession.cookies.remove(entry.url, entry.name)
-      removed++
-    } catch { /* One stale cookie must not prevent the rest from clearing. */ }
+  const browserSession = getAgentBrowserSession()
+  const count = (await browserSession.cookies.get({}).catch(() => [])).length
+  // Close active pages first so their scripts cannot immediately renew a rotated session.
+  for (const contents of webContents.getAllWebContents()) {
+    if (contents.session === browserSession && !contents.isDestroyed()) {
+      try { await contents.loadURL('about:blank') } catch { /* Continue clearing even if a page rejects navigation. */ }
+    }
   }
-  saveManifest([])
-  await session.defaultSession.cookies.flushStore()
-  return removed
+  await browserSession.closeAllConnections()
+  await browserSession.clearStorageData()
+  await browserSession.clearCache()
+  await browserSession.clearAuthCache()
+  await browserSession.cookies.flushStore()
+  return count
 }

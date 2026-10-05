@@ -23,6 +23,7 @@ import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import { BrowserRecordingService } from './browser-recording'
+import { getAgentBrowserSession } from './agent-browser-session'
 import { buildRecordingInstallScript, buildRecordingSnapshotScript, buildRecordingTargetScript, RECORDING_PREFIX, RECORDING_REMOVE_SCRIPT, RECORDING_WORLD } from './browser-recording-scripts'
 import type { BrowserRecordingResult, BrowserRecordingSnapshot, BrowserRecordingStep } from '../shared/browser-recording'
 
@@ -602,11 +603,13 @@ export class PanelBrowserBroker {
   /** webContentsIds already carrying a console-message listener. */
   private consoleHooked: Set<number> = new Set()
 
-  registerPanel(panelId: string, webContentsId: number, taskIds: string[]): void {
+  registerPanel(panelId: string, webContentsId: number, taskIds: string[]): boolean {
+    const wc = this.getLiveWebContents(webContentsId)
+    if (!wc) return false
     this.registry.set(panelId, { webContentsId, taskIds: new Set(taskIds) })
     if (!this.consoleBuffers.has(panelId)) this.consoleBuffers.set(panelId, [])
-    const wc = this.getLiveWebContents(webContentsId)
-    if (wc) this.ensureConsoleHook(webContentsId, wc)
+    this.ensureConsoleHook(webContentsId, wc)
+    return true
   }
 
   /** Replaces just the task linkage (edges changed), keeping the webContentsId. */
@@ -648,7 +651,7 @@ export class PanelBrowserBroker {
     if (typeof webContentsId !== 'number') return null
     try {
       const wc = webContents.fromId(webContentsId)
-      return wc && !wc.isDestroyed() ? wc : null
+      return wc && !wc.isDestroyed() && wc.session === getAgentBrowserSession() ? wc : null
     } catch {
       return null
     }

@@ -20,5 +20,6 @@ export interface BrowserImportRequest {
 export interface BrowserImportResult {
   imported: number
   skipped: number
+  unsupportedWindowsCookies: number
   byDomain: Record<string, number>
 }

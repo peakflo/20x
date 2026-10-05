@@ -21,6 +21,7 @@ import { NotionPlugin } from './plugins/notion-plugin'
 import { YouTrackPlugin } from './plugins/youtrack-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { panelBrowserBroker } from './panel-browser-broker'
+import { getAgentBrowserSession } from './agent-browser-session'
 import { VoiceSessionManager } from './voice/voice-session-manager'
 import { assistantTextParts, sinceLastUserMessage } from './voice/voice-answer-parts'
 import { EnterpriseAuth } from './enterprise-auth'
@@ -1161,6 +1162,8 @@ app.whenReady().then(async () => {
     const isAppWindow = mainWindow != null && contents === mainWindow.webContents
     callback(isAppWindow && voiceSessionManager?.isEnabled() === true)
   })
+  // Agent webviews have separate storage and receive no privileged permissions.
+  getAgentBrowserSession().setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
 
   // Register updater IPC handlers (safe in dev mode — returns no-op results)
   registerUpdaterIpc()
@@ -1192,8 +1195,8 @@ app.whenReady().then(async () => {
   }).catch(() => {})
 
   // ── Strip embedding-restriction headers ───────────────────────────────────
-  // Register on session.defaultSession so it intercepts ALL HTTP responses
-  // including those from iframes/subframes. Must be set before any window loads.
+  // Apply to the application and isolated agent browser sessions, including
+  // responses from iframes/subframes. Must be set before any window loads.
   const BLOCKED_HEADERS_LC = [
     'x-frame-options',
     'cross-origin-opener-policy',
@@ -1201,7 +1204,7 @@ app.whenReady().then(async () => {
     'cross-origin-resource-policy',
   ]
 
-  session.defaultSession.webRequest.onHeadersReceived(
+  for (const browserSession of [session.defaultSession, getAgentBrowserSession()]) browserSession.webRequest.onHeadersReceived(
     { urls: ['http://*/*', 'https://*/*'] },
     (details, callback) => {
       const headers = { ...details.responseHeaders }
@@ -1233,12 +1236,9 @@ app.whenReady().then(async () => {
   // as a signal.  We intercept via will-attach-webview to configure each
   // webview's session without conflicting with enterprise auth handlers.
   //
-  // We modify the defaultSession headers directly.  The onBeforeSendHeaders
-  // handler merges with enterprise auth because enterprise auth only registers
-  // its handler AFTER enableIframeAuth is called (and with a narrow URL filter).
-  // Our handler runs first; if enterprise auth later overrides it with its
-  // scoped filter, that's fine — the scoped handler only affects API URLs.
-  session.defaultSession.webRequest.onBeforeSendHeaders(
+  // Apply the browser fingerprint headers to the isolated agent session too.
+  // Enterprise auth may later replace the default session handler for API URLs.
+  for (const browserSession of [session.defaultSession, getAgentBrowserSession()]) browserSession.webRequest.onBeforeSendHeaders(
     { urls: ['http://*/*', 'https://*/*'] },
     (details, callback) => {
       const headers = { ...details.requestHeaders }

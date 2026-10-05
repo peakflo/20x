@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
-import { decryptChromiumCookie, normalizeDomains, parseSafariCookies, readFirefox, shouldImportCookie } from './browser-session-import'
+import { decryptChromiumCookie, normalizeDomains, parseSafariCookies, readChromium, readFirefox, shouldImportCookie } from './browser-session-import'
 
 const temporary: string[] = []
 afterEach(() => { for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -36,6 +36,29 @@ describe('browser session import', () => {
     const read = await readFirefox(file)
     expect(read.skipped).toBe(1)
     expect(read.cookies).toMatchObject([{ host: '.example.com', name: 'sid', value: 'value', secure: true, httpOnly: true, sameSite: 'strict' }])
+  })
+
+  it('converts Firefox schema 16 millisecond expiry to seconds', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'browser-import-test-'))
+    temporary.push(dir)
+    const file = join(dir, 'cookies.sqlite')
+    const db = new Database(file)
+    db.pragma('user_version = 16')
+    db.exec('CREATE TABLE moz_cookies (host TEXT, name TEXT, value TEXT, path TEXT, expiry INTEGER, isSecure INTEGER, isHttpOnly INTEGER, sameSite INTEGER)')
+    db.prepare('INSERT INTO moz_cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run('.example.com', 'sid', 'value', '/', 2000000000123, 1, 1, 1)
+    db.close()
+    expect((await readFirefox(file)).cookies[0].expirationDate).toBe(2000000000)
+  })
+
+  it('reports Windows app-bound cookies separately from other skipped rows', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'browser-import-test-'))
+    temporary.push(dir)
+    const file = join(dir, 'Cookies')
+    const db = new Database(file)
+    db.exec('CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB, path TEXT, expires_utc INTEGER, is_secure INTEGER, is_httponly INTEGER, samesite INTEGER, top_frame_site_key TEXT)')
+    db.prepare('INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run('.example.com', 'sid', '', Buffer.from('v20sealed'), '/', 0, 1, 1, 1, '')
+    db.close()
+    expect(await readChromium(file, {}, 'win32')).toMatchObject({ cookies: [], skipped: 1, unsupportedWindowsCookies: 1 })
   })
 
   it('parses a small Safari binarycookies fixture', () => {
