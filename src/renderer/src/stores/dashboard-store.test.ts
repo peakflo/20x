@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import type { Mock } from 'vitest'
 import { useDashboardStore, computeLocalStats } from './dashboard-store'
 import type { ApplicationItem, DashboardStats } from './dashboard-store'
 import { TaskStatus } from '@/types'
@@ -254,7 +255,7 @@ describe('useDashboardStore', () => {
     expect(state.statsLoading).toBe(false)
   })
 
-  it('updateLocalStats computes stats from tasks', () => {
+  it('updateLocalStats counts open tasks from the store and completed history from the DB', async () => {
     const now = new Date().toISOString()
     const tasks: WorkfloTask[] = [
       makeTask({ id: 't1', status: TaskStatus.NotStarted }),
@@ -263,10 +264,15 @@ describe('useDashboardStore', () => {
       makeTask({ id: 't4', status: TaskStatus.Completed, agent_id: 'agent-1', updated_at: now })
     ]
 
+    // The DB aggregates are authoritative for completed tasks (t2, t4);
+    // completed tasks present in the store are not double counted.
+    ;(window.electronAPI.db.getCompletedTaskStats as unknown as Mock).mockResolvedValueOnce({
+      total: 2, createdInWindow: 2, completedInWindow: 2, withAgent: 1
+    })
     useDashboardStore.getState().updateLocalStats(tasks)
 
+    await vi.waitFor(() => expect(useDashboardStore.getState().localStats).not.toBeNull())
     const { localStats } = useDashboardStore.getState()
-    expect(localStats).not.toBeNull()
     expect(localStats!.totalTasks).toBe(4)
     expect(localStats!.tasksCompletedInWindow).toBe(2)
     expect(localStats!.totalAgentRuns).toBe(2)
@@ -274,7 +280,7 @@ describe('useDashboardStore', () => {
     expect(localStats!.humanReviewedTasksCompleted).toBe(1)
   })
 
-  it('updateLocalStats excludes subtasks', () => {
+  it('updateLocalStats excludes subtasks', async () => {
     const tasks: WorkfloTask[] = [
       makeTask({ id: 'parent', status: TaskStatus.NotStarted }),
       makeTask({ id: 'sub-1', status: TaskStatus.NotStarted, parent_task_id: 'parent' })
@@ -282,6 +288,7 @@ describe('useDashboardStore', () => {
 
     useDashboardStore.getState().updateLocalStats(tasks)
 
+    await vi.waitFor(() => expect(useDashboardStore.getState().localStats).not.toBeNull())
     const { localStats } = useDashboardStore.getState()
     expect(localStats!.totalTasks).toBe(1)
   })

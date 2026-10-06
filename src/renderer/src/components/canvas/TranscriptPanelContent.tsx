@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
@@ -21,6 +21,12 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
   // delta of every task's session.
   const removeSession = useAgentStore((s) => s.removeSession)
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
+  // Completed history is not preloaded; a panel for a completed task loads it.
+  const ensureTask = useTaskStore((s) => s.ensureTask)
+  const taskMissing = !task
+  useEffect(() => {
+    if (taskMissing) void ensureTask(taskId)
+  }, [taskMissing, taskId, ensureTask])
   const submittedQuestionIdsRef = useRef(new Set<string>())
 
   const messages = session?.messages ?? []

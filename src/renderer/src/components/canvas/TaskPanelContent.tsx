@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { TaskWorkspace, type TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
 import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
 import { useTaskStore } from '@/stores/task-store'
@@ -20,6 +20,12 @@ interface TaskPanelContentProps {
  */
 export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: TaskPanelContentProps) {
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
+  // Completed history is not preloaded; a panel for a completed task loads it.
+  const ensureTask = useTaskStore((s) => s.ensureTask)
+  const taskMissing = !task
+  useEffect(() => {
+    if (taskMissing) void ensureTask(taskId)
+  }, [taskMissing, taskId, ensureTask])
   const agents = useAgentStore((s) => s.agents)
   const updateTask = useTaskStore((s) => s.updateTask)
   const updatePanel = useCanvasStore((s) => s.updatePanel)

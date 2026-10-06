@@ -112,6 +112,18 @@ export function registerIpcHandlers(
     return db.getTasks()
   })
 
+  ipcMain.handle('db:getOpenTasks', () => {
+    return db.getOpenTasks()
+  })
+
+  ipcMain.handle('db:getCompletedTasks', (_, input: { offset?: number; limit?: number; query?: string } = {}) => {
+    return db.getCompletedTasksPage(input?.offset ?? 0, input?.limit ?? 50, input?.query)
+  })
+
+  ipcMain.handle('db:getCompletedTaskStats', (_, windowStartIso: string | null) => {
+    return db.getCompletedTaskStats(windowStartIso)
+  })
+
   ipcMain.handle('db:getTask', (_, id: string) => {
     return db.getTask(id)
   })

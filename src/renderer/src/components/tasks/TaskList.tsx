@@ -1,40 +1,39 @@
-import { useState, useMemo, useRef, useCallback, useLayoutEffect, type ReactNode } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
-import { Inbox, ChevronRight } from 'lucide-react'
+import { useState, useMemo, useRef, useCallback } from 'react'
+import { Inbox, ChevronRight, Loader2 } from 'lucide-react'
 import { TaskListItem } from './TaskListItem'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { isSnoozed } from '@/lib/utils'
 import { useSnoozeTick } from '@/hooks/use-snooze-tick'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
-
-// Below this many tasks the plain list is cheap and keeps the original markup;
-// above it, only the rows in (or near) the viewport are mounted. The decision
-// uses the total task count, NOT the visible row count: expanding a section
-// must never switch modes, because swapping the DOM mid-scroll resets the
-// scroll position.
-export const TASK_LIST_VIRTUALIZE_THRESHOLD = 80
-
-// Rendered heights of TaskListItem rows (py-2.5 + title + mt-1 + badge row,
-// plus the 2px row gap). Accurate estimates keep the scrollbar stable: rows
-// are re-measured as they mount, and a low estimate made the total height
-// (and the scrollbar thumb) keep changing while scrolling.
-const ROW_HEIGHT = { task: 66, subtask: 56, header: 36 } as const
-
-type Section = 'hidden' | 'recurring' | 'completed'
-
-type Row =
-  | { kind: 'task'; key: string; task: WorkfloTask; subtaskCount?: number; isExpanded?: boolean }
-  | { kind: 'subtask'; key: string; task: WorkfloTask }
-  | { kind: 'header'; key: string; section: Section; label: string; count: number; open: boolean }
+import { COMPLETED_PAGE_SIZE } from '@/stores/task-store'
 
 interface TaskListProps {
   tasks: WorkfloTask[]
   selectedTaskId: string | null
   onSelectTask: (id: string) => void
+  /**
+   * Completed history is paged in from the database. When set, this is the
+   * total shown in the Completed header (the list itself only holds the
+   * completed tasks loaded so far).
+   */
+  completedTotal?: number
+  /** More completed tasks exist in the database than are loaded. */
+  hasMoreCompleted?: boolean
+  completedLoading?: boolean
+  /** Load the next page of completed tasks. */
+  onLoadMoreCompleted?: () => void
 }
 
-export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps) {
+export function TaskList({
+  tasks,
+  selectedTaskId,
+  onSelectTask,
+  completedTotal,
+  hasMoreCompleted = false,
+  completedLoading = false,
+  onLoadMoreCompleted
+}: TaskListProps) {
   const [completedOpen, setCompletedOpen] = useState(false)
   const [hiddenOpen, setHiddenOpen] = useState(false)
   const [recurringOpen, setRecurringOpen] = useState(false)
@@ -121,127 +120,17 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
     return { activeTasks: active, snoozedTasks: snoozed, recurringTasks: recurring, completedTasks: completed }
   }, [tasks, snoozeTick])
 
-  const rows = useMemo(() => {
-    const out: Row[] = []
-    const pushTasks = (list: WorkfloTask[]) => {
-      for (const task of list) {
-        const subtasks = subtasksByParent.get(task.id)
-        if (!subtasks || subtasks.length === 0) {
-          out.push({ kind: 'task', key: task.id, task })
-          continue
-        }
-        const isExpanded = expandedParents.has(task.id)
-        out.push({ kind: 'task', key: task.id, task, subtaskCount: subtasks.length, isExpanded })
-        if (isExpanded) for (const subtask of subtasks) out.push({ kind: 'subtask', key: subtask.id, task: subtask })
-      }
-    }
-    const pushSection = (section: Section, label: string, list: WorkfloTask[], open: boolean) => {
-      if (list.length === 0) return
-      out.push({ kind: 'header', key: `section:${section}`, section, label, count: list.length, open })
-      if (open) pushTasks(list)
-    }
-    pushTasks(activeTasks)
-    pushSection('hidden', 'Hidden', snoozedTasks, hiddenOpen)
-    pushSection('recurring', 'Recurring', recurringTasks, recurringOpen)
-    pushSection('completed', 'Completed', completedTasks, completedOpen)
-    return out
-  }, [activeTasks, snoozedTasks, recurringTasks, completedTasks, subtasksByParent, expandedParents, hiddenOpen, recurringOpen, completedOpen])
+  const completedCount = completedTotal ?? completedTasks.length
+  const toggleCompleted = () => {
+    const opening = !completedOpen
+    setCompletedOpen(opening)
+    // Opening with less than one page loaded (e.g. only completed parents of
+    // open subtasks are present) fetches the next page of completed history.
+    if (opening && hasMoreCompleted && completedTasks.length < COMPLETED_PAGE_SIZE) onLoadMoreCompleted?.()
+  }
 
-  const virtualize = tasks.length > TASK_LIST_VIRTUALIZE_THRESHOLD
-  const isEmpty = tasks.length === 0
-  const listRef = useRef<HTMLDivElement>(null)
-  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null)
-  const [scrollMargin, setScrollMargin] = useState(0)
-
-  // Resolve the scroll container on mount (in both modes) so the virtualizer
-  // has it on its very first render; a null scroll element renders zero rows,
-  // which collapses the list height and scrolls the sidebar to the top.
-  useLayoutEffect(() => {
-    const list = listRef.current
-    let parent = list?.parentElement ?? null
-    while (parent) {
-      const overflowY = getComputedStyle(parent).overflowY
-      if (overflowY === 'auto' || overflowY === 'scroll') break
-      parent = parent.parentElement
-    }
-    setScrollElement(parent)
-    if (list && parent) {
-      setScrollMargin(list.getBoundingClientRect().top - parent.getBoundingClientRect().top + parent.scrollTop)
-    }
-  }, [virtualize, isEmpty])
-
-  const virtualizer = useVirtualizer({
-    count: virtualize ? rows.length : 0,
-    getScrollElement: () => scrollElement,
-    estimateSize: (index) => ROW_HEIGHT[rows[index]?.kind ?? 'task'],
-    getItemKey: (index) => rows[index]?.key ?? index,
-    overscan: 10,
-    scrollMargin
-  })
-
-  if (tasks.length === 0) {
+  if (tasks.length === 0 && completedCount === 0) {
     return <EmptyState icon={Inbox} title="No tasks" description="Create a task to get started" className="py-10" />
-  }
-
-  const toggleSection = (section: Section) => {
-    if (section === 'hidden') setHiddenOpen((v) => !v)
-    else if (section === 'recurring') setRecurringOpen((v) => !v)
-    else setCompletedOpen((v) => !v)
-  }
-
-  const renderSectionHeader = (section: Section, label: string, count: number, open: boolean): ReactNode => (
-    <button
-      onClick={() => toggleSection(section)}
-      className="flex w-full items-center gap-1.5 px-3 py-2 mt-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
-    >
-      <ChevronRight className={`h-3 w-3 transition-transform ${open ? 'rotate-90' : ''}`} />
-      {label}
-      <span className="ml-auto tabular-nums">{count}</span>
-    </button>
-  )
-
-  if (virtualize) {
-    return (
-      <div ref={listRef} className="relative px-2 pb-2" style={{ height: virtualizer.getTotalSize() }}>
-        {virtualizer.getVirtualItems().map((item) => {
-          const row = rows[item.index]
-          if (!row) return null
-          return (
-            <div
-              key={item.key}
-              data-index={item.index}
-              ref={virtualizer.measureElement}
-              className="absolute left-2 right-2 top-0"
-              style={{ transform: `translateY(${item.start - scrollMargin}px)` }}
-            >
-              {row.kind === 'header' ? (
-                renderSectionHeader(row.section, row.label, row.count, row.open)
-              ) : row.kind === 'subtask' ? (
-                <div className="ml-5 pl-2 border-l border-border/30">
-                  <TaskListItem
-                    task={row.task}
-                    isSelected={row.task.id === selectedTaskId}
-                    onSelect={getSelectHandler(row.task.id)}
-                    isSubtask
-                  />
-                </div>
-              ) : (
-                <div className="pb-0.5">
-                  <TaskListItem
-                    task={row.task}
-                    isSelected={row.task.id === selectedTaskId}
-                    onSelect={getSelectHandler(row.task.id)}
-                    subtaskCount={row.subtaskCount}
-                    isExpanded={row.isExpanded}
-                    onToggleExpand={row.subtaskCount ? getToggleHandler(row.task.id) : undefined}
-                  />
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    )
   }
 
   const renderTaskWithSubtasks = (task: WorkfloTask) => {
@@ -289,7 +178,7 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
   }
 
   return (
-    <div ref={listRef} className="flex flex-col gap-0.5 px-2 pb-2">
+    <div className="flex flex-col gap-0.5 px-2 pb-2">
       {activeTasks.map(renderTaskWithSubtasks)}
 
       {snoozedTasks.length > 0 && (
@@ -320,17 +209,27 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
         </>
       )}
 
-      {completedTasks.length > 0 && (
+      {completedCount > 0 && (
         <>
           <button
-            onClick={() => setCompletedOpen(!completedOpen)}
+            onClick={toggleCompleted}
             className="flex items-center gap-1.5 px-3 py-2 mt-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
           >
             <ChevronRight className={`h-3 w-3 transition-transform ${completedOpen ? 'rotate-90' : ''}`} />
             Completed
-            <span className="ml-auto tabular-nums">{completedTasks.length}</span>
+            <span className="ml-auto tabular-nums">{completedCount}</span>
           </button>
           {completedOpen && completedTasks.map(renderTaskWithSubtasks)}
+          {completedOpen && (hasMoreCompleted || completedLoading) && (
+            <button
+              onClick={() => onLoadMoreCompleted?.()}
+              disabled={completedLoading}
+              className="flex items-center justify-center gap-1.5 px-3 py-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer disabled:cursor-default"
+            >
+              {completedLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+              {completedLoading ? 'Loading…' : 'Show more'}
+            </button>
+          )}
         </>
       )}
     </div>

@@ -19,6 +19,7 @@ const taskStoreState = vi.hoisted(() => ({
   selectedTaskId: null as string | null,
   isLoading: false,
   error: null as string | null,
+  ensureTask: async () => null,
 }))
 
 const makeTask = (overrides: Partial<WorkfloTask> = {}): WorkfloTask => ({

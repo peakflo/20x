@@ -23,7 +23,10 @@ beforeEach(() => {
     tasks: [],
     selectedTaskId: null,
     isLoading: false,
-    error: null
+    error: null,
+    completedTotal: 0,
+    completedLoaded: 0,
+    completedLoading: false
   })
   vi.clearAllMocks()
 })
@@ -35,7 +38,7 @@ describe('useTaskStore', () => {
         { id: 't1', title: 'Task 1' },
         { id: 't2', title: 'Task 2' }
       ]
-      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValue(mockTasks)
+      ;(mockElectronAPI.db.getOpenTasks as unknown as Mock).mockResolvedValue(mockTasks)
 
       await useTaskStore.getState().fetchTasks()
 
@@ -44,7 +47,7 @@ describe('useTaskStore', () => {
     })
 
     it('sets error on failure', async () => {
-      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockRejectedValue(new Error('DB error'))
+      ;(mockElectronAPI.db.getOpenTasks as unknown as Mock).mockRejectedValue(new Error('DB error'))
 
       await useTaskStore.getState().fetchTasks()
 
@@ -192,7 +195,7 @@ describe('useTaskStore', () => {
         // labels, repos, attachments, output_fields are missing (undefined)
         // skill_ids is missing (undefined)
       }
-      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValue([taskWithMissingFields])
+      ;(mockElectronAPI.db.getOpenTasks as unknown as Mock).mockResolvedValue([taskWithMissingFields])
 
       await useTaskStore.getState().fetchTasks()
 
@@ -219,7 +222,7 @@ describe('useTaskStore', () => {
         output_fields: [{ id: 'o1', label: 'Action' }],
         skill_ids: ['s1', 's2']
       }
-      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValue([taskWithArrays])
+      ;(mockElectronAPI.db.getOpenTasks as unknown as Mock).mockResolvedValue([taskWithArrays])
 
       await useTaskStore.getState().fetchTasks()
 
@@ -238,7 +241,7 @@ describe('useTaskStore', () => {
           { name: 'Approval', type: 'toggle', value: true, options: ['yes', 1, null] }
         ]
       }
-      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValue([taskWithMalformedOutputs])
+      ;(mockElectronAPI.db.getOpenTasks as unknown as Mock).mockResolvedValue([taskWithMalformedOutputs])
 
       await useTaskStore.getState().fetchTasks()
 
@@ -260,7 +263,7 @@ describe('useTaskStore', () => {
 
     it('preserves skill_ids null (agent defaults)', async () => {
       const taskWithNullSkills = { id: 't4', title: 'Task', skill_ids: null }
-      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValue([taskWithNullSkills])
+      ;(mockElectronAPI.db.getOpenTasks as unknown as Mock).mockResolvedValue([taskWithNullSkills])
 
       await useTaskStore.getState().fetchTasks()
 
@@ -278,6 +281,52 @@ describe('useTaskStore', () => {
       useTaskStore.getState().selectTask('t1')
       useTaskStore.getState().selectTask(null)
       expect(useTaskStore.getState().selectedTaskId).toBeNull()
+    })
+  })
+
+  describe('completed history paging', () => {
+    const completed = (id: string, extra: Record<string, unknown> = {}) =>
+      ({ id, title: id, status: 'completed', ...extra }) as unknown as WorkfloTask
+
+    it('loads completed pages, advances the offset, and keeps them across fetchTasks', async () => {
+      const getPage = mockElectronAPI.db.getCompletedTasks as unknown as Mock
+      getPage.mockResolvedValueOnce({ tasks: [completed('c1'), completed('c2'), completed('c1-sub', { parent_task_id: 'c1' })], total: 120 })
+      await useTaskStore.getState().loadMoreCompleted()
+      expect(getPage).toHaveBeenCalledWith({ offset: 0, limit: 50 })
+      expect(useTaskStore.getState().completedLoaded).toBe(2)
+      expect(useTaskStore.getState().completedTotal).toBe(120)
+
+      ;(mockElectronAPI.db.getOpenTasks as unknown as Mock).mockResolvedValueOnce([{ id: 'o1', title: 'open', status: 'not_started' }])
+      getPage.mockResolvedValueOnce({ tasks: [], total: 120 })
+      await useTaskStore.getState().fetchTasks()
+      expect(useTaskStore.getState().tasks.map((t) => t.id)).toEqual(['o1', 'c1', 'c2', 'c1-sub'])
+
+      getPage.mockResolvedValueOnce({ tasks: [completed('c2'), completed('c3')], total: 120 })
+      await useTaskStore.getState().loadMoreCompleted()
+      expect(getPage).toHaveBeenLastCalledWith({ offset: 2, limit: 50 })
+      // Duplicates are merged by id, not appended twice.
+      expect(useTaskStore.getState().tasks.filter((t) => t.id === 'c2')).toHaveLength(1)
+    })
+
+    it('ensureTask loads a task that is not in the working set once', async () => {
+      const getTask = mockElectronAPI.db.getTask as unknown as Mock
+      getTask.mockResolvedValueOnce(completed('old'))
+      const [a, b] = await Promise.all([
+        useTaskStore.getState().ensureTask('old'),
+        useTaskStore.getState().ensureTask('old')
+      ])
+      expect(a?.id).toBe('old')
+      expect(b?.id).toBe('old')
+      expect(getTask).toHaveBeenCalledTimes(1)
+      expect(useTaskStore.getState().tasks.map((t) => t.id)).toEqual(['old'])
+    })
+
+    it('selectTask loads an unknown task', async () => {
+      const getTask = mockElectronAPI.db.getTask as unknown as Mock
+      getTask.mockResolvedValueOnce(completed('picked'))
+      useTaskStore.getState().selectTask('picked')
+      await vi.waitFor(() => expect(useTaskStore.getState().tasks.some((t) => t.id === 'picked')).toBe(true))
+      expect(useTaskStore.getState().selectedTaskId).toBe('picked')
     })
   })
 })

@@ -77,7 +77,7 @@ describe('useTasks', () => {
     renderHook(() => useTasks())
     // useEffect fires fetchTasks asynchronously
     await vi.waitFor(() => {
-      expect(mockElectronAPI.db.getTasks).toHaveBeenCalled()
+      expect(mockElectronAPI.db.getOpenTasks).toHaveBeenCalled()
     })
   })
 

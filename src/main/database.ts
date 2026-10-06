@@ -2226,6 +2226,96 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return row ? this.withServerOwnership(deserializeTask(row)) : undefined
   }
 
+  /**
+   * The renderer's working set: everything except completed history. Keeps
+   * recurring templates, completed subtasks of open parents (shown when a
+   * parent is expanded) and completed parents of open subtasks. Completed
+   * top-level tasks are paged in on demand via getCompletedTasksPage().
+   */
+  getOpenTasks(): TaskRecord[] {
+    if (!this.ensureDbOpen()) return []
+
+    const rows = this.db.prepare(`
+      SELECT * FROM tasks t
+      WHERE t.status != ?
+        OR (t.is_recurring = 1 AND t.recurrence_parent_id IS NULL)
+        OR (t.parent_task_id IS NOT NULL AND EXISTS (
+          SELECT 1 FROM tasks p WHERE p.id = t.parent_task_id AND p.status != ?))
+        OR EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id = t.id AND c.status != ?)
+      ORDER BY t.created_at DESC
+    `).all(TaskStatus.Completed, TaskStatus.Completed, TaskStatus.Completed) as TaskRow[]
+
+    return rows.map(row => this.withServerOwnership(deserializeTask(row)))
+  }
+
+  /**
+   * One page of completed top-level tasks (most recently updated first) plus
+   * their subtasks, and the total number of completed top-level tasks that
+   * match. `query` filters by title, description or labels (case-insensitive).
+   */
+  getCompletedTasksPage(offset: number, limit: number, query?: string): { tasks: TaskRecord[]; total: number } {
+    if (!this.ensureDbOpen()) return { tasks: [], total: 0 }
+
+    const safeOffset = Math.max(0, Math.floor(Number(offset) || 0))
+    const safeLimit = Math.min(500, Math.max(0, Math.floor(Number(limit) || 0)))
+    const where = [
+      't.status = ?',
+      't.parent_task_id IS NULL',
+      'NOT (t.is_recurring = 1 AND t.recurrence_parent_id IS NULL)'
+    ]
+    const params: unknown[] = [TaskStatus.Completed]
+    const q = typeof query === 'string' ? query.trim().toLowerCase() : ''
+    if (q) {
+      const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+      where.push("(lower(t.title) LIKE ? ESCAPE '\\' OR lower(t.description) LIKE ? ESCAPE '\\' OR lower(t.labels) LIKE ? ESCAPE '\\')")
+      params.push(like, like, like)
+    }
+    const whereSql = where.join(' AND ')
+
+    const { total } = this.db.prepare(`SELECT COUNT(*) AS total FROM tasks t WHERE ${whereSql}`).get(...params) as { total: number }
+    if (safeLimit === 0) return { tasks: [], total }
+
+    const parents = this.db.prepare(
+      `SELECT * FROM tasks t WHERE ${whereSql} ORDER BY t.updated_at DESC, t.created_at DESC LIMIT ? OFFSET ?`
+    ).all(...params, safeLimit, safeOffset) as TaskRow[]
+    if (parents.length === 0) return { tasks: [], total }
+
+    const ids = parents.map((row) => row.id)
+    const children = this.db.prepare(
+      `SELECT * FROM tasks WHERE parent_task_id IN (${ids.map(() => '?').join(',')}) ORDER BY sort_order ASC, created_at ASC`
+    ).all(...ids) as TaskRow[]
+
+    return {
+      tasks: [...parents, ...children].map(row => this.withServerOwnership(deserializeTask(row))),
+      total
+    }
+  }
+
+  /**
+   * Aggregates over completed, top-level, non-template, non-snoozed tasks so
+   * dashboards can count completed history without loading it.
+   */
+  getCompletedTaskStats(windowStartIso: string | null): { total: number; createdInWindow: number; completedInWindow: number; withAgent: number } {
+    if (!this.ensureDbOpen()) return { total: 0, createdInWindow: 0, completedInWindow: 0, withAgent: 0 }
+
+    const windowStart = typeof windowStartIso === 'string' && windowStartIso ? windowStartIso : null
+    const row = this.db.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN ? IS NULL OR created_at >= ? THEN 1 ELSE 0 END), 0) AS createdInWindow,
+        COALESCE(SUM(CASE WHEN ? IS NULL OR updated_at >= ? THEN 1 ELSE 0 END), 0) AS completedInWindow,
+        COALESCE(SUM(CASE WHEN agent_id IS NOT NULL AND agent_id != '' THEN 1 ELSE 0 END), 0) AS withAgent
+      FROM tasks
+      WHERE status = ?
+        AND parent_task_id IS NULL
+        AND NOT (is_recurring = 1 AND recurrence_parent_id IS NULL)
+        AND (snoozed_until IS NULL OR snoozed_until <= ?)
+    `).get(windowStart, windowStart, windowStart, windowStart, TaskStatus.Completed, new Date().toISOString()) as {
+      total: number; createdInWindow: number; completedInWindow: number; withAgent: number
+    }
+    return row
+  }
+
   getSubtasks(parentId: string): TaskRecord[] {
     if (!this.ensureDbOpen()) return []
 

@@ -30,6 +30,19 @@ export const taskApi = {
     return window.electronAPI.db.getTasks()
   },
 
+  /** Working set without completed history (see Database.getOpenTasks). */
+  getOpen: (): Promise<WorkfloTask[]> => {
+    return window.electronAPI.db.getOpenTasks()
+  },
+
+  getCompletedPage: (input: { offset?: number; limit?: number; query?: string }): Promise<{ tasks: WorkfloTask[]; total: number }> => {
+    return window.electronAPI.db.getCompletedTasks(input)
+  },
+
+  getCompletedStats: (windowStartIso: string | null) => {
+    return window.electronAPI.db.getCompletedTaskStats(windowStartIso)
+  },
+
   getById: (id: string): Promise<WorkfloTask | undefined> => {
     return window.electronAPI.db.getTask(id)
   },

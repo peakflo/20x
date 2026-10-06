@@ -1,76 +1,83 @@
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
-import { TaskList, TASK_LIST_VIRTUALIZE_THRESHOLD } from './TaskList'
+import { TaskList } from './TaskList'
 
-function makeTasks(count: number): WorkfloTask[] {
-  return Array.from({ length: count }, (_, i) => ({
+function makeTask(i: number, status: TaskStatus = TaskStatus.NotStarted): WorkfloTask {
+  return {
     id: `t${i}`,
     title: `Task ${i}`,
-    status: TaskStatus.NotStarted,
+    status,
     created_at: new Date(1_750_000_000_000 + i).toISOString(),
     updated_at: new Date(1_750_000_000_000 + i).toISOString(),
     labels: [],
     attachments: [],
     repos: [],
     output_fields: []
-  }) as unknown as WorkfloTask)
-}
-
-function renderInScroller(tasks: WorkfloTask[], onSelect = vi.fn()) {
-  return render(
-    <div style={{ height: 400, overflowY: 'auto' }}>
-      <TaskList tasks={tasks} selectedTaskId={null} onSelectTask={onSelect} />
-    </div>
-  )
-}
-
-function stubLayout(): void {
-  // jsdom has no layout; give the scroller a viewport and rows a height.
-  const height = (el: Element): number => ((el as HTMLElement).style?.overflowY === 'auto' ? 400 : 38)
-  const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
-    const h = height(this)
-    return { x: 0, y: 0, top: 0, left: 0, right: 300, bottom: h, width: 300, height: h, toJSON: () => ({}) } as DOMRect
-  })
-  const offset = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) { return height(this) })
-  const client = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) { return height(this) })
-  onTestFinished(() => { rect.mockRestore(); offset.mockRestore(); client.mockRestore() })
+  } as unknown as WorkfloTask
 }
 
 afterEach(cleanup)
 
 describe('TaskList', () => {
-  it('renders every row for short lists', () => {
+  it('renders every open task and selects on click', () => {
     const onSelect = vi.fn()
-    renderInScroller(makeTasks(10), onSelect)
+    render(<TaskList tasks={Array.from({ length: 10 }, (_, i) => makeTask(i))} selectedTaskId={null} onSelectTask={onSelect} />)
     expect(screen.getAllByText(/^Task \d+$/)).toHaveLength(10)
     fireEvent.click(screen.getByText('Task 3'))
     expect(onSelect).toHaveBeenCalledWith('t3')
   })
 
-  it('mounts only a window of rows for long lists', () => {
-    stubLayout()
-    const count = TASK_LIST_VIRTUALIZE_THRESHOLD * 5
-    renderInScroller(makeTasks(count))
-    const rendered = screen.queryAllByText(/^Task \d+$/).length
-    expect(rendered).toBeGreaterThan(0)
-    expect(rendered).toBeLessThan(count)
+  it('shows the database completed total and loads the first page on open', () => {
+    const onLoadMore = vi.fn()
+    render(
+      <TaskList
+        tasks={[makeTask(1)]}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        completedTotal={1200}
+        hasMoreCompleted
+        onLoadMoreCompleted={onLoadMore}
+      />
+    )
+    expect(screen.getByText('1200')).toBeTruthy()
+    fireEvent.click(screen.getByText('Completed'))
+    expect(onLoadMore).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps virtual mode and scroll position when a section is expanded', () => {
-    stubLayout()
-    const tasks = makeTasks(TASK_LIST_VIRTUALIZE_THRESHOLD + 20).map((task, i) =>
-      i >= 10 ? ({ ...task, status: TaskStatus.Completed }) as WorkfloTask : task)
-    const { container } = renderInScroller(tasks)
-    const scroller = container.firstElementChild as HTMLElement
-    // Only 10 active rows + 1 header are visible, but the mode is chosen by
-    // task count, so the list is already virtual before the toggle.
-    expect(container.querySelector('[data-index]')).not.toBeNull()
-    scroller.scrollTop = 120
+  it('renders only loaded completed tasks with a Show more button', () => {
+    const onLoadMore = vi.fn()
+    const completed = Array.from({ length: 3 }, (_, i) => makeTask(100 + i, TaskStatus.Completed))
+    render(
+      <TaskList
+        tasks={[makeTask(1), ...completed]}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        completedTotal={1200}
+        hasMoreCompleted
+        onLoadMoreCompleted={onLoadMore}
+      />
+    )
     fireEvent.click(screen.getByText('Completed'))
-    expect(container.querySelector('[data-index]')).not.toBeNull()
-    expect(scroller.scrollTop).toBe(120)
-    expect(screen.getAllByText(/^Task \d+$/).length).toBeGreaterThan(10)
+    // Less than one page loaded: opening fetches the next page.
+    expect(onLoadMore).toHaveBeenCalledTimes(1)
+    expect(screen.getAllByText(/^Task 10\d$/)).toHaveLength(3)
+    fireEvent.click(screen.getByText('Show more'))
+    expect(onLoadMore).toHaveBeenCalledTimes(2)
+  })
+
+  it('hides Show more when all completed tasks are loaded', () => {
+    render(
+      <TaskList
+        tasks={[makeTask(1), makeTask(2, TaskStatus.Completed)]}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        completedTotal={1}
+        hasMoreCompleted={false}
+      />
+    )
+    fireEvent.click(screen.getByText('Completed'))
+    expect(screen.queryByText('Show more')).toBeNull()
   })
 })
