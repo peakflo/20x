@@ -223,8 +223,6 @@ describe('TaskWorkspace keyboard actions', () => {
     useAgentStore.setState({ sessions: new Map([[task.id, { ...failed, status: SessionStatus.ERROR }]]) })
     renderWorkspace(task, [makeAgent({ config: { coding_agent: CodingAgentType.CODEX, model: 'gpt-6' } })])
 
-    expect(screen.getByTestId('header-cta-continue')).toBeInTheDocument()
-
     act(() => dispatchTaskShortcut({ action: TaskShortcutAction.RUN, taskId: task.id }))
 
     await waitFor(() => expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith(

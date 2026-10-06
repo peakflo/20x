@@ -1019,8 +1019,6 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length > 0
   const canStart = task.agent_id && assignedAgentConfigured && !task.session_id && !session.sessionId && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed
-  const canContinue = task.agent_id && assignedAgentConfigured && !!session.sessionId && session.status === SessionStatus.ERROR
-    && !session.pendingSend && task.status !== TaskStatus.Completed
   const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging
 
@@ -1034,9 +1032,6 @@ Update existing skills that were helpful or create new ones for patterns worth r
   } else if (canStart) {
     primaryAction = TaskPrimaryAction.START
     handlePrimaryAction = () => void handleStartSession()
-  } else if (canContinue) {
-    primaryAction = TaskPrimaryAction.CONTINUE
-    handlePrimaryAction = handleRunShortcut
   } else if (canResume) {
     primaryAction = TaskPrimaryAction.RESUME
     handlePrimaryAction = () => void handleResumeSession()
