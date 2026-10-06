@@ -276,12 +276,25 @@ const ColumnHeader = memo(function ColumnHeader({ column, count }: { column: Sta
 // Columns with more cards than this mount only the cards near the viewport.
 export const BOARD_COLUMN_VIRTUALIZE_THRESHOLD = 40
 
+// TaskCard: p-3.5 + border + title (1–2 lines) + footer, optional description
+// (2 lines) and label row, plus the pb-2 gap of the virtual row wrapper.
+function estimateCardHeight(task: WorkfloTask | undefined): number {
+  if (!task) return 80
+  let height = 78
+  if ((task.title?.length ?? 0) > 32) height += 18
+  if (task.description) height += 46
+  if (task.labels?.length) height += 26
+  return height
+}
+
 const VirtualCardList = memo(function VirtualCardList({ tasks, onSelect, agentMap }: { tasks: WorkfloTask[]; onSelect: (id: string) => void; agentMap: Map<string, Agent> }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
     count: tasks.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 96,
+    // Close per-card estimates keep the scrollbar stable while rows are
+    // measured (a flat guess made the total height jump during scroll).
+    estimateSize: (index) => estimateCardHeight(tasks[index]),
     getItemKey: (index) => tasks[index]?.id ?? index,
     overscan: 6
   })

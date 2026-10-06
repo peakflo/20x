@@ -8,9 +8,18 @@ import { useSnoozeTick } from '@/hooks/use-snooze-tick'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 
-// Below this many visible rows the plain list is cheap and keeps the original
-// markup; above it, only the rows in (or near) the viewport are mounted.
+// Below this many tasks the plain list is cheap and keeps the original markup;
+// above it, only the rows in (or near) the viewport are mounted. The decision
+// uses the total task count, NOT the visible row count: expanding a section
+// must never switch modes, because swapping the DOM mid-scroll resets the
+// scroll position.
 export const TASK_LIST_VIRTUALIZE_THRESHOLD = 80
+
+// Rendered heights of TaskListItem rows (py-2.5 + title + mt-1 + badge row,
+// plus the 2px row gap). Accurate estimates keep the scrollbar stable: rows
+// are re-measured as they mount, and a low estimate made the total height
+// (and the scrollbar thumb) keep changing while scrolling.
+const ROW_HEIGHT = { task: 66, subtask: 56, header: 36 } as const
 
 type Section = 'hidden' | 'recurring' | 'completed'
 
@@ -138,13 +147,16 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
     return out
   }, [activeTasks, snoozedTasks, recurringTasks, completedTasks, subtasksByParent, expandedParents, hiddenOpen, recurringOpen, completedOpen])
 
-  const virtualize = rows.length > TASK_LIST_VIRTUALIZE_THRESHOLD
+  const virtualize = tasks.length > TASK_LIST_VIRTUALIZE_THRESHOLD
+  const isEmpty = tasks.length === 0
   const listRef = useRef<HTMLDivElement>(null)
   const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null)
   const [scrollMargin, setScrollMargin] = useState(0)
 
+  // Resolve the scroll container on mount (in both modes) so the virtualizer
+  // has it on its very first render; a null scroll element renders zero rows,
+  // which collapses the list height and scrolls the sidebar to the top.
   useLayoutEffect(() => {
-    if (!virtualize) return
     const list = listRef.current
     let parent = list?.parentElement ?? null
     while (parent) {
@@ -156,12 +168,12 @@ export function TaskList({ tasks, selectedTaskId, onSelectTask }: TaskListProps)
     if (list && parent) {
       setScrollMargin(list.getBoundingClientRect().top - parent.getBoundingClientRect().top + parent.scrollTop)
     }
-  }, [virtualize])
+  }, [virtualize, isEmpty])
 
   const virtualizer = useVirtualizer({
     count: virtualize ? rows.length : 0,
     getScrollElement: () => scrollElement,
-    estimateSize: (index) => (rows[index]?.kind === 'header' ? 34 : 38),
+    estimateSize: (index) => ROW_HEIGHT[rows[index]?.kind ?? 'task'],
     getItemKey: (index) => rows[index]?.key ?? index,
     overscan: 10,
     scrollMargin
