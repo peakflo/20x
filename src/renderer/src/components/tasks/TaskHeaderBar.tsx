@@ -14,6 +14,7 @@ export enum TaskPrimaryAction {
   START = 'start',
   RESUME = 'resume',
   RESTART = 'restart',
+  CONTINUE = 'continue',
   TRIAGE = 'triage',
   COMPLETE = 'complete'
 }
@@ -22,6 +23,7 @@ const ACTION_META = {
   [TaskPrimaryAction.START]: { label: 'Start', icon: Play },
   [TaskPrimaryAction.RESUME]: { label: 'Resume', icon: Play },
   [TaskPrimaryAction.RESTART]: { label: 'Restart', icon: RotateCcw },
+  [TaskPrimaryAction.CONTINUE]: { label: 'Continue', icon: Play },
   [TaskPrimaryAction.TRIAGE]: { label: 'Triage', icon: Sparkles },
   [TaskPrimaryAction.COMPLETE]: { label: 'Complete', icon: Check }
 }

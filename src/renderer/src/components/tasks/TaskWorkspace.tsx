@@ -910,6 +910,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
       persistedSessionId: task.session_id,
       liveSessionId: session.sessionId,
       liveSessionIdle: session.status === SessionStatus.IDLE,
+      liveSessionErrored: session.status === SessionStatus.ERROR,
+      liveSessionPendingSend: !!session.pendingSend,
       liveMessageCount: session.messages.length
     })
     if (decision.action === null) {
@@ -920,10 +922,14 @@ Update existing skills that were helpful or create new ones for patterns worth r
       void handleResumeSession()
     } else if (decision.action === RunShortcutAction.RESTART) {
       void handleStartFreshSession()
+    } else if (decision.action === RunShortcutAction.CONTINUE) {
+      void handleSend('continue').catch((error) => {
+        dispatchShortcutFeedback(error instanceof Error ? error.message : String(error), true)
+      })
     } else {
       void handleTriage()
     }
-  }, [agents, handleResumeSession, handleStartFreshSession, handleStartSession, handleTriage, session.messages.length, session.sessionId, session.status, task])
+  }, [agents, handleResumeSession, handleStartFreshSession, handleStartSession, handleSend, handleTriage, session.messages.length, session.pendingSend, session.sessionId, session.status, task])
 
   const handleTaskShortcut = ({ action, taskId }: TaskShortcutDetail) => {
     if (!task || task.id !== taskId) return
@@ -1013,6 +1019,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length > 0
   const canStart = task.agent_id && assignedAgentConfigured && !task.session_id && !session.sessionId && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed
+  const canContinue = task.agent_id && assignedAgentConfigured && !!session.sessionId && session.status === SessionStatus.ERROR
+    && !session.pendingSend && task.status !== TaskStatus.Completed
   const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && session.status === SessionStatus.IDLE
     && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging
 
@@ -1026,6 +1034,9 @@ Update existing skills that were helpful or create new ones for patterns worth r
   } else if (canStart) {
     primaryAction = TaskPrimaryAction.START
     handlePrimaryAction = () => void handleStartSession()
+  } else if (canContinue) {
+    primaryAction = TaskPrimaryAction.CONTINUE
+    handlePrimaryAction = handleRunShortcut
   } else if (canResume) {
     primaryAction = TaskPrimaryAction.RESUME
     handlePrimaryAction = () => void handleResumeSession()
