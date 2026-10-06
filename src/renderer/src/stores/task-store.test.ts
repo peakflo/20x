@@ -329,4 +329,12 @@ describe('useTaskStore', () => {
       expect(useTaskStore.getState().selectedTaskId).toBe('picked')
     })
   })
+
+  it('falls back to loading all tasks when the open-set API is unavailable', async () => {
+    ;(mockElectronAPI.db.getOpenTasks as unknown as Mock).mockRejectedValueOnce(new Error("No handler registered for 'db:getOpenTasks'"))
+    ;(mockElectronAPI.db.getTasks as unknown as Mock).mockResolvedValueOnce([{ id: 'a', title: 'A', status: 'completed' }, { id: 'b', title: 'B', status: 'ready_for_review' }])
+    await useTaskStore.getState().fetchTasks()
+    expect(useTaskStore.getState().tasks.map((t) => t.id)).toEqual(['a', 'b'])
+    expect(useTaskStore.getState().error).toBeNull()
+  })
 })

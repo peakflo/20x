@@ -115,7 +115,17 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set({ isLoading: true, error: null })
     void get().refreshCompletedTotal()
     try {
-      const open = (await taskApi.getOpen()).map(normalizeTask)
+      let openRaw: WorkfloTask[]
+      try {
+        openRaw = await taskApi.getOpen()
+      } catch (err) {
+        // A main process older than this renderer (e.g. dev hot-reload of the
+        // UI only) has no open-set handler: fall back to loading everything
+        // rather than showing an empty list.
+        console.warn('[task-store] getOpenTasks unavailable, loading all tasks:', err)
+        openRaw = await taskApi.getAll()
+      }
+      const open = openRaw.map(normalizeTask)
       const openIds = new Set(open.map((task) => task.id))
       set((state) => ({
         // Keep completed tasks the user already paged in (or that completed

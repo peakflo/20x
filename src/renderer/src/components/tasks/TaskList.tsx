@@ -120,7 +120,8 @@ export function TaskList({
     return { activeTasks: active, snoozedTasks: snoozed, recurringTasks: recurring, completedTasks: completed }
   }, [tasks, snoozeTick])
 
-  const completedCount = completedTotal ?? completedTasks.length
+  // Never hide loaded completed tasks, even if the DB total is unavailable.
+  const completedCount = Math.max(completedTotal ?? 0, completedTasks.length)
   const toggleCompleted = () => {
     const opening = !completedOpen
     setCompletedOpen(opening)
