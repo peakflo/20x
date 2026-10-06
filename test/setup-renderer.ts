@@ -30,6 +30,9 @@ const mockElectronAPI = {
   db: {
     getTasks: vi.fn().mockResolvedValue([]),
     getTask: vi.fn().mockResolvedValue(undefined),
+    getOpenTasks: vi.fn().mockResolvedValue([]),
+    getCompletedTasks: vi.fn().mockResolvedValue({ tasks: [], total: 0 }),
+    getCompletedTaskStats: vi.fn().mockResolvedValue({ total: 0, createdInWindow: 0, completedInWindow: 0, withAgent: 0 }),
     createTask: vi.fn().mockResolvedValue({}),
     updateTask: vi.fn().mockResolvedValue({}),
     deleteTask: vi.fn().mockResolvedValue(true),

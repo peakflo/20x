@@ -300,6 +300,8 @@ export function TaskBoard() {
   // Use individual selectors to prevent re-renders from unrelated store changes
   const tasks = useTaskStore((s) => s.tasks)
   const isLoading = useTaskStore((s) => s.isLoading)
+  // Completed history is not loaded into the store; its count comes from the DB.
+  const completedTotal = useTaskStore((s) => s.completedTotal)
   const agents = useAgentStore((s) => s.agents)
   const openDashboardPreview = useUIStore((s) => s.openDashboardPreview)
   const snoozeTick = useSnoozeTick(tasks)
@@ -356,10 +358,10 @@ export function TaskBoard() {
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-sm font-semibold tracking-wide">Task Board</h2>
         <div className="flex items-center gap-3">
-          {tasksByStatus.completedCount > 0 && (
+          {completedTotal > 0 && (
             <span className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full">
               <CheckCircle2 className="h-3 w-3" />
-              {tasksByStatus.completedCount} completed
+              {completedTotal} completed
             </span>
           )}
           <span className="text-xs text-muted-foreground">

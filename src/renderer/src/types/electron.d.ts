@@ -60,6 +60,14 @@ import type {
   VoiceTtsSnapshot
 } from '@shared/voice-tts'
 
+/** Aggregates over completed top-level tasks (see Database.getCompletedTaskStats). */
+export interface CompletedTaskStats {
+  total: number
+  createdInWindow: number
+  completedInWindow: number
+  withAgent: number
+}
+
 export interface AgentSessionStartResult {
   sessionId: string
 }
@@ -221,6 +229,9 @@ interface ElectronAPI {
   db: {
     getTasks: () => Promise<WorkfloTask[]>
     getTask: (id: string) => Promise<WorkfloTask | undefined>
+    getOpenTasks: () => Promise<WorkfloTask[]>
+    getCompletedTasks: (input: { offset?: number; limit?: number; query?: string }) => Promise<{ tasks: WorkfloTask[]; total: number }>
+    getCompletedTaskStats: (windowStartIso: string | null) => Promise<CompletedTaskStats>
     createTask: (data: CreateTaskDTO) => Promise<WorkfloTask>
     updateTask: (id: string, data: UpdateTaskDTO) => Promise<WorkfloTask | undefined>
     deleteTask: (id: string) => Promise<boolean>

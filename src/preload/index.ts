@@ -18,6 +18,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   db: {
     getTasks: (): Promise<unknown[]> => ipcRenderer.invoke('db:getTasks'),
     getTask: (id: string): Promise<unknown> => ipcRenderer.invoke('db:getTask', id),
+    getOpenTasks: (): Promise<unknown[]> => ipcRenderer.invoke('db:getOpenTasks'),
+    getCompletedTasks: (input: { offset?: number; limit?: number; query?: string }): Promise<unknown> =>
+      ipcRenderer.invoke('db:getCompletedTasks', input),
+    getCompletedTaskStats: (windowStartIso: string | null): Promise<unknown> =>
+      ipcRenderer.invoke('db:getCompletedTaskStats', windowStartIso),
     createTask: (data: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('db:createTask', data),
     updateTask: (id: string, data: Record<string, unknown>): Promise<unknown> =>

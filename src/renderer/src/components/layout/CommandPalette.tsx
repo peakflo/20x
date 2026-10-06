@@ -67,6 +67,14 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
   const toggleTheme = useThemeStore((s) => s.toggle)
   const themeResolved = useThemeStore((s) => s.resolved)
   const tasks = useTaskStore((s) => s.tasks)
+  const searchCompleted = useTaskStore((s) => s.searchCompleted)
+  // Completed history is not preloaded: look it up in the DB as the user types.
+  useEffect(() => {
+    const q = query.trim()
+    if (!q) return
+    const timer = setTimeout(() => { void searchCompleted(q) }, 250)
+    return () => clearTimeout(timer)
+  }, [query, searchCompleted])
   const selectTask = useTaskStore((s) => s.selectTask)
   const skills = useSkillStore((s) => s.skills)
   const selectSkill = useSkillStore((s) => s.selectSkill)

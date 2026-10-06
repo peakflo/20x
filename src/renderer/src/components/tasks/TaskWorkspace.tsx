@@ -23,10 +23,11 @@ import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
+import { useShallow } from 'zustand/react/shallow'
 import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
-import { memo, useEffect, useLayoutEffect, useCallback, useRef, useState, useMemo, type PointerEvent as ReactPointerEvent } from 'react'
+import { memo, useEffect, useLayoutEffect, useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, UpdateAgentDTO, CreateAgentDTO } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
@@ -40,6 +41,8 @@ import { ArtifactRail } from '@/components/artifacts/ArtifactRail'
 import type { Artifact, ArtifactUIState } from '@shared/artifacts'
 import { dispatchShortcutFeedback, onTaskShortcut, TaskShortcutAction, type TaskShortcutDetail } from '@/lib/keyboard-shortcuts'
 import { resolveRunShortcut, RunShortcutAction } from '@/lib/run-shortcut'
+
+const EMPTY_SUBTASKS: WorkfloTask[] = []
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 const DEFAULT_ARTIFACT_UI: ArtifactUIState = { open: false, activeTabId: null, railExpanded: false }
@@ -162,13 +165,16 @@ function TaskWorkspaceComponent({
 
   // Derive subtasks reactively from the task store so status changes (e.g., from
   // mobile-initiated sessions) update immediately without needing a re-fetch.
-  const allTasks = useTaskStore((s) => s.tasks)
-  const subtasks = useMemo(() => {
-    if (!task) return []
-    return allTasks
-      .filter((t) => t.parent_task_id === task.id)
+  // useShallow: the store keeps unchanged task objects by identity, so this
+  // only re-renders the workspace when one of THIS task's subtasks changes —
+  // not on every update to any task in the app.
+  const parentTaskId = task?.id
+  const subtasks = useTaskStore(useShallow((s) => {
+    if (!parentTaskId) return EMPTY_SUBTASKS
+    return s.tasks
+      .filter((t) => t.parent_task_id === parentTaskId)
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.created_at.localeCompare(b.created_at))
-  }, [allTasks, task?.id])
+  }))
 
   useEffect(() => {
     if (!task?.id) return

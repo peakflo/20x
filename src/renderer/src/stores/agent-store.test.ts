@@ -130,6 +130,43 @@ describe('useAgentStore', () => {
   })
 
   describe('Transcript projection (transcript:changed deltas)', () => {
+    it('keeps sorted order for out-of-order and moved parts (incremental cache)', () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+      fireDelta('task-1', [
+        part({ partId: 'a', createdAt: 100 }),
+        part({ partId: 'c', createdAt: 300 })
+      ])
+      // Append fast path
+      fireDelta('task-1', [part({ partId: 'd', createdAt: 400 })])
+      // New part older than the tail must be inserted, not appended
+      fireDelta('task-1', [part({ partId: 'b', createdAt: 200 })])
+      const ids = () => useAgentStore.getState().sessions.get('task-1')!.messages.map((m) => m.id)
+      expect(ids()).toEqual(['a', 'b', 'c', 'd'])
+      // An existing part whose createdAt changes moves to its new position
+      fireDelta('task-1', [part({ partId: 'a', createdAt: 350 })])
+      expect(ids()).toEqual(['b', 'c', 'a', 'd'])
+      // Equal createdAt is ordered by seq
+      fireDelta('task-1', [part({ partId: 'e', createdAt: 400, seq: 0 })])
+      expect(ids()).toEqual(['b', 'c', 'a', 'e', 'd'])
+    })
+
+    it('preserves unchanged row identity and skips publishing a re-delivered part', () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+      const p1 = part({ partId: 'p1', content: 'one', createdAt: 100, rev: 1 })
+      fireDelta('task-1', [p1, part({ partId: 'p2', content: 'two', createdAt: 200, rev: 2 })])
+      const before = useAgentStore.getState().sessions.get('task-1')!.messages
+      fireDelta('task-1', [part({ partId: 'p2', content: 'two!', createdAt: 200, rev: 3 })])
+      const after = useAgentStore.getState().sessions.get('task-1')!.messages
+      expect(after).not.toBe(before)
+      expect(after[0]).toBe(before[0])
+      expect(after[1].content).toBe('two!')
+      expect(before[1].content).toBe('two') // published arrays are never mutated
+
+      const sessions = useAgentStore.getState().sessions
+      fireDelta('task-1', [{ ...p1 }])
+      expect(useAgentStore.getState().sessions).toBe(sessions)
+    })
+
     it('renders parts from a delta, sorted by createdAt', () => {
       useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
       fireDelta('task-1', [

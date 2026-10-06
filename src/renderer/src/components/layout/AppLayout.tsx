@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, lazy, Suspense } from 'react'
 import { Sidebar } from './Sidebar'
 import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
-import { InfiniteCanvas } from '@/components/canvas/InfiniteCanvas'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
 import { UpdateDialog } from '@/components/update/UpdateDialog'
@@ -16,6 +15,9 @@ import { TopBarVoiceButton } from '@/components/voice/TopBarVoiceButton'
 
 // Lazy-load heavy workspace components — only imported when their view is active.
 // This reduces the initial bundle size and speeds up first render significantly.
+// The canvas is always mounted (hidden) so iframes/terminals survive navigation,
+// but its code (panels, drawing layer) is not needed for first paint.
+const InfiniteCanvas = lazy(() => import('@/components/canvas/InfiniteCanvas').then(m => ({ default: m.InfiniteCanvas })))
 const SkillWorkspace = lazy(() => import('@/components/skills/SkillWorkspace').then(m => ({ default: m.SkillWorkspace })))
 const SettingsWorkspace = lazy(() => import('@/components/settings/SettingsWorkspace').then(m => ({ default: m.SettingsWorkspace })))
 const DashboardWorkspace = lazy(() => import('@/components/dashboard/DashboardWorkspace').then(m => ({ default: m.DashboardWorkspace })))
@@ -862,7 +864,9 @@ export function AppLayout() {
               className="absolute inset-0"
               style={{ visibility: sidebarView === 'canvas' && activeModal !== 'settings' ? 'visible' : 'hidden' }}
             >
-              <InfiniteCanvas />
+              <Suspense fallback={null}>
+                <InfiniteCanvas />
+              </Suspense>
             </div>
 
             {/* Other workspace content — conditionally rendered */}

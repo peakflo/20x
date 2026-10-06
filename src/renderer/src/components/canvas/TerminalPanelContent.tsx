@@ -311,7 +311,12 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
   // trigger re-initialization of the terminal.
   useEffect(() => {
     if (!isReady) return
+    let inFlight = false
     const interval = setInterval(async () => {
+      // Hidden windows cannot change the user's cwd view; skip the IPC and
+      // never stack requests if the main process is slow to answer.
+      if (inFlight || document.hidden) return
+      inFlight = true
       try {
         const expectedPid = activePidRef.current ?? undefined
         const { cwd: currentCwd } = await window.electronAPI.terminal.getCwd(terminalId, expectedPid)
@@ -321,7 +326,9 @@ export function TerminalPanelContent({ terminalId, cwd }: TerminalPanelContentPr
           lastWrittenCwdRef.current = currentCwd
           useCanvasStore.getState().updatePanel(terminalId, { url: currentCwd })
         }
-      } catch { /* ignore */ }
+      } catch { /* ignore */ } finally {
+        inFlight = false
+      }
     }, 30_000) // every 30 seconds (less aggressive)
     return () => clearInterval(interval)
   }, [isReady, terminalId])

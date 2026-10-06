@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect, memo, useMemo, type CSSProperties } from 'react'
+import { useCallback, useRef, useState, useEffect, memo, useMemo, lazy, Suspense, type CSSProperties } from 'react'
 import {
   useCanvasStore,
   calculateSnap,
@@ -16,7 +16,6 @@ import { TaskPanelContent } from './TaskPanelContent'
 import { TranscriptPanelContent } from './TranscriptPanelContent'
 import { AppPanelContent } from './AppPanelContent'
 import { WebPagePanelContent } from './WebPagePanelContent'
-import { TerminalPanelContent } from './TerminalPanelContent'
 import { BrowserPanelContent } from './BrowserPanelContent'
 import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
 
@@ -632,6 +631,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
               taskLayout={taskLayout}
               browserSessionId={panel.browserSessionId}
               streamPort={panel.streamPort}
+              paused={panel.type === 'browser' ? frozen : undefined}
             />
           )}
         </div>
@@ -717,9 +717,16 @@ interface PanelContentProps {
   taskLayout?: TaskWorkspaceLayout
   browserSessionId?: string
   streamPort?: number
+  /** Only passed for browser panels (others ignore it) so frozen toggles do
+   *  not re-render unrelated panel content. */
+  paused?: boolean
 }
 
-const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title, taskLayout, browserSessionId, streamPort }: PanelContentProps) {
+// xterm (~340 KB of source) is only needed once a terminal panel exists, so it
+// is split out of the startup bundle.
+const TerminalPanelContent = lazy(() => import('./TerminalPanelContent').then((m) => ({ default: m.TerminalPanelContent })))
+
+const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title, taskLayout, browserSessionId, streamPort, paused }: PanelContentProps) {
   if (type === 'task' && refId) {
     return <TaskPanelContent panelId={id} taskId={refId} panelLayout={taskLayout} />
   }
@@ -733,10 +740,14 @@ const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, 
     return <WebPagePanelContent panelId={id} url={url} title={title} />
   }
   if (type === 'terminal') {
-    return <TerminalPanelContent terminalId={id} cwd={url} />
+    return (
+      <Suspense fallback={<div className="h-full w-full bg-background" />}>
+        <TerminalPanelContent terminalId={id} cwd={url} />
+      </Suspense>
+    )
   }
   if (type === 'browser') {
-    return <BrowserPanelContent panelId={id} url={url} sessionName={browserSessionId} streamPort={streamPort} />
+    return <BrowserPanelContent panelId={id} url={url} sessionName={browserSessionId} streamPort={streamPort} paused={paused} />
   }
   return (
     <div className="flex items-center justify-center h-full text-muted-foreground/50 text-xs">

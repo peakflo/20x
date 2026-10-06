@@ -95,6 +95,11 @@ export interface TaskSession {
 interface ProjectionCache {
   parts: Map<string, TranscriptPartRecord>
   rev: number
+  /** Parts sorted by (createdAt, seq) plus their derived messages, maintained
+   *  incrementally by upsertParts(). `undefined` means "rebuild on next read". */
+  ordered?: TranscriptPartRecord[]
+  messages?: AgentMessage[]
+  indexById?: Map<string, number>
 }
 
 const projections = new Map<string, ProjectionCache>()
@@ -172,10 +177,75 @@ function toAgentMessage(p: TranscriptPartRecord): AgentMessage {
   return message
 }
 
+function comparePart(a: TranscriptPartRecord, b: TranscriptPartRecord): number {
+  return (a.createdAt - b.createdAt) || (a.seq - b.seq)
+}
+
+function rebuildOrder(cache: ProjectionCache): void {
+  // Array.prototype.sort is stable, so ties keep Map insertion order.
+  const ordered = [...cache.parts.values()].sort(comparePart)
+  cache.ordered = ordered
+  cache.messages = ordered.map(toAgentMessage)
+  cache.indexById = new Map(ordered.map((p, i) => [p.partId, i]))
+}
+
 function deriveMessages(cache: ProjectionCache): AgentMessage[] {
-  return [...cache.parts.values()]
-    .sort((a, b) => (a.createdAt - b.createdAt) || (a.seq - b.seq))
-    .map(toAgentMessage)
+  if (!cache.messages) rebuildOrder(cache)
+  return cache.messages!
+}
+
+/**
+ * Merge parts into the cache. Streaming deltas almost always either replace a
+ * part in place (same createdAt/seq) or append a newer part, so we patch the
+ * ordered list instead of re-sorting the whole transcript on every 125ms flush.
+ * Any change that could move a part falls back to a full rebuild. The returned
+ * messages array is copy-on-write: a new array only when something changed.
+ */
+function upsertParts(cache: ProjectionCache, parts: TranscriptPartRecord[]): boolean {
+  let changed = false
+  let needsRebuild = !cache.messages
+  let messages = cache.messages
+  let copied = false
+  const ensureCopy = (): AgentMessage[] => {
+    if (!copied) { messages = messages!.slice(); copied = true }
+    return messages!
+  }
+
+  for (const p of parts) {
+    const prev = cache.parts.get(p.partId)
+    // `rev` is a global change cursor bumped on every upsert, so an equal rev
+    // means the same stored content (e.g. a reconcile re-delivering a part).
+    if (prev === p || (prev && p.rev > 0 && prev.rev === p.rev && prev.updatedAt === p.updatedAt)) continue
+    cache.parts.set(p.partId, p)
+    changed = true
+    if (needsRebuild) continue
+
+    const ordered = cache.ordered!
+    const indexById = cache.indexById!
+    if (prev) {
+      const i = indexById.get(p.partId)
+      if (i !== undefined && comparePart(prev, p) === 0) {
+        ordered[i] = p
+        ensureCopy()[i] = toAgentMessage(p)
+      } else {
+        needsRebuild = true
+      }
+      continue
+    }
+
+    const last = ordered[ordered.length - 1]
+    if (!last || comparePart(last, p) <= 0) {
+      ordered.push(p)
+      indexById.set(p.partId, ordered.length - 1)
+      ensureCopy().push(toAgentMessage(p))
+    } else {
+      needsRebuild = true
+    }
+  }
+
+  if (needsRebuild) rebuildOrder(cache)
+  else cache.messages = messages
+  return changed
 }
 
 function findBySessionId(sessions: Map<string, TaskSession>, sid: string): TaskSession | undefined {
@@ -225,6 +295,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
     const messages = deriveMessages(cache)
     set((state) => {
       const existing = state.sessions.get(taskId)
+      // Nothing to publish: avoid a new sessions Map (and a re-render of every
+      // subscriber) when the derived list is already the one in the session.
+      if (existing && existing.messages === messages) return state
       const session: TaskSession = existing
         ? { ...existing, messages }
         : { sessionId: null, agentId: '', taskId, status: SessionStatus.IDLE, messages, pendingApproval: null }
@@ -236,9 +309,9 @@ export const useAgentStore = create<AgentState>((set, get) => {
   const applyParts = (taskId: string, parts: TranscriptPartRecord[], maxRev?: number): void => {
     if (parts.length === 0 && maxRev == null) return
     const cache = getProjection(taskId)
-    for (const p of parts) cache.parts.set(p.partId, p)
+    const changed = upsertParts(cache, parts)
     if (typeof maxRev === 'number') cache.rev = Math.max(cache.rev, maxRev)
-    commitMessages(taskId)
+    if (changed || !get().sessions.has(taskId)) commitMessages(taskId)
   }
 
   const accumulateOutputAnalytics = (taskId: string, parts: TranscriptPartRecord[]): void => {

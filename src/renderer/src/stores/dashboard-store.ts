@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { enterpriseApi } from '@/lib/ipc-client'
+import type { CompletedTaskStats } from '@/types/electron'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { isSnoozed } from '@/lib/utils'
 import type { WorkfloTask } from '@/types'
@@ -69,6 +70,8 @@ export type TimeWindow = '24h' | '7d' | '30d' | 'all'
 
 // ── Local stats computation ─────────────────────────────────
 
+let localStatsRequest = 0
+
 function getWindowStart(timeWindow: TimeWindow): Date | null {
   if (timeWindow === 'all') return null
   const now = new Date()
@@ -83,9 +86,16 @@ function getWindowStart(timeWindow: TimeWindow): Date | null {
 }
 
 /** Compute dashboard stats from local tasks (no cloud required). */
-export function computeLocalStats(tasks: WorkfloTask[], timeWindow: TimeWindow): DashboardStats {
+/**
+ * Local dashboard stats. The task store holds only open tasks plus whatever
+ * completed history was paged in, so when `completedStats` (database
+ * aggregates) is given, completed tasks are counted from it instead of from
+ * `tasks`. Without it, everything is counted from `tasks`.
+ */
+export function computeLocalStats(tasks: WorkfloTask[], timeWindow: TimeWindow, completedStats?: CompletedTaskStats): DashboardStats {
   // Filter to top-level, non-snoozed, non-template tasks only (consistent with TaskBoard)
-  const topLevel = tasks.filter((t) => !t.parent_task_id && !isSnoozed(t.snoozed_until) && !(t.is_recurring && !t.recurrence_parent_id))
+  const topLevelAll = tasks.filter((t) => !t.parent_task_id && !isSnoozed(t.snoozed_until) && !(t.is_recurring && !t.recurrence_parent_id))
+  const topLevel = completedStats ? topLevelAll.filter((t) => t.status !== TaskStatus.Completed) : topLevelAll
   const windowStart = getWindowStart(timeWindow)
 
   const tasksByStatus: Record<string, number> = {}
@@ -93,22 +103,29 @@ export function computeLocalStats(tasks: WorkfloTask[], timeWindow: TimeWindow):
     const s = t.status || TaskStatus.NotStarted
     tasksByStatus[s] = (tasksByStatus[s] || 0) + 1
   }
+  if (completedStats && completedStats.total > 0) tasksByStatus[TaskStatus.Completed] = completedStats.total
 
-  const tasksCreatedInWindow = windowStart
+  const tasksCreatedInWindow = (windowStart
     ? topLevel.filter((t) => new Date(t.created_at) >= windowStart).length
-    : topLevel.length
+    : topLevel.length) + (completedStats?.createdInWindow ?? 0)
 
   const completedTasks = topLevel.filter((t) => t.status === TaskStatus.Completed)
-  const tasksCompletedInWindow = windowStart
-    ? completedTasks.filter((t) => new Date(t.updated_at) >= windowStart).length
-    : completedTasks.length
+  const completedCount = completedStats ? completedStats.total : completedTasks.length
+  const tasksCompletedInWindow = completedStats
+    ? completedStats.completedInWindow
+    : windowStart
+      ? completedTasks.filter((t) => new Date(t.updated_at) >= windowStart).length
+      : completedTasks.length
 
   // Agent-related tasks (tasks that have/had an agent assigned)
-  const agentTasks = topLevel.filter((t) => t.agent_id)
-  const agentCompletedTasks = agentTasks.filter((t) => t.status === TaskStatus.Completed)
+  const openAgentTasks = topLevel.filter((t) => t.agent_id)
+  const agentCompletedCount = completedStats
+    ? completedStats.withAgent
+    : openAgentTasks.filter((t) => t.status === TaskStatus.Completed).length
+  const agentTaskCount = openAgentTasks.length + (completedStats?.withAgent ?? 0)
 
   return {
-    totalTasks: topLevel.length,
+    totalTasks: topLevel.length + (completedStats?.total ?? 0),
     tasksByStatus,
     tasksCreatedInWindow,
     tasksCompletedInWindow,
@@ -116,14 +133,14 @@ export function computeLocalStats(tasks: WorkfloTask[], timeWindow: TimeWindow):
     avgTaskCompletionTimeHours: null,
     p50CompletionTimeHours: null,
     p90CompletionTimeHours: null,
-    totalAgentRuns: agentTasks.length,
-    agentSuccessRate: agentTasks.length > 0
-      ? (agentCompletedTasks.length / agentTasks.length) * 100
+    totalAgentRuns: agentTaskCount,
+    agentSuccessRate: agentTaskCount > 0
+      ? (agentCompletedCount / agentTaskCount) * 100
       : null,
-    autonomousTasksCompleted: agentCompletedTasks.length,
-    humanReviewedTasksCompleted: completedTasks.length - agentCompletedTasks.length,
-    aiAutonomyRate: completedTasks.length > 0
-      ? (agentCompletedTasks.length / completedTasks.length) * 100
+    autonomousTasksCompleted: agentCompletedCount,
+    humanReviewedTasksCompleted: completedCount - agentCompletedCount,
+    aiAutonomyRate: completedCount > 0
+      ? (agentCompletedCount / completedCount) * 100
       : null,
     activeUsers: 1, // Local is always single-user
     totalUsers: 1,
@@ -291,7 +308,23 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
 
   updateLocalStats: (tasks: WorkfloTask[]) => {
     const { timeWindow } = get()
-    set({ localStats: computeLocalStats(tasks, timeWindow) })
+    // Completed history is not in the task store; aggregate it in the DB.
+    const request = ++localStatsRequest
+    const windowStart = getWindowStart(timeWindow)
+    const getStats = typeof window !== 'undefined' ? window.electronAPI?.db?.getCompletedTaskStats : undefined
+    if (typeof getStats !== 'function') {
+      set({ localStats: computeLocalStats(tasks, timeWindow) })
+      return
+    }
+    void getStats(windowStart ? windowStart.toISOString() : null)
+      .then((completedStats) => {
+        if (request !== localStatsRequest) return
+        set({ localStats: computeLocalStats(tasks, timeWindow, completedStats) })
+      })
+      .catch(() => {
+        if (request !== localStatsRequest) return
+        set({ localStats: computeLocalStats(tasks, timeWindow) })
+      })
   },
 
   fetchApplications: async () => {

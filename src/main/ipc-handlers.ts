@@ -54,6 +54,7 @@ import { listTaskArtifactEntries, readTaskArtifact, resolveTaskArtifactFilePath 
 import { writeArtifactFileToClipboard } from './artifact-clipboard'
 import { ArtifactClipboardMode, type ArtifactCopyFileResult } from '../shared/artifacts'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
+import { resolveTerminalCwd } from './terminal-cwd'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -109,6 +110,18 @@ export function registerIpcHandlers(
   let enterpriseStateSync = initialEnterpriseStateSync
   ipcMain.handle('db:getTasks', () => {
     return db.getTasks()
+  })
+
+  ipcMain.handle('db:getOpenTasks', () => {
+    return db.getOpenTasks()
+  })
+
+  ipcMain.handle('db:getCompletedTasks', (_, input: { offset?: number; limit?: number; query?: string } = {}) => {
+    return db.getCompletedTasksPage(input?.offset ?? 0, input?.limit ?? 50, input?.query)
+  })
+
+  ipcMain.handle('db:getCompletedTaskStats', (_, windowStartIso: string | null) => {
+    return db.getCompletedTaskStats(windowStartIso)
   })
 
   ipcMain.handle('db:getTask', (_, id: string) => {
@@ -2163,58 +2176,9 @@ else:
     if (expectedPid !== undefined && term.pid !== expectedPid) return { cwd: null }
 
     try {
-      const { execSync } = childProcess
-      const pythonPid = term.pid
-
-      // Find child PIDs of the Python process (the forked shell)
-      let targetPid = pythonPid
-      try {
-        const children = execSync(`pgrep -P ${pythonPid} 2>/dev/null || true`, {
-          encoding: 'utf-8',
-          timeout: 2000,
-        }).trim()
-        if (children) {
-          // Get the last child (deepest descendant = active process)
-          const childPids = children.split('\n').map((s) => parseInt(s.trim(), 10)).filter(Boolean)
-          if (childPids.length > 0) {
-            // Walk down — find children of children to get the deepest active shell
-            let deepest = childPids[childPids.length - 1]
-            for (let i = 0; i < 5; i++) { // max 5 levels deep
-              const grandchildren = execSync(`pgrep -P ${deepest} 2>/dev/null || true`, {
-                encoding: 'utf-8',
-                timeout: 1000,
-              }).trim()
-              if (!grandchildren) break
-              const gcPids = grandchildren.split('\n').map((s) => parseInt(s.trim(), 10)).filter(Boolean)
-              if (gcPids.length === 0) break
-              deepest = gcPids[gcPids.length - 1]
-            }
-            targetPid = deepest
-          }
-        }
-      } catch { /* ignore pgrep failures */ }
-
-      // Get cwd of the target process
-      const output = execSync(`lsof -p ${targetPid} -a -d cwd -Fn 2>/dev/null || true`, {
-        encoding: 'utf-8',
-        timeout: 2000,
-      })
-      const lines = output.split('\n')
-      const cwdLine = lines.find((l) => l.startsWith('n/'))
-      if (cwdLine) {
-        return { cwd: cwdLine.slice(1) }
-      }
-
-      // Fallback: try /proc on Linux
-      if (process.platform === 'linux') {
-        const linkTarget = execSync(`readlink /proc/${targetPid}/cwd 2>/dev/null || true`, {
-          encoding: 'utf-8',
-          timeout: 2000,
-        }).trim()
-        if (linkTarget) return { cwd: linkTarget }
-      }
-
-      return { cwd: null }
+      // Async child processes: the old execSync chain (pgrep ×N + lsof)
+      // blocked the Electron main process for every open terminal poll.
+      return { cwd: await resolveTerminalCwd(term.pid) }
     } catch {
       return { cwd: null }
     }

@@ -111,12 +111,31 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   const hasActiveFilters = statusFilter !== 'all' || priorityFilter !== 'all' || sourceFilter !== 'all'
 
   // Memoize sidebar footer stats to avoid 4x redundant .filter() calls inline in JSX
+  // Completed history is paged in from the database, so its count comes from
+  // the store (database total) unless a filter/search narrows the list.
+  const completedTotal = useTaskStore((s) => s.completedTotal)
+  const completedLoaded = useTaskStore((s) => s.completedLoaded)
+  const completedLoading = useTaskStore((s) => s.completedLoading)
+  const loadMoreCompleted = useTaskStore((s) => s.loadMoreCompleted)
+  const searchCompleted = useTaskStore((s) => s.searchCompleted)
+  const isNarrowed = hasActiveFilters || searchQuery.trim() !== ''
+
+  // Search also looks in completed history that has not been paged in.
+  useEffect(() => {
+    const q = searchQuery.trim()
+    if (!q) return
+    const timer = setTimeout(() => { void searchCompleted(q) }, 250)
+    return () => clearTimeout(timer)
+  }, [searchQuery, searchCompleted])
+
   const { activeCount, hiddenCount, totalCount } = useMemo(() => {
     let active = 0
     let hidden = 0
     let total = 0
     for (const t of tasks) {
       if (!t.parent_task_id) {
+        const isCompletedHistory = t.status === TaskStatus.Completed && !(t.is_recurring && !t.recurrence_parent_id)
+        if (!isNarrowed && isCompletedHistory) continue
         total++
         if (t.status !== TaskStatus.Completed) {
           if (isSnoozed(t.snoozed_until)) {
@@ -127,8 +146,8 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
         }
       }
     }
-    return { activeCount: active, hiddenCount: hidden, totalCount: total }
-  }, [tasks])
+    return { activeCount: active, hiddenCount: hidden, totalCount: isNarrowed ? total : total + completedTotal }
+  }, [tasks, isNarrowed, completedTotal])
 
   const handleSelectTask = useCallback((id: string) => {
     if (activeModal === 'settings') closeModal()
@@ -298,7 +317,15 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           <div className="mx-3 border-t" />
 
           <div className="flex-1 overflow-y-auto pt-1">
-            <TaskList tasks={tasks} selectedTaskId={selectedTaskId} onSelectTask={handleSelectTask} />
+            <TaskList
+              tasks={tasks}
+              selectedTaskId={selectedTaskId}
+              onSelectTask={handleSelectTask}
+              completedTotal={isNarrowed ? undefined : completedTotal}
+              hasMoreCompleted={completedLoaded < completedTotal}
+              completedLoading={completedLoading}
+              onLoadMoreCompleted={loadMoreCompleted}
+            />
           </div>
 
           <div className="px-4 py-2.5 border-t text-xs text-muted-foreground tabular-nums">

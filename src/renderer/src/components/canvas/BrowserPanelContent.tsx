@@ -29,6 +29,8 @@ interface BrowserPanelContentProps {
   url?: string
   sessionName?: string
   streamPort?: number
+  /** True while the panel is off the visible canvas; stops status polling. */
+  paused?: boolean
 }
 
 /**
@@ -60,6 +62,7 @@ function getChromeUserAgent(): string {
 export function BrowserPanelContent({
   panelId,
   url: initialUrl,
+  paused = false,
 }: BrowserPanelContentProps) {
   const updatePanel = useCanvasStore((s) => s.updatePanel)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -87,9 +90,12 @@ export function BrowserPanelContent({
 
   useEffect(() => {
     if (!window.electronAPI?.browser?.recordingStatus) return
+    // Off-canvas panels cannot show the recording badge; resume (with an
+    // immediate refresh) when the panel or window becomes visible again.
+    if (paused) return
     let disposed = false
     const refresh = () => {
-      if (recordingLock.current) return
+      if (recordingLock.current || document.hidden) return
       const version = recordingStateVersion.current
       void browserRecordingApi.status(panelId).then(({ recording: current }) => {
         if (disposed || recordingLock.current || version !== recordingStateVersion.current) return
@@ -102,8 +108,13 @@ export function BrowserPanelContent({
     }
     refresh()
     const timer = setInterval(refresh, 2000)
-    return () => { disposed = true; clearInterval(timer) }
-  }, [panelId])
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      disposed = true
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [panelId, paused])
 
   const deliverRecording = async (saved: BrowserRecordingManifest, taskIds?: string[]) => {
     const result = await notifyAgentsOfBrowserRecording(saved, taskIds)
