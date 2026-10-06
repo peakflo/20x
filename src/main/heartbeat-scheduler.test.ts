@@ -477,6 +477,38 @@ describe('HeartbeatScheduler', () => {
     })
   })
 
+  describe('completed task and off guards', () => {
+    it('does not run a manual check for a completed task', async () => {
+      ;(db.getTask as ReturnType<typeof vi.fn>).mockReturnValue(makeTask({ status: TaskStatus.Completed }))
+
+      expect(await scheduler.runNow('task-1')).toBe('inactive')
+      expect(agent.sendHeartbeatViaMastermind).not.toHaveBeenCalled()
+    })
+
+    it('does not run a manual check when heartbeat is off', async () => {
+      ;(db.getTask as ReturnType<typeof vi.fn>).mockReturnValue(makeTask({ heartbeat_enabled: false }))
+
+      expect(await scheduler.runNow('task-1')).toBe('inactive')
+      expect(agent.sendHeartbeatViaMastermind).not.toHaveBeenCalled()
+    })
+
+    it('changes the interval without enabling heartbeat', () => {
+      ;(db.getTask as ReturnType<typeof vi.fn>).mockReturnValue(makeTask({ heartbeat_enabled: false }))
+
+      scheduler.updateInterval('task-1', 60)
+
+      expect(db.updateTask).toHaveBeenCalledWith('task-1', { heartbeat_interval_minutes: 60 })
+    })
+
+    it('does not schedule another check after heartbeat is disabled', () => {
+      ;(db.getTask as ReturnType<typeof vi.fn>).mockReturnValue(makeTask({ heartbeat_enabled: false }))
+
+      ;(scheduler as unknown as { advanceNextCheck: (task: TaskRecord) => void }).advanceNextCheck(makeTask())
+
+      expect(db.updateTask).not.toHaveBeenCalled()
+    })
+  })
+
   // ── task:updated events for sidebar sync ──────────────
 
   describe('task:updated renderer events', () => {
@@ -671,7 +703,7 @@ describe('HeartbeatScheduler', () => {
       expect(db.updateTask).toHaveBeenCalledWith('task-1', {
         heartbeat_enabled: false,
         heartbeat_next_check_at: null,
-      })
+      }, 'heartbeat-auto')
     })
 
     it('respects custom max errors setting', () => {
@@ -706,7 +738,7 @@ describe('HeartbeatScheduler', () => {
       expect(db.updateTask).toHaveBeenCalledWith('completed-task', {
         heartbeat_enabled: false,
         heartbeat_next_check_at: null,
-      })
+      }, 'heartbeat-auto')
     })
 
     it('does not run heartbeat for completed tasks even if they have heartbeat enabled', async () => {
@@ -745,7 +777,7 @@ describe('HeartbeatScheduler', () => {
       expect(db.updateTask).toHaveBeenCalledWith('subtask-1', {
         heartbeat_enabled: false,
         heartbeat_next_check_at: null,
-      })
+      }, 'heartbeat-auto')
       expect(agent.startHeartbeatSession).not.toHaveBeenCalled()
     })
 

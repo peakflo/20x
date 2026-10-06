@@ -132,6 +132,8 @@ interface AgentSession {
   agentId: string
   taskId: string
   workspaceDir?: string
+  heartbeatFilePresentAtTurnStart?: boolean
+  heartbeatDisableVersionAtTurnStart?: string
   status: 'idle' | 'working' | 'error' | 'waiting_approval'
   createdAt: Date
   seenMessageIds: Set<string>
@@ -2120,6 +2122,8 @@ export class AgentManager extends EventEmitter {
       agentId,
       taskId,
       workspaceDir,
+      heartbeatFilePresentAtTurnStart: this.hasHeartbeatFile(taskId),
+      heartbeatDisableVersionAtTurnStart: this.db.getSetting(`heartbeat-manual-disable:${taskId}`),
       status: 'working',
       createdAt: new Date(),
       lastActivityAt: Date.now(),
@@ -3543,6 +3547,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       agentId,
       taskId,
       workspaceDir,
+      heartbeatFilePresentAtTurnStart: this.hasHeartbeatFile(taskId),
+      heartbeatDisableVersionAtTurnStart: this.db.getSetting(`heartbeat-manual-disable:${taskId}`),
       status: 'idle',
       createdAt: new Date(),
       lastActivityAt: Date.now(),
@@ -3718,6 +3724,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
    * Uses the real task's workspace dir so the agent has repo context for gh commands.
    */
   async sendHeartbeatViaMastermind(agentId: string, taskId: string, heartbeatPrompt: string): Promise<string> {
+    if (!this.canRunHeartbeatForTask(taskId)) throw new Error('Heartbeat is inactive for this task.')
     const heartbeatTaskId = `heartbeat-${taskId}`
 
     // Check if heartbeat session for this task exists in memory
@@ -3736,6 +3743,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       sessionId = await this.startSession(agentId, heartbeatTaskId, workspaceDir, true /* skipInitialPrompt */)
     }
 
+    if (!this.canRunHeartbeatForTask(taskId)) throw new Error('Heartbeat is inactive for this task.')
     console.log(`[AgentManager] Heartbeat: sending check via heartbeat session ${sessionId} for task ${taskId}`)
     const result = await this.sendMessage(sessionId, heartbeatPrompt, heartbeatTaskId, agentId)
     return result.newSessionId || sessionId
@@ -3746,6 +3754,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
    * Only called when mastermind detected something that needs the task agent to act on.
    */
   async startHeartbeatSession(agentId: string, taskId: string, heartbeatPrompt: string): Promise<string> {
+    if (!this.canRunHeartbeatForTask(taskId)) throw new Error('Heartbeat is inactive for this task.')
     const task = this.db.getTask(taskId)
     let sessionId = task?.session_id
 
@@ -3754,6 +3763,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       sessionId = await this.startSession(agentId, taskId, undefined, true /* skipInitialPrompt */)
     }
 
+    if (!this.canRunHeartbeatForTask(taskId)) throw new Error('Heartbeat is inactive for this task.')
     console.log(`[AgentManager] Heartbeat: forwarding action to task session ${sessionId} for task ${taskId}`)
 
     // sendMessage handles everything: resume if dead, send the prompt, start polling
@@ -4443,7 +4453,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       await yieldEventLoop()
 
       // Auto-enable heartbeat if agent wrote a heartbeat.md file
-      this.autoEnableHeartbeat(session.taskId)
+      this.autoEnableHeartbeat(session)
       await yieldEventLoop()
 
       // Get updated task with output fields and notify renderer
@@ -4791,6 +4801,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     attachments?: MessageAttachmentRef[],
     opts: { redisplay?: boolean } = {}
   ): Promise<void> {
+    if (session.status !== 'working') {
+      session.heartbeatFilePresentAtTurnStart = this.hasHeartbeatFile(session.taskId)
+      session.heartbeatDisableVersionAtTurnStart = this.db.getSetting(`heartbeat-manual-disable:${session.taskId}`)
+    }
     session.autoAbortNotified = false
 
     if (session.status === 'error') {
@@ -5949,35 +5963,53 @@ Important:
     this.externalListeners.push(fn)
   }
 
-  /**
-   * Auto-enable heartbeat for a task if a heartbeat.md file exists in the workspace.
-   * Called after a task transitions to ready_for_review.
-   */
-  private autoEnableHeartbeat(taskId: string): void {
+  private hasHeartbeatFile(taskId: string): boolean {
+    try {
+      return existsSync(join(this.db.getWorkspaceDir(taskId), 'heartbeat.md'))
+    } catch (err) {
+      console.error(`[AgentManager] Error checking heartbeat.md for task ${taskId}:`, err)
+      return false
+    }
+  }
+
+  private canRunHeartbeatForTask(taskId: string): boolean {
+    const task = this.db.getTask(taskId)
+    if (!task?.heartbeat_enabled || task.status === TaskStatus.Completed) return false
+    return !task.parent_task_id || this.db.getTask(task.parent_task_id)?.status !== TaskStatus.Completed
+  }
+
+  /** Check whether the task workspace has useful heartbeat instructions. */
+  private hasUsefulHeartbeatFile(taskId: string): boolean {
     try {
       const workspaceDir = this.db.getWorkspaceDir(taskId)
       const heartbeatPath = join(workspaceDir, 'heartbeat.md')
-
-      if (existsSync(heartbeatPath)) {
-        const content = readFileSync(heartbeatPath, 'utf-8').trim()
-        // Skip empty files or files with only headers
-        if (content && !/^(#[^\n]*\n?\s*)*$/.test(content)) {
-          const defaultInterval = parseInt(this.db.getSetting('heartbeat_default_interval') || '30', 10)
-          const now = new Date()
-          const nextCheck = new Date(now.getTime() + defaultInterval * 60_000)
-
-          this.updateTaskFromLocalAgent(taskId, {
-            heartbeat_enabled: true,
-            heartbeat_interval_minutes: defaultInterval,
-            heartbeat_next_check_at: nextCheck.toISOString()
-          })
-
-          console.log(`[AgentManager] Auto-enabled heartbeat for task ${taskId} (found heartbeat.md)`)
-        }
-      }
+      if (!existsSync(heartbeatPath)) return false
+      const content = readFileSync(heartbeatPath, 'utf-8').trim()
+      return !!content && !/^(#[^\n]*\n?\s*)*$/.test(content)
     } catch (err) {
-      console.error(`[AgentManager] Error auto-enabling heartbeat for task ${taskId}:`, err)
+      console.error(`[AgentManager] Error reading heartbeat.md for task ${taskId}:`, err)
+      return false
     }
+  }
+
+  /** Auto-enable only when the agent added a useful heartbeat file in this turn. */
+  private autoEnableHeartbeat(session: AgentSession): void {
+    const taskId = session.taskId
+    if (session.heartbeatFilePresentAtTurnStart !== false || !this.hasUsefulHeartbeatFile(taskId)) return
+    if (session.heartbeatDisableVersionAtTurnStart !== this.db.getSetting(`heartbeat-manual-disable:${taskId}`)) return
+
+    const task = this.db.getTask(taskId)
+    if (!task || task.status === TaskStatus.Completed ||
+      (task.parent_task_id && this.db.getTask(task.parent_task_id)?.status === TaskStatus.Completed)) return
+
+    const defaultInterval = parseInt(this.db.getSetting('heartbeat_default_interval') || '30', 10)
+    const nextCheck = new Date(Date.now() + defaultInterval * 60_000)
+    this.updateTaskFromLocalAgent(taskId, {
+      heartbeat_enabled: true,
+      heartbeat_interval_minutes: defaultInterval,
+      heartbeat_next_check_at: nextCheck.toISOString()
+    })
+    console.log(`[AgentManager] Auto-enabled heartbeat for task ${taskId} (new heartbeat.md)`)
   }
 
   /** Part types that are absorbed by clients (never rendered as messages) —

@@ -668,7 +668,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             <span className="text-foreground">{formatRelativeDate(task.updated_at)}</span>
 
             {/* Heartbeat */}
-            {(task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
+            {task.status !== TaskStatus.Completed && (task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
               <>
                 <span className="text-muted-foreground flex items-center gap-1.5">
                   <svg className={`h-3.5 w-3.5 ${task.heartbeat_enabled ? 'text-rose-500' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

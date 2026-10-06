@@ -160,7 +160,7 @@ export function registerIpcHandlers(
     return task
   })
 
-  ipcMain.handle('db:updateTask', (_, id: string, data: UpdateTaskData) => {
+  ipcMain.handle('db:updateTask', (event, id: string, data: UpdateTaskData) => {
     // Capture previous status before updating (for enterprise sync)
     let previousStatus: string | undefined
     if (data.status) {
@@ -186,7 +186,7 @@ export function registerIpcHandlers(
 
     // Auto-disable heartbeat when task is completed
     if (heartbeatScheduler && data.status === TaskStatus.Completed && updated?.heartbeat_enabled) {
-      heartbeatScheduler.disableHeartbeat(id)
+      heartbeatScheduler.disableHeartbeat(id, 'automatic')
     }
 
     // Completing a parent does not force its subtasks to complete (a subtask
@@ -197,9 +197,12 @@ export function registerIpcHandlers(
     if (heartbeatScheduler && data.status === TaskStatus.Completed && updated) {
       for (const subtask of db.getSubtasks(id)) {
         if (subtask.heartbeat_enabled) {
-          heartbeatScheduler.disableHeartbeat(subtask.id)
+          heartbeatScheduler.disableHeartbeat(subtask.id, 'automatic')
         }
       }
+    }
+    if (updated && data.status === TaskStatus.Completed) {
+      event.sender?.send('tasks:refresh', {})
     }
 
     // Record status change event for enterprise sync
@@ -1808,7 +1811,7 @@ export function registerIpcHandlers(
 
   ipcMain.handle('heartbeat:updateInterval', (_, taskId: string, intervalMinutes: number) => {
     if (!heartbeatScheduler) throw new Error('HeartbeatScheduler not initialized')
-    heartbeatScheduler.enableHeartbeat(taskId, intervalMinutes)
+    heartbeatScheduler.updateInterval(taskId, intervalMinutes)
     return db.getTask(taskId)
   })
 
