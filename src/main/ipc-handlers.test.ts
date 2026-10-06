@@ -318,8 +318,8 @@ describe('db:updateTask heartbeat cascade on parent completion', () => {
 
     updateHandler({}, 'parent-1', { status: 'completed' })
 
-    expect(disableHeartbeat).toHaveBeenCalledWith('sub-1')
-    expect(disableHeartbeat).not.toHaveBeenCalledWith('sub-2')
+    expect(disableHeartbeat).toHaveBeenCalledWith('sub-1', 'automatic')
+    expect(disableHeartbeat).not.toHaveBeenCalledWith('sub-2', 'automatic')
   })
 
   it('does not touch subtask heartbeats for a non-completion status change', () => {
