@@ -1,4 +1,5 @@
-import { useMemo, useCallback, memo } from 'react'
+import { useMemo, useCallback, memo, useRef } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { Clock, AlertCircle, CheckCircle2, ExternalLink, Bot, Terminal } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { OpenCodeLogo, AnthropicLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
@@ -272,6 +273,41 @@ const ColumnHeader = memo(function ColumnHeader({ column, count }: { column: Sta
 
 // ── Column wrapper ───────────────────────────────────────────
 
+// Columns with more cards than this mount only the cards near the viewport.
+export const BOARD_COLUMN_VIRTUALIZE_THRESHOLD = 40
+
+const VirtualCardList = memo(function VirtualCardList({ tasks, onSelect, agentMap }: { tasks: WorkfloTask[]; onSelect: (id: string) => void; agentMap: Map<string, Agent> }) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const virtualizer = useVirtualizer({
+    count: tasks.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 96,
+    getItemKey: (index) => tasks[index]?.id ?? index,
+    overscan: 6
+  })
+  return (
+    <div ref={scrollRef} className="flex-1 p-2 overflow-y-auto">
+      <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
+        {virtualizer.getVirtualItems().map((item) => {
+          const task = tasks[item.index]
+          if (!task) return null
+          return (
+            <div
+              key={item.key}
+              data-index={item.index}
+              ref={virtualizer.measureElement}
+              className="absolute left-0 right-0 top-0 pb-2"
+              style={{ transform: `translateY(${item.start}px)` }}
+            >
+              <TaskCard task={task} onSelect={onSelect} agent={task.agent_id ? agentMap.get(task.agent_id) : undefined} />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+})
+
 const BoardColumn = memo(function BoardColumn({ column, tasks, onSelect, agentMap }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void; agentMap: Map<string, Agent> }) {
   return (
     <div className={`min-w-[230px] max-w-[320px] flex-1 flex flex-col rounded-xl ${column.columnBg} border border-border/15`}>
@@ -281,6 +317,9 @@ const BoardColumn = memo(function BoardColumn({ column, tasks, onSelect, agentMa
       </div>
 
       {/* Cards */}
+      {tasks.length > BOARD_COLUMN_VIRTUALIZE_THRESHOLD ? (
+        <VirtualCardList tasks={tasks} onSelect={onSelect} agentMap={agentMap} />
+      ) : (
       <div className="flex-1 p-2 space-y-2 overflow-y-auto">
         {tasks.length === 0 ? (
           <div className="text-[11px] text-muted-foreground/50 text-center py-8 px-2">
@@ -290,6 +329,7 @@ const BoardColumn = memo(function BoardColumn({ column, tasks, onSelect, agentMa
           tasks.map((task) => <TaskCard key={task.id} task={task} onSelect={onSelect} agent={task.agent_id ? agentMap.get(task.agent_id) : undefined} />)
         )}
       </div>
+      )}
     </div>
   )
 })

@@ -1,5 +1,4 @@
-import posthog from 'posthog-js'
-import type { Properties } from 'posthog-js'
+import type { PostHog, Properties } from 'posthog-js'
 
 type AnalyticsProperties = Properties
 type AnalyticsPlatform = 'desktop' | 'mobile'
@@ -13,6 +12,21 @@ let identifiedId: string | null = null
 let appPlatform: AnalyticsPlatform = 'desktop'
 let enterpriseEmail: string | null = null
 
+// posthog-js is ~230 KB of source. It is loaded on demand so it stays out of
+// the startup bundle; calls made before it loads are queued and replayed in
+// order once the client is initialized.
+const MAX_QUEUED_CALLS = 500
+let client: PostHog | null = null
+const pendingCalls: Array<(ph: PostHog) => void> = []
+
+function withPosthog(fn: (ph: PostHog) => void): void {
+  if (client) {
+    try { fn(client) } catch { /* analytics is best-effort */ }
+    return
+  }
+  if (pendingCalls.length < MAX_QUEUED_CALLS) pendingCalls.push(fn)
+}
+
 function isEnabled(): boolean {
   return typeof window !== 'undefined' && Boolean(POSTHOG_KEY)
 }
@@ -20,16 +34,15 @@ function isEnabled(): boolean {
 export function setAnalyticsEnterpriseEmail(email: string | null): void {
   enterpriseEmail = email && email.trim() ? email.trim() : null
   if (initialized && isEnabled()) {
-    try {
-      if (enterpriseEmail) {
-        posthog.register({ email: enterpriseEmail, enterprise_email: enterpriseEmail })
+    const value = enterpriseEmail
+    withPosthog((ph) => {
+      if (value) {
+        ph.register({ email: value, enterprise_email: value })
       } else {
-        posthog.unregister('email')
-        posthog.unregister('enterprise_email')
+        ph.unregister('email')
+        ph.unregister('enterprise_email')
       }
-    } catch {
-      // ignore
-    }
+    })
   }
 }
 
@@ -44,27 +57,35 @@ function getEnterpriseEmailProperties(): AnalyticsProperties {
 export function initAnalytics(platform: AnalyticsPlatform = 'desktop'): void {
   appPlatform = platform
   if (!isEnabled() || initialized) return
-
-  posthog.init(POSTHOG_KEY, {
-    api_host: POSTHOG_HOST,
-    capture_pageview: false,
-    capture_pageleave: true,
-    autocapture: true,
-    disable_session_recording: !POSTHOG_RECORD_SESSIONS,
-    loaded: (client) => {
-      if (POSTHOG_RECORD_SESSIONS) client.startSessionRecording()
-    },
-    persistence: 'localStorage+cookie'
-  })
-
   initialized = true
-  if (enterpriseEmail) {
-    try {
-      posthog.register({ email: enterpriseEmail, enterprise_email: enterpriseEmail })
-    } catch {
-      // ignore
+
+  void import('posthog-js').then(({ default: posthog }) => {
+    posthog.init(POSTHOG_KEY, {
+      api_host: POSTHOG_HOST,
+      capture_pageview: false,
+      capture_pageleave: true,
+      autocapture: true,
+      disable_session_recording: !POSTHOG_RECORD_SESSIONS,
+      loaded: (loadedClient) => {
+        if (POSTHOG_RECORD_SESSIONS) loadedClient.startSessionRecording()
+      },
+      persistence: 'localStorage+cookie'
+    })
+    if (enterpriseEmail) {
+      try {
+        posthog.register({ email: enterpriseEmail, enterprise_email: enterpriseEmail })
+      } catch {
+        // ignore
+      }
     }
-  }
+    client = posthog
+    for (const call of pendingCalls.splice(0)) {
+      try { call(posthog) } catch { /* analytics is best-effort */ }
+    }
+  }).catch(() => {
+    // Analytics must never break the app; drop queued calls.
+    pendingCalls.length = 0
+  })
 }
 
 export function identifyAnalyticsUser(
@@ -74,17 +95,18 @@ export function identifyAnalyticsUser(
   initAnalytics(appPlatform)
   if (!isEnabled() || !distinctId || identifiedId === distinctId) return
 
-  posthog.identify(distinctId, cleanProperties({
+  const identifyProperties = cleanProperties({
     ...getEnterpriseEmailProperties(),
     ...properties,
     app_platform: appPlatform
-  }))
+  })
+  withPosthog((ph) => ph.identify(distinctId, identifyProperties))
   identifiedId = distinctId
 }
 
 export function resetAnalyticsUser(): void {
   if (!isEnabled() || !initialized) return
-  posthog.reset()
+  withPosthog((ph) => ph.reset())
   identifiedId = null
 }
 
@@ -92,11 +114,12 @@ export function captureAnalyticsEvent(event: string, properties: AnalyticsProper
   initAnalytics(appPlatform)
   if (!isEnabled()) return
 
-  posthog.capture(event, cleanProperties({
+  const eventProperties = cleanProperties({
     ...properties,
     ...getEnterpriseEmailProperties(),
     app_platform: appPlatform
-  }))
+  })
+  withPosthog((ph) => ph.capture(event, eventProperties))
 }
 
 export function capturePageView(name: string, properties: AnalyticsProperties = {}): void {
