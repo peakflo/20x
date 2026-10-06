@@ -47,7 +47,9 @@ describe('useTaskStore', () => {
     })
 
     it('sets error on failure', async () => {
-      ;(mockElectronAPI.db.getOpenTasks as unknown as Mock).mockRejectedValue(new Error('DB error'))
+      // Both the open-set call and its full-load fallback fail.
+      ;(mockElectronAPI.db.getOpenTasks as unknown as Mock).mockRejectedValueOnce(new Error('DB error'))
+      ;(mockElectronAPI.db.getTasks as unknown as Mock).mockRejectedValueOnce(new Error('DB error'))
 
       await useTaskStore.getState().fetchTasks()
 
