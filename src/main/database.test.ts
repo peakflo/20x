@@ -181,9 +181,59 @@ describe('getHeartbeatDueTasks', () => {
   it('excludes a ready_for_review subtask whose parent task is completed', () => {
     const parent = db.createTask(makeTask({ title: 'Parent', status: 'completed' }))!
     const subtask = db.createTask(makeTask({ title: 'Subtask', status: 'ready_for_review', parent_task_id: parent.id }))!
-    dueNow(subtask)
+    // Simulate a flag left by a version before the completed-parent guard.
+    const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db
+    rawDb.prepare('UPDATE tasks SET heartbeat_enabled = 1, heartbeat_next_check_at = ? WHERE id = ?')
+      .run(new Date(Date.now() - 60_000).toISOString(), subtask.id)
 
     expect(db.getHeartbeatDueTasks().map(t => t.id)).not.toContain(subtask.id)
+  })
+
+  it('clears a task and its child heartbeats on completion from any update route', () => {
+    const parent = db.createTask(makeTask({ status: 'ready_for_review' }))!
+    const child = db.createTask(makeTask({ status: 'ready_for_review', parent_task_id: parent.id }))!
+    dueNow(parent)
+    dueNow(child)
+
+    db.updateTask(parent.id, { status: 'completed' })
+
+    expect(db.getTask(parent.id)).toMatchObject({ heartbeat_enabled: false, heartbeat_next_check_at: null })
+    expect(db.getTask(child.id)).toMatchObject({ heartbeat_enabled: false, heartbeat_next_check_at: null })
+  })
+
+  it('clears old completed task and child flags when the database opens', () => {
+    const parent = db.createTask(makeTask({ status: 'completed' }))!
+    const child = db.createTask(makeTask({ status: 'ready_for_review', parent_task_id: parent.id }))!
+    const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db
+    rawDb.prepare('UPDATE tasks SET heartbeat_enabled = 1, heartbeat_next_check_at = ? WHERE id IN (?, ?)')
+      .run(new Date().toISOString(), parent.id, child.id)
+
+    ;(db as unknown as { clearHeartbeatForCompletedTasks: () => void }).clearHeartbeatForCompletedTasks()
+
+    expect(db.getTask(parent.id)).toMatchObject({ heartbeat_enabled: false, heartbeat_next_check_at: null })
+    expect(db.getTask(child.id)).toMatchObject({ heartbeat_enabled: false, heartbeat_next_check_at: null })
+  })
+
+  it('rejects heartbeat enable for completed tasks and children of completed parents', () => {
+    const parent = db.createTask(makeTask({ status: 'completed' }))!
+    const child = db.createTask(makeTask({ status: 'ready_for_review', parent_task_id: parent.id }))!
+
+    expect(() => dueNow(parent)).toThrow('Heartbeat cannot be enabled')
+    expect(() => dueNow(child)).toThrow('Heartbeat cannot be enabled')
+    expect(db.getTask(parent.id)?.heartbeat_enabled).toBe(false)
+    expect(db.getTask(child.id)?.heartbeat_enabled).toBe(false)
+  })
+
+  it('records a manual disable and clears the next check time', () => {
+    const task = db.createTask(makeTask({ status: 'ready_for_review' }))!
+    dueNow(task)
+    db.updateTask(task.id, { heartbeat_enabled: false })
+
+    expect(db.getTask(task.id)).toMatchObject({ heartbeat_enabled: false, heartbeat_next_check_at: null })
+    const disableVersion = db.getSetting(`heartbeat-manual-disable:${task.id}`)
+    expect(disableVersion).toBeTruthy()
+    db.updateTask(task.id, { heartbeat_enabled: false }, 'heartbeat-auto')
+    expect(db.getSetting(`heartbeat-manual-disable:${task.id}`)).toBe(disableVersion)
   })
 
   it('includes a ready_for_review subtask whose parent task is still active', () => {

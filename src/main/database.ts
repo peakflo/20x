@@ -1053,6 +1053,8 @@ export class DatabaseManager {
       this.setSchemaVersion(SCHEMA_VERSION)
     }
 
+    this.clearHeartbeatForCompletedTasks()
+
     // These must run on EVERY startup (not just during migrations)
     // because they start runtime services (task API server) and
     // ensure default records exist (MCP server, orchestrator skill).
@@ -2493,11 +2495,24 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return this.getTask(id)
   }
 
-  updateTask(id: string, data: UpdateTaskData, origin?: 'workflo-server' | 'session-feedback' | 'task-source'): TaskRecord | undefined {
+  private clearHeartbeatForCompletedTasks(): void {
+    // Old completion routes could leave heartbeat enabled on a task or its child.
+    this.db.prepare(`
+      UPDATE tasks SET heartbeat_enabled = 0, heartbeat_next_check_at = NULL
+      WHERE heartbeat_enabled = 1 AND (
+        status = ? OR EXISTS (
+          SELECT 1 FROM tasks p WHERE p.id = tasks.parent_task_id AND p.status = ?
+        )
+      )
+    `).run(TaskStatus.Completed, TaskStatus.Completed)
+  }
+
+  updateTask(id: string, data: UpdateTaskData, origin?: 'workflo-server' | 'session-feedback' | 'task-source' | 'heartbeat-auto'): TaskRecord | undefined {
     if (origin !== 'workflo-server' && ('external_id' in data || 'source_id' in data || 'source' in data)) {
       throw new Error('Only the sync service can change a task source link.')
     }
     const currentTask = this.getTask(id)
+    const manualHeartbeatDisable = data.heartbeat_enabled === false && origin !== 'heartbeat-auto'
     // Reassigning the agent keeps the session id. Whether the new agent resumes
     // that session or continues by handoff is decided at resume time (see
     // planContinuation), and the id is only replaced once a new session starts.
@@ -2528,6 +2543,18 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       if (task?.source_id && task.status !== TaskStatus.Completed) {
         throw new Error('The task source must confirm completion before this task can close in 20x.')
       }
+    }
+    const nextStatus = data.status ?? currentTask?.status
+    if (data.status !== TaskStatus.Completed && data.heartbeat_enabled === true && (
+      nextStatus === TaskStatus.Completed ||
+      (currentTask?.parent_task_id && this.getTask(currentTask.parent_task_id)?.status === TaskStatus.Completed)
+    )) {
+      throw new Error('Heartbeat cannot be enabled for a completed task or a child of a completed task.')
+    }
+    if (nextStatus === TaskStatus.Completed) {
+      data = { ...data, heartbeat_enabled: false, heartbeat_next_check_at: null }
+    } else if (data.heartbeat_enabled === false && data.heartbeat_next_check_at === undefined) {
+      data = { ...data, heartbeat_next_check_at: null }
     }
     const setClauses: string[] = []
     const values: (string | number | null)[] = []
@@ -2565,6 +2592,16 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     this.db.prepare(
       `UPDATE tasks SET ${setClauses.join(', ')} WHERE id = ?`
     ).run(...values)
+
+    if (manualHeartbeatDisable) {
+      this.setSetting(`heartbeat-manual-disable:${id}`, createId())
+    }
+    if (nextStatus === TaskStatus.Completed) {
+      this.db.prepare(`
+        UPDATE tasks SET heartbeat_enabled = 0, heartbeat_next_check_at = NULL
+        WHERE parent_task_id = ? AND (heartbeat_enabled = 1 OR heartbeat_next_check_at IS NOT NULL)
+      `).run(id)
+    }
 
     // Recorded only once the change is written, so a failed update leaves no marker.
     if (agentChanged && currentTask) this.markContextHandoff(id, currentTask.agent_id)

@@ -106,14 +106,35 @@ export class HeartbeatScheduler {
     console.log(`[HeartbeatScheduler] Enabled heartbeat for task ${taskId}, interval: ${interval}min, next: ${nextCheck.toISOString()}`)
   }
 
+  /** Change the interval without changing the user's on/off choice. */
+  updateInterval(taskId: string, intervalMinutes: number): void {
+    const task = this.dbManager.getTask(taskId)
+    if (!task) throw new Error('Task not found')
+    const updates: Partial<TaskRecord> = { heartbeat_interval_minutes: intervalMinutes }
+    if (task.heartbeat_enabled) {
+      updates.heartbeat_next_check_at = new Date(Date.now() + intervalMinutes * 60_000).toISOString()
+    }
+    const updated = this.dbManager.updateTask(taskId, updates)
+    this.sendToRenderer('task:updated', {
+      taskId,
+      updates: {
+        heartbeat_enabled: updated?.heartbeat_enabled,
+        heartbeat_interval_minutes: updated?.heartbeat_interval_minutes,
+        heartbeat_next_check_at: updated?.heartbeat_next_check_at
+      }
+    })
+  }
+
   /**
    * Disable heartbeat for a task.
    */
-  disableHeartbeat(taskId: string): void {
-    this.dbManager.updateTask(taskId, {
+  disableHeartbeat(taskId: string, reason: 'manual' | 'automatic' = 'manual'): void {
+    const updates = {
       heartbeat_enabled: false,
       heartbeat_next_check_at: null
-    })
+    }
+    if (reason === 'automatic') this.dbManager.updateTask(taskId, updates, 'heartbeat-auto')
+    else this.dbManager.updateTask(taskId, updates)
 
     this.sendToRenderer('task:updated', {
       taskId,
@@ -131,12 +152,13 @@ export class HeartbeatScheduler {
    * Skips pre-flight checks — always sends to the agent since the user explicitly requested it.
    * Returns a status string so the UI can show feedback.
    */
-  async runNow(taskId: string): Promise<'sent' | 'no_file' | 'no_agent' | 'in_progress' | 'error'> {
+  async runNow(taskId: string): Promise<'sent' | 'inactive' | 'no_file' | 'no_agent' | 'in_progress' | 'error'> {
     const task = this.dbManager.getTask(taskId)
     if (!task) {
       console.warn(`[HeartbeatScheduler] runNow: task ${taskId} not found`)
       return 'error'
     }
+    if (!this.canRunHeartbeat(taskId)) return 'inactive'
 
     // A manual run must never race a scheduled run. Two concurrent runs share one
     // mastermind session, so both would read the same reply and forward it twice.
@@ -159,8 +181,18 @@ export class HeartbeatScheduler {
 
     try {
       // Phase 1: Send check to mastermind (skips preflight since user requested it)
+      if (!this.canRunHeartbeat(taskId)) {
+        this.inProgress.delete(taskId)
+        return 'inactive'
+      }
       const checkPrompt = this.buildHeartbeatPrompt(task, heartbeatContent)
       const mastermindSessionId = await this.agentManager.sendHeartbeatViaMastermind(agentId, task.id, checkPrompt)
+
+      if (!this.canRunHeartbeat(taskId)) {
+        this.inProgress.delete(taskId)
+        await this.agentManager.cleanupHeartbeatSession(taskId)
+        return 'inactive'
+      }
 
       // Phase 2: Wait for result and forward — run in background so IPC returns immediately
       this.processRunNowResult(mastermindSessionId, task, agentId).catch((err) => {
@@ -173,11 +205,18 @@ export class HeartbeatScheduler {
     } catch (err) {
       this.inProgress.delete(taskId)
       this.loggedInProgress.delete(taskId)
+      if (!this.canRunHeartbeat(taskId)) return 'inactive'
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[HeartbeatScheduler] runNow error for task ${taskId}:`, message)
       this.logResult(taskId, HeartbeatStatus.Error, message)
       return 'error'
     }
+  }
+
+  private canRunHeartbeat(taskId: string): boolean {
+    const task = this.dbManager.getTask(taskId)
+    if (!task?.heartbeat_enabled || task.status === TaskStatus.Completed) return false
+    return !task.parent_task_id || this.dbManager.getTask(task.parent_task_id)?.status !== TaskStatus.Completed
   }
 
   /**
@@ -283,7 +322,7 @@ export class HeartbeatScheduler {
         // Skip completed tasks and disable their heartbeat
         if (task.status === TaskStatus.Completed) {
           console.log(`[HeartbeatScheduler] Task ${task.id} is completed, disabling heartbeat`)
-          this.disableHeartbeat(task.id)
+          this.disableHeartbeat(task.id, 'automatic')
           continue
         }
 
@@ -297,7 +336,7 @@ export class HeartbeatScheduler {
           const parentTask = this.dbManager.getTask(task.parent_task_id)
           if (parentTask?.status === TaskStatus.Completed) {
             console.log(`[HeartbeatScheduler] Task ${task.id}'s parent ${task.parent_task_id} is completed, disabling heartbeat`)
-            this.disableHeartbeat(task.id)
+            this.disableHeartbeat(task.id, 'automatic')
             continue
           }
         }
@@ -305,7 +344,7 @@ export class HeartbeatScheduler {
         // Verify heartbeat.md still exists
         if (!this.hasHeartbeatFile(task.id)) {
           console.log(`[HeartbeatScheduler] No heartbeat.md for task ${task.id}, disabling heartbeat`)
-          this.disableHeartbeat(task.id)
+          this.disableHeartbeat(task.id, 'automatic')
           continue
         }
 
@@ -330,6 +369,7 @@ export class HeartbeatScheduler {
    * 4. If HEARTBEAT_OK → task agent is never touched
    */
   private async runHeartbeat(task: TaskRecord): Promise<void> {
+    if (!this.canRunHeartbeat(task.id)) return
     const heartbeatContent = this.readHeartbeatFile(task.id)
     if (!heartbeatContent) {
       this.advanceNextCheck(task)
@@ -343,6 +383,7 @@ export class HeartbeatScheduler {
 
       // Phase 1: Pre-flight checks (cheap, no LLM)
       const preflightResult = await this.runPreflightChecks(heartbeatContent, task)
+      if (!this.canRunHeartbeat(task.id)) return
       if (preflightResult === 'no_changes') {
         console.log(`[HeartbeatScheduler] Pre-flight: no changes for task "${task.title}", skipping LLM`)
         this.logResult(task.id, HeartbeatStatus.Ok, 'Pre-flight: no changes detected (LLM skipped)')
@@ -359,9 +400,11 @@ export class HeartbeatScheduler {
       }
 
       // Phase 2: Send check to mastermind session (doesn't pollute task context)
+      if (!this.canRunHeartbeat(task.id)) return
       const checkPrompt = this.buildHeartbeatPrompt(task, heartbeatContent)
       const mastermindSessionId = await this.agentManager.sendHeartbeatViaMastermind(agentId, task.id, checkPrompt)
       const mastermindResult = await this.waitForSessionResult(mastermindSessionId, task.id)
+      if (!this.canRunHeartbeat(task.id)) return
 
       // Phase 3: Evaluate mastermind result
       const classification = this.classifyMastermindResult(mastermindResult)
@@ -386,6 +429,7 @@ export class HeartbeatScheduler {
         this.handleResult(task, taskSessionId, taskResult)
       }
     } catch (err) {
+      if (!this.canRunHeartbeat(task.id)) return
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[HeartbeatScheduler] Heartbeat error for task ${task.id}:`, message)
       this.logResult(task.id, HeartbeatStatus.Error, message)
@@ -405,6 +449,7 @@ export class HeartbeatScheduler {
   private async processRunNowResult(mastermindSessionId: string, task: TaskRecord, agentId: string): Promise<void> {
     try {
       const mastermindResult = await this.waitForSessionResult(mastermindSessionId, task.id)
+      if (!this.canRunHeartbeat(task.id)) return
       const classification = this.classifyMastermindResult(mastermindResult)
 
       if (classification === 'action') {
@@ -492,6 +537,7 @@ export class HeartbeatScheduler {
    * Returns the task session id when the findings were forwarded, otherwise null.
    */
   private async forwardFindings(task: TaskRecord, findings: string, agentId: string): Promise<string | null> {
+    if (!this.canRunHeartbeat(task.id)) return null
     const now = Date.now()
     this.pruneDeliveredFindings(now)
 
@@ -611,6 +657,7 @@ export class HeartbeatScheduler {
    * Handle the heartbeat result.
    */
   private handleResult(task: TaskRecord, sessionId: string, result: string): void {
+    if (!this.canRunHeartbeat(task.id)) return
     const isOk = result.includes(HEARTBEAT_OK_TOKEN)
 
     if (isOk) {
@@ -698,6 +745,7 @@ export class HeartbeatScheduler {
    * - On attention_needed or error, reset to the configured base interval
    */
   private advanceNextCheck(task: TaskRecord, isOk?: boolean): void {
+    if (!this.canRunHeartbeat(task.id)) return
     const baseInterval = task.heartbeat_interval_minutes ?? this.getDefaultInterval()
     let effectiveInterval = baseInterval
 
@@ -747,7 +795,7 @@ export class HeartbeatScheduler {
 
     if (consecutiveErrors >= maxErrors) {
       console.log(`[HeartbeatScheduler] Auto-disabling heartbeat for task ${taskId} after ${consecutiveErrors} consecutive errors`)
-      this.disableHeartbeat(taskId)
+      this.disableHeartbeat(taskId, 'automatic')
 
       const task = this.dbManager.getTask(taskId)
       if (task) {

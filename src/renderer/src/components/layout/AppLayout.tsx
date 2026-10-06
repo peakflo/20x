@@ -356,6 +356,7 @@ export function AppLayout() {
       const result = await window.electronAPI.heartbeat.runNow(activeTaskId)
       const feedback = {
         sent: ['Heartbeat check started', false],
+        inactive: ['Heartbeat is off or this task is completed', true],
         no_file: ['This task has no heartbeat.md file', true],
         no_agent: ['This task has no heartbeat agent', true],
         in_progress: ['A heartbeat check is already running', true],

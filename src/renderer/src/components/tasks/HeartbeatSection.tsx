@@ -62,10 +62,13 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
   }, [task.id])
 
   useEffect(() => {
-    fetchStatus()
     fetchContent()
     fetchLogs()
-  }, [fetchStatus, fetchContent, fetchLogs])
+  }, [fetchContent, fetchLogs])
+
+  useEffect(() => {
+    fetchStatus()
+  }, [fetchStatus, task.heartbeat_enabled, task.heartbeat_interval_minutes, task.heartbeat_next_check_at])
 
   // Listen for heartbeat events (shared listeners to avoid MaxListeners warning)
   useEffect(() => {
@@ -93,7 +96,7 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
   }, [task.id, fetchStatus, fetchContent, fetchLogs])
 
   // Don't render for tasks that aren't ready_for_review and don't have heartbeat
-  if (!status?.hasHeartbeatFile && !status?.enabled && task.status !== 'ready_for_review') {
+  if (task.status === 'completed' || (!status?.hasHeartbeatFile && !status?.enabled && task.status !== 'ready_for_review')) {
     return null
   }
 
@@ -140,6 +143,8 @@ export function HeartbeatSection({ task, onTaskUpdated }: HeartbeatSectionProps)
       alert('No agent assigned to this task.')
     } else if (result === 'in_progress') {
       alert('A heartbeat check is already running for this task.')
+    } else if (result === 'inactive') {
+      alert('Heartbeat is off or this task is completed.')
     } else {
       alert('Failed to run heartbeat check.')
     }

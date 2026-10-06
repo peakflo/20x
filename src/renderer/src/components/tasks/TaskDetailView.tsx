@@ -731,7 +731,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
             <span className="text-muted-foreground">{formatRelativeDate(task.created_at)}</span>
             <span className="text-muted-foreground flex items-center gap-2"><Clock className="h-3.5 w-3.5" /> Updated</span>
             <span className="text-muted-foreground">{formatRelativeDate(task.updated_at)}</span>
-            {(task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
+            {task.status !== TaskStatus.Completed && (task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
               <HeartbeatSection task={task} />
             )}
           </div>

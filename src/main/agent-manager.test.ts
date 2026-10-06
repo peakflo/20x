@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { join } from 'path'
 import { AgentManager } from './agent-manager'
 import { SessionStatus, TaskStatus } from '../shared/constants'
@@ -139,6 +139,79 @@ function createMockDb(agentConfig: Record<string, unknown> = {}) {
 }
 
 let manager: AgentManager
+
+describe('AgentManager heartbeat file appearance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedExistsSync.mockReturnValue(true)
+    mockedReadFileSync.mockReturnValue('- [ ] Check the pull request')
+  })
+  afterEach(() => {
+    mockedExistsSync.mockReturnValue(false)
+    mockedReadFileSync.mockReturnValue('')
+  })
+
+  function setup(fileWasPresent: boolean, disableVersion?: string) {
+    const db = createMockDb()
+    vi.mocked(db.getTask).mockReturnValue({
+      id: 'task-1', status: TaskStatus.ReadyForReview, parent_task_id: null
+    } as never)
+    vi.mocked(db.getSetting).mockImplementation((key: string) =>
+      key === 'heartbeat-manual-disable:task-1' ? disableVersion : undefined
+    )
+    const mgr = new AgentManager(db)
+    const session = {
+      taskId: 'task-1', heartbeatFilePresentAtTurnStart: fileWasPresent,
+      heartbeatDisableVersionAtTurnStart: undefined
+    }
+    return { db, mgr, session }
+  }
+
+  it('enables heartbeat when useful instructions first appear during a turn', () => {
+    const { db, mgr, session } = setup(false)
+    ;(mgr as any).autoEnableHeartbeat(session)
+    expect(db.updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ heartbeat_enabled: true }))
+  })
+
+  it('keeps heartbeat off when the file was already present', () => {
+    const { db, mgr, session } = setup(true)
+    ;(mgr as any).autoEnableHeartbeat(session)
+    expect(db.updateTask).not.toHaveBeenCalled()
+  })
+
+  it('counts a header-only file as present before the turn', () => {
+    const { db, mgr, session } = setup(false)
+    mockedReadFileSync.mockReturnValue('# Heartbeat\n')
+    session.heartbeatFilePresentAtTurnStart = (mgr as any).hasHeartbeatFile('task-1')
+    mockedReadFileSync.mockReturnValue('- [ ] Check the pull request')
+
+    ;(mgr as any).autoEnableHeartbeat(session)
+    expect(db.updateTask).not.toHaveBeenCalled()
+  })
+
+  it('keeps heartbeat off when the user disables it during the turn', () => {
+    const { db, mgr, session } = setup(false, 'new-disable')
+    ;(mgr as any).autoEnableHeartbeat(session)
+    expect(db.updateTask).not.toHaveBeenCalled()
+  })
+
+  it('keeps heartbeat off for a completed task', () => {
+    const { db, mgr, session } = setup(false)
+    vi.mocked(db.getTask).mockReturnValue({ id: 'task-1', status: TaskStatus.Completed } as never)
+    ;(mgr as any).autoEnableHeartbeat(session)
+    expect(db.updateTask).not.toHaveBeenCalled()
+  })
+
+  it('does not send a heartbeat prompt for a completed task', async () => {
+    const { db, mgr } = setup(false)
+    vi.mocked(db.getTask).mockReturnValue({
+      id: 'task-1', status: TaskStatus.Completed, heartbeat_enabled: true
+    } as never)
+
+    await expect(mgr.sendHeartbeatViaMastermind('agent-1', 'task-1', 'Check')).rejects.toThrow('inactive')
+    await expect(mgr.startHeartbeatSession('agent-1', 'task-1', 'Act')).rejects.toThrow('inactive')
+  })
+})
 
 describe('AgentManager skill file paths', () => {
   beforeEach(() => {
