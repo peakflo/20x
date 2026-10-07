@@ -263,6 +263,10 @@ describe('MessageActivityGroup inline HTML renders', () => {
 
     expect(screen.getByText('Q3 revenue')).toBeTruthy()
     await waitFor(() => expect(screen.getByTitle('Q3 revenue').getAttribute('srcdoc')).toContain('<p>chart</p>'))
+
+    // Sits at message level — not nested inside the indented tool-call
+    // column (.border-l.pl-2) that the ToolCallMessage row above it uses.
+    expect(screen.getByTitle('Q3 revenue').closest('.border-l.pl-2')).toBeNull()
   })
 
   it('navigates via onOpenArtifact (not the desktop artifact-tab store) when Expand is clicked', async () => {

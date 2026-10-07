@@ -451,6 +451,14 @@ git push 2>&1 | tail -2`
     expect(screen.queryByText('Preview · Click to open')).not.toBeInTheDocument()
     await waitFor(() => expect(screen.getByTitle('Q3 revenue').getAttribute('srcdoc')).toContain('<p>chart</p>'))
 
+    // Sits at message level — not nested inside the indented tool-call
+    // column (.border-l.pl-2) that the ToolCallMessage row above it uses.
+    // (The transcript panel's own outer chrome also uses a plain .border-l
+    // for an unrelated edge, hence matching both classes together here.)
+    const frame = screen.getByTitle('Q3 revenue')
+    const indentedColumn = frame.closest('.border-l.pl-2')
+    expect(indentedColumn).toBeNull()
+
     useArtifactStore.setState({ artifactsByTask: {} })
   })
 

@@ -631,30 +631,40 @@ function openExternalLink(href: string): boolean {
 
 function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
   return (
-    <div className="w-full border-l border-border/30 pl-2 py-0.5">
+    <>
+      <div className="w-full border-l border-border/30 pl-2 py-0.5">
+        {messages.map((message) => {
+          if (message.partType === 'reasoning') {
+            return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
+          }
+          const artifact = findMessageArtifact(message, artifacts)
+          const isInlineHtml = artifact?.type === ArtifactType.HTML && artifact.inline
+          return (
+            <React.Fragment key={message.id}>
+              <ToolCallMessage message={message} searchQuery={searchQuery} />
+              {artifact && !isInlineHtml && onOpenArtifact && <ArtifactTranscriptCard artifact={artifact} onOpen={onOpenArtifact} />}
+            </React.Fragment>
+          )
+        })}
+      </div>
+      {/* Inline HTML renders sit at message level, not indented under the
+          tool-call column above — the page is the agent's visual reply, not
+          a detail of the tool call that produced it. */}
       {messages.map((message) => {
-        if (message.partType === 'reasoning') {
-          return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
-        }
         const artifact = findMessageArtifact(message, artifacts)
-        const isInlineHtml = artifact?.type === ArtifactType.HTML && artifact.inline
+        if (!artifact || artifact.type !== ArtifactType.HTML || !artifact.inline) return null
         return (
-          <React.Fragment key={message.id}>
-            <ToolCallMessage message={message} searchQuery={searchQuery} />
-            {artifact && isInlineHtml && (
-              <InlineHtmlRender
-                artifact={artifact}
-                artifactApi={artifactApi}
-                onExpand={() => onOpenArtifact?.(artifact)}
-                onLinkClick={openExternalLink}
-                onSaveAs={artifactApi.saveAs && artifact.path ? () => void artifactApi.saveAs!(artifact.taskId, artifact.path!, htmlRenderFileName(artifact.title)) : undefined}
-              />
-            )}
-            {artifact && !isInlineHtml && onOpenArtifact && <ArtifactTranscriptCard artifact={artifact} onOpen={onOpenArtifact} />}
-          </React.Fragment>
+          <InlineHtmlRender
+            key={message.id}
+            artifact={artifact}
+            artifactApi={artifactApi}
+            onExpand={() => onOpenArtifact?.(artifact)}
+            onLinkClick={openExternalLink}
+            onSaveAs={artifactApi.saveAs && artifact.path ? () => void artifactApi.saveAs!(artifact.taskId, artifact.path!, htmlRenderFileName(artifact.title)) : undefined}
+          />
         )
       })}
-    </div>
+    </>
   )
 }
 
