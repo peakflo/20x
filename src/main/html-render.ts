@@ -149,14 +149,19 @@ export interface HtmlPreviewResult {
 /** Only the slice of the Electron API this module touches. Kept as a small
  * local interface — rather than `typeof import('electron')` — so a test can
  * pass a plain fake object with no real `electron` package involved at all. */
+export interface HtmlPreviewImage { toPNG: () => Buffer }
+
 export interface HtmlPreviewWindow {
   webContents: {
     on(event: 'console-message', listener: (event: unknown, level: number, message: string) => void): void
     on(event: 'will-navigate', listener: (event: { preventDefault: () => void }) => void): void
+    // Offscreen rendering delivers frames through 'paint', not capturePage()
+    // — see the comment on captureWithWindow for why capturePage() is not
+    // used here.
+    on(event: 'paint', listener: (event: unknown, dirty: unknown, image: HtmlPreviewImage) => void): void
     setWindowOpenHandler: (handler: () => { action: 'deny' | 'allow' }) => void
     loadFile: (path: string) => Promise<void>
     executeJavaScript: (script: string) => Promise<unknown>
-    capturePage: () => Promise<{ toPNG: () => Buffer }>
   }
   setContentSize: (width: number, height: number) => void
   destroy: () => void
@@ -231,6 +236,39 @@ export async function captureHtmlPreview(
   }
 }
 
+/**
+ * capturePage() targets a window's normal compositor presentation, which an
+ * `offscreen: true` BrowserWindow does not have — observed empirically as
+ * either a blank capture (plain CSS/text can still look right by accident,
+ * but a <canvas> — e.g. a chart library — never appears) or a hard
+ * `UnknownVizError` (a Chromium GPU/Viz-process error) once anything
+ * GPU-composited is on the page. Offscreen windows instead deliver frames
+ * through the `'paint'` event; that is the only reliable way to capture one.
+ */
+export function waitForFreshPaint(
+  getLatest: () => { image: HtmlPreviewImage | null; paintedAt: number },
+  readyAt: number,
+  timeoutMs: number
+): Promise<HtmlPreviewImage> {
+  return new Promise((resolve, reject) => {
+    const deadline = Date.now() + timeoutMs
+    const poll = (): void => {
+      const { image, paintedAt } = getLatest()
+      if (image && paintedAt >= readyAt) { resolve(image); return }
+      if (Date.now() >= deadline) {
+        // No frame newer than our resize/settle point arrived in time —
+        // still better to return a slightly stale frame than to fail the
+        // whole preview outright, as long as at least one frame exists.
+        if (image) { resolve(image); return }
+        reject(new Error('The offscreen window did not produce a frame to capture'))
+        return
+      }
+      setTimeout(poll, 30)
+    }
+    poll()
+  })
+}
+
 async function captureWithWindow(win: HtmlPreviewWindow, html: string, width: number, tempDir: string): Promise<HtmlPreviewResult> {
   const tempFile = join(tempDir, `${randomUUID()}.html`)
   await writeFile(tempFile, html, 'utf8')
@@ -238,6 +276,13 @@ async function captureWithWindow(win: HtmlPreviewWindow, html: string, width: nu
   const consoleErrors: string[] = []
   let truncatedConsole = false
   const wc = win.webContents
+
+  let latestImage: HtmlPreviewImage | null = null
+  let latestPaintedAt = 0
+  wc.on('paint', (_event, _dirty, image) => {
+    latestImage = image
+    latestPaintedAt = Date.now()
+  })
 
   wc.on('console-message', (_event, level, message) => {
     if (level < 2) return // only warnings (2) and errors (3)
@@ -255,7 +300,9 @@ async function captureWithWindow(win: HtmlPreviewWindow, html: string, width: nu
   )
   win.setContentSize(width, measuredHeight)
   await wc.executeJavaScript(WAIT_FOR_PAINT_SCRIPT)
-  const image = await wc.capturePage()
+
+  const readyAt = Date.now()
+  const image = await waitForFreshPaint(() => ({ image: latestImage, paintedAt: latestPaintedAt }), readyAt, 4000)
 
   if (truncatedConsole) consoleErrors.push('… more console messages were omitted')
   return { png: image.toPNG(), contentHeight: measuredHeight, consoleErrors }
