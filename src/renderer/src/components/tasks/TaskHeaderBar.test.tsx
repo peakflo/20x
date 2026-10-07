@@ -172,4 +172,32 @@ describe('TaskHeaderBar', () => {
     expect(option.querySelector('svg')).not.toBeNull()
     expect(option.querySelector('.lucide-bot')).toBeNull()
   })
+
+  it('offers "Move to project" from the "..." menu and fires the callback', () => {
+    const onMoveToProject = vi.fn()
+    render(
+      <TaskHeaderBar
+        {...requiredProps}
+        task={makeTask()}
+        onMoveToProject={onMoveToProject}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Task actions' }))
+    fireEvent.click(screen.getByText('Move to project'))
+
+    expect(onMoveToProject).toHaveBeenCalledOnce()
+  })
+
+  it('hides "Move to project" when no handler is given', () => {
+    render(
+      <TaskHeaderBar
+        {...requiredProps}
+        task={makeTask()}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Task actions' }))
+    expect(screen.queryByText('Move to project')).not.toBeInTheDocument()
+  })
 })
