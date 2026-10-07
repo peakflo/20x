@@ -45,7 +45,7 @@ describe('Claude usage-limit stops', () => {
   it('flags a blocking_limit turn with the latest reset among rejected windows', async () => {
     const { adapter, session } = claudeSetup([
       rejected('five_hour', RESET_SOON),
-      rejected('seven_day_opus', 1_791_300_000),
+      rejected('seven_day_opus', RESET_LATER),
       { type: 'result', subtype: 'success', is_error: false, terminal_reason: 'blocking_limit', result: "You've hit your limit", uuid: 'r1' }
     ])
     await (adapter as any).consumeStream('s1', session)
@@ -53,7 +53,7 @@ describe('Claude usage-limit stops', () => {
     expect(status).toEqual({
       type: SessionStatusType.ERROR,
       message: "You've hit your limit",
-      usageLimit: { resetAt: new Date(1_791_300_000 * 1000).toISOString() }
+      usageLimit: { resetAt: new Date(RESET_LATER * 1000).toISOString() }
     })
   })
 
@@ -84,7 +84,7 @@ describe('Claude usage-limit stop review fixes', () => {
   it('only counts windows rejected during the current turn', async () => {
     const { adapter, session } = claudeSetup([])
     await adapter.initialize()
-    session.rejectedLimitWindows = new Map([['seven_day_opus', '2026-10-09T00:00:00.000Z']])
+    session.rejectedLimitWindows = new Map([['seven_day_opus', new Date(RESET_LATER * 1000).toISOString()]])
     session.enqueuePrompt = vi.fn()
     session.queryIterator = { [Symbol.asyncIterator]() { return this }, async next() { return { done: true } } }
     await adapter.sendPrompt('s1', [{ type: 'text', text: 'next' } as any], session.config)
@@ -174,10 +174,10 @@ describe('Codex usage-limit stops', () => {
     const { priv, session } = codexSetup()
     priv.handleRpcMessage(session, {
       jsonrpc: '2.0', method: 'account/rateLimits/updated',
-      params: { rateLimits: { limitId: 'codex', primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: 1_791_250_000 } } }
+      params: { rateLimits: { limitId: 'codex', primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: RESET_SOON } } }
     })
     priv.handleRpcMessage(session, limitError)
-    expect(session.usageLimit).toEqual({ resetAt: new Date(1_791_250_000 * 1000).toISOString() })
+    expect(session.usageLimit).toEqual({ resetAt: new Date(RESET_SOON * 1000).toISOString() })
 
     const other = codexSetup()
     other.priv.handleRpcMessage(other.session, { ...limitError, params: { ...limitError.params, error: { message: 'boom', codexErrorInfo: 'internalServerError' } } })
