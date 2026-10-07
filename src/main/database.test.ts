@@ -83,7 +83,7 @@ describe('Task CRUD', () => {
     expect(db.deleteTask('non-existent')).toBe(false)
   })
 
-  it('removes the task workspace — artifacts, including inline HTML renders — along with the task', () => {
+  it('removes the task artifacts — including inline HTML renders — along with the task', () => {
     const task = db.createTask(makeTask())!
     // `createTestDb` stubs `getWorkspaceDir` to a fixed path unrelated to the
     // real one (see db-test-helper.ts), so build the real path the same way
@@ -96,11 +96,37 @@ describe('Task CRUD', () => {
     writeFileSync(join(workspaceDir, 'artifacts', 'artifact_chart_abc12345', 'index.html'), '<p>chart</p>')
     mkdirSync(join(workspaceDir, '.20x'), { recursive: true })
     writeFileSync(join(workspaceDir, '.20x', 'artifacts.json'), '{"version":1,"artifacts":[]}')
-    expect(existsSync(workspaceDir)).toBe(true)
+    expect(existsSync(join(workspaceDir, 'artifacts'))).toBe(true)
+    expect(existsSync(join(workspaceDir, '.20x'))).toBe(true)
 
     db.deleteTask(task.id)
 
-    expect(existsSync(workspaceDir)).toBe(false)
+    expect(existsSync(join(workspaceDir, 'artifacts'))).toBe(false)
+    expect(existsSync(join(workspaceDir, '.20x'))).toBe(false)
+  })
+
+  it('never touches a git worktree checkout living alongside the artifacts in the same workspace', () => {
+    // Worktrees nest at workspaces/<taskId>/<repoName> (worktree-manager.ts),
+    // sharing the parent directory with .20x/artifacts. Deleting a task must
+    // not rm -rf that sibling: a worktree needs `git worktree remove`
+    // (WorktreeManager.cleanupTaskWorkspace), or the main repo is left with
+    // stale .git/worktrees metadata. Some deletion paths (e.g. a
+    // Workflo-linked task deleted remotely, see peakflo-plugin.ts) call
+    // db.deleteTask with no prior worktree cleanup at all.
+    const task = db.createTask(makeTask())!
+    const workspaceDir = join('/tmp/pf-desktop-test', 'workspaces', task.id)
+    const worktreeDir = join(workspaceDir, 'my-repo')
+    mkdirSync(worktreeDir, { recursive: true })
+    writeFileSync(join(worktreeDir, '.git'), 'gitdir: /somewhere/.git/worktrees/my-repo\n')
+    writeFileSync(join(worktreeDir, 'README.md'), '# checked out repo\n')
+    mkdirSync(join(workspaceDir, '.20x'), { recursive: true })
+    writeFileSync(join(workspaceDir, '.20x', 'artifacts.json'), '{"version":1,"artifacts":[]}')
+
+    db.deleteTask(task.id)
+
+    expect(existsSync(join(workspaceDir, '.20x'))).toBe(false)
+    expect(existsSync(join(worktreeDir, '.git'))).toBe(true)
+    expect(existsSync(join(worktreeDir, 'README.md'))).toBe(true)
   })
 
   it('getByExternalId finds the right task', () => {
