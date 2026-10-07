@@ -4,7 +4,7 @@ import type { TaskPriority } from '@/types'
 
 export type SortField = 'created_at' | 'updated_at' | 'priority' | 'due_date' | 'title' | 'status'
 export type SortDirection = 'asc' | 'desc'
-export type ActiveModal = 'create' | 'edit' | 'delete' | 'settings' | 'repo-selector' | 'gh-setup' | null
+export type ActiveModal = 'create' | 'edit' | 'delete' | 'settings' | 'repo-selector' | 'gh-setup' | 'create-project' | 'edit-project' | 'delete-project' | null
 export type SidebarView = 'tasks' | 'skills' | 'dashboard' | 'canvas'
 
 // ── Persisted sidebar layout (localStorage) ──
@@ -35,6 +35,8 @@ interface UIState {
   statusFilter: TaskStatus | 'all'
   priorityFilter: TaskPriority | 'all'
   sourceFilter: string
+  /** Which project's tasks to show: 'all' (default, everything), 'inbox' (unfiled only), or a project id. */
+  projectFilter: string
   sortField: SortField
   sortDirection: SortDirection
   searchQuery: string
@@ -42,6 +44,8 @@ interface UIState {
   activeModal: ActiveModal
   editingTaskId: string | null
   deletingTaskId: string | null
+  editingProjectId: string | null
+  deletingProjectId: string | null
   settingsTab: SettingsTab
   dashboardPreviewTaskId: string | null
   /** Task ID to add to canvas when switching to canvas view */
@@ -61,6 +65,7 @@ interface UIState {
   setStatusFilter: (filter: TaskStatus | 'all') => void
   setPriorityFilter: (filter: TaskPriority | 'all') => void
   setSourceFilter: (filter: string) => void
+  setProjectFilter: (filter: string) => void
   setSortField: (field: SortField) => void
   setSortDirection: (dir: SortDirection) => void
   setSearchQuery: (query: string) => void
@@ -71,6 +76,12 @@ interface UIState {
   openDeleteModal: (taskId: string) => void
   openSettings: () => void
   closeModal: () => void
+  /** Open the "new project" dialog */
+  openCreateProjectModal: () => void
+  /** Open the "edit project" dialog for an existing project */
+  openEditProjectModal: (projectId: string) => void
+  /** Open the delete-confirmation dialog for a project */
+  openDeleteProjectModal: (projectId: string) => void
   openDashboardPreview: (taskId: string) => void
   closeDashboardPreview: () => void
   /** Switch to canvas view and queue a task to be added as a panel */
@@ -100,6 +111,7 @@ export const useUIStore = create<UIState>((set) => ({
   statusFilter: 'all',
   priorityFilter: 'all',
   sourceFilter: 'all',
+  projectFilter: 'all',
   sortField: 'created_at',
   sortDirection: 'desc',
   searchQuery: '',
@@ -107,6 +119,8 @@ export const useUIStore = create<UIState>((set) => ({
   activeModal: null,
   editingTaskId: null,
   deletingTaskId: null,
+  editingProjectId: null,
+  deletingProjectId: null,
   settingsTab: SettingsTab.GENERAL,
   dashboardPreviewTaskId: null,
   canvasPendingTaskId: null,
@@ -120,6 +134,7 @@ export const useUIStore = create<UIState>((set) => ({
   setStatusFilter: (statusFilter) => set({ statusFilter }),
   setPriorityFilter: (priorityFilter) => set({ priorityFilter }),
   setSourceFilter: (sourceFilter) => set({ sourceFilter }),
+  setProjectFilter: (projectFilter) => set({ projectFilter }),
   setSortField: (sortField) => {
     // Auto-set the most intuitive sort direction for each field
     const FIELD_DEFAULT_DIRECTION: Record<SortField, SortDirection> = {
@@ -141,7 +156,10 @@ export const useUIStore = create<UIState>((set) => ({
   openEditModal: (taskId) => set({ activeModal: 'edit', editingTaskId: taskId }),
   openDeleteModal: (taskId) => set({ activeModal: 'delete', deletingTaskId: taskId }),
   openSettings: () => set({ activeModal: 'settings' }),
-  closeModal: () => set({ activeModal: null, editingTaskId: null, deletingTaskId: null }),
+  closeModal: () => set({ activeModal: null, editingTaskId: null, deletingTaskId: null, editingProjectId: null, deletingProjectId: null }),
+  openCreateProjectModal: () => set({ activeModal: 'create-project', editingProjectId: null }),
+  openEditProjectModal: (projectId) => set({ activeModal: 'edit-project', editingProjectId: projectId }),
+  openDeleteProjectModal: (projectId) => set({ activeModal: 'delete-project', deletingProjectId: projectId }),
   openDashboardPreview: (taskId) => set({ dashboardPreviewTaskId: taskId }),
   closeDashboardPreview: () => set({ dashboardPreviewTaskId: null }),
   openTaskOnCanvas: (taskId) => set({ sidebarView: 'canvas', canvasPendingTaskId: taskId, dashboardPreviewTaskId: null }),

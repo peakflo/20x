@@ -22,6 +22,8 @@ import type {
   DatabaseManager,
   CreateTaskData,
   UpdateTaskData,
+  CreateProjectData,
+  UpdateProjectData,
   FileAttachmentRecord,
   CreateAgentData,
   UpdateAgentData,
@@ -292,6 +294,31 @@ export function registerIpcHandlers(
   ipcMain.handle('db:reorderSubtasks', (_, parentId: string, orderedIds: string[]) => {
     db.reorderSubtasks(parentId, orderedIds)
     return true
+  })
+
+  // Project handlers (optional grouping/folders for tasks)
+  ipcMain.handle('db:getProjects', () => {
+    return db.getProjects()
+  })
+
+  ipcMain.handle('db:getProject', (_, id: string) => {
+    return db.getProject(id)
+  })
+
+  ipcMain.handle('db:getProjectTaskCounts', () => {
+    return db.getProjectTaskCounts()
+  })
+
+  ipcMain.handle('db:createProject', (_, data: CreateProjectData) => {
+    return db.createProject(data)
+  })
+
+  ipcMain.handle('db:updateProject', (_, id: string, data: UpdateProjectData) => {
+    return db.updateProject(id, data)
+  })
+
+  ipcMain.handle('db:deleteProject', (_, id: string) => {
+    return db.deleteProject(id)
   })
 
   // Attachment handlers

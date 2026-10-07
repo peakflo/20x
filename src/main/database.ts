@@ -283,6 +283,7 @@ export interface TaskRow {
   repos: string
   output_fields: string
   agent_id: string | null
+  project_id: string | null
   external_id: string | null
   source_id: string | null
   source: string
@@ -381,6 +382,8 @@ export interface TaskRecord {
   repos: string[]
   output_fields: OutputFieldRecord[]
   agent_id: string | null
+  /** Project this task belongs to. null = unfiled/Inbox — never set automatically, so existing tasks are unaffected. */
+  project_id: string | null
   external_id: string | null
   source_id: string | null
   source: string
@@ -438,6 +441,7 @@ export interface CreateTaskData {
   attachments?: FileAttachmentRecord[]
   repos?: string[]
   output_fields?: OutputFieldRecord[]
+  project_id?: string | null
   external_id?: string
   source_id?: string
   source?: string
@@ -468,6 +472,7 @@ export interface UpdateTaskData {
   repos?: string[]
   output_fields?: OutputFieldRecord[]
   agent_id?: string | null
+  project_id?: string | null
   skill_ids?: string[] | null
   session_id?: string | null
   snoozed_until?: string | null
@@ -504,6 +509,7 @@ const UPDATABLE_COLUMNS = new Set([
   'repos',
   'output_fields',
   'agent_id',
+  'project_id',
   'skill_ids',
   'session_id',
   'snoozed_until',
@@ -527,6 +533,50 @@ const UPDATABLE_COLUMNS = new Set([
 
 const JSON_COLUMNS = new Set(['labels', 'attachments', 'repos', 'output_fields', 'skill_ids'])
 
+// ── Projects (optional task grouping / "folders") ──────────────
+export interface ProjectRow {
+  id: string
+  name: string
+  description: string
+  color: string
+  is_archived: number
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectRecord {
+  id: string
+  name: string
+  description: string
+  color: string
+  is_archived: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateProjectData {
+  name: string
+  description?: string
+  color?: string
+}
+
+export interface UpdateProjectData {
+  name?: string
+  description?: string
+  color?: string
+  is_archived?: boolean
+  sort_order?: number
+}
+
+function deserializeProject(row: ProjectRow): ProjectRecord {
+  return {
+    ...row,
+    is_archived: row.is_archived === 1
+  }
+}
+
 /** Ensure a parsed JSON value is always an array (guards against double-stringified or scalar values) */
 function ensureArray<T = string>(value: unknown): T[] {
   if (Array.isArray(value)) return value as T[]
@@ -548,6 +598,7 @@ function deserializeTask(row: TaskRow): TaskRecord {
     repos: parseJsonArray(row.repos),
     output_fields: parseJsonArray<OutputFieldRecord>(row.output_fields),
     agent_id: row.agent_id ?? null,
+    project_id: row.project_id ?? null,
     external_id: row.external_id ?? null,
     source_id: row.source_id ?? null,
     skill_ids: row.skill_ids ? parseJsonArray(row.skill_ids) : null,
@@ -1007,8 +1058,9 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  *
  * 8 → 9: tasks.complete_at_source
  * 9 → 10: harness_instances table; agent config account_home → harness_instance_id
+ * 10 → 11: projects table + tasks.project_id
  */
-const SCHEMA_VERSION = 10
+const SCHEMA_VERSION = 11
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -1191,6 +1243,21 @@ export class DatabaseManager {
         home_path TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+
+      -- Optional grouping for tasks ("Projects" / folders). A task's project_id
+      -- is nullable and defaults to NULL (unfiled/Inbox) so every task that
+      -- existed before this feature keeps working exactly as before.
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT '',
+        color TEXT NOT NULL DEFAULT '#6366f1',
+        is_archived INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_projects_sort_order ON projects(sort_order);
 
       CREATE TABLE IF NOT EXISTS settings (
         key TEXT PRIMARY KEY,
@@ -1841,6 +1908,15 @@ export class DatabaseManager {
         VALUES (?, ?, ?, ?, 1, ?, ?)
       `).run(createId(), 'Default Agent', 'http://localhost:4096', '{}', now, now)
     }
+
+    // Migration v9 → v10: tasks.project_id (optional grouping into Projects).
+    // Nullable with no default backfill — every pre-existing task simply has
+    // project_id = NULL (shows up as "Inbox"/unfiled), so nothing is lost or
+    // reassigned by this migration.
+    if (!columnNames.has('project_id')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL`)
+    }
+    this.db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id) WHERE project_id IS NOT NULL`)
 
     // Migration v4: FTS5 full-text search index for similar task search
     this.initializeTasksFts()
@@ -2548,13 +2624,13 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     this.db.prepare(`
       INSERT INTO tasks (
         id, title, description, type, priority, status, assignee, due_date,
-        labels, attachments, repos, output_fields, external_id, source_id, source,
+        labels, attachments, repos, output_fields, project_id, external_id, source_id, source,
         is_recurring, recurrence_pattern, recurrence_parent_id,
         auto_start_agent, auto_complete_without_review,
         parent_task_id, sort_order,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.title,
@@ -2568,6 +2644,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       JSON.stringify(data.attachments ?? []),
       JSON.stringify(data.repos ?? []),
       JSON.stringify(data.output_fields ?? []),
+      data.project_id ?? null,
       data.external_id ?? null,
       data.source_id ?? null,
       data.source ?? 'local',
@@ -2703,6 +2780,85 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     this.deleteTaskAttachments(id)
     this.deleteTranscriptParts(id)
     const result = this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
+    return result.changes > 0
+  }
+
+  // ── Project CRUD ──────────────────────────────────────────────
+  // Projects are a lightweight grouping/folder for tasks. Deleting a project
+  // never deletes its tasks — the FK is ON DELETE SET NULL, so those tasks
+  // simply fall back to "unfiled" (project_id = NULL) instead of disappearing.
+
+  getProjects(): ProjectRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const rows = this.db.prepare(
+      'SELECT * FROM projects ORDER BY sort_order ASC, created_at ASC'
+    ).all() as ProjectRow[]
+    return rows.map(deserializeProject)
+  }
+
+  getProject(id: string): ProjectRecord | undefined {
+    if (!this.ensureDbOpen()) return undefined
+    const row = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as ProjectRow | undefined
+    return row ? deserializeProject(row) : undefined
+  }
+
+  /** Number of tasks (top-level, not subtasks) currently filed under each project. */
+  getProjectTaskCounts(): Record<string, number> {
+    if (!this.ensureDbOpen()) return {}
+    const rows = this.db.prepare(
+      'SELECT project_id, COUNT(*) as count FROM tasks WHERE project_id IS NOT NULL AND parent_task_id IS NULL GROUP BY project_id'
+    ).all() as { project_id: string; count: number }[]
+    const result: Record<string, number> = {}
+    for (const row of rows) result[row.project_id] = row.count
+    return result
+  }
+
+  createProject(data: CreateProjectData): ProjectRecord | undefined {
+    const id = createId()
+    const now = new Date().toISOString()
+    const maxRow = this.db.prepare('SELECT COALESCE(MAX(sort_order), -1) as max_order FROM projects').get() as { max_order: number }
+    const sortOrder = (maxRow?.max_order ?? -1) + 1
+
+    this.db.prepare(`
+      INSERT INTO projects (id, name, description, color, is_archived, sort_order, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+    `).run(
+      id,
+      data.name,
+      data.description ?? '',
+      data.color ?? '#6366f1',
+      sortOrder,
+      now,
+      now
+    )
+
+    return this.getProject(id)
+  }
+
+  updateProject(id: string, data: UpdateProjectData): ProjectRecord | undefined {
+    const setClauses: string[] = []
+    const values: (string | number | null)[] = []
+
+    if (data.name !== undefined) { setClauses.push('name = ?'); values.push(data.name) }
+    if (data.description !== undefined) { setClauses.push('description = ?'); values.push(data.description) }
+    if (data.color !== undefined) { setClauses.push('color = ?'); values.push(data.color) }
+    if (data.is_archived !== undefined) { setClauses.push('is_archived = ?'); values.push(data.is_archived ? 1 : 0) }
+    if (data.sort_order !== undefined) { setClauses.push('sort_order = ?'); values.push(data.sort_order) }
+
+    if (setClauses.length === 0) return this.getProject(id)
+
+    setClauses.push('updated_at = ?')
+    values.push(new Date().toISOString())
+    values.push(id)
+
+    this.db.prepare(`UPDATE projects SET ${setClauses.join(', ')} WHERE id = ?`).run(...values)
+    return this.getProject(id)
+  }
+
+  /** Deletes the project. Tasks that referenced it are kept — the FK's
+   *  ON DELETE SET NULL moves them back to "unfiled" automatically. */
+  deleteProject(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM projects WHERE id = ?').run(id)
     return result.changes > 0
   }
 

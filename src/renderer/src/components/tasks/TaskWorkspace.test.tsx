@@ -49,6 +49,7 @@ function makeRendererTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     repos: [],
     output_fields: [],
     agent_id: 'agent-1',
+    project_id: null,
     session_id: null,
     external_id: null,
     source_id: null,

@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { Plus, Search, ChevronDown, X, FileText, RefreshCw, Loader2, Play, Pause } from 'lucide-react'
+import { Plus, Search, ChevronDown, X, FileText, RefreshCw, Loader2, Play, Pause, Folder, Inbox, Pencil, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TaskList } from '@/components/tasks/TaskList'
 import { SkillList } from '@/components/skills/SkillList'
 import { useUIStore, type SortField } from '@/stores/ui-store'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useTaskStore } from '@/stores/task-store'
+import { useProjectStore } from '@/stores/project-store'
 import { useUserStore } from '@/stores/user-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { useAgentSchedulerStore } from '@/stores/agent-scheduler-store'
@@ -41,13 +42,18 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   const statusFilter = useUIStore((s) => s.statusFilter)
   const priorityFilter = useUIStore((s) => s.priorityFilter)
   const sourceFilter = useUIStore((s) => s.sourceFilter)
+  const projectFilter = useUIStore((s) => s.projectFilter)
   const sortField = useUIStore((s) => s.sortField)
   const searchQuery = useUIStore((s) => s.searchQuery)
   const setStatusFilter = useUIStore((s) => s.setStatusFilter)
   const setPriorityFilter = useUIStore((s) => s.setPriorityFilter)
   const setSourceFilter = useUIStore((s) => s.setSourceFilter)
+  const setProjectFilter = useUIStore((s) => s.setProjectFilter)
   const setSortField = useUIStore((s) => s.setSortField)
   const setSearchQuery = useUIStore((s) => s.setSearchQuery)
+  const openCreateProjectModal = useUIStore((s) => s.openCreateProjectModal)
+  const openEditProjectModal = useUIStore((s) => s.openEditProjectModal)
+  const openDeleteProjectModal = useUIStore((s) => s.openDeleteProjectModal)
   const skillSearchQuery = useUIStore((s) => s.skillSearchQuery)
   const setSkillSearchQuery = useUIStore((s) => s.setSkillSearchQuery)
   const sidebarWidth = useUIStore((s) => s.sidebarWidth)
@@ -58,6 +64,10 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   const fetchSources = useTaskSourceStore((s) => s.fetchSources)
   const syncAllEnabled = useTaskSourceStore((s) => s.syncAllEnabled)
   const fetchTasks = useTaskStore((s) => s.fetchTasks)
+  const projects = useProjectStore((s) => s.projects)
+  const projectTaskCounts = useProjectStore((s) => s.taskCounts)
+  const fetchProjects = useProjectStore((s) => s.fetchProjects)
+  const [projectsOpen, setProjectsOpen] = useState(true)
   const skills = useSkillStore((s) => s.skills)
   const selectedSkillId = useSkillStore((s) => s.selectedSkillId)
   const fetchSkills = useSkillStore((s) => s.fetchSkills)
@@ -69,8 +79,19 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
 
   useEffect(() => {
     fetchSources()
+    fetchProjects()
     useUserStore.getState().loadCurrentUser()
-  }, [fetchSources])
+  }, [fetchSources, fetchProjects])
+
+  const handleDeleteProject = useCallback(async (e: React.MouseEvent, projectId: string) => {
+    e.stopPropagation()
+    openDeleteProjectModal(projectId)
+  }, [openDeleteProjectModal])
+
+  const handleEditProject = useCallback((e: React.MouseEvent, projectId: string) => {
+    e.stopPropagation()
+    openEditProjectModal(projectId)
+  }, [openEditProjectModal])
 
   useEffect(() => {
     if (sidebarView === 'skills') fetchSkills()
@@ -233,6 +254,92 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
               )}
             </div>
           </div>
+
+          <div className="no-drag px-3 pb-2">
+            <div className="flex items-center justify-between px-1 pb-1">
+              <button
+                onClick={() => setProjectsOpen(!projectsOpen)}
+                className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground cursor-pointer"
+              >
+                <ChevronDown className={`h-3 w-3 transition-transform ${projectsOpen ? 'rotate-180' : ''}`} />
+                Projects
+              </button>
+              <button
+                onClick={openCreateProjectModal}
+                title="New project"
+                className="rounded-md p-0.5 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            {projectsOpen && (
+              <div className="space-y-0.5">
+                <button
+                  onClick={() => setProjectFilter('all')}
+                  className={`w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left cursor-pointer ${
+                    projectFilter === 'all' ? 'bg-primary/15 text-primary' : 'text-foreground hover:bg-accent'
+                  }`}
+                >
+                  <Folder className="h-3.5 w-3.5 shrink-0" />
+                  <span className="flex-1 truncate">All Tasks</span>
+                </button>
+                <button
+                  onClick={() => setProjectFilter('inbox')}
+                  className={`w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left cursor-pointer ${
+                    projectFilter === 'inbox' ? 'bg-primary/15 text-primary' : 'text-foreground hover:bg-accent'
+                  }`}
+                >
+                  <Inbox className="h-3.5 w-3.5 shrink-0" />
+                  <span className="flex-1 truncate">Inbox (no project)</span>
+                </button>
+
+                {projects.map((project) => (
+                  <div
+                    key={project.id}
+                    onClick={() => setProjectFilter(project.id)}
+                    className={`group w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left cursor-pointer ${
+                      projectFilter === project.id ? 'bg-primary/15 text-primary' : 'text-foreground hover:bg-accent'
+                    }`}
+                  >
+                    <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: project.color }} />
+                    <span className="flex-1 truncate">{project.name}</span>
+                    <span className="text-[10px] text-muted-foreground tabular-nums">
+                      {projectTaskCounts[project.id] ?? 0}
+                    </span>
+                    <span className="hidden group-hover:flex items-center gap-0.5">
+                      <button
+                        onClick={(e) => handleEditProject(e, project.id)}
+                        title="Edit project"
+                        className="rounded p-0.5 text-muted-foreground hover:text-foreground cursor-pointer"
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </button>
+                      <button
+                        onClick={(e) => handleDeleteProject(e, project.id)}
+                        title="Delete project"
+                        className="rounded p-0.5 text-muted-foreground hover:text-destructive cursor-pointer"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </span>
+                  </div>
+                ))}
+
+                {projects.length === 0 && (
+                  <button
+                    onClick={openCreateProjectModal}
+                    className="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-left text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
+                  >
+                    <Plus className="h-3 w-3" />
+                    New project...
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="mx-3 border-t" />
 
           <div className="no-drag px-3 pb-3 flex items-center gap-2">
             <button

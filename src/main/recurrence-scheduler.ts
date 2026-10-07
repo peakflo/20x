@@ -26,6 +26,7 @@ interface RawTaskRow {
   repos: string
   output_fields: string
   agent_id: string | null
+  project_id: string | null
   external_id: string | null
   source_id: string | null
   source: string
@@ -444,6 +445,7 @@ export class RecurrenceScheduler {
       repos: safeParseArray(row.repos),
       output_fields: safeParseArray(row.output_fields),
       agent_id: row.agent_id ?? null,
+      project_id: row.project_id ?? null,
       external_id: row.external_id ?? null,
       source_id: row.source_id ?? null,
       skill_ids: row.skill_ids ? safeParseArray(row.skill_ids) : null,

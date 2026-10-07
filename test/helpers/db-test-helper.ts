@@ -55,6 +55,18 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      color TEXT NOT NULL DEFAULT '#6366f1',
+      is_archived INTEGER NOT NULL DEFAULT 0,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_projects_sort_order ON projects(sort_order);
+
     CREATE TABLE IF NOT EXISTS task_sources (
       id TEXT PRIMARY KEY,
       mcp_server_id TEXT REFERENCES mcp_servers(id) ON DELETE CASCADE,
@@ -86,6 +98,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       repos TEXT NOT NULL DEFAULT '[]',
       output_fields TEXT NOT NULL DEFAULT '[]',
       agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+      project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
       external_id TEXT,
       source_id TEXT REFERENCES task_sources(id) ON DELETE CASCADE,
       source TEXT NOT NULL DEFAULT 'local',
@@ -121,6 +134,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_external ON tasks(source_id, external_id) WHERE external_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_tasks_next_occurrence ON tasks(next_occurrence_at) WHERE is_recurring = 1;
+    CREATE INDEX IF NOT EXISTS idx_tasks_project_id ON tasks(project_id) WHERE project_id IS NOT NULL;
 
     -- FTS5 full-text search index for similar task search.
     -- Keep the tokenizer in step with DatabaseManager.initializeTasksFts —

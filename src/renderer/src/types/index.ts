@@ -325,6 +325,8 @@ export interface WorkfloTask {
   repos: string[]
   output_fields: OutputField[]
   agent_id: string | null
+  /** Project this task is filed under. null = unfiled (Inbox) — the default for every task. */
+  project_id: string | null
   session_id: string | null
   external_id: string | null
   source_id: string | null
@@ -365,6 +367,7 @@ export interface CreateTaskDTO {
   attachments?: FileAttachment[]
   repos?: string[]
   output_fields?: OutputField[]
+  project_id?: string | null
   is_recurring?: boolean
   recurrence_pattern?: RecurrencePattern | null
   recurrence_parent_id?: string | null
@@ -388,6 +391,7 @@ export interface UpdateTaskDTO {
   output_fields?: OutputField[]
   resolution?: string | null
   agent_id?: string | null
+  project_id?: string | null
   skill_ids?: string[] | null
   snoozed_until?: string | null
   feedback_rating?: number | null
@@ -404,6 +408,33 @@ export interface UpdateTaskDTO {
   auto_complete_without_review?: boolean
   complete_at_source?: boolean | null
   parent_task_id?: string | null
+  sort_order?: number
+}
+
+// ── Projects (optional grouping/folders for tasks) ───────────
+
+export interface WorkfloProject {
+  id: string
+  name: string
+  description: string
+  color: string
+  is_archived: boolean
+  sort_order: number
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateProjectDTO {
+  name: string
+  description?: string
+  color?: string
+}
+
+export interface UpdateProjectDTO {
+  name?: string
+  description?: string
+  color?: string
+  is_archived?: boolean
   sort_order?: number
 }
 

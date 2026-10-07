@@ -35,6 +35,7 @@ export function useTasks() {
   const statusFilter = useUIStore((s) => s.statusFilter)
   const priorityFilter = useUIStore((s) => s.priorityFilter)
   const sourceFilter = useUIStore((s) => s.sourceFilter)
+  const projectFilter = useUIStore((s) => s.projectFilter)
   const sortField = useUIStore((s) => s.sortField)
   const sortDirection = useUIStore((s) => s.sortDirection)
   const searchQuery = useUIStore((s) => s.searchQuery)
@@ -53,6 +54,14 @@ export function useTasks() {
       } else {
         result = result.filter((t) => t.source_id === sourceFilter)
       }
+    }
+
+    // Project filter — 'all' shows everything (default, so nothing changes for
+    // users who never create a project), 'inbox' shows only unfiled tasks.
+    if (projectFilter === 'inbox') {
+      result = result.filter((t) => !t.project_id)
+    } else if (projectFilter !== 'all') {
+      result = result.filter((t) => t.project_id === projectFilter)
     }
 
     // Status filter
@@ -107,7 +116,7 @@ export function useTasks() {
     })
 
     return result
-  }, [tasks, sourceFilter, statusFilter, priorityFilter, searchQuery, sortField, sortDirection])
+  }, [tasks, sourceFilter, projectFilter, statusFilter, priorityFilter, searchQuery, sortField, sortDirection])
 
   const selectedTask: WorkfloTask | undefined = useMemo(
     () => (selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) : undefined),
