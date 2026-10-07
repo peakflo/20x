@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { TaskStatus, TASK_STATUSES } from './constants'
 
 describe('TaskStatus enum', () => {
-  it('has exactly 6 statuses', () => {
+  it('has exactly 8 statuses', () => {
     const values = Object.values(TaskStatus)
-    expect(values).toHaveLength(6)
+    expect(values).toHaveLength(8)
   })
 
   it('has expected string values', () => {
@@ -14,6 +14,8 @@ describe('TaskStatus enum', () => {
     expect(TaskStatus.ReadyForReview).toBe('ready_for_review')
     expect(TaskStatus.AgentLearning).toBe('agent_learning')
     expect(TaskStatus.Completed).toBe('completed')
+    expect(TaskStatus.Cancelled).toBe('cancelled')
+    expect(TaskStatus.Expired).toBe('expired')
   })
 })
 
@@ -37,7 +39,9 @@ describe('TASK_STATUSES array', () => {
     }
   })
 
-  it('has the same length as the enum', () => {
-    expect(TASK_STATUSES).toHaveLength(Object.values(TaskStatus).length)
+  it('keeps server-owned closed states out of the local status picker', () => {
+    expect(TASK_STATUSES).toHaveLength(6)
+    expect(TASK_STATUSES.map((status) => status.value)).not.toContain(TaskStatus.Cancelled)
+    expect(TASK_STATUSES.map((status) => status.value)).not.toContain(TaskStatus.Expired)
   })
 })

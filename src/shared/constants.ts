@@ -20,6 +20,7 @@ export function isTaskClosed(status: string): boolean {
   return status === TaskStatus.Completed || status === TaskStatus.Cancelled || status === TaskStatus.Expired
 }
 
+/** Statuses a person can choose locally. Workflo owns cancelled and expired states. */
 export const TASK_STATUSES: { value: TaskStatus; label: string }[] = [
   { value: TaskStatus.NotStarted, label: 'Not Started' },
   { value: TaskStatus.Triaging, label: 'Triaging' },
