@@ -16,6 +16,9 @@ import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
 import { SpeakMessageButton } from '@/components/voice/SpeakMessageButton'
 import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
 import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
+import { InlineHtmlRender } from '@/components/artifacts/InlineHtmlRender'
+import { findMessageArtifact } from '@/components/artifacts/find-message-artifact'
+import { htmlRenderFileName } from '@shared/html-render'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -588,16 +591,6 @@ const ReasoningMessage = React.memo(function ReasoningMessage({ message, searchQ
   )
 })
 
-function findMessageArtifact(message: AgentMessage, artifacts: Artifact[]): Artifact | undefined {
-  if (!message.tool || !['success', 'succeeded', 'complete', 'completed'].includes(message.tool.status?.toLowerCase?.() || '')) return undefined
-  let haystack = `${message.tool.title || ''}\n${message.content || ''}`
-  try { haystack += `\n${typeof message.tool.input === 'string' ? message.tool.input : JSON.stringify(message.tool.input)}\n${typeof message.tool.output === 'string' ? message.tool.output : JSON.stringify(message.tool.output)}` } catch { /* ignore unserializable tool payloads */ }
-  return artifacts.find((artifact) => {
-    const target = artifact.path || artifact.url
-    return !!target && (haystack.includes(target) || haystack.replace(/\\/g, '/').includes(target.replace(/\\/g, '/')))
-  })
-}
-
 function ArtifactTranscriptCard({ artifact, onOpen }: { artifact: Artifact; onOpen: (artifact: Artifact) => void }) {
   const [thumbnail, setThumbnail] = useState<string | null>(artifact.url && artifact.type === ArtifactType.IMAGE ? artifact.url : null)
   useEffect(() => {
@@ -632,6 +625,12 @@ function ArtifactTranscriptCard({ artifact, onOpen }: { artifact: Artifact; onOp
   )
 }
 
+function openExternalLink(href: string): boolean {
+  if (!/^https?:\/\//i.test(href)) return false
+  void window.electronAPI.shell.openExternal(href)
+  return true
+}
+
 function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
   return (
     <div className="w-full border-l border-border/30 pl-2 py-0.5">
@@ -640,11 +639,22 @@ function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFAC
           return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
         }
         const artifact = findMessageArtifact(message, artifacts) || findChatScadArtifact(message, artifacts)
+        const isInlineHtml = artifact?.type === ArtifactType.HTML && artifact.inline
+        const isScad = !!artifact?.path?.toLowerCase().endsWith('.scad') && !!artifactApi.renderScad
         return (
           <React.Fragment key={message.id}>
             <ToolCallMessage message={message} searchQuery={searchQuery} />
-            {artifact && onOpenArtifact && (artifact.path?.toLowerCase().endsWith('.scad') && artifactApi.renderScad
-              ? <InlineScadPreview artifact={artifact} renderModel={artifactApi.renderScad} onOpen={() => onOpenArtifact(artifact)} />
+            {artifact && isInlineHtml && (
+              <InlineHtmlRender
+                artifact={artifact}
+                artifactApi={artifactApi}
+                onExpand={() => onOpenArtifact?.(artifact)}
+                onLinkClick={openExternalLink}
+                onSaveAs={artifactApi.saveAs && artifact.path ? () => void artifactApi.saveAs!(artifact.taskId, artifact.path!, htmlRenderFileName(artifact.title)) : undefined}
+              />
+            )}
+            {artifact && !isInlineHtml && onOpenArtifact && (isScad
+              ? <InlineScadPreview artifact={artifact} renderModel={artifactApi.renderScad!} onOpen={() => onOpenArtifact(artifact)} />
               : <ArtifactTranscriptCard artifact={artifact} onOpen={onOpenArtifact} />)}
           </React.Fragment>
         )

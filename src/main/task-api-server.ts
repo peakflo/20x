@@ -11,6 +11,9 @@
  * copy per session stayed alive for as long as the agent CLI did.
  */
 import { createServer, type Server as HttpServer } from 'http'
+import { mkdirSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { randomUUID } from 'crypto'
 import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager } from './database'
 import { TASK_MCP_PATH, handleTaskMcpRequest } from './task-mcp-endpoint'
@@ -39,6 +42,17 @@ import {
   writeRegisteredTaskArtifactFile
 } from './artifacts'
 import { panelBrowserBroker } from './panel-browser-broker'
+import * as electron from 'electron'
+import { appearanceFromInput, captureHtmlPreview, HtmlRenderImageError, HtmlRenderPageTooLargeError, inlineLocalImages } from './html-render'
+import {
+  applyHtmlRenderShell,
+  clampHtmlPreviewWidth,
+  clampHtmlRenderHeight,
+  HTML_RENDER_DEFAULT_THEME,
+  HTML_RENDER_DONT_NARRATE,
+  HTML_RENDER_MAX_LENGTH,
+  HTML_RENDER_MAX_TITLE_LENGTH
+} from '../shared/html-render'
 
 let server: HttpServer | null = null
 let port: number | null = null
@@ -319,6 +333,64 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         params.artifact_id,
         params.filename
       )
+    }
+
+    case '/html_render': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      const html = typeof params.html === 'string' ? params.html : ''
+      const title = typeof params.title === 'string' ? params.title.trim() : ''
+      if (!html || html.length > HTML_RENDER_MAX_LENGTH) return { error: `html is required and must be at most ${HTML_RENDER_MAX_LENGTH} characters` }
+      if (!title || title.length > HTML_RENDER_MAX_TITLE_LENGTH) return { error: `title is required and must be at most ${HTML_RENDER_MAX_TITLE_LENGTH} characters` }
+      const heightHint = typeof params.height === 'number' ? clampHtmlRenderHeight(params.height) : undefined
+
+      let inlined: string
+      try {
+        inlined = (await inlineLocalImages(html, { strict: true })).html
+      } catch (error) {
+        if (error instanceof HtmlRenderImageError || error instanceof HtmlRenderPageTooLargeError) return { error: error.message }
+        throw error
+      }
+
+      const workspaceDir = db.getWorkspaceDir(taskId)
+      const registered = await createRegisteredTaskArtifact(workspaceDir, taskId, { title, type: ArtifactType.HTML })
+      const artifact = await writeRegisteredTaskArtifactFile(workspaceDir, taskId, {
+        artifactId: registered.artifactId,
+        filename: 'index.html',
+        content: inlined,
+        preview: true,
+        inline: true,
+        heightHint
+      })
+      notifyRenderer?.('artifact:updated', { taskId, artifact })
+      return { artifact_id: registered.artifactId, path: artifact.path, title: artifact.title, message: HTML_RENDER_DONT_NARRATE }
+    }
+
+    case '/html_preview': {
+      const html = typeof params.html === 'string' ? params.html : ''
+      if (!html || html.length > HTML_RENDER_MAX_LENGTH) return { error: `html is required and must be at most ${HTML_RENDER_MAX_LENGTH} characters` }
+      const width = clampHtmlPreviewWidth(typeof params.width === 'number' ? params.width : undefined)
+      const appearance = appearanceFromInput(params.appearance)
+
+      const { html: prepared, missingImages } = await inlineLocalImages(html, { strict: false })
+      const themed = applyHtmlRenderShell(prepared, HTML_RENDER_DEFAULT_THEME[appearance])
+
+      try {
+        const result = await captureHtmlPreview(electron, themed, width)
+        // Not every harness's MCP client renders an image content block
+        // inline. Also save the PNG to disk and return its path, so an
+        // agent whose harness drops the image block can still open it.
+        const path = savePreviewPng(result.png)
+        return {
+          image: { mimeType: 'image/png', data: result.png.toString('base64') },
+          path,
+          contentHeight: result.contentHeight,
+          consoleErrors: result.consoleErrors,
+          missingImages
+        }
+      } catch (error) {
+        return { error: (error as Error).message }
+      }
     }
 
     case '/list_tasks': {
@@ -1373,6 +1445,17 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     default:
       return { error: 'Unknown route' }
   }
+}
+
+/** Saves an html_preview screenshot to a temp file and returns its path, as
+ * a fallback for a harness whose MCP client does not surface an image
+ * content block (mirrors the panelBrowserBroker.screenshot() convention). */
+function savePreviewPng(png: Buffer): string {
+  const dir = join(electron.app.getPath('temp'), '20x-html-previews')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `${randomUUID()}.png`)
+  writeFileSync(file, png)
+  return file
 }
 
 function safeParseArray(raw: string | null | undefined): unknown[] {

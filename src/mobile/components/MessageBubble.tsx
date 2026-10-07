@@ -1,11 +1,22 @@
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import { Markdown } from '@/components/ui/Markdown'
+import { InlineHtmlRender } from '@/components/artifacts/InlineHtmlRender'
+import { findMessageArtifact } from '@/components/artifacts/find-message-artifact'
+import { ArtifactType, type Artifact } from '@shared/artifacts'
+import { mobileArtifactApi } from '../lib/artifact-api'
 import { cn } from '../lib/utils'
 import type { AgentMessage } from '../stores/agent-store'
-import type { Artifact } from '@shared/artifacts'
 import { findChatScadArtifact } from '@shared/scad-chat'
 import { InlineScadPreview } from '@/components/artifacts/viewers/InlineScadPreview'
 import { api } from '../api/client'
+
+const EMPTY_ARTIFACTS: Artifact[] = []
+
+function openExternalLink(href: string): boolean {
+  if (!/^https?:\/\//i.test(href)) return false
+  window.open(href, '_blank', 'noopener,noreferrer')
+  return true
+}
 
 function HighlightedText({ text, query }: { text: string; query?: string }) {
   const normalizedQuery = query?.trim()
@@ -461,18 +472,30 @@ const ReasoningMessage = memo(function ReasoningMessage({ message, searchQuery }
 // virtualization, which makes this the difference between O(changed) and O(all)
 // work per delta.
 export const MessageActivityGroup = memo(
-  function MessageActivityGroup({ messages, searchQuery, artifacts = [], onOpenArtifact }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
+  function MessageActivityGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
     return (
       <div className="w-full border-l border-border/30 pl-2 py-0.5">
         {messages.map((message) => {
           if (message.partType === 'reasoning') {
             return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
           }
-          const artifact = findChatScadArtifact(message, artifacts)
-          return <div key={message.id}>
-            <ToolCallMessage message={message} searchQuery={searchQuery} />
-            {artifact && onOpenArtifact && <InlineScadPreview artifact={artifact} renderModel={api.artifacts.renderScad} onOpen={() => onOpenArtifact(artifact)} />}
-          </div>
+          const artifact = findMessageArtifact(message, artifacts) || findChatScadArtifact(message, artifacts)
+          const isInlineHtml = artifact?.type === ArtifactType.HTML && artifact.inline
+          const isScad = !!artifact?.path?.toLowerCase().endsWith('.scad')
+          return (
+            <div key={message.id}>
+              <ToolCallMessage message={message} searchQuery={searchQuery} />
+              {artifact && isInlineHtml && (
+                <InlineHtmlRender
+                  artifact={artifact}
+                  artifactApi={mobileArtifactApi}
+                  onExpand={() => onOpenArtifact?.(artifact)}
+                  onLinkClick={openExternalLink}
+                />
+              )}
+              {artifact && isScad && onOpenArtifact && <InlineScadPreview artifact={artifact} renderModel={api.artifacts.renderScad} onOpen={() => onOpenArtifact(artifact)} />}
+            </div>
+          )
         })}
       </div>
     )

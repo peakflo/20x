@@ -81,7 +81,8 @@ export const artifactApi: ArtifactApi = {
   read: (taskId, relativePath) => window.electronAPI.artifacts.read(taskId, relativePath),
   saveScad: (taskId, relativePath, content, expectedContent) => window.electronAPI.artifacts.saveScad(taskId, relativePath, content, expectedContent),
   renderScad: (taskId, relativePath) => window.electronAPI.artifacts.renderScad(taskId, relativePath),
-  copyFile: (taskId, relativePath) => window.electronAPI.artifacts.copyFile(taskId, relativePath)
+  copyFile: (taskId, relativePath) => window.electronAPI.artifacts.copyFile(taskId, relativePath),
+  saveAs: (taskId, relativePath, suggestedName) => window.electronAPI.artifacts.saveAs(taskId, relativePath, suggestedName)
 }
 
 export const mcpServerApi = {
