@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { AgentTranscriptPanel } from './AgentTranscriptPanel'
 import { SessionStatus } from '@/stores/agent-store'
+import { useArtifactStore } from '@/stores/artifact-store'
+import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
 
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -392,6 +394,107 @@ git push 2>&1 | tail -2`
 
     expect(screen.getByRole('button', { name: /Edit page\.tsx/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /workflow-builder/i })).toBeNull()
+  })
+
+  it('renders an inline HTML artifact above the reply, not the open-in-panel card', async () => {
+    const taskId = 'task-inline-1'
+    const artifact: Artifact = {
+      id: `${taskId}:workpiece:artifact_chart_abc12345`,
+      taskId,
+      type: ArtifactType.HTML,
+      title: 'Q3 revenue',
+      path: 'artifacts/artifact_chart_abc12345/index.html',
+      inline: true,
+      heightHint: 320,
+      updatedAt: 1,
+      reloadTrigger: 0
+    }
+    useArtifactStore.setState({ artifactsByTask: { [taskId]: [artifact] } })
+
+    Object.assign(window, {
+      electronAPI: {
+        ...window.electronAPI,
+        artifacts: {
+          scan: vi.fn().mockResolvedValue([]),
+          read: vi.fn().mockResolvedValue({ kind: ArtifactContentKind.TEXT, content: '<p>chart</p>' }),
+          mcpCall: vi.fn(),
+          copyFile: vi.fn(),
+          saveAs: vi.fn()
+        }
+      }
+    })
+
+    render(
+      <AgentTranscriptPanel
+        taskId={taskId}
+        messages={[
+          {
+            id: 'tool-html-render',
+            role: 'assistant',
+            content: '',
+            timestamp: new Date(),
+            partType: 'tool',
+            tool: {
+              name: 'html_render',
+              status: 'success',
+              input: JSON.stringify({ title: 'Q3 revenue' }),
+              output: JSON.stringify({ artifact_id: 'artifact_chart_abc12345', path: artifact.path, title: 'Q3 revenue' })
+            }
+          }
+        ]}
+        status={SessionStatus.IDLE}
+        onStop={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('Q3 revenue')).toBeInTheDocument()
+    expect(screen.queryByText('Preview · Click to open')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTitle('Q3 revenue').getAttribute('srcdoc')).toContain('<p>chart</p>'))
+
+    useArtifactStore.setState({ artifactsByTask: {} })
+  })
+
+  it('still uses the small open-in-panel card for a non-inline HTML artifact', () => {
+    const taskId = 'task-card-1'
+    const artifact: Artifact = {
+      id: `${taskId}:workpiece:artifact_report_xyz98765`,
+      taskId,
+      type: ArtifactType.HTML,
+      title: 'Report',
+      path: 'artifacts/artifact_report_xyz98765/index.html',
+      updatedAt: 1,
+      reloadTrigger: 0
+    }
+    useArtifactStore.setState({ artifactsByTask: { [taskId]: [artifact] } })
+
+    render(
+      <AgentTranscriptPanel
+        taskId={taskId}
+        messages={[
+          {
+            id: 'tool-write-artifact',
+            role: 'assistant',
+            content: '',
+            timestamp: new Date(),
+            partType: 'tool',
+            tool: {
+              name: 'write_artifact_file',
+              status: 'success',
+              input: JSON.stringify({ filename: 'index.html' }),
+              output: JSON.stringify({ artifact: { path: artifact.path } })
+            }
+          }
+        ]}
+        status={SessionStatus.IDLE}
+        onStop={() => undefined}
+      />
+    )
+
+    expect(screen.getByText('Report')).toBeInTheDocument()
+    expect(screen.getByText('Preview · Click to open')).toBeInTheDocument()
+    expect(screen.queryByTitle('Report')).not.toBeInTheDocument()
+
+    useArtifactStore.setState({ artifactsByTask: {} })
   })
 
   it('shows only filenames for read tool subtitles', () => {

@@ -14,6 +14,19 @@
  * cannot change the workpieces of another task.
  */
 import type { Tool } from '@modelcontextprotocol/server'
+import {
+  HTML_PREVIEW_DEFAULT_WIDTH,
+  HTML_PREVIEW_MAX_WIDTH,
+  HTML_PREVIEW_MIN_WIDTH,
+  HTML_RENDER_DONT_NARRATE,
+  HTML_RENDER_LAYOUT_GUIDE,
+  HTML_RENDER_MAX_HEIGHT,
+  HTML_RENDER_MAX_LENGTH,
+  HTML_RENDER_MAX_TITLE_LENGTH,
+  HTML_RENDER_MIN_HEIGHT,
+  HTML_RENDER_NETWORK_POLICY,
+  HTML_RENDER_THEME_GUIDE
+} from '../../shared/html-render'
 
 /** Which task a session may act on. All fields null means full access. */
 export type TaskMcpScope = {
@@ -26,9 +39,14 @@ export type TaskMcpScope = {
 /** Calls one Task API route. In process this is handleRoute; over stdio it is fetch. */
 export type TaskApiInvoke = (route: string, params: Record<string, unknown>) => Promise<unknown>
 
-/** Result shape of an MCP tools/call. */
+/** Result shape of an MCP tools/call. Most tools return text; `html_preview`
+ * returns a PNG image block plus a text block of metrics (contentHeight,
+ * consoleErrors, missingImages). */
 export type ToolCallResult = {
-  content: Array<{ type: 'text'; text: string }>
+  content: Array<
+    | { type: 'text'; text: string }
+    | { type: 'image'; data: string; mimeType: string }
+  >
   isError?: boolean
 }
 
@@ -107,6 +125,20 @@ const artifactTools: Tool[] = [
       },
       required: ['artifact_id', 'filename', 'text_to_replace', 'replacement']
     }
+  },
+  {
+    name: 'html_render',
+    description: `Publish a self-contained HTML page (chart, table, diagram, image collage, mockup) so it appears INLINE in this task's conversation, above your next reply — check it with html_preview first. ${HTML_RENDER_THEME_GUIDE} ${HTML_RENDER_LAYOUT_GUIDE} ${HTML_RENDER_NETWORK_POLICY} Local images referenced by absolute file path (src="/abs/x.png", CSS url(/abs/x.png)) are inlined as data: URIs automatically; up to 10 MB per image, 25 MB per page. ${HTML_RENDER_DONT_NARRATE}`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'Task ID. Automatically scoped in a task agent session.' },
+        html: { type: 'string', minLength: 1, maxLength: HTML_RENDER_MAX_LENGTH, description: 'A complete, self-contained HTML document.' },
+        title: { type: 'string', minLength: 1, maxLength: HTML_RENDER_MAX_TITLE_LENGTH, description: 'Short title shown in the inline toolbar.' },
+        height: { type: 'number', minimum: HTML_RENDER_MIN_HEIGHT, maximum: HTML_RENDER_MAX_HEIGHT, description: `Height hint in px (${HTML_RENDER_MIN_HEIGHT}-${HTML_RENDER_MAX_HEIGHT}), used before the page reports its real content height.` }
+      },
+      required: ['html', 'title']
+    }
   }
 ]
 
@@ -114,6 +146,19 @@ const artifactToolNames = new Set(artifactTools.map((tool) => tool.name))
 
 const sharedTools: Tool[] = [
   ...artifactTools,
+  {
+    name: 'html_preview',
+    description: `Render HTML in an offscreen sandboxed browser and return a screenshot, so you can check a page BEFORE publishing it with html_render. Not stored anywhere — purely a self-check. Returns an image content block plus a path to the same PNG on disk, in case your harness does not display inline images. ${HTML_RENDER_THEME_GUIDE} ${HTML_RENDER_NETWORK_POLICY} Missing local images are reported in missing_images instead of failing (html_render is stricter and will reject them).`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        html: { type: 'string', minLength: 1, maxLength: HTML_RENDER_MAX_LENGTH, description: 'A complete, self-contained HTML document.' },
+        width: { type: 'number', minimum: HTML_PREVIEW_MIN_WIDTH, maximum: HTML_PREVIEW_MAX_WIDTH, description: `Viewport width in px (${HTML_PREVIEW_MIN_WIDTH}-${HTML_PREVIEW_MAX_WIDTH}), default ${HTML_PREVIEW_DEFAULT_WIDTH}.` },
+        appearance: { type: 'string', enum: ['dark', 'light'], description: 'Theme to preview against. Defaults to dark.' }
+      },
+      required: ['html']
+    }
+  },
   {
     name: 'list_agents',
     description: 'List all available agents with their capabilities and configurations. Each agent includes `usage_limits`: the current subscription plan usage of its harness (level low/moderate/high/critical/exhausted/unknown/not_applicable, most_used_percent, headroom_percent, per-window usage and reset times). When several agents fit a task equally well, prefer the one with the most headroom.',
@@ -1047,6 +1092,20 @@ export async function callToolForScope(
 
     if (result?.error) {
       return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: true }
+    }
+    // html_preview carries a screenshot: return it as an MCP image content
+    // block (not JSON text) plus a text block with the metrics, so a harness
+    // that renders image blocks shows the agent an actual picture.
+    const image = result?.image as { data?: unknown; mimeType?: unknown } | undefined
+    if (name === 'html_preview' && image && typeof image.data === 'string' && typeof image.mimeType === 'string') {
+      const { image: _droppedImage, ...metrics } = result as Record<string, unknown>
+      void _droppedImage
+      return {
+        content: [
+          { type: 'image', data: image.data, mimeType: image.mimeType },
+          { type: 'text', text: JSON.stringify(metrics, null, 2) }
+        ]
+      }
     }
     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
   } catch (error: unknown) {

@@ -1,7 +1,19 @@
 import { memo, useMemo, useState, type ReactNode } from 'react'
 import { Markdown } from '@/components/ui/Markdown'
+import { InlineHtmlRender } from '@/components/artifacts/InlineHtmlRender'
+import { findMessageArtifact } from '@/components/artifacts/find-message-artifact'
+import { ArtifactType, type Artifact } from '@shared/artifacts'
+import { mobileArtifactApi } from '../lib/artifact-api'
 import { cn } from '../lib/utils'
 import type { AgentMessage } from '../stores/agent-store'
+
+const EMPTY_ARTIFACTS: Artifact[] = []
+
+function openExternalLink(href: string): boolean {
+  if (!/^https?:\/\//i.test(href)) return false
+  window.open(href, '_blank', 'noopener,noreferrer')
+  return true
+}
 
 function HighlightedText({ text, query }: { text: string; query?: string }) {
   const normalizedQuery = query?.trim()
@@ -457,20 +469,36 @@ const ReasoningMessage = memo(function ReasoningMessage({ message, searchQuery }
 // virtualization, which makes this the difference between O(changed) and O(all)
 // work per delta.
 export const MessageActivityGroup = memo(
-  function MessageActivityGroup({ messages, searchQuery }: { messages: AgentMessage[]; searchQuery?: string }) {
+  function MessageActivityGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
     return (
       <div className="w-full border-l border-border/30 pl-2 py-0.5">
         {messages.map((message) => {
           if (message.partType === 'reasoning') {
             return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
           }
-          return <ToolCallMessage key={message.id} message={message} searchQuery={searchQuery} />
+          const artifact = findMessageArtifact(message, artifacts)
+          const isInlineHtml = artifact?.type === ArtifactType.HTML && artifact.inline
+          return (
+            <div key={message.id}>
+              <ToolCallMessage message={message} searchQuery={searchQuery} />
+              {artifact && isInlineHtml && (
+                <InlineHtmlRender
+                  artifact={artifact}
+                  artifactApi={mobileArtifactApi}
+                  onExpand={() => onOpenArtifact?.(artifact)}
+                  onLinkClick={openExternalLink}
+                />
+              )}
+            </div>
+          )
         })}
       </div>
     )
   },
   (prev, next) =>
     prev.searchQuery === next.searchQuery &&
+    prev.artifacts === next.artifacts &&
+    prev.onOpenArtifact === next.onOpenArtifact &&
     prev.messages.length === next.messages.length &&
     prev.messages.every((message, index) => message === next.messages[index])
 )

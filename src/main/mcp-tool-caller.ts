@@ -80,7 +80,9 @@ export class McpToolCaller {
     invoke: TaskApiInvoke
   ): Promise<McpToolCallResult> {
     const result = await callToolForScope(toolName, toolArgs, FULL_ACCESS_SCOPE, invoke)
-    const text = result.content[0]?.text ?? ''
+    // html_preview's first block can be an image; always take the first TEXT
+    // block (its JSON metrics, or the error payload) for this JSON-oriented caller.
+    const text = result.content.find((block): block is { type: 'text'; text: string } => block.type === 'text')?.text ?? ''
     if (result.isError) {
       return { success: false, error: text }
     }

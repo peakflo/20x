@@ -1,9 +1,52 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ArtifactContent } from '@shared/artifacts'
 import { ARTIFACT_BRIDGE_HANDSHAKE, ARTIFACT_MCP_SHIM } from '@shared/artifact-mcp'
+import {
+  applyHtmlRenderShell,
+  clampHtmlRenderHeight,
+  HTML_RENDER_SIZE_MESSAGE_TYPE,
+  HTML_RENDER_THEME_MESSAGE_TYPE,
+  isHtmlRenderSizeMessage,
+  type HtmlRenderTheme
+} from '@shared/html-render'
 import { prepareArtifactHtml } from '../artifact-resources'
+import { useHtmlRenderTheme } from './useHtmlRenderTheme'
 
-const HARDENING = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline' data:; script-src 'unsafe-inline' data:; font-src data:"><base href="about:blank"><script>window.open=function(){return null};document.addEventListener('click',function(event){var a=event.target.closest&&event.target.closest('a[href]');if(!a)return;var href=a.getAttribute('href');if(!href||href.charAt(0)==='#')return;event.preventDefault();window.parent.postMessage({type:'artifact:open-file',href:href},'*')},true);</script>${ARTIFACT_MCP_SHIM}`
+/** Posts the frame's content height to the host, clamped on the host side
+ * (never trust the frame's own arithmetic). Runs on load, on font-ready +
+ * two animation frames, and on every ResizeObserver tick of `<html>`. */
+const SIZE_BOOTSTRAP_SCRIPT = `<script>(function(){
+  var last=-1;
+  function send(){
+    var r=document.documentElement;
+    var h=Math.round(r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height);
+    if(h===last)return;
+    last=h;
+    window.parent.postMessage({type:'${HTML_RENDER_SIZE_MESSAGE_TYPE}',height:h},'*');
+  }
+  if(window.ResizeObserver)new ResizeObserver(send).observe(document.documentElement);
+  document.addEventListener('DOMContentLoaded',send);
+  window.addEventListener('load',send);
+  if(document.fonts&&document.fonts.ready){document.fonts.ready.then(function(){requestAnimationFrame(function(){requestAnimationFrame(send)})})}else{requestAnimationFrame(function(){requestAnimationFrame(send)})}
+})();</script>`
+
+/** Applies a theme pushed by the host after the document has loaded, without
+ * a reload — only the `--variable` values and the dark class change. */
+const THEME_LISTENER_SCRIPT = `<script>window.addEventListener('message',function(event){
+  var data=event.data;
+  if(!data||data.type!=='${HTML_RENDER_THEME_MESSAGE_TYPE}'||!data.theme)return;
+  var style=document.getElementById('20x-theme');
+  if(!style)return;
+  var vars=data.theme,out='';
+  for(var k in vars){if(k==='appearance')continue;out+='--'+k+':'+vars[k]+';'}
+  if(vars.appearance)out+='color-scheme:'+vars.appearance+';';
+  style.textContent=':root{'+out+'}';
+  document.documentElement.classList.toggle('dark',vars.appearance==='dark');
+});</script>`
+
+function interactiveScripts(): string {
+  return `<script>window.open=function(){return null};document.addEventListener('click',function(event){var a=event.target.closest&&event.target.closest('a[href]');if(!a)return;var href=a.getAttribute('href');if(!href||href.charAt(0)==='#')return;event.preventDefault();window.parent.postMessage({type:'artifact:open-file',href:href},'*')},true);</script>${SIZE_BOOTSTRAP_SCRIPT}${THEME_LISTENER_SCRIPT}${ARTIFACT_MCP_SHIM}`
+}
 
 const EMPTY_DOCUMENT = '<!doctype html><html><head></head><body></body></html>'
 
@@ -14,11 +57,19 @@ const EMPTY_DOCUMENT = '<!doctype html><html><head></head><body></body></html>'
  * and the frame has no CSP. A `<meta>` right after the doctype opens the
  * implied head, so the guard is the head's first child; a later `<html>` tag
  * only adds its attributes and a later `<head>` is ignored.
+ *
+ * `theme`, when given, is baked in as the initial `#20x-theme` style so the
+ * very first paint is already themed (no flash of the wrong palette). Later
+ * theme changes are pushed over `postMessage` by the caller instead of
+ * calling this again — changing srcDoc would reload the document.
  */
-export function hardenArtifactHtml(source: string): string {
-  const doctype = /^\s*<!doctype[^>]*>/i.exec(source)
-  const rest = doctype ? source.slice(doctype[0].length) : source
-  return `<!doctype html>${HARDENING}${rest}`
+export function hardenArtifactHtml(source: string, theme?: HtmlRenderTheme): string {
+  const shelled = applyHtmlRenderShell(source, theme)
+  // Insert the interactive scripts right after the shell `applyHtmlRenderShell`
+  // just added (CSP meta + base + theme style), still before any artifact
+  // content/markup.
+  const shellEnd = shelled.indexOf('</style>') + '</style>'.length
+  return `${shelled.slice(0, shellEnd)}${interactiveScripts()}${shelled.slice(shellEnd)}`
 }
 
 type Reply = (message: Record<string, unknown>) => void
@@ -37,7 +88,27 @@ type Reply = (message: Record<string, unknown>) => void
  * neither call tools nor receive replies. The iframe is keyed by its
  * document, so new content gets a new element and a new handshake.
  */
-export function ArtifactHtmlFrame({ html, title, taskId, path, files, readFile, onLinkClick, onMessage }: { html: string; title: string; taskId: string; path: string; files: string[]; readFile: (taskId: string, path: string) => Promise<ArtifactContent | null>; onLinkClick?: (href: string) => boolean; onMessage?: (data: unknown, reply: Reply) => void }) {
+export function ArtifactHtmlFrame({
+  html, title, taskId, path, files, readFile, onLinkClick, onMessage,
+  fill = true, height, onContentHeight
+}: {
+  html: string
+  title: string
+  taskId: string
+  path: string
+  files: string[]
+  readFile: (taskId: string, path: string) => Promise<ArtifactContent | null>
+  onLinkClick?: (href: string) => boolean
+  onMessage?: (data: unknown, reply: Reply) => void
+  /** Default true: fills its container (the artifact panel/tab). Set false
+   * for an inline render that auto-sizes to `height` instead. */
+  fill?: boolean
+  /** Pixel height to use when `fill` is false. */
+  height?: number
+  /** Called with the frame's own measured content height (clamped 80..2000)
+   * as it changes — only fires when `fill` is false. */
+  onContentHeight?: (height: number) => void
+}) {
   const frameRef = useRef<HTMLIFrameElement>(null)
   const [prepared, setPrepared] = useState<string | null>(null)
   const filesKey = files.join('\0')
@@ -51,19 +122,43 @@ export function ArtifactHtmlFrame({ html, title, taskId, path, files, readFile, 
     })
     return () => { cancelled = true }
   }, [html, path, filesKey, readFile, taskId])
-  const srcDoc = useMemo(() => hardenArtifactHtml(prepared || EMPTY_DOCUMENT), [prepared])
+
+  // The live theme (follows the app's own light/dark toggle). Baked into the
+  // document on (re)mount; later changes are pushed over postMessage below,
+  // never by recomputing srcDoc — that would reload the page.
+  const theme = useHtmlRenderTheme()
+  const themeRef = useRef(theme)
+  themeRef.current = theme
+  const bakedThemeRef = useRef<HtmlRenderTheme | undefined>(undefined)
+  const srcDoc = useMemo(() => {
+    bakedThemeRef.current = themeRef.current
+    return hardenArtifactHtml(prepared || EMPTY_DOCUMENT, themeRef.current)
+  }, [prepared])
+
+  useEffect(() => {
+    if (bakedThemeRef.current === theme) return
+    bakedThemeRef.current = theme
+    frameRef.current?.contentWindow?.postMessage({ type: HTML_RENDER_THEME_MESSAGE_TYPE, theme }, '*')
+  }, [theme])
+
   // Callers pass inline arrows. Keep the latest ones without re-running the
   // effect, because a re-run would forget the accepted port.
   const onLinkClickRef = useRef(onLinkClick)
   const onMessageRef = useRef(onMessage)
+  const onContentHeightRef = useRef(onContentHeight)
   onLinkClickRef.current = onLinkClick
   onMessageRef.current = onMessage
+  onContentHeightRef.current = onContentHeight
   useLayoutEffect(() => {
     let port: MessagePort | null = null
     const listener = (event: MessageEvent) => {
       if (event.origin !== 'null' || !frameRef.current?.contentWindow || event.source !== frameRef.current.contentWindow) return
       if (event.data?.type === 'artifact:open-file' && typeof event.data.href === 'string') {
         onLinkClickRef.current?.(event.data.href)
+        return
+      }
+      if (isHtmlRenderSizeMessage(event.data)) {
+        onContentHeightRef.current?.(clampHtmlRenderHeight(event.data.height))
         return
       }
       if (port || event.data?.type !== ARTIFACT_BRIDGE_HANDSHAKE || event.ports?.length !== 1) return
@@ -79,5 +174,16 @@ export function ArtifactHtmlFrame({ html, title, taskId, path, files, readFile, 
       port?.close()
     }
   }, [srcDoc])
-  return <iframe key={srcDoc} ref={frameRef} title={title} sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={srcDoc} className="h-full w-full border-0 bg-white" />
+  return (
+    <iframe
+      key={srcDoc}
+      ref={frameRef}
+      title={title}
+      sandbox="allow-scripts"
+      referrerPolicy="no-referrer"
+      srcDoc={srcDoc}
+      className={fill ? 'h-full w-full border-0 bg-white' : 'w-full border-0'}
+      style={fill ? undefined : { height: `${height ?? 80}px` }}
+    />
+  )
 }

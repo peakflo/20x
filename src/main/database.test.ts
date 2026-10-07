@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect, beforeEach } from 'vitest'
@@ -81,6 +81,26 @@ describe('Task CRUD', () => {
 
   it('returns false when deleting non-existent task', () => {
     expect(db.deleteTask('non-existent')).toBe(false)
+  })
+
+  it('removes the task workspace — artifacts, including inline HTML renders — along with the task', () => {
+    const task = db.createTask(makeTask())!
+    // `createTestDb` stubs `getWorkspaceDir` to a fixed path unrelated to the
+    // real one (see db-test-helper.ts), so build the real path the same way
+    // `deleteTaskWorkspace` does (both read `app.getPath('userData')`,
+    // mocked to '/tmp/pf-desktop-test' in test/setup-main.ts) rather than
+    // going through the stub.
+    const workspaceDir = join('/tmp/pf-desktop-test', 'workspaces', task.id)
+    // Simulate what html_render/create_artifact leave behind.
+    mkdirSync(join(workspaceDir, 'artifacts', 'artifact_chart_abc12345'), { recursive: true })
+    writeFileSync(join(workspaceDir, 'artifacts', 'artifact_chart_abc12345', 'index.html'), '<p>chart</p>')
+    mkdirSync(join(workspaceDir, '.20x'), { recursive: true })
+    writeFileSync(join(workspaceDir, '.20x', 'artifacts.json'), '{"version":1,"artifacts":[]}')
+    expect(existsSync(workspaceDir)).toBe(true)
+
+    db.deleteTask(task.id)
+
+    expect(existsSync(workspaceDir)).toBe(false)
   })
 
   it('getByExternalId finds the right task', () => {

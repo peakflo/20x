@@ -356,6 +356,16 @@ export function registerIpcHandlers(
     return writeArtifactFileToClipboard(filePath)
   })
 
+  ipcMain.handle('artifacts:saveAs', async (_, taskId: string, relativePath: string, suggestedName: string): Promise<boolean> => {
+    const filePath = await resolveTaskArtifactFilePath(db.getWorkspaceDir(taskId), relativePath)
+    if (!filePath) return false
+    const safeName = basename(suggestedName) || basename(filePath)
+    const result = await dialog.showSaveDialog({ defaultPath: join(app.getPath('downloads'), safeName), filters: [{ name: 'HTML', extensions: ['html', 'htm'] }] })
+    if (result.canceled || !result.filePath) return false
+    copyFileSync(filePath, result.filePath)
+    return true
+  })
+
   ipcMain.handle('attachments:open', (_, taskId: string, attachmentId: string) => {
     console.log('[IPC] attachments:open called:', { taskId, attachmentId })
 

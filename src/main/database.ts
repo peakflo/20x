@@ -2201,6 +2201,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
   }
 
+  /** Removes the task's artifact registry and files (`.20x/artifacts.json`,
+   * `artifacts/<id>/...`) — everything `getWorkspaceDir` hands out, including
+   * inline HTML renders. Mirrors `deleteTaskAttachments`. */
+  deleteTaskWorkspace(taskId: string): void {
+    const dir = join(app.getPath('userData'), 'workspaces', taskId)
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
+  }
+
   getTasks(): TaskRecord[] {
     if (!this.ensureDbOpen()) return []
 
@@ -2701,6 +2709,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
   deleteTask(id: string): boolean {
     this.deleteTaskAttachments(id)
+    this.deleteTaskWorkspace(id)
     this.deleteTranscriptParts(id)
     const result = this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
     return result.changes > 0

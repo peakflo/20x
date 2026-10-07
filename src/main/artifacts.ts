@@ -202,7 +202,9 @@ export function registeredArtifactToArtifact(record: RegisteredArtifact): Artifa
     files: record.files.map((file) => `${ARTIFACT_FILES_DIRECTORY}/${record.artifactId}/${file}`),
     workpieceKey: record.artifactId,
     updatedAt: record.updatedAt,
-    reloadTrigger: Math.floor(record.updatedAt)
+    reloadTrigger: Math.floor(record.updatedAt),
+    inline: record.inline,
+    heightHint: record.heightHint
   }
 }
 
@@ -216,7 +218,9 @@ function registeredArtifactToEntry(record: RegisteredArtifact): ArtifactFileEntr
     updatedAt: record.updatedAt,
     size: 0,
     workpieceKey: record.artifactId,
-    files: record.files.map((file) => `${ARTIFACT_FILES_DIRECTORY}/${record.artifactId}/${file}`)
+    files: record.files.map((file) => `${ARTIFACT_FILES_DIRECTORY}/${record.artifactId}/${file}`),
+    inline: record.inline,
+    heightHint: record.heightHint
   }
 }
 
@@ -280,7 +284,7 @@ export async function listRegisteredTaskArtifacts(workspaceDir: string, taskId: 
 export async function writeRegisteredTaskArtifactFile(
   workspaceDir: string,
   taskId: string,
-  input: { artifactId: string; filename: string; content: string; encoding?: 'utf8' | 'base64'; preview?: boolean }
+  input: { artifactId: string; filename: string; content: string; encoding?: 'utf8' | 'base64'; preview?: boolean; inline?: boolean; heightHint?: number }
 ): Promise<Artifact> {
   const existingRegistry = await readArtifactRegistry(workspaceDir)
   if (!existingRegistry.artifacts.some((artifact) => artifact.artifactId === input.artifactId && artifact.taskId === taskId)) {
@@ -305,6 +309,8 @@ export async function writeRegisteredTaskArtifactFile(
       artifact.entryFile = target.relativeName
       artifact.type = candidateType
     }
+    if (input.inline !== undefined) artifact.inline = input.inline
+    if (input.heightHint !== undefined) artifact.heightHint = input.heightHint
     artifact.updatedAt = Date.now()
     return artifact
   })

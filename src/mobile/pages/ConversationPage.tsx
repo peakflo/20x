@@ -9,6 +9,7 @@ import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '.
 import { ArtifactCard } from '../components/ArtifactCard'
 import { ChatInput, type ChatInputAttachment } from '../components/ChatInput'
 import { useArtifactStore } from '../stores/artifact-store'
+import type { Artifact } from '@shared/artifacts'
 import { cn } from '../lib/utils'
 import { captureAnalyticsEvent } from '@/lib/analytics'
 import type { Route } from '../App'
@@ -78,15 +79,19 @@ const TranscriptRow = memo(function TranscriptRow({
   item,
   activeQuestionId,
   normalizedSearchQuery,
-  onAnswer
+  onAnswer,
+  artifacts,
+  onOpenArtifact
 }: {
   item: TranscriptItem
   activeQuestionId: string | null
   normalizedSearchQuery: string
   onAnswer: (answer: string) => void
+  artifacts: Artifact[]
+  onOpenArtifact: (artifact: Artifact) => void
 }) {
   if (item.type === 'activity') {
-    return <MessageActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} />
+    return <MessageActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} artifacts={artifacts} onOpenArtifact={onOpenArtifact} />
   }
 
   return (
@@ -275,6 +280,11 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       }
     },
     [taskId, isQuestion, activeQuestionId, initSession, beginSend, endSend]
+  )
+
+  const handleOpenArtifact = useCallback(
+    (artifact: Artifact) => onNavigate({ page: 'artifact', taskId, artifactId: artifact.id }),
+    [onNavigate, taskId]
   )
 
   // Handle question answer from QuestionMessage options
@@ -754,6 +764,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                         activeQuestionId={activeQuestionId}
                         normalizedSearchQuery={normalizedSearchQuery}
                         onAnswer={handleAnswer}
+                        artifacts={artifacts}
+                        onOpenArtifact={handleOpenArtifact}
                       />
                     </div>
                   </div>

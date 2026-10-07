@@ -77,6 +77,85 @@ describe('artifact workpiece tools', () => {
   })
 })
 
+describe('html_render / html_preview tools', () => {
+  it('html_render is task-scoped like the other artifact tools, html_preview is not', () => {
+    for (const scope of [FULL_ACCESS_SCOPE, SCOPED]) {
+      const names = listToolsForScope(scope).map((t) => t.name)
+      expect(names).toContain('html_render')
+      expect(names).toContain('html_preview')
+    }
+    const htmlRenderProps = propertiesOf(SCOPED, 'html_render')
+    expect(Object.keys(htmlRenderProps)).toEqual(expect.arrayContaining(['html', 'title', 'height']))
+    const htmlPreviewProps = propertiesOf(SCOPED, 'html_preview')
+    expect(Object.keys(htmlPreviewProps)).toEqual(expect.arrayContaining(['html', 'width', 'appearance']))
+    expect(htmlPreviewProps.task_id).toBeUndefined()
+  })
+
+  it('pins html_render to the owning task, like write_artifact_file', async () => {
+    const calls: Array<{ route: string; params: Record<string, unknown> }> = []
+    const invoke = async (route: string, params: Record<string, unknown>): Promise<unknown> => {
+      calls.push({ route, params })
+      return { artifact_id: 'a1', path: 'artifacts/a1/index.html', title: 'x', message: 'ok' }
+    }
+
+    await callToolForScope(
+      'html_render',
+      { task_id: 'some-other-task', html: '<p>x</p>', title: 'x' },
+      { parentTaskId: null, taskId: null, artifactTaskId: 'task-owner' },
+      invoke
+    )
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].params.task_id).toBe('task-owner')
+  })
+
+  it('does not force a task_id onto html_preview', async () => {
+    const calls: Array<{ route: string; params: Record<string, unknown> }> = []
+    const invoke = async (route: string, params: Record<string, unknown>): Promise<unknown> => {
+      calls.push({ route, params })
+      return { image: { mimeType: 'image/png', data: 'AAAA' }, contentHeight: 10, consoleErrors: [], missingImages: [] }
+    }
+
+    await callToolForScope('html_preview', { html: '<p>x</p>' }, { parentTaskId: null, taskId: null, artifactTaskId: 'task-owner' }, invoke)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].params.task_id).toBeUndefined()
+  })
+
+  it('returns html_preview as an MCP image content block plus a text block of metrics', async () => {
+    const invoke = async (): Promise<unknown> => ({
+      image: { mimeType: 'image/png', data: 'ZmFrZS1wbmc=' },
+      contentHeight: 480,
+      consoleErrors: ['oops'],
+      missingImages: []
+    })
+
+    const result = await callToolForScope('html_preview', { html: '<p>x</p>' }, FULL_ACCESS_SCOPE, invoke)
+
+    expect(result.isError).toBeUndefined()
+    expect(result.content).toHaveLength(2)
+    expect(result.content[0]).toEqual({ type: 'image', data: 'ZmFrZS1wbmc=', mimeType: 'image/png' })
+    const textBlock = result.content[1] as { type: 'text'; text: string }
+    expect(textBlock.type).toBe('text')
+    const metrics = JSON.parse(textBlock.text) as Record<string, unknown>
+    expect(metrics).toEqual({ contentHeight: 480, consoleErrors: ['oops'], missingImages: [] })
+    expect(metrics.image).toBeUndefined()
+  })
+
+  it('still wraps a plain html_render result as text, unaffected by the image special-case', async () => {
+    const invoke = async (): Promise<unknown> => ({ artifact_id: 'a1', path: 'artifacts/a1/index.html', title: 'Chart', message: 'ok' })
+    const result = await callToolForScope('html_render', { html: '<p>x</p>', title: 'Chart' }, FULL_ACCESS_SCOPE, invoke)
+    expect(result.content).toEqual([{ type: 'text', text: JSON.stringify({ artifact_id: 'a1', path: 'artifacts/a1/index.html', title: 'Chart', message: 'ok' }, null, 2) }])
+  })
+
+  it('surfaces an html_preview error as a normal error result, not an image block', async () => {
+    const invoke = async (): Promise<unknown> => ({ error: 'html_preview timed out after 20000ms' })
+    const result = await callToolForScope('html_preview', { html: '<p>x</p>' }, FULL_ACCESS_SCOPE, invoke)
+    expect(result.isError).toBe(true)
+    expect(result.content).toEqual([{ type: 'text', text: JSON.stringify({ error: 'html_preview timed out after 20000ms' }) }])
+  })
+})
+
 describe('tool sets per scope', () => {
   it('gives a full-access session the orchestration tools and no scoped aliases', () => {
     const names = listToolsForScope(FULL_ACCESS_SCOPE).map((t) => t.name)
@@ -163,7 +242,7 @@ describe('subtask status writes', () => {
 
     const result = await callToolForScope('update_own_task', { status: 'cancelled' }, SCOPED, invoke)
     expect(result.isError).toBe(true)
-    expect(result.content[0].text).toContain('cannot set status')
+    expect((result.content[0] as { text: string }).text).toContain('cannot set status')
   })
 
   it('allows a scoped agent to complete its own task', async () => {
