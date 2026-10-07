@@ -9,6 +9,7 @@ import {
   HtmlRenderPageTooLargeError,
   inlineLocalImages,
   sniffImageBytes,
+  waitForFreshPaint,
   withTimeout,
   type HtmlPreviewElectron,
   type HtmlPreviewWindow
@@ -131,18 +132,37 @@ describe('appearanceFromInput', () => {
   })
 })
 
-function fakeElectron(overrides: Partial<HtmlPreviewWindow> = {}): { electron: HtmlPreviewElectron; window: HtmlPreviewWindow } {
+/**
+ * Offscreen windows deliver frames through the `'paint'` event, not
+ * `capturePage()` (see the comment on `captureWithWindow`). The fake's `on`
+ * auto-fires a fresh 'paint' every 5ms once captureWithWindow registers a
+ * listener for it, like a real offscreen window repainting continuously —
+ * `destroy()` stops it so no interval outlives its test.
+ */
+function fakeElectron(options: {
+  webContentsOverrides?: Partial<HtmlPreviewWindow['webContents']>
+  consoleMessage?: [level: number, message: string]
+} = {}): { electron: HtmlPreviewElectron; window: HtmlPreviewWindow } {
+  let paintInterval: ReturnType<typeof setInterval> | null = null
+  const webContents: HtmlPreviewWindow['webContents'] = {
+    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+      if (event === 'paint') {
+        paintInterval = setInterval(() => listener(null, null, { toPNG: () => Buffer.from('fake-png') }), 5)
+      }
+      if (event === 'console-message' && options.consoleMessage) {
+        const [level, message] = options.consoleMessage
+        queueMicrotask(() => listener(null, level, message))
+      }
+    }) as HtmlPreviewWindow['webContents']['on'],
+    setWindowOpenHandler: vi.fn(),
+    loadFile: vi.fn(async () => undefined),
+    executeJavaScript: vi.fn(async (script: string) => (script.includes('scrollHeight') ? 480 : true)),
+    ...options.webContentsOverrides
+  }
   const window: HtmlPreviewWindow = {
-    webContents: {
-      on: vi.fn(),
-      setWindowOpenHandler: vi.fn(),
-      loadFile: vi.fn(async () => undefined),
-      executeJavaScript: vi.fn(async (script: string) => (script.includes('scrollHeight') ? 480 : true)),
-      capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from('fake-png') }))
-    },
+    webContents,
     setContentSize: vi.fn(),
-    destroy: vi.fn(),
-    ...overrides
+    destroy: vi.fn(() => { if (paintInterval) clearInterval(paintInterval) })
   }
   const electron: HtmlPreviewElectron = {
     BrowserWindow: vi.fn(function BrowserWindow() { return window }) as unknown as HtmlPreviewElectron['BrowserWindow']
@@ -154,15 +174,20 @@ describe('captureHtmlPreview', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it('returns a PNG, the measured content height, and captured console errors', async () => {
-    const { electron, window } = fakeElectron()
-    window.webContents.on = vi.fn((event, listener) => {
-      if (event === 'console-message') (listener as (e: unknown, level: number, message: string) => void)(null, 3, 'boom')
-    }) as HtmlPreviewWindow['webContents']['on']
+    const { electron, window } = fakeElectron({ consoleMessage: [3, 'boom'] })
     const result = await captureHtmlPreview(electron, '<p>hi</p>', 728)
     expect(result.png.toString()).toBe('fake-png')
     expect(result.contentHeight).toBe(480)
     expect(result.consoleErrors).toEqual(['boom'])
     expect(window.destroy).toHaveBeenCalled()
+  })
+
+  it('captures canvas/GPU-composited content via paint, not capturePage (which is unreliable for offscreen windows)', async () => {
+    // A window whose webContents has no capturePage at all — if the
+    // implementation ever called it again, this would throw immediately.
+    const { electron } = fakeElectron({ webContentsOverrides: { loadFile: vi.fn(async () => undefined) } })
+    const result = await captureHtmlPreview(electron, '<canvas></canvas>', 728)
+    expect(result.png.toString()).toBe('fake-png')
   })
 
   it('blocks navigation and popups', async () => {
@@ -176,17 +201,14 @@ describe('captureHtmlPreview', () => {
 
   it('destroys the window even when capture throws', async () => {
     const { electron, window } = fakeElectron({
-      webContents: {
-        on: vi.fn(),
-        setWindowOpenHandler: vi.fn(),
-        loadFile: vi.fn(async () => { throw new Error('load failed') }),
-        executeJavaScript: vi.fn(),
-        capturePage: vi.fn()
+      webContentsOverrides: {
+        loadFile: vi.fn(async () => { throw new Error('load failed') })
       }
     })
     await expect(captureHtmlPreview(electron, '<p>hi</p>', 728)).rejects.toThrow('load failed')
     expect(window.destroy).toHaveBeenCalled()
   })
+
 
   it('times out slow pages instead of hanging (exercising captureHtmlPreview\'s real 20s budget would be impractical in a unit test, so this covers the shared withTimeout it is built on)', async () => {
     await expect(withTimeout(20, () => new Promise(() => { /* never resolves */ }))).rejects.toThrow(/timed out/)
@@ -198,9 +220,14 @@ describe('captureHtmlPreview', () => {
     const windows: HtmlPreviewWindow[] = []
     const electron: HtmlPreviewElectron = {
       BrowserWindow: vi.fn(function BrowserWindow() {
+        let paintInterval: ReturnType<typeof setInterval> | null = null
         const win: HtmlPreviewWindow = {
           webContents: {
-            on: vi.fn(),
+            on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+              if (event === 'paint') {
+                paintInterval = setInterval(() => listener(null, null, { toPNG: () => Buffer.from('p') }), 5)
+              }
+            }) as HtmlPreviewWindow['webContents']['on'],
             setWindowOpenHandler: vi.fn(),
             loadFile: vi.fn(async () => {
               active++
@@ -208,11 +235,10 @@ describe('captureHtmlPreview', () => {
               await new Promise((resolve) => setTimeout(resolve, 20))
               active--
             }),
-            executeJavaScript: vi.fn(async () => 100),
-            capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from('p') }))
+            executeJavaScript: vi.fn(async () => 100)
           },
           setContentSize: vi.fn(),
-          destroy: vi.fn()
+          destroy: vi.fn(() => { if (paintInterval) clearInterval(paintInterval) })
         }
         windows.push(win)
         return win
@@ -222,5 +248,27 @@ describe('captureHtmlPreview', () => {
     await Promise.all(Array.from({ length: HTML_PREVIEW_MAX_CONCURRENT + 2 }, () => captureHtmlPreview(electron, '<p>x</p>', 728)))
     expect(maxActive).toBeLessThanOrEqual(HTML_PREVIEW_MAX_CONCURRENT)
     expect(windows.every((w) => (w.destroy as ReturnType<typeof vi.fn>).mock.calls.length === 1)).toBe(true)
+  })
+})
+
+describe('waitForFreshPaint', () => {
+  it('resolves as soon as a frame painted at/after readyAt is available', async () => {
+    const image = { toPNG: () => Buffer.from('fresh') }
+    const readyAt = Date.now()
+    const result = await waitForFreshPaint(() => ({ image, paintedAt: readyAt + 1 }), readyAt, 200)
+    expect(result).toBe(image)
+  })
+
+  it('falls back to a stale frame rather than failing the whole preview, once at least one frame exists', async () => {
+    const stale = { toPNG: () => Buffer.from('stale') }
+    // paintedAt is always before readyAt, so this never counts as "fresh" —
+    // the timeout should still resolve with it instead of rejecting.
+    const result = await waitForFreshPaint(() => ({ image: stale, paintedAt: 0 }), Date.now() + 10_000, 40)
+    expect(result).toBe(stale)
+  })
+
+  it('rejects clearly when the window never produces a single frame', async () => {
+    await expect(waitForFreshPaint(() => ({ image: null, paintedAt: 0 }), Date.now(), 40))
+      .rejects.toThrow(/did not produce a frame/)
   })
 })
