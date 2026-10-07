@@ -474,30 +474,39 @@ const ReasoningMessage = memo(function ReasoningMessage({ message, searchQuery }
 export const MessageActivityGroup = memo(
   function MessageActivityGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
     return (
-      <div className="w-full border-l border-border/30 pl-2 py-0.5">
+      <>
+        <div className="w-full border-l border-border/30 pl-2 py-0.5">
+          {messages.map((message) => {
+            if (message.partType === 'reasoning') {
+              return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
+            }
+            const artifact = findMessageArtifact(message, artifacts) || findChatScadArtifact(message, artifacts)
+            const isScad = !!artifact?.path?.toLowerCase().endsWith('.scad')
+            return (
+              <div key={message.id}>
+                <ToolCallMessage message={message} searchQuery={searchQuery} />
+                {artifact && isScad && onOpenArtifact && <InlineScadPreview artifact={artifact} renderModel={api.artifacts.renderScad} onOpen={() => onOpenArtifact(artifact)} />}
+              </div>
+            )
+          })}
+        </div>
+        {/* Inline HTML renders sit at message level, not indented under the
+            tool-call column above — the page is the agent's visual reply,
+            not a detail of the tool call that produced it. */}
         {messages.map((message) => {
-          if (message.partType === 'reasoning') {
-            return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
-          }
-          const artifact = findMessageArtifact(message, artifacts) || findChatScadArtifact(message, artifacts)
-          const isInlineHtml = artifact?.type === ArtifactType.HTML && artifact.inline
-          const isScad = !!artifact?.path?.toLowerCase().endsWith('.scad')
+          const artifact = findMessageArtifact(message, artifacts)
+          if (!artifact || artifact.type !== ArtifactType.HTML || !artifact.inline) return null
           return (
-            <div key={message.id}>
-              <ToolCallMessage message={message} searchQuery={searchQuery} />
-              {artifact && isInlineHtml && (
-                <InlineHtmlRender
-                  artifact={artifact}
-                  artifactApi={mobileArtifactApi}
-                  onExpand={() => onOpenArtifact?.(artifact)}
-                  onLinkClick={openExternalLink}
-                />
-              )}
-              {artifact && isScad && onOpenArtifact && <InlineScadPreview artifact={artifact} renderModel={api.artifacts.renderScad} onOpen={() => onOpenArtifact(artifact)} />}
-            </div>
+            <InlineHtmlRender
+              key={message.id}
+              artifact={artifact}
+              artifactApi={mobileArtifactApi}
+              onExpand={() => onOpenArtifact?.(artifact)}
+              onLinkClick={openExternalLink}
+            />
           )
         })}
-      </div>
+      </>
     )
   },
   (prev, next) =>
