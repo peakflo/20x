@@ -12,6 +12,8 @@ export enum RunShortcutAction {
   RESUME = 'resume',
   /** Assigned agent, persisted session with a transcript: start a fresh session. */
   RESTART = 'restart',
+  /** Failed live session: send a follow-up in the same conversation. */
+  CONTINUE = 'continue',
   /** Unassigned task: triage with the default agent, which also starts it. */
   TRIAGE = 'triage'
 }
@@ -26,8 +28,12 @@ export interface RunShortcutInput {
   persistedSessionId: string | null | undefined
   /** Session currently held in memory for this task. */
   liveSessionId: string | null | undefined
-  /** Whether the in-memory session is idle. Anything else means a session is busy. */
+  /** Whether the in-memory session is idle. */
   liveSessionIdle: boolean
+  /** Whether the live session stopped after an agent or provider error. */
+  liveSessionErrored: boolean
+  /** A follow-up was sent and has not started yet. */
+  liveSessionPendingSend: boolean
   /** Number of messages loaded in the in-memory session. */
   liveMessageCount: number
 }
@@ -45,7 +51,10 @@ export function resolveRunShortcut(input: RunShortcutInput): RunShortcutDecision
   if (input.taskStatus === TaskStatus.Completed) {
     return { action: null, blockedReason: 'This task is already completed' }
   }
-  if (input.liveSessionId || !input.liveSessionIdle) {
+  if (input.liveSessionPendingSend || (!input.liveSessionIdle && !input.liveSessionErrored)) {
+    return { action: null, blockedReason: 'The agent is already running on this task' }
+  }
+  if (input.liveSessionId && (!input.liveSessionErrored || !input.assignedAgent)) {
     return { action: null, blockedReason: 'The agent is already running on this task' }
   }
 
@@ -53,6 +62,7 @@ export function resolveRunShortcut(input: RunShortcutInput): RunShortcutDecision
     if (!input.agentConfigured) {
       return { action: null, blockedReason: 'The assigned agent is not configured' }
     }
+    if (input.liveSessionId && input.liveSessionErrored) return { action: RunShortcutAction.CONTINUE }
     if (!input.persistedSessionId) return { action: RunShortcutAction.START }
     if (input.liveMessageCount === 0) return { action: RunShortcutAction.RESUME }
     return { action: RunShortcutAction.RESTART }

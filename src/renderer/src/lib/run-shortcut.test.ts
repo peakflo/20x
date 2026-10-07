@@ -9,6 +9,8 @@ const base: RunShortcutInput = {
   persistedSessionId: null,
   liveSessionId: null,
   liveSessionIdle: true,
+  liveSessionErrored: false,
+  liveSessionPendingSend: false,
   liveMessageCount: 0
 }
 
@@ -71,6 +73,27 @@ describe('resolveRunShortcut', () => {
     it('does not start a second session while one is running', () => {
       expect(resolveRunShortcut({ ...assigned, liveSessionId: 'sess-1' })).toMatchObject({ action: null })
       expect(resolveRunShortcut({ ...assigned, liveSessionIdle: false })).toMatchObject({ action: null })
+    })
+
+    it('continues a failed live session in the same conversation', () => {
+      expect(resolveRunShortcut({
+        ...assigned,
+        taskStatus: TaskStatus.AgentWorking,
+        persistedSessionId: 'sess-1',
+        liveSessionId: 'sess-1',
+        liveSessionIdle: false,
+        liveSessionErrored: true
+      })).toEqual({ action: RunShortcutAction.CONTINUE })
+    })
+
+    it('blocks a second follow-up while the first is pending', () => {
+      expect(resolveRunShortcut({
+        ...assigned,
+        liveSessionId: 'sess-1',
+        liveSessionIdle: false,
+        liveSessionErrored: true,
+        liveSessionPendingSend: true
+      })).toMatchObject({ action: null })
     })
   })
 

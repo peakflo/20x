@@ -916,6 +916,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
       persistedSessionId: task.session_id,
       liveSessionId: session.sessionId,
       liveSessionIdle: session.status === SessionStatus.IDLE,
+      liveSessionErrored: session.status === SessionStatus.ERROR,
+      liveSessionPendingSend: !!session.pendingSend,
       liveMessageCount: session.messages.length
     })
     if (decision.action === null) {
@@ -926,10 +928,14 @@ Update existing skills that were helpful or create new ones for patterns worth r
       void handleResumeSession()
     } else if (decision.action === RunShortcutAction.RESTART) {
       void handleStartFreshSession()
+    } else if (decision.action === RunShortcutAction.CONTINUE) {
+      void handleSend('continue').catch((error) => {
+        dispatchShortcutFeedback(error instanceof Error ? error.message : String(error), true)
+      })
     } else {
       void handleTriage()
     }
-  }, [agents, handleResumeSession, handleStartFreshSession, handleStartSession, handleTriage, session.messages.length, session.sessionId, session.status, task])
+  }, [agents, handleResumeSession, handleStartFreshSession, handleStartSession, handleSend, handleTriage, session.messages.length, session.pendingSend, session.sessionId, session.status, task])
 
   const handleTaskShortcut = ({ action, taskId }: TaskShortcutDetail) => {
     if (!task || task.id !== taskId) return

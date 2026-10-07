@@ -212,6 +212,26 @@ describe('TaskWorkspace keyboard actions', () => {
     expect(window.electronAPI.agentSession.start).not.toHaveBeenCalled()
   })
 
+  it('sends continue to a failed live session through R', async () => {
+    const task = makeRendererTask({
+      agent_id: 'agent-1',
+      session_id: 'failed-session',
+      status: TaskStatus.AgentWorking
+    })
+    useAgentStore.getState().initSession(task.id, 'failed-session', 'agent-1')
+    const failed = useAgentStore.getState().sessions.get(task.id)!
+    useAgentStore.setState({ sessions: new Map([[task.id, { ...failed, status: SessionStatus.ERROR }]]) })
+    renderWorkspace(task, [makeAgent({ config: { coding_agent: CodingAgentType.CODEX, model: 'gpt-6' } })])
+
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.RUN, taskId: task.id }))
+
+    await waitFor(() => expect(window.electronAPI.agentSession.send).toHaveBeenCalledWith(
+      'failed-session', 'continue', task.id, 'agent-1', undefined
+    ))
+    expect(window.electronAPI.agentSession.start).not.toHaveBeenCalled()
+    expect(window.electronAPI.agentSession.resume).not.toHaveBeenCalled()
+  })
+
   it('acts on the task as last rendered, not on a stale copy', async () => {
     const unassigned = makeRendererTask({ agent_id: null })
     const agent = makeAgent({ config: { coding_agent: CodingAgentType.CODEX, model: 'gpt-6' } })
