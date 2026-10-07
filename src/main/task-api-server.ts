@@ -385,8 +385,8 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       }
 
       rawDb.prepare(`
-        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, is_recurring, recurrence_pattern, next_occurrence_at, parent_task_id, auto_start_agent, auto_complete_without_review, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, project_id, skill_ids, is_recurring, recurrence_pattern, next_occurrence_at, parent_task_id, auto_start_agent, auto_complete_without_review, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
         params.title,
@@ -398,6 +398,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         params.due_date || null,
         JSON.stringify(params.labels || []),
         params.agent_id || null,
+        params.project_id || null,
         params.skill_ids ? JSON.stringify(params.skill_ids) : null,
         isRecurring,
         recurrencePattern,
@@ -463,6 +464,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (params.labels !== undefined) { updates.push('labels = ?'); qParams.push(JSON.stringify(params.labels)) }
       if (params.skill_ids !== undefined) { updates.push('skill_ids = ?'); qParams.push(JSON.stringify(params.skill_ids)) }
       if (params.agent_id !== undefined) { updates.push('agent_id = ?'); qParams.push(params.agent_id) }
+      if (params.project_id !== undefined) { updates.push('project_id = ?'); qParams.push(params.project_id) }
       // The raw update below bypasses DatabaseManager.updateTask, so the agent
       // change is recorded here for the context handoff.
       const previousAgentId = params.agent_id !== undefined
@@ -768,6 +770,12 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const githubOrg = orgRow?.value || null
 
       return { repos: Array.from(repoSet), github_org: githubOrg }
+    }
+
+    case '/list_projects': {
+      // Projects are a human-curated list — agents may file tasks into an
+      // existing one, but there is no create_project tool, intentionally.
+      return db.getProjects()
     }
 
     case '/list_subtasks': {
