@@ -63,7 +63,7 @@ import {
   type ContinuationPlan
 } from './context-handoff'
 import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
-import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../shared/system-authority'
+import { buildSystemMessage, computeDeliveryId, isSystemGeneratedMessage, SystemMessageOrigin } from '../shared/system-authority'
 import { sendMobilePush } from './mobile-push'
 import { AgentPushEvents, type QuestionPart } from './agent-push-events'
 
@@ -1981,7 +1981,8 @@ export class AgentManager extends EventEmitter {
     agentId: string,
     taskId: string,
     workspaceDir?: string,
-    skipInitialPrompt?: boolean
+    skipInitialPrompt?: boolean,
+    preserveTaskStatus = false
   ): Promise<string> {
     this.assertLocalHelpAllowed(taskId)
     // Helper: yield event loop between bursts of synchronous DB / FS calls
@@ -2142,7 +2143,7 @@ export class AgentManager extends EventEmitter {
     console.log(`[SessionTracker] CREATED session=${adapterSessionId} task=${taskId} agent=${agentId} reason=new_session`)
 
     // Update task status (preserve Triaging status for triage sessions)
-    if (!isTriageSession) {
+    if (!isTriageSession && !preserveTaskStatus) {
       this.updateTaskFromLocalAgent(taskId, { status: TaskStatus.AgentWorking })
 
       // Notify renderer about task status change
@@ -3609,7 +3610,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     return this.db.updateTask(taskId, fields)
   }
 
-  async startSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<string> {
+  async startSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean, preserveTaskStatus = false): Promise<string> {
     this.assertLocalHelpAllowed(taskId)
     const agent = this.db.getAgent(agentId)
     if (!agent) {
@@ -3625,7 +3626,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     if (!adapter) {
       throw new Error(`No adapter available for agent ${agentId}`)
     }
-    return this.startAdapterSession(adapter, agentId, taskId, workspaceDir, skipInitialPrompt)
+    return this.startAdapterSession(adapter, agentId, taskId, workspaceDir, skipInitialPrompt, preserveTaskStatus)
   }
 
   async startTask(taskId: string, opts?: { preferSubtasks?: boolean; allowTriage?: boolean }): Promise<{
@@ -3851,12 +3852,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
    *   the pipeline drains — it can start the next child or consolidate. A
    *   parent with several children still gets a single wake-up instead of one
    *   per child.
-   * - A dedupe set prevents double-wakes when several children finish at once.
+   * - A dedupe set prevents concurrent wakes, and a stored fingerprint prevents
+   *   repeat delivery for the same subtask states after the turn goes idle.
    */
   async notifyParentOfSubtaskCompletion(parentTaskId: string, subtaskId: string): Promise<void> {
     const parentTask = this.db.getTask(parentTaskId)
     if (!parentTask) return
-    if (parentTask.status === TaskStatus.Completed) return
+    if (parentTask.status === TaskStatus.ReadyForReview || parentTask.status === TaskStatus.Completed) return
 
     const live = this.findSessionByTaskId(parentTaskId)
     if (live && live.session.status !== 'idle') {
@@ -3887,6 +3889,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     if (this.wakingParents.has(parentTaskId)) return
     this.wakingParents.add(parentTaskId)
     try {
+      const fingerprint = computeDeliveryId(
+        parentTaskId,
+        JSON.stringify(subtasks.map((s) => [s.id, s.status]).sort(([a], [b]) => a.localeCompare(b)))
+      )
+      const fingerprintKey = `coordinator-wakeup-fingerprint:${parentTaskId}`
+      if (this.db.getSetting(fingerprintKey) === fingerprint) return
+
       const summary = subtasks
         .map((s) => `- "${s.title}" (id: ${s.id}) → ${s.status}`)
         .join('\n')
@@ -3918,6 +3927,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       )
       console.log(`[AgentManager] Waking parent coordinator ${parentTaskId}: no subtask in agent_working (${subtasks.length} subtask(s))`)
       await this.sendByTaskId(parentTaskId, message)
+      this.db.setSetting(fingerprintKey, fingerprint)
     } finally {
       this.wakingParents.delete(parentTaskId)
     }
@@ -4685,6 +4695,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     agentId?: string,
     attachments?: MessageAttachmentRef[]
   ): Promise<{ newSessionId?: string }> {
+    const preserveTaskStatus = isSystemGeneratedMessage(message)
     let session = this.sessions.get(sessionId)
 
     // Check redirect map: session ID may have been re-keyed (temp → real)
@@ -4738,7 +4749,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         // If resume failed or no session_id, create new session
         if (!session) {
           console.log(`[AgentManager] Creating new session for task ${taskId}`)
-          const newSessionId = await this.startSession(resolvedAgentId, taskId, undefined, true)
+          const newSessionId = await this.startSession(resolvedAgentId, taskId, undefined, true, preserveTaskStatus)
           session = this.sessions.get(newSessionId)
           if (!session) throw new Error('Failed to restart session')
           sessionId = newSessionId
@@ -4833,7 +4844,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     session.status = 'working'
     session.lastActivityAt = Date.now()
     const currentTask = this.db.getTask(session.taskId)
-    if (currentTask?.status !== TaskStatus.AgentLearning) {
+    if (!isSystemGeneratedMessage(message) && currentTask?.status !== TaskStatus.AgentLearning) {
       this.updateTaskFromLocalAgent(session.taskId, { status: TaskStatus.AgentWorking })
     }
     this.sendToRenderer('agent:status', {

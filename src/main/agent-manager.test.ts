@@ -6,6 +6,7 @@ import { SessionStatus, TaskStatus } from '../shared/constants'
 import { MessagePartType, MessageRole, SessionStatusType } from './adapters/coding-agent-adapter'
 import { unregisterSecretSession } from './secret-broker'
 import { sendMobilePush } from './mobile-push'
+import { buildSystemMessage, SystemMessageOrigin } from '../shared/system-authority'
 
 vi.mock('./mobile-push', () => ({ sendMobilePush: vi.fn(async () => ({ sent: 1, failed: 0 })) }))
 
@@ -877,6 +878,25 @@ describe('AgentManager skill file paths', () => {
 
         expect((session as any).taskContextMode).toBe('full')
       })
+
+      it('keeps the task status when an automated notification wakes an idle session', async () => {
+        const db = makeTaskDb()
+        db.getTask = vi.fn(() => ({ id: 'task-1', title: 'Parent', status: TaskStatus.ReadyForReview }))
+        manager = new AgentManager(db)
+        vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+        const session = makeSession()
+        ;(manager as any).sessions.set('session-1', session)
+        const message = buildSystemMessage(
+          { origin: SystemMessageOrigin.Coordinator, taskId: 'task-1', deliveryId: 'once', generatedAt: new Date().toISOString() },
+          'Subtasks finished', 'Child A completed'
+        )
+
+        await (manager as any).doSendAdapterMessage(session, 'session-1', message)
+
+        expect(session.adapter.sendPrompt).toHaveBeenCalledOnce()
+        expect(db.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.AgentWorking })
+        expect(db.getTask('task-1').status).toBe(TaskStatus.ReadyForReview)
+      })
     })
   })
 })
@@ -1236,6 +1256,28 @@ describe('AgentManager OS notifications', () => {
 describe('AgentManager implicit resume behavior', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('starts a fallback session without changing task status for an automated notification', async () => {
+    const db = createMockDb()
+    vi.mocked(db.getTask).mockReturnValue({
+      id: 'task-1', agent_id: 'agent-1', status: TaskStatus.ReadyForReview, session_id: null
+    } as never)
+    const manager = new AgentManager(db)
+    const start = vi.spyOn(manager, 'startSession').mockImplementation(async () => {
+      ;(manager as any).sessions.set('new-session', { id: 'new-session', taskId: 'task-1', agentId: 'agent-1' })
+      return 'new-session'
+    })
+    vi.spyOn(manager as any, 'doSendAdapterMessage').mockResolvedValue(undefined)
+    const message = buildSystemMessage(
+      { origin: SystemMessageOrigin.Coordinator, taskId: 'task-1', deliveryId: 'once', generatedAt: new Date().toISOString() },
+      'Subtasks finished', 'Child A completed'
+    )
+
+    await manager.sendByTaskId('task-1', message)
+
+    expect(start).toHaveBeenCalledWith('agent-1', 'task-1', undefined, true, true)
+    expect(db.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.AgentWorking })
   })
 
   it('preserves the conversation when resume fails with an active writer', async () => {
@@ -3725,7 +3767,7 @@ describe('AgentManager event-driven parent wake-up', () => {
     return { mgr, mockDb, wakeSpy }
   }
 
-  const parentTask = { id: 'parent-1', title: 'Parent', status: TaskStatus.ReadyForReview }
+  const parentTask = { id: 'parent-1', title: 'Parent', status: TaskStatus.AgentWorking }
 
   it('wakes an idle parent when all subtasks reach a terminal state', async () => {
     const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
@@ -3810,6 +3852,46 @@ describe('AgentManager event-driven parent wake-up', () => {
     await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
 
     expect(wakeSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not wake a parent that is ready for review', async () => {
+    const { mgr, wakeSpy } = buildManager(
+      { 'parent-1': { ...parentTask, status: TaskStatus.ReadyForReview } },
+      [{ id: 'sub-1', title: 'Child A', status: TaskStatus.Completed }]
+    )
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).not.toHaveBeenCalled()
+  })
+
+  it('delivers one prompt for an unchanged set of terminal subtask states', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.Completed },
+    ])
+    const settings = new Map<string, string>()
+    ;(mgr as any).db.getSetting = vi.fn((key: string) => settings.get(key))
+    ;(mgr as any).db.setSetting = vi.fn((key: string, value: string) => settings.set(key, value))
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-2')
+
+    expect(wakeSpy).toHaveBeenCalledOnce()
+  })
+
+  it('can deliver again after a subtask state changes', async () => {
+    const subtasks = [{ id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview }]
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, subtasks)
+    const settings = new Map<string, string>()
+    ;(mgr as any).db.getSetting = vi.fn((key: string) => settings.get(key))
+    ;(mgr as any).db.setSetting = vi.fn((key: string, value: string) => settings.set(key, value))
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+    subtasks[0].status = TaskStatus.Completed
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
+
+    expect(wakeSpy).toHaveBeenCalledTimes(2)
   })
 })
 
