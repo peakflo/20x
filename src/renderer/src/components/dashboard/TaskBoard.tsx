@@ -8,6 +8,7 @@ import { useUIStore } from '@/stores/ui-store'
 import { useSnoozeTick } from '@/hooks/use-snooze-tick'
 import { isSnoozed } from '@/lib/utils'
 import { TaskStatus, CodingAgentType } from '@/types'
+import { isTaskClosed } from '@shared/constants'
 import type { WorkfloTask, Agent } from '@/types'
 
 // ── Status column definitions (matching 20x local TaskStatus enum) ──
@@ -172,7 +173,7 @@ function getAgentDisplay(agent: Agent | undefined): { name: string; Logo: React.
 // ── Task Card ──────────────────────────────────────────────
 
 const TaskCard = memo(function TaskCard({ task, onSelect, agent }: { task: WorkfloTask; onSelect: (id: string) => void; agent?: Agent }) {
-  const overdue = task.due_date && task.status !== TaskStatus.Completed && isOverdue(task.due_date)
+  const overdue = task.due_date && !isTaskClosed(task.status) && isOverdue(task.due_date)
   const sourceConfig = task.source && task.source !== 'local' ? getSourceConfig(task.source) : null
 
   return (
@@ -334,7 +335,7 @@ export function TaskBoard() {
     let completedCount = 0
     for (const task of topLevelTasks) {
       const status = task.status || TaskStatus.NotStarted
-      if (status === TaskStatus.Completed) {
+      if (isTaskClosed(status)) {
         completedCount++
       } else if (grouped[status]) {
         grouped[status].push(task)

@@ -24,6 +24,9 @@ export interface WorkfloTask {
   title: string
   description: string | null
   status: string
+  spaceId?: string | null
+  spaceName?: string | null
+  metadata?: { triage?: { reason?: string | null } } | null
   deletedAt?: string | null
   version?: number
   agentId?: string | null

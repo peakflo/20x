@@ -3,6 +3,7 @@ import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, OutputField, OutputFiel
 import { taskApi, taskSourceApi, onTaskUpdated, onTaskCreated, onTaskDeleted, onTasksRefresh } from '@/lib/ipc-client'
 import { captureAnalyticsEvent, getTaskAnalyticsProperties, getTaskMutationProperties } from '@/lib/analytics'
 import { TaskStatus } from '@/types'
+import { isTaskClosed } from '@shared/constants'
 
 /** Completed top-level tasks fetched per "Show more" page. */
 export const COMPLETED_PAGE_SIZE = 50
@@ -132,7 +133,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         // during this session); everything else comes from the fresh fetch.
         tasks: [
           ...open,
-          ...state.tasks.filter((task) => !openIds.has(task.id) && task.status === TaskStatus.Completed)
+          ...state.tasks.filter((task) => !openIds.has(task.id) && isTaskClosed(task.status))
         ],
         isLoading: false
       }))
@@ -280,7 +281,7 @@ onTaskUpdated((event) => {
   if (!previousTask) {
     // Not in the working set (completed history that was never paged in):
     // load it when it is reopened so it shows up in the open lists.
-    if (nextStatus && nextStatus !== TaskStatus.Completed) {
+    if (nextStatus && !isTaskClosed(nextStatus)) {
       void useTaskStore.getState().ensureTask(event.taskId)
       void useTaskStore.getState().refreshCompletedTotal()
     }
@@ -292,7 +293,7 @@ onTaskUpdated((event) => {
     )
   }))
   if (nextStatus && previousTask.status !== nextStatus
-    && (nextStatus === TaskStatus.Completed || previousTask.status === TaskStatus.Completed)) {
+    && (isTaskClosed(nextStatus) || isTaskClosed(previousTask.status))) {
     void useTaskStore.getState().refreshCompletedTotal()
   }
   if (nextStatus && previousTask?.status !== nextStatus) {

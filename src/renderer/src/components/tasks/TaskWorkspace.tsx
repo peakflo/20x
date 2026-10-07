@@ -32,6 +32,7 @@ import { TaskStatus } from '@/types'
 import type { WorkfloTask, FileAttachment, OutputField, Agent, UpdateAgentDTO, CreateAgentDTO } from '@/types'
 import type { GitHubRepo } from '@/types/electron'
 import { isAgentConfigured } from '@shared/agent-utils'
+import { isTaskClosed } from '@shared/constants'
 import { useUIStore } from '@/stores/ui-store'
 import { useArtifactStore, PinnedArtifactTabId } from '@/stores/artifact-store'
 import { artifactApi } from '@/lib/ipc-client'
@@ -336,7 +337,7 @@ function TaskWorkspaceComponent({
   useEffect(() => {
     const prevStatus = prevTaskStatusRef.current
     prevTaskStatusRef.current = task?.status
-    if (session.sessionId && task?.status === TaskStatus.Completed && prevStatus !== TaskStatus.Completed) {
+    if (session.sessionId && task && isTaskClosed(task.status) && !isTaskClosed(prevStatus ?? '')) {
       stop().catch(console.error)
     }
     // Clean up triage session when triage completes (Triaging → NotStarted)
@@ -1021,17 +1022,17 @@ Update existing skills that were helpful or create new ones for patterns worth r
   // Triage uses the default agent (or the first agent in the list as a fallback).
   const triageAgent = !task.agent_id ? (agents.find((a) => a.is_default) || agents[0] || null) : null
   const triageAgentConfigured = isAgentConfigured(triageAgent)
-  const canResume = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length === 0
-  const canRestart = task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length > 0
+  const canResume = !isTaskClosed(task.status) && task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length === 0
+  const canRestart = !isTaskClosed(task.status) && task.agent_id && task.session_id && !session.sessionId && session.status === SessionStatus.IDLE && session.messages.length > 0
   const canStart = task.agent_id && assignedAgentConfigured && !task.session_id && !session.sessionId && session.status === SessionStatus.IDLE
-    && task.status !== TaskStatus.Completed
+    && !isTaskClosed(task.status)
   const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && session.status === SessionStatus.IDLE
-    && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging
+    && !isTaskClosed(task.status) && task.status !== TaskStatus.Triaging
 
   let primaryAction: TaskPrimaryAction | null = null
   let handlePrimaryAction: (() => void) | undefined
-  if (task.status === TaskStatus.ReadyForReview || task.status === TaskStatus.Completed) {
-    if (task.status !== TaskStatus.Completed) {
+  if (task.status === TaskStatus.ReadyForReview || isTaskClosed(task.status)) {
+    if (!isTaskClosed(task.status)) {
       primaryAction = TaskPrimaryAction.COMPLETE
       handlePrimaryAction = () => void handleCompleteTask()
     }
@@ -1147,7 +1148,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
           {panelLayout === 'task-only' || (!hasSession && panelLayout === 'both') ? (
             <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
               <div className="min-h-0 flex-1">{detailsView}</div>
-              {!hasSession && panelLayout === 'both' && task.status !== TaskStatus.Completed && (
+              {!hasSession && panelLayout === 'both' && !isTaskClosed(task.status) && (
                 <div className="sticky bottom-0 mx-auto w-full max-w-[780px] shrink-0 border-t border-border/50 bg-background/95 px-6 py-3 backdrop-blur">
                   <div className="flex items-end gap-2 rounded-xl border border-border/50 bg-card p-2 shadow-lg">
                     <textarea
@@ -1201,7 +1202,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
                     onToggleRail={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
                     details={detailsView}
                     changes={<ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} onPullRequests={handlePullRequests} />}
-                    output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={task.status !== TaskStatus.Completed} onComplete={handleCompleteTask} taskUpdatedAt={task.updated_at} />}
+                    output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={!isTaskClosed(task.status)} onComplete={handleCompleteTask} taskUpdatedAt={task.updated_at} />}
                     className="min-w-[320px] flex-1 border-l border-border/50"
                   />
                 </>

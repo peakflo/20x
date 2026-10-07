@@ -65,6 +65,17 @@ function makeTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
 
 const noopFn = vi.fn()
 
+it('shows read-only Workflo Space and triage details when supplied', () => {
+  renderDetailView({ task: { server_managed: true, server_space_name: 'Finance', server_triage_reason: 'The agent has the needed skill.' } })
+  expect(screen.getByText('Finance')).toBeTruthy()
+  expect(screen.getByText('The agent has the needed skill.')).toBeTruthy()
+})
+
+it.each([TaskStatus.Cancelled, TaskStatus.Expired])('does not offer completion for a %s task', (status) => {
+  renderDetailView({ task: { status, server_managed: true } })
+  expect(screen.queryByTestId('main-cta-complete')).toBeNull()
+})
+
 function makeAgent(overrides: Partial<Agent> = {}): Agent {
   return {
     id: 'agent-1',

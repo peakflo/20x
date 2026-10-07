@@ -21,6 +21,7 @@ import { AgentHoverCard } from '@/components/usage/AgentHoverCard'
 import { HeartbeatSection } from './HeartbeatSection'
 import { useUIStore } from '@/stores/ui-store'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
+import { isTaskClosed } from '@shared/constants'
 
 function ordinal(n: number): string {
   if (n >= 11 && n <= 13) return `${n}th`
@@ -98,7 +99,9 @@ const subtaskStatusDotColor: Record<TaskStatus, string> = {
   [TaskStatus.AgentWorking]: 'bg-amber-400 animate-pulse',
   [TaskStatus.ReadyForReview]: 'bg-pink-400',
   [TaskStatus.AgentLearning]: 'bg-blue-400 animate-pulse',
-  [TaskStatus.Completed]: 'bg-emerald-400'
+  [TaskStatus.Completed]: 'bg-emerald-400',
+  [TaskStatus.Cancelled]: 'bg-muted-foreground',
+  [TaskStatus.Expired]: 'bg-muted-foreground'
 }
 
 function SortableSubtaskItem({ subtask, onNavigateToTask, onOpenSubtaskInWindow }: { subtask: WorkfloTask; onNavigateToTask?: (taskId: string) => void; onOpenSubtaskInWindow?: (taskId: string) => void }) {
@@ -402,7 +405,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
   const skills = useSkillStore((s) => s.skills)
   const fetchSkills = useSkillStore((s) => s.fetchSkills)
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
-  const isActive = task.status !== TaskStatus.Completed
+  const isActive = !isTaskClosed(task.status)
 
   // Ensure skills are loaded for badge display
   useEffect(() => {
@@ -646,6 +649,18 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
                     </Button>
                   )}
                 </div>
+              </>
+            )}
+            {task.server_space_name && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-2"><Folder className="h-3.5 w-3.5" /> Space</span>
+                <span>{task.server_space_name}</span>
+              </>
+            )}
+            {task.server_triage_reason && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-2"><Sparkles className="h-3.5 w-3.5" /> Triage reason</span>
+                <span className="whitespace-pre-wrap break-words">{task.server_triage_reason}</span>
               </>
             )}
             {task.due_date && (

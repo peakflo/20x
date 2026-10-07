@@ -366,6 +366,8 @@ export interface TaskRecord {
   server_managed?: boolean
   server_execution_mode?: 'human' | 'autonomous'
   server_cron?: string | null
+  server_space_name?: string | null
+  server_triage_reason?: string | null
   server_sync_pending?: boolean
   server_sync_error?: string
   id: string
@@ -2215,7 +2217,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (this.getSetting(`workflo-upload:${task.id}`)) return { ...task, server_pending_edits: JSON.parse(this.getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_sync_pending: true, server_sync_error: this.getSetting(`workflo-upload:${task.id}:error`) }
     if (!isWorkfloLinkedTask(this, task)) return task
     const snapshot = this.getSetting(`workflo-task:${task.id}`)
-    return { ...task, server_pending_edits: JSON.parse(this.getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_cron: snapshot ? JSON.parse(snapshot).cron : null, server_execution_mode: snapshot ? JSON.parse(snapshot).executionMode : 'human', server_sync_pending: !!this.getSetting(`workflo-update:${task.id}`) || !!this.getSetting(`workflo-completion:${task.id}`), server_sync_error: this.getSetting(`workflo-update:${task.id}:error`) ?? this.getSetting(`workflo-completion:${task.id}:error`) }
+    const remote = snapshot ? JSON.parse(snapshot) as import('./workflo-api-client').WorkfloTask : undefined
+    return { ...task, server_pending_edits: JSON.parse(this.getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_cron: remote?.cron ?? null, server_execution_mode: remote?.executionMode ?? 'human', server_space_name: remote?.spaceName ?? null, server_triage_reason: remote?.metadata?.triage?.reason ?? null, server_sync_pending: !!this.getSetting(`workflo-update:${task.id}`) || !!this.getSetting(`workflo-completion:${task.id}`), server_sync_error: this.getSetting(`workflo-update:${task.id}:error`) ?? this.getSetting(`workflo-completion:${task.id}:error`) }
   }
 
   getTask(id: string): TaskRecord | undefined {
@@ -2237,15 +2240,16 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   getOpenTasks(): TaskRecord[] {
     if (!this.ensureDbOpen()) return []
 
+    const closedStatuses = [TaskStatus.Completed, TaskStatus.Cancelled, TaskStatus.Expired]
     const rows = this.db.prepare(`
       SELECT * FROM tasks t
-      WHERE t.status != ?
+      WHERE t.status NOT IN (?, ?, ?)
         OR (t.is_recurring = 1 AND t.recurrence_parent_id IS NULL)
         OR (t.parent_task_id IS NOT NULL AND EXISTS (
-          SELECT 1 FROM tasks p WHERE p.id = t.parent_task_id AND p.status != ?))
-        OR EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id = t.id AND c.status != ?)
+          SELECT 1 FROM tasks p WHERE p.id = t.parent_task_id AND p.status NOT IN (?, ?, ?)))
+        OR EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id = t.id AND c.status NOT IN (?, ?, ?))
       ORDER BY t.created_at DESC
-    `).all(TaskStatus.Completed, TaskStatus.Completed, TaskStatus.Completed) as TaskRow[]
+    `).all(...closedStatuses, ...closedStatuses, ...closedStatuses) as TaskRow[]
 
     return rows.map(row => this.withServerOwnership(deserializeTask(row)))
   }
@@ -2261,11 +2265,11 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const safeOffset = Math.max(0, Math.floor(Number(offset) || 0))
     const safeLimit = Math.min(500, Math.max(0, Math.floor(Number(limit) || 0)))
     const where = [
-      't.status = ?',
+      't.status IN (?, ?, ?)',
       't.parent_task_id IS NULL',
       'NOT (t.is_recurring = 1 AND t.recurrence_parent_id IS NULL)'
     ]
-    const params: unknown[] = [TaskStatus.Completed]
+    const params: unknown[] = [TaskStatus.Completed, TaskStatus.Cancelled, TaskStatus.Expired]
     const q = typeof query === 'string' ? query.trim().toLowerCase() : ''
     if (q) {
       const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`

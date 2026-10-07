@@ -11,7 +11,13 @@ export enum TaskStatus {
   AgentWorking = 'agent_working',
   ReadyForReview = 'ready_for_review',
   AgentLearning = 'agent_learning',
-  Completed = 'completed'
+  Completed = 'completed',
+  Cancelled = 'cancelled',
+  Expired = 'expired'
+}
+
+export function isTaskClosed(status: string): boolean {
+  return status === TaskStatus.Completed || status === TaskStatus.Cancelled || status === TaskStatus.Expired
 }
 
 export const TASK_STATUSES: { value: TaskStatus; label: string }[] = [

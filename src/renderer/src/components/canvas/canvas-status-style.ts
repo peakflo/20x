@@ -66,6 +66,14 @@ export const CANVAS_TASK_STATUS_STYLES: Record<TaskStatus, CanvasTaskStatusStyle
     miniFill: 'rgba(16,185,129,0.86)',
     rgb: '16,185,129',
   },
+  [TaskStatus.Cancelled]: {
+    label: 'Cancelled', color: 'bg-zinc-500/20 text-zinc-300', border: 'border-zinc-500/45',
+    outline: 'outline-zinc-500/45', bg: 'bg-zinc-500/10', miniFill: 'rgba(113,113,122,0.78)', rgb: '113,113,122',
+  },
+  [TaskStatus.Expired]: {
+    label: 'Expired', color: 'bg-zinc-500/20 text-zinc-300', border: 'border-zinc-500/45',
+    outline: 'outline-zinc-500/45', bg: 'bg-zinc-500/10', miniFill: 'rgba(113,113,122,0.78)', rgb: '113,113,122',
+  },
 }
 
 export function getCanvasTaskStatusStyle(status: TaskStatus | undefined): CanvasTaskStatusStyle | null {

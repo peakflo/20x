@@ -4,7 +4,7 @@ import { TaskListItem } from './TaskListItem'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { isSnoozed } from '@/lib/utils'
 import { useSnoozeTick } from '@/hooks/use-snooze-tick'
-import { TaskStatus } from '@/types'
+import { isTaskClosed } from '@shared/constants'
 import type { WorkfloTask } from '@/types'
 import { COMPLETED_PAGE_SIZE } from '@/stores/task-store'
 
@@ -109,7 +109,7 @@ export function TaskList({
       // Template tasks only (not instances)
       if (task.is_recurring && !task.recurrence_parent_id) {
         recurring.push(task)
-      } else if (task.status === TaskStatus.Completed) {
+      } else if (isTaskClosed(task.status)) {
         completed.push(task)
       } else if (isSnoozed(task.snoozed_until)) {
         snoozed.push(task)
@@ -217,7 +217,7 @@ export function TaskList({
             className="flex items-center gap-1.5 px-3 py-2 mt-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer"
           >
             <ChevronRight className={`h-3 w-3 transition-transform ${completedOpen ? 'rotate-90' : ''}`} />
-            Completed
+            Closed
             <span className="ml-auto tabular-nums">{completedCount}</span>
           </button>
           {completedOpen && completedTasks.map(renderTaskWithSubtasks)}
