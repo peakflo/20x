@@ -3,8 +3,20 @@ import { Sidebar } from './Sidebar'
 import { TaskWorkspace } from '@/components/tasks/TaskWorkspace'
 import { TaskForm, type TaskFormSubmitData } from '@/components/tasks/TaskForm'
 import { DeleteConfirmDialog } from '@/components/tasks/DeleteConfirmDialog'
+import { ProjectForm } from '@/components/projects/ProjectForm'
+import { useProjectStore } from '@/stores/project-store'
 import { UpdateDialog } from '@/components/update/UpdateDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogAction,
+  AlertDialogCancel
+} from '@/components/ui/AlertDialog'
 import { OnboardingWizard, shouldShowOnboarding } from '@/components/onboarding/OnboardingWizard'
 import { ProgressToastStack } from '@/components/ui/ProgressToastStack'
 import { VoiceOverlay } from '@/components/voice/VoiceOverlay'
@@ -71,9 +83,13 @@ export function AppLayout() {
   const activeModal = useUIStore((s) => s.activeModal)
   const editingTaskId = useUIStore((s) => s.editingTaskId)
   const deletingTaskId = useUIStore((s) => s.deletingTaskId)
+  const editingProjectId = useUIStore((s) => s.editingProjectId)
+  const deletingProjectId = useUIStore((s) => s.deletingProjectId)
   const openCreateModal = useUIStore((s) => s.openCreateModal)
   const openEditModal = useUIStore((s) => s.openEditModal)
   const openDeleteModal = useUIStore((s) => s.openDeleteModal)
+  const setProjectFilter = useUIStore((s) => s.setProjectFilter)
+  const projectFilter = useUIStore((s) => s.projectFilter)
   const openSettings = useUIStore((s) => s.openSettings)
   const closeModal = useUIStore((s) => s.closeModal)
   const setCanvasPendingTaskId = useUIStore((s) => s.setCanvasPendingTaskId)
@@ -148,6 +164,18 @@ export function AppLayout() {
   const deletingTask = useMemo(
     () => deletingTaskId ? allTasks.find((t) => t.id === deletingTaskId) : undefined,
     [deletingTaskId, allTasks]
+  )
+  const projects = useProjectStore((s) => s.projects)
+  const createProject = useProjectStore((s) => s.createProject)
+  const updateProject = useProjectStore((s) => s.updateProject)
+  const deleteProject = useProjectStore((s) => s.deleteProject)
+  const editingProject = useMemo(
+    () => editingProjectId ? projects.find((p) => p.id === editingProjectId) : undefined,
+    [editingProjectId, projects]
+  )
+  const deletingProject = useMemo(
+    () => deletingProjectId ? projects.find((p) => p.id === deletingProjectId) : undefined,
+    [deletingProjectId, projects]
   )
   const dashboardPreviewTask = useMemo(
     () => dashboardPreviewTaskId ? allTasks.find((t) => t.id === dashboardPreviewTaskId) : undefined,
@@ -926,6 +954,7 @@ export function AppLayout() {
           <DialogBody>
             <TaskForm
               prefill={createTaskPrefill}
+              defaultProjectId={projectFilter !== 'all' && projectFilter !== 'inbox' ? projectFilter : null}
               onSubmit={async (data) => {
                 const formData = data as TaskFormSubmitData
                 const pendingFiles = formData._pendingFiles
@@ -978,6 +1007,72 @@ export function AppLayout() {
           </DialogBody>
         </DialogContent>
       </Dialog>
+
+      {/* Create Project Dialog */}
+      <Dialog open={activeModal === 'create-project'} onOpenChange={(open) => !open && closeModal()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New Project</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <ProjectForm
+              onSubmit={async (data) => {
+                const project = await createProject(data)
+                closeModal()
+                if (project) setProjectFilter(project.id)
+              }}
+              onCancel={closeModal}
+            />
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Project Dialog */}
+      <Dialog open={activeModal === 'edit-project'} onOpenChange={(open) => !open && closeModal()}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Project</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            {editingProject && (
+              <ProjectForm
+                project={editingProject}
+                onSubmit={async (data) => {
+                  await updateProject(editingProject.id, data)
+                  closeModal()
+                }}
+                onCancel={closeModal}
+              />
+            )}
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Project Confirmation — tasks in the project are kept, just unfiled */}
+      <AlertDialog open={activeModal === 'delete-project'} onOpenChange={(open) => !open && closeModal()}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Project</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{deletingProject?.name}"? Its tasks will not be deleted — they move back to Inbox.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={closeModal}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                if (deletingProjectId) {
+                  await deleteProject(deletingProjectId)
+                  if (projectFilter === deletingProjectId) setProjectFilter('all')
+                }
+                closeModal()
+              }}
+            >
+              Delete Project
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Delete Confirmation */}
       <DeleteConfirmDialog

@@ -18,6 +18,7 @@ function makeTask(id: string, title: string, status = TaskStatus.NotStarted): Wo
     repos: [],
     output_fields: [],
     agent_id: null,
+    project_id: null,
     session_id: null,
     external_id: null,
     source_id: null,

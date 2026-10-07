@@ -1,7 +1,7 @@
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Bot, Check, ChevronDown, ExternalLink, FolderOpen, Layers, Menu, MoreHorizontal, Pencil, Play, RotateCcw, Sparkles, Terminal, Trash2 } from 'lucide-react'
+import { ArrowLeft, Bot, Check, ChevronDown, ExternalLink, FolderInput, FolderOpen, Layers, Menu, MoreHorizontal, Pencil, Play, RotateCcw, Sparkles, Terminal, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { AnthropicLogo, OpenAILogo, OpenCodeLogo, PiLogo } from '@/components/icons/AgentLogos'
 import { AgentHoverCard } from '@/components/usage/AgentHoverCard'
@@ -58,6 +58,7 @@ interface TaskHeaderBarProps {
   showDetailsToggle: boolean
   onToggleDetails: () => void
   onEdit: () => void
+  onMoveToProject?: () => void
   onSnooze?: () => void
   onOpenCanvas?: () => void
   onOpenFolder?: () => void
@@ -80,6 +81,7 @@ export function TaskHeaderBar({
   showDetailsToggle,
   onToggleDetails,
   onEdit,
+  onMoveToProject,
   onSnooze,
   onOpenCanvas,
   onOpenFolder,
@@ -318,6 +320,7 @@ export function TaskHeaderBar({
               { label: 'Send to Workflo', icon: ExternalLink, action: enterpriseConnected && !task.source_id ? () => uploadToWorkflo(false) : undefined },
               { label: 'Run agent in Workflo', icon: HarnessIcon, action: enterpriseConnected && !task.source_id && task.agent_id ? () => uploadToWorkflo(true) : undefined },
               { label: 'Edit task', icon: Pencil, action: onEdit },
+              { label: 'Move to project', icon: FolderInput, action: onMoveToProject },
               { label: 'Snooze', icon: ChevronDown, action: onSnooze },
               { label: 'Open in canvas', icon: Layers, action: onOpenCanvas },
               { label: 'Open folder', icon: FolderOpen, action: onOpenFolder },

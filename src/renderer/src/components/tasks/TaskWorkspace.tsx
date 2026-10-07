@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { FeedbackDialog } from './FeedbackDialog'
 import { SnoozeDialog } from './SnoozeDialog'
+import { MoveToProjectDialog } from './MoveToProjectDialog'
 import { IncompatibleSessionDialog } from './IncompatibleSessionDialog'
 import { TaskDetailView } from './TaskDetailView'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
@@ -134,6 +135,7 @@ function TaskWorkspaceComponent({
   const taskSources = useTaskSourceStore(state => state.sources)
   const [showFeedback, setShowFeedback] = useState(false)
   const [showSnooze, setShowSnooze] = useState(false)
+  const [showMoveToProject, setShowMoveToProject] = useState(false)
   const [showIncompatibleSession, setShowIncompatibleSession] = useState(false)
   const [incompatibleSessionError, setIncompatibleSessionError] = useState<string>()
   const [parentTask, setParentTask] = useState<WorkfloTask | null>(null)
@@ -767,6 +769,17 @@ Update existing skills that were helpful or create new ones for patterns worth r
     fetchTasks()
   }, [task, onUpdateTask, fetchTasks])
 
+  const handleMoveToProject = useCallback(async (projectId: string | null) => {
+    if (!task) return
+    setShowMoveToProject(false)
+    if (onUpdateTask) {
+      await onUpdateTask(task.id, { project_id: projectId })
+    } else {
+      await taskApi.update(task.id, { project_id: projectId })
+    }
+    fetchTasks()
+  }, [task, onUpdateTask, fetchTasks])
+
   const handleUnsnooze = useCallback(async () => {
     if (!task) return
     if (onUpdateTask) {
@@ -831,6 +844,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
   }, [onUpdateTask, task?.id, updateTaskInStore])
   const handleShowSkillSelector = useCallback(() => setShowSkillSelector(true), [])
   const handleShowSnooze = useCallback(() => setShowSnooze(true), [])
+  const handleShowMoveToProject = useCallback(() => setShowMoveToProject(true), [])
   const handleUpdateAutoFlags = useCallback(async (updates: Record<string, unknown>) => {
     if (!task?.id) return
     if (onUpdateTask) {
@@ -1137,6 +1151,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
           showDetailsToggle={hasSession && panelLayout === 'both'}
           onToggleDetails={openDetails}
           onEdit={onEdit}
+          onMoveToProject={handleShowMoveToProject}
           onSnooze={handleShowSnooze}
           onOpenCanvas={() => openTaskOnCanvas(task.id)}
           onOpenFolder={() => void handleOpenFolder()}
@@ -1269,6 +1284,13 @@ Update existing skills that were helpful or create new ones for patterns worth r
         open={showSnooze}
         onOpenChange={setShowSnooze}
         onSnooze={handleSnooze}
+      />
+
+      <MoveToProjectDialog
+        open={showMoveToProject}
+        onOpenChange={setShowMoveToProject}
+        currentProjectId={task.project_id}
+        onMove={handleMoveToProject}
       />
 
       <IncompatibleSessionDialog

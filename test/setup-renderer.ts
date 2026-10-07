@@ -148,6 +148,14 @@ const mockElectronAPI = {
     getUsers: vi.fn().mockResolvedValue([]),
     reassign: vi.fn().mockResolvedValue({ success: true })
   },
+  projects: {
+    getAll: vi.fn().mockResolvedValue([]),
+    get: vi.fn().mockResolvedValue(undefined),
+    getTaskCounts: vi.fn().mockResolvedValue({}),
+    create: vi.fn().mockResolvedValue({}),
+    update: vi.fn().mockResolvedValue({}),
+    delete: vi.fn().mockResolvedValue(true)
+  },
   skills: {
     getAll: vi.fn().mockResolvedValue([]),
     get: vi.fn().mockResolvedValue(undefined),

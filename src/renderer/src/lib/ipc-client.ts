@@ -1,4 +1,4 @@
-import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
+import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, WorkfloProject, CreateProjectDTO, UpdateProjectDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
@@ -65,6 +65,32 @@ export const taskApi = {
 
   reorderSubtasks: (parentId: string, orderedIds: string[]): Promise<boolean> => {
     return window.electronAPI.db.reorderSubtasks(parentId, orderedIds)
+  }
+}
+
+export const projectApi = {
+  getAll: (): Promise<WorkfloProject[]> => {
+    return window.electronAPI.projects.getAll()
+  },
+
+  getById: (id: string): Promise<WorkfloProject | undefined> => {
+    return window.electronAPI.projects.get(id)
+  },
+
+  getTaskCounts: (): Promise<Record<string, number>> => {
+    return window.electronAPI.projects.getTaskCounts()
+  },
+
+  create: (data: CreateProjectDTO): Promise<WorkfloProject> => {
+    return window.electronAPI.projects.create(data)
+  },
+
+  update: (id: string, data: UpdateProjectDTO): Promise<WorkfloProject | undefined> => {
+    return window.electronAPI.projects.update(id, data)
+  },
+
+  delete: (id: string): Promise<boolean> => {
+    return window.electronAPI.projects.delete(id)
   }
 }
 

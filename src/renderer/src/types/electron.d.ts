@@ -5,6 +5,9 @@ import type {
   WorkfloTask,
   CreateTaskDTO,
   UpdateTaskDTO,
+  WorkfloProject,
+  CreateProjectDTO,
+  UpdateProjectDTO,
   FileAttachment,
   Agent,
   CreateAgentDTO,
@@ -237,6 +240,14 @@ interface ElectronAPI {
     deleteTask: (id: string) => Promise<boolean>
     getSubtasks: (parentId: string) => Promise<WorkfloTask[]>
     reorderSubtasks: (parentId: string, orderedIds: string[]) => Promise<boolean>
+  }
+  projects: {
+    getAll: () => Promise<WorkfloProject[]>
+    get: (id: string) => Promise<WorkfloProject | undefined>
+    getTaskCounts: () => Promise<Record<string, number>>
+    create: (data: CreateProjectDTO) => Promise<WorkfloProject>
+    update: (id: string, data: UpdateProjectDTO) => Promise<WorkfloProject | undefined>
+    delete: (id: string) => Promise<boolean>
   }
   tasks: {
     getWorkspaceDir: (taskId: string) => Promise<string>

@@ -231,6 +231,7 @@ const mastermindTools: Tool[] = [
         labels: { type: 'array', items: { type: 'string' }, description: 'Task labels' },
         assignee: { type: 'string', description: 'Person assigned to the task' },
         due_date: { type: 'string', description: 'Due date in ISO format' },
+        project_id: { type: 'string', description: 'File this task under a Project (use list_projects to find IDs). Omit to leave it unfiled (Inbox) — the default.' },
         agent_id: { type: 'string', description: 'Assign to an agent by ID (use list_agents to find IDs)' },
         skill_ids: { type: 'array', items: { type: 'string' }, description: 'Skill IDs to assign (use list_skills to find IDs)' },
         cron: { type: 'string', description: 'Cron expression for recurring tasks (e.g. "0 9 * * 1-5" for weekdays at 9am). Standard 5-field cron syntax: minute hour day-of-month month day-of-week.' },
@@ -263,6 +264,7 @@ const mastermindTools: Tool[] = [
         labels: { type: 'array', items: { type: 'string' }, description: 'Set task labels' },
         skill_ids: { type: 'array', items: { type: 'string' }, description: 'Set task skills' },
         agent_id: { type: 'string', description: 'Assign to agent' },
+        project_id: { type: 'string', description: 'File this task under a Project (use list_projects to find IDs). Pass null to unfile it back to Inbox.' },
         auto_start_agent: { type: 'boolean', description: 'Hand the task to its assigned agent automatically as soon as it is created or becomes due, instead of waiting for someone to press start. Set this on a recurring task so every occurrence runs by itself.' },
         auto_complete_without_review: { type: 'boolean', description: 'Complete the task automatically when its agent finishes, instead of leaving it for review. Needed for a task that must finish with no 20x window open.' },
         repos: { type: 'array', items: { type: 'string' }, description: 'Set repository paths/URLs for this task' },
@@ -321,6 +323,14 @@ const mastermindTools: Tool[] = [
   {
     name: 'list_repos',
     description: 'List all known repositories from historical tasks and the configured GitHub organization.',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'list_projects',
+    description: 'List all Projects (folders tasks can be filed under). Call this before setting project_id on create_task or update_task — a task can only be filed under an existing project, there is no way to create one from here.',
     inputSchema: {
       type: 'object',
       properties: {}

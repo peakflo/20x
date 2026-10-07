@@ -203,6 +203,88 @@ describe('/list_repos', () => {
   })
 })
 
+describe('Projects on the triage-bot MCP surface (list_projects/create_task/update_task)', () => {
+  const post = async <T>(apiPort: number, route: string, body: Record<string, unknown> = {}): Promise<T> => {
+    const response = await fetch(`http://127.0.0.1:${apiPort}${route}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    return response.json() as Promise<T>
+  }
+
+  it('list_projects returns the existing projects (no create_project tool exists)', async () => {
+    const project = db.createProject({ name: 'Website Redesign', color: '#22c55e' })!
+    const apiPort = await startTaskApiServer(db)
+
+    const projects = await post<Array<{ id: string; name: string; color: string }>>(apiPort, '/list_projects')
+
+    expect(projects).toEqual([
+      expect.objectContaining({ id: project.id, name: 'Website Redesign', color: '#22c55e' })
+    ])
+  })
+
+  it('create_task files a new task under a project when project_id is given', async () => {
+    const project = db.createProject({ name: 'Marketing' })!
+    const apiPort = await startTaskApiServer(db)
+
+    const created = await post<{ success: boolean; task: { project_id: string | null } }>(apiPort, '/create_task', {
+      title: 'Write launch copy',
+      project_id: project.id
+    })
+
+    expect(created.success).toBe(true)
+    expect(created.task.project_id).toBe(project.id)
+  })
+
+  it('create_task defaults to unfiled (Inbox) when project_id is omitted', async () => {
+    const apiPort = await startTaskApiServer(db)
+
+    const created = await post<{ task: { project_id: string | null } }>(apiPort, '/create_task', {
+      title: 'No project given'
+    })
+
+    expect(created.task.project_id).toBeNull()
+  })
+
+  it('update_task files an existing task under a project', async () => {
+    const task = db.createTask(makeTask({ title: 'Existing task' }))!
+    const project = db.createProject({ name: 'Ops' })!
+    const apiPort = await startTaskApiServer(db)
+
+    const updated = await post<{ task: { project_id: string | null } }>(apiPort, '/update_task', {
+      task_id: task.id,
+      project_id: project.id
+    })
+
+    expect(updated.task.project_id).toBe(project.id)
+  })
+
+  it('update_task unfiles a task back to Inbox when project_id is set to null', async () => {
+    const project = db.createProject({ name: 'Temp' })!
+    const task = db.createTask(makeTask({ title: 'Filed task', project_id: project.id }))!
+    const apiPort = await startTaskApiServer(db)
+
+    const updated = await post<{ task: { project_id: string | null } }>(apiPort, '/update_task', {
+      task_id: task.id,
+      project_id: null
+    })
+
+    expect(updated.task.project_id).toBeNull()
+  })
+
+  it('deleting a project unfiles its tasks instead of deleting them, visible over the API too', () => {
+    const project = db.createProject({ name: 'Short-lived' })!
+    const task = db.createTask(makeTask({ title: 'Survives', project_id: project.id }))!
+
+    expect(db.deleteProject(project.id)).toBe(true)
+
+    const survived = db.getTask(task.id)
+    expect(survived).toBeDefined()
+    expect(survived!.project_id).toBeNull()
+  })
+})
+
 describe('/list_skills - excludes content', () => {
   it('returns skills without content field', () => {
     db.createSkill({ name: 'Test Skill', description: 'A test skill', content: 'SECRET CONTENT HERE' })

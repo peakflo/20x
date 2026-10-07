@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/Label'
 import { TaskAttachments, type PendingFile } from './TaskAttachments'
 import { OutputFieldsEditor } from './OutputFieldsEditor'
 import { RecurrenceEditor } from './RecurrenceEditor'
+import { useProjectStore } from '@/stores/project-store'
 import { TaskStatus, TASK_TYPES, TASK_PRIORITIES, TASK_STATUSES } from '@/types'
 import type {
   WorkfloTask,
@@ -27,15 +28,19 @@ export interface TaskFormSubmitData extends CreateTaskDTO {
 interface TaskFormProps {
   task?: WorkfloTask
   prefill?: { title: string; description: string } | null
+  /** Project to pre-select for a brand-new task (e.g. when created from inside a project's filtered view). Ignored when editing an existing task. */
+  defaultProjectId?: string | null
   /** @deprecated Use collapsible section instead — kept for backward compat, ignored */
   compact?: boolean
   onSubmit: (data: TaskFormSubmitData | UpdateTaskDTO) => Promise<void>
   onCancel: () => void
 }
 
-export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
+export function TaskForm({ task, prefill, defaultProjectId, onSubmit, onCancel }: TaskFormProps) {
+  const projects = useProjectStore((s) => s.projects)
   const [title, setTitle] = useState(prefill?.title || '')
   const [description, setDescription] = useState(prefill?.description || '')
+  const [projectId, setProjectId] = useState<string>(task?.project_id ?? defaultProjectId ?? '')
   const [type, setType] = useState<TaskType>('general')
   const [priority, setPriority] = useState<TaskPriority>('medium')
   const [status, setStatus] = useState<TaskStatus>(TaskStatus.NotStarted)
@@ -58,6 +63,7 @@ export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
     if (task) {
       setTitle(task.title)
       setDescription(task.description)
+      setProjectId(task.project_id ?? '')
       setType(task.type)
       setPriority(task.priority)
       setStatus(task.status)
@@ -101,6 +107,7 @@ export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
       const formData: TaskFormSubmitData = {
         title: title.trim(),
         description,
+        project_id: projectId || null,
         type,
         priority,
         status,
@@ -150,6 +157,19 @@ export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
           onChange={(e) => setDescription(e.target.value)}
           placeholder="Add details, context, or notes..."
           rows={3}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="project">Project</Label>
+        <Select
+          id="project"
+          value={projectId}
+          onChange={(e) => setProjectId(e.target.value)}
+          options={[
+            { value: '', label: 'No project (Inbox)' },
+            ...projects.map((p) => ({ value: p.id, label: p.name }))
+          ]}
         />
       </div>
 
