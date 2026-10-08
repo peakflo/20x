@@ -191,16 +191,9 @@ describe('getHeartbeatDueTasks', () => {
 
   it('clears a task and its child heartbeats on completion from any update route', () => {
     const parent = db.createTask(makeTask({ status: 'ready_for_review' }))!
-    // The subtask-completion gate on the parent (see 'Subtask completion gate' below)
-    // requires this child to already be Completed, and a completed task can't have its
-    // heartbeat enabled through the normal update path — so the flag is forced via raw
-    // SQL, simulating data left by a version before that guard existed (same pattern as
-    // 'excludes a ready_for_review subtask whose parent task is completed' above).
-    const child = db.createTask(makeTask({ status: 'completed', parent_task_id: parent.id }))!
-    const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db
-    rawDb.prepare('UPDATE tasks SET heartbeat_enabled = 1, heartbeat_next_check_at = ? WHERE id = ?')
-      .run(new Date(Date.now() - 60_000).toISOString(), child.id)
+    const child = db.createTask(makeTask({ status: 'ready_for_review', parent_task_id: parent.id }))!
     dueNow(parent)
+    dueNow(child)
 
     db.updateTask(parent.id, { status: 'completed' })
 
@@ -259,59 +252,16 @@ describe('getHeartbeatDueTasks', () => {
   })
 })
 
-describe('Subtask completion gate', () => {
-  it('refuses to complete a parent while a subtask is only ready_for_review', () => {
+describe('Task completion', () => {
+  it('completes a parent task even while its subtasks are still open', () => {
     const parent = db.createTask(makeTask({ title: 'Parent', status: 'ready_for_review' }))!
-    const subtask = db.createTask(makeTask({ title: 'Write the report', status: 'ready_for_review', parent_task_id: parent.id }))!
-
-    expect(() => db.updateTask(parent.id, { status: 'completed' })).toThrow(
-      'Complete all subtasks before finishing this task: "Write the report" (ready_for_review)'
-    )
-    expect(db.getTask(parent.id)?.status).toBe('ready_for_review')
-    expect(db.getTask(subtask.id)?.status).toBe('ready_for_review')
-  })
-
-  it('refuses to complete a parent while a subtask is not_started or agent_working', () => {
-    const parent = db.createTask(makeTask({ title: 'Parent', status: 'ready_for_review' }))!
-    db.createTask(makeTask({ title: 'Not started yet', status: 'not_started', parent_task_id: parent.id }))
-    db.createTask(makeTask({ title: 'In flight', status: 'agent_working', parent_task_id: parent.id }))
-
-    expect(() => db.updateTask(parent.id, { status: 'completed' })).toThrow(
-      /Complete all subtasks before finishing this task/
-    )
-  })
-
-  it('allows completion once every subtask is explicitly Completed', () => {
-    const parent = db.createTask(makeTask({ title: 'Parent', status: 'ready_for_review' }))!
-    const subtask = db.createTask(makeTask({ title: 'Write the report', status: 'completed', parent_task_id: parent.id }))!
+    const subtask = db.createTask(makeTask({ title: 'Write the report', status: 'not_started', parent_task_id: parent.id }))!
 
     const updated = db.updateTask(parent.id, { status: 'completed' })
 
     expect(updated?.status).toBe('completed')
-    expect(db.getTask(subtask.id)?.status).toBe('completed')
-  })
-
-  it('allows completion when a task has no subtasks at all', () => {
-    const task = db.createTask(makeTask({ status: 'ready_for_review' }))!
-
-    expect(() => db.updateTask(task.id, { status: 'completed' })).not.toThrow()
-    expect(db.getTask(task.id)?.status).toBe('completed')
-  })
-
-  it('does not re-check subtasks on an update that leaves an already-completed parent completed', () => {
-    const parent = db.createTask(makeTask({ title: 'Parent', status: 'completed' }))!
-    db.createTask(makeTask({ title: 'Still open', status: 'ready_for_review', parent_task_id: parent.id }))
-
-    // A no-op status write (e.g. a source resync) must not be blocked by a child that
-    // was left open after the parent already closed.
-    expect(() => db.updateTask(parent.id, { status: 'completed', resolution: 'synced' })).not.toThrow()
-  })
-
-  it('does not block updates to a parent that leave its status unchanged', () => {
-    const parent = db.createTask(makeTask({ title: 'Parent', status: 'ready_for_review' }))!
-    db.createTask(makeTask({ title: 'Still open', status: 'not_started', parent_task_id: parent.id }))
-
-    expect(() => db.updateTask(parent.id, { title: 'Renamed parent' })).not.toThrow()
+    // Finishing the parent doesn't touch the subtask's own status.
+    expect(db.getTask(subtask.id)?.status).toBe('not_started')
   })
 })
 

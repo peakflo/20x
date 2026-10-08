@@ -35,13 +35,6 @@ export async function finishSessionFeedback(db: DatabaseManager, sync: SyncManag
   const { completeAtSource } = JSON.parse(pending) as { completeAtSource: boolean }
   db.deleteSetting(feedbackKey(taskId))
   try {
-    // Fail fast, before triggering any source-completion action, if a subtask hasn't
-    // explicitly reached Completed. db.updateTask enforces this too (it's the only
-    // guard guaranteed to run for every completion path), but checking here avoids
-    // firing the source action needlessly.
-    if (db.getSubtasks(taskId).some(child => child.status !== TaskStatus.Completed)) {
-      throw new Error('Subtasks must finish before this task can complete.')
-    }
     if (task.source_id && completeAtSource) {
       if (!sync) throw new Error('Task source is unavailable.')
       const result = await sync.executeAction(getTaskCompletionAction(task.output_fields), task, undefined, task.source_id)

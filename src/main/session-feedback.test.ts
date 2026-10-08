@@ -57,28 +57,13 @@ describe('session feedback completion', () => {
     expect(executeAction).not.toHaveBeenCalled()
   })
 
-  it('blocks completion while a subtask is only ready_for_review, and never fires the source action', async () => {
-    db.createTask(makeTask({title: 'Draft the summary', status: 'ready_for_review', parent_task_id: taskId}))
-    updateTaskFromUser(db, taskId, {status: 'agent_learning', feedback_rating: 4, complete_at_source: true})
-    const executeAction = vi.fn().mockResolvedValue({success: true})
-    await expect(finishSessionFeedback(db, {executeAction} as never, taskId)).rejects.toThrow(
-      'Subtasks must finish before this task can complete.'
-    )
-    expect(executeAction).not.toHaveBeenCalled()
-    expect(db.getTask(taskId)?.status).toBe('ready_for_review')
-  })
-
-  it('completes once the subtask is explicitly Completed, not merely ready_for_review', async () => {
-    const subtaskId = db.createTask(makeTask({title: 'Draft the summary', status: 'ready_for_review', parent_task_id: taskId}))!.id
+  it('completes the parent even while a subtask is still open — finishing does not require subtasks to be done', async () => {
+    const subtaskId = db.createTask(makeTask({title: 'Draft the summary', status: 'not_started', parent_task_id: taskId}))!.id
     updateTaskFromUser(db, taskId, {status: 'agent_learning', feedback_rating: 4, complete_at_source: false})
     const executeAction = vi.fn()
-    await expect(finishSessionFeedback(db, {executeAction} as never, taskId)).rejects.toThrow(
-      'Subtasks must finish before this task can complete.'
-    )
-
-    db.updateTask(subtaskId, {status: 'completed'})
-    updateTaskFromUser(db, taskId, {status: 'agent_learning', feedback_rating: 4, complete_at_source: false})
     await finishSessionFeedback(db, {executeAction} as never, taskId)
     expect(db.getTask(taskId)?.status).toBe('completed')
+    // The open subtask is left exactly as it was — completing the parent doesn't touch it.
+    expect(db.getTask(subtaskId)?.status).toBe('not_started')
   })
 })
