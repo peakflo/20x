@@ -45,11 +45,17 @@ You should be able to hand off a task without copying its brief into a new chat,
   <img src="resources/integrations.png" alt="20x integrations: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → 20x ↔ GitLab, Github, MCP → Claude Code, Opencode, OpenAI Codex, Cursor, Pi; Skills automatically improved" />
 </p>
 
+Light mode screenshots below show the app with sample tasks and skills.
+
 ### 📊 Dashboard Workspace
 - **Overview dashboard** — See task completion stats, AI autonomy metrics, and agent success rates at a glance
 - **Kanban task board** — Tasks grouped by status with drag-and-drop support
 - **Workflow applications** — Launch and manage workflow apps directly from the dashboard
 - **Presetup wizard** — Guided templates to get started quickly with new applications
+
+<p align="center">
+  <img src="docs/screenshots/readme-dashboard-light.png" alt="20x light mode dashboard showing tasks moving from triage through agent work to review" width="960" />
+</p>
 
 ### 🤖 Multi-Agent Support
 - **Claude Code** — Anthropic's official agent SDK (Claude Sonnet 4.6)
@@ -60,6 +66,12 @@ You should be able to hand off a task without copying its brief into a new chat,
 - **Live transcripts** — Watch agents think and work in real time with message counts
 - **Human-in-the-loop** — Approve risky actions before execution
 - **Task progress tracking** — Real-time progress events during agent execution
+
+The task brief, repository, skills, and agent work log stay in the same view.
+
+<p align="center">
+  <img src="docs/screenshots/readme-agent-work-light.png" alt="20x light mode task showing an agent work log beside the task brief, repository, and skill" width="960" />
+</p>
 
 ### 🔗 Smart Integrations
 - **Linear** — Pull issues, update status, post comments
@@ -78,6 +90,10 @@ You should be able to hand off a task without copying its brief into a new chat,
 - **2-way sync** — Skills synchronize bidirectionally between 20x and Workflo
 - **Searchable skills** — Quickly find skills with built-in search
 
+<p align="center">
+  <img src="docs/screenshots/readme-skills-light.png" alt="20x light mode skills editor showing a reusable skill, confidence, and instructions" width="960" />
+</p>
+
 ### 🛠 Developer-First
 - **Git worktree management** — Isolated branches per task
 - **Repository context** — Agents know which repos to work on (GitHub & GitLab)
@@ -94,6 +110,10 @@ You should be able to hand off a task without copying its brief into a new chat,
 - **File attachments** — Add context files to tasks
 - **Output fields** — Structured task results
 - **Smart search** — Find anything fast
+
+<p align="center">
+  <img src="docs/screenshots/readme-review-light.png" alt="20x light mode task ready for review with the agent work log and structured output together" width="960" />
+</p>
 
 ### 🎙 Voice (desktop, optional)
 - **Local speech to text** — Runs on your machine; no audio is stored or sent anywhere
@@ -257,9 +277,9 @@ We welcome contributions! Here's how:
 - Cost tracking (token usage per session)
 - Agent templates (pre-configured profiles)
 - Plugin marketplace (community skills)
-- Light theme
 
 ### Recently Shipped
+- ✅ Light theme
 - ✅ Cursor coding agent support (Agent Client Protocol)
 - ✅ Idle workspace cleanup — node_modules pruning after 7 days
 - ✅ Browser console logs and network activity exposed via MCP
