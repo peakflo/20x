@@ -82,6 +82,16 @@ export const BARGE_IN_HOLD_MS = 300
  */
 export const BARGE_IN_PREROLL_MS = 600
 
+/**
+ * How long the microphone stays held after an answer finishes by itself.
+ *
+ * The last word is still in the room, and in the echo canceller, for a moment
+ * after the playback queue empties. Opening the gate at once handed that tail
+ * to the recogniser, which glued a fragment of 20x's own sentence to the front
+ * of whatever the user said next.
+ */
+export const ECHO_TAIL_MS = 400
+
 export interface BargeInGateOptions {
   /** Called once, when the held audio shows that the user has started talking. */
   onBargeIn: () => void
@@ -90,6 +100,7 @@ export interface BargeInGateOptions {
   preRollMs?: number
   floorFactor?: number
   floorWindow?: number
+  tailMs?: number
 }
 
 export class BargeInGate {
@@ -99,6 +110,8 @@ export class BargeInGate {
   private loudMs = 0
   /** Loudness of the most recent batches, for measuring the room. */
   private levels: number[] = []
+  /** Audio still to be held after an answer ended by itself. */
+  private tailLeftMs = 0
 
   constructor(private options: BargeInGateOptions) {}
 
@@ -125,9 +138,27 @@ export class BargeInGate {
 
   /** Follows the audio state: 20x has started or stopped reading. */
   setSpeaking(speaking: boolean): void {
+    this.tailLeftMs = 0
     if (this.speaking === speaking) return
     this.speaking = speaking
     this.reset()
+  }
+
+  /**
+   * The answer finished by itself, as opposed to the user stopping it.
+   *
+   * The gate keeps holding for `ECHO_TAIL_MS` and then drops what it held: that
+   * is the echo of the last word. A user who starts talking straight away is
+   * still heard, because loud audio in the tail is released, not dropped.
+   */
+  finishSpeaking(): void {
+    if (!this.speaking) return
+    this.speaking = false
+    this.held = []
+    this.heldMs = 0
+    this.loudMs = 0
+    // The room measured during the answer is kept: it is the echo to beat.
+    this.tailLeftMs = this.options.tailMs ?? ECHO_TAIL_MS
   }
 
   /** Forgets the held audio. Used when a turn ends. */
@@ -153,6 +184,7 @@ export class BargeInGate {
    * at the moment the user interrupts.
    */
   push(chunk: Uint8Array): Uint8Array[] {
+    if (!this.speaking && this.tailLeftMs > 0 && chunk.length >= 2) return this.pushTail(chunk)
     if (!this.speaking) return chunk.length > 0 ? [chunk] : []
     if (chunk.length < 2) return []
 
@@ -184,6 +216,27 @@ export class BargeInGate {
     this.heldMs = 0
     this.loudMs = 0
     this.options.onBargeIn()
+    return release
+  }
+
+  private pushTail(chunk: Uint8Array): Uint8Array[] {
+    const ms = (chunk.length / 2 / VOICE_SAMPLE_RATE) * 1000
+    this.held.push(chunk)
+    this.heldMs += ms
+    this.tailLeftMs -= ms
+    const loud = rmsOfPcm16(chunk) >= this.threshold
+    this.loudMs = loud ? this.loudMs + ms : 0
+    // Still the echo of the answer: keep holding.
+    if (this.tailLeftMs > 0 && this.loudMs < this.holdMs) return []
+
+    // The tail is over, or the user is plainly talking. What was held is the
+    // user's if it is loud right now, and the echo otherwise.
+    const release = loud ? this.held : []
+    this.tailLeftMs = 0
+    this.held = []
+    this.heldMs = 0
+    this.loudMs = 0
+    this.levels = []
     return release
   }
 }

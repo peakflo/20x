@@ -114,6 +114,8 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
   return (
     <button
       data-keyboard-task-id={task.id}
+      data-task-row=""
+      data-attention={hasPendingApproval ? 'approval' : undefined}
       onClick={onSelect}
       aria-current={isSelected ? 'true' : undefined}
       className={cn(
@@ -123,7 +125,7 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
       )}
     >
       <div className="flex items-start gap-3">
-        <div className={cn(
+        <div data-status-dot="" className={cn(
           'mt-[7px] h-2 w-2 rounded-full shrink-0',
           isSubtask && 'mt-[5px] h-1.5 w-1.5',
           statusColor

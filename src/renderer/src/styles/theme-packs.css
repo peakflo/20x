@@ -1,0 +1,936 @@
+/* Package fonts ship inside the app, like Legacy's. */
+@import "@fontsource/figtree/latin-400.css";
+@import "@fontsource/figtree/latin-500.css";
+@import "@fontsource/figtree/latin-600.css";
+@import "@fontsource/figtree/latin-700.css";
+@import "@fontsource/bricolage-grotesque/latin-600.css";
+@import "@fontsource/bricolage-grotesque/latin-700.css";
+@import "@fontsource/geist-sans/latin-400.css";
+@import "@fontsource/geist-sans/latin-500.css";
+@import "@fontsource/geist-sans/latin-600.css";
+@import "@fontsource/geist-sans/latin-700.css";
+@import "@fontsource/geist-mono/latin-400.css";
+@import "@fontsource/geist-mono/latin-500.css";
+@import "@fontsource/dm-sans/latin-400.css";
+@import "@fontsource/dm-sans/latin-500.css";
+@import "@fontsource/dm-sans/latin-600.css";
+@import "@fontsource/dm-sans/latin-700.css";
+@import "@fontsource/fredoka/latin-500.css";
+@import "@fontsource/fredoka/latin-600.css";
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Theme packages
+   Each package overrides the design tokens from globals.css, in a light and a
+   dark version. "Legacy" has no attribute and keeps the defaults untouched.
+   Selectors carry :root plus the attribute (plus .dark), so they always win
+   over the base :root and .dark blocks regardless of source order.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+
+/* Packages may give headings their own display face; Legacy never does. */
+:root[data-theme-pack] :is(h1, h2, h3) {
+  font-family: var(--font-display);
+}
+
+/* ── Calm Desk ─────────────────────────────────────────────────────────── */
+:root[data-theme-pack="calm"] {
+  --background: #f6f7f9;
+  --foreground: #15191f;
+  --card: #ffffff;
+  --card-foreground: #15191f;
+  --popover: #ffffff;
+  --popover-foreground: #15191f;
+  --primary: #1668b0;
+  --primary-foreground: #ffffff;
+  --secondary: #eff1f4;
+  --secondary-foreground: #2c333d;
+  --muted: #eff1f4;
+  --muted-foreground: #5e6672;
+  --accent: #e8ebef;
+  --accent-foreground: #15191f;
+  --destructive: #c4321f;
+  --destructive-foreground: #ffffff;
+  --success: #1e8a5a;
+  --success-foreground: #ffffff;
+  --warning: #f5a524;
+  --warning-foreground: #3a2800;
+  --border: #e4e7ec;
+  --input: #d9dde3;
+  --ring: #1668b0;
+  --sidebar: #eff1f4;
+  --sidebar-foreground: #3d4552;
+  --sidebar-border: #e4e7ec;
+  --sidebar-accent: #ffffff;
+  --sidebar-muted: #e8ebef;
+  --chrome: rgba(246, 247, 249, 0.82);
+  --chrome-solid: #f6f7f9;
+  --canvas-bg: #eef0f3;
+  --canvas-panel: #ffffff;
+  --canvas-chrome: #f6f7f9;
+  --canvas-toolbar: rgba(255, 255, 255, 0.92);
+  --canvas-dot: rgba(20, 30, 50, 0.08);
+  --shadow-xs: 0 1px 2px rgba(20, 30, 50, 0.05);
+  --shadow-sm: 0 1px 2px rgba(20, 30, 50, 0.06), 0 0 0 1px rgba(20, 30, 50, 0.03);
+  --shadow-md: 0 6px 16px -4px rgba(20, 30, 50, 0.1);
+  --shadow-lg: 0 16px 36px -10px rgba(20, 30, 50, 0.16);
+  --shadow-pop: 0 12px 32px -8px rgba(20, 30, 50, 0.18);
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 12px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --r-2xl: 24px;
+  --font-ui: "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Bricolage Grotesque", "Figtree", -apple-system, sans-serif;
+}
+:root.dark[data-theme-pack="calm"] {
+  --background: #111418;
+  --foreground: #e8ecf1;
+  --card: #1a1e24;
+  --card-foreground: #e8ecf1;
+  --popover: #1a1e24;
+  --popover-foreground: #e8ecf1;
+  --primary: #5aa9f0;
+  --primary-foreground: #06131f;
+  --secondary: #20252c;
+  --secondary-foreground: #e8ecf1;
+  --muted: #1d2228;
+  --muted-foreground: #9aa3ae;
+  --accent: #252b33;
+  --accent-foreground: #e8ecf1;
+  --destructive: #f06a5b;
+  --destructive-foreground: #1a0705;
+  --success: #3cc486;
+  --success-foreground: #06140d;
+  --warning: #f3b562;
+  --warning-foreground: #1a1200;
+  --border: #262b33;
+  --input: #2f353e;
+  --ring: #5aa9f0;
+  --sidebar: #0c0f12;
+  --sidebar-foreground: #c9d0d8;
+  --sidebar-border: #1d2228;
+  --sidebar-accent: #1a1e24;
+  --sidebar-muted: #161a1f;
+  --chrome: rgba(17, 20, 24, 0.78);
+  --chrome-solid: #111418;
+  --canvas-bg: #0d1013;
+  --canvas-panel: #1a1e24;
+  --canvas-chrome: #20252c;
+  --canvas-toolbar: rgba(26, 30, 36, 0.92);
+  --canvas-dot: rgba(255, 255, 255, 0.06);
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 6px 18px -4px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 18px 40px -10px rgba(0, 0, 0, 0.55);
+  --shadow-pop: 0 12px 34px -8px rgba(0, 0, 0, 0.55);
+}
+
+/* ── Mission Control ───────────────────────────────────────────────────── */
+:root[data-theme-pack="mission"] {
+  --background: #f3f5f8;
+  --foreground: #0b1220;
+  --card: #ffffff;
+  --card-foreground: #0b1220;
+  --popover: #ffffff;
+  --popover-foreground: #0b1220;
+  --primary: #0a6fc2;
+  --primary-foreground: #ffffff;
+  --secondary: #e9edf2;
+  --secondary-foreground: #1a2333;
+  --muted: #eef1f5;
+  --muted-foreground: #566273;
+  --accent: #e4e9ef;
+  --accent-foreground: #0b1220;
+  --destructive: #c8333a;
+  --destructive-foreground: #ffffff;
+  --success: #16884f;
+  --success-foreground: #ffffff;
+  --warning: #f5a524;
+  --warning-foreground: #3a2800;
+  --border: #d6dde6;
+  --input: #ccd4de;
+  --ring: #0a6fc2;
+  --sidebar: #e9edf2;
+  --sidebar-foreground: #2a3342;
+  --sidebar-border: #d6dde6;
+  --sidebar-accent: #ffffff;
+  --sidebar-muted: #e1e6ec;
+  --chrome: rgba(243, 245, 248, 0.88);
+  --chrome-solid: #f3f5f8;
+  --canvas-bg: #ebeef2;
+  --canvas-panel: #ffffff;
+  --canvas-chrome: #f3f5f8;
+  --canvas-toolbar: rgba(255, 255, 255, 0.94);
+  --canvas-dot: rgba(11, 18, 32, 0.08);
+  --shadow-xs: none;
+  --shadow-sm: 0 0 0 1px rgba(11, 18, 32, 0.04);
+  --shadow-md: 0 4px 12px -4px rgba(11, 18, 32, 0.12);
+  --shadow-lg: 0 12px 28px -8px rgba(11, 18, 32, 0.18);
+  --shadow-pop: 0 10px 26px -8px rgba(11, 18, 32, 0.2);
+  --r-xs: 3px;
+  --r-sm: 5px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 10px;
+  --r-2xl: 12px;
+  --font-ui: "Geist Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-code: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-display: "Geist Sans", -apple-system, sans-serif;
+}
+:root.dark[data-theme-pack="mission"] {
+  --background: #0b0e13;
+  --foreground: #e6edf5;
+  --card: #10161d;
+  --card-foreground: #e6edf5;
+  --popover: #121922;
+  --popover-foreground: #e6edf5;
+  --primary: #3fa9f5;
+  --primary-foreground: #04121f;
+  --secondary: #151c25;
+  --secondary-foreground: #e6edf5;
+  --muted: #131a22;
+  --muted-foreground: #8d9aa8;
+  --accent: #18212b;
+  --accent-foreground: #e6edf5;
+  --destructive: #f2555a;
+  --destructive-foreground: #1a0507;
+  --success: #3dd68c;
+  --success-foreground: #04140c;
+  --warning: #f5a524;
+  --warning-foreground: #1a1204;
+  --border: #1f2833;
+  --input: #263140;
+  --ring: #3fa9f5;
+  --sidebar: #0e1218;
+  --sidebar-foreground: #afbbc8;
+  --sidebar-border: #1c232d;
+  --sidebar-accent: #141b24;
+  --sidebar-muted: #11171e;
+  --chrome: rgba(11, 14, 19, 0.82);
+  --chrome-solid: #0b0e13;
+  --canvas-bg: #080b0f;
+  --canvas-panel: #10161d;
+  --canvas-chrome: #151c25;
+  --canvas-toolbar: rgba(16, 22, 29, 0.94);
+  --canvas-dot: rgba(255, 255, 255, 0.05);
+  --shadow-xs: none;
+  --shadow-sm: 0 0 0 1px rgba(255, 255, 255, 0.02);
+  --shadow-md: 0 6px 16px -6px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 16px 36px -10px rgba(0, 0, 0, 0.7);
+  --shadow-pop: 0 12px 30px -8px rgba(0, 0, 0, 0.7);
+}
+
+/* ── Peako World ───────────────────────────────────────────────────────── */
+:root[data-theme-pack="peako"] {
+  --background: #e9f2fd;
+  --foreground: #0f2741;
+  --card: #ffffff;
+  --card-foreground: #0f2741;
+  --popover: #ffffff;
+  --popover-foreground: #0f2741;
+  --primary: #1770c2;
+  --primary-foreground: #ffffff;
+  --secondary: #dce8f7;
+  --secondary-foreground: #0f2741;
+  --muted: #e3eefb;
+  --muted-foreground: #4b6684;
+  --accent: #d7e6f8;
+  --accent-foreground: #0f2741;
+  --destructive: #d9442f;
+  --destructive-foreground: #ffffff;
+  --success: #12a67a;
+  --success-foreground: #ffffff;
+  --warning: #ffc23d;
+  --warning-foreground: #3d2800;
+  --border: #d3e3f5;
+  --input: #c4d7ee;
+  --ring: #1770c2;
+  --sidebar: #dce8f7;
+  --sidebar-foreground: #1f3a5a;
+  --sidebar-border: #cadcf2;
+  --sidebar-accent: #ffffff;
+  --sidebar-muted: #e3eefb;
+  --chrome: rgba(233, 242, 253, 0.86);
+  --chrome-solid: #e9f2fd;
+  --canvas-bg: #e1ecfa;
+  --canvas-panel: #ffffff;
+  --canvas-chrome: #e9f2fd;
+  --canvas-toolbar: rgba(255, 255, 255, 0.92);
+  --canvas-dot: rgba(15, 39, 65, 0.1);
+  --shadow-xs: 0 2px 0 #d3e3f5;
+  --shadow-sm: 0 3px 0 #d3e3f5;
+  --shadow-md: 0 4px 0 #d3e3f5, 0 10px 24px -12px rgba(15, 39, 65, 0.25);
+  --shadow-lg: 0 6px 0 #c9dcf2, 0 14px 30px -10px rgba(15, 39, 65, 0.28);
+  --shadow-pop: 0 4px 0 #c9dcf2, 0 14px 34px -10px rgba(15, 39, 65, 0.3);
+  --r-xs: 8px;
+  --r-sm: 12px;
+  --r-md: 14px;
+  --r-lg: 18px;
+  --r-xl: 22px;
+  --r-2xl: 28px;
+  --font-ui: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Fredoka", "DM Sans", -apple-system, sans-serif;
+}
+:root.dark[data-theme-pack="peako"] {
+  --background: #0e1b2c;
+  --foreground: #eaf3ff;
+  --card: #15263b;
+  --card-foreground: #eaf3ff;
+  --popover: #172a41;
+  --popover-foreground: #eaf3ff;
+  --primary: #5fb0ff;
+  --primary-foreground: #04182c;
+  --secondary: #1b3350;
+  --secondary-foreground: #eaf3ff;
+  --muted: #172b44;
+  --muted-foreground: #a7bcd4;
+  --accent: #1e3858;
+  --accent-foreground: #eaf3ff;
+  --destructive: #ff7a6b;
+  --destructive-foreground: #2b0a05;
+  --success: #4cd4a0;
+  --success-foreground: #06301f;
+  --warning: #ffd66b;
+  --warning-foreground: #3a2e0a;
+  --border: #23405f;
+  --input: #2a4a6e;
+  --ring: #5fb0ff;
+  --sidebar: #0a1524;
+  --sidebar-foreground: #cfe0f5;
+  --sidebar-border: #1a3150;
+  --sidebar-accent: #15263b;
+  --sidebar-muted: #12223a;
+  --chrome: rgba(14, 27, 44, 0.84);
+  --chrome-solid: #0e1b2c;
+  --canvas-bg: #0a1524;
+  --canvas-panel: #15263b;
+  --canvas-chrome: #1b3350;
+  --canvas-toolbar: rgba(21, 38, 59, 0.92);
+  --canvas-dot: rgba(255, 255, 255, 0.07);
+  --shadow-xs: 0 2px 0 #08111d;
+  --shadow-sm: 0 3px 0 #08111d;
+  --shadow-md: 0 4px 0 #08111d, 0 10px 24px -12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 6px 0 #071019, 0 14px 30px -10px rgba(0, 0, 0, 0.55);
+  --shadow-pop: 0 4px 0 #071019, 0 14px 34px -10px rgba(0, 0, 0, 0.6);
+}
+
+/* ── Status colours ─────────────────────────────────────────────────────────
+   Components colour status with Tailwind palette utilities (amber, pink,
+   emerald…), which read --color-<family>-<shade>. Inside a package those
+   variables point at six status roles the package defines per mode, so every
+   badge, column tint and status dot follows the package without touching a
+   component. `html:root` outranks the light-mode shade fixes in globals.css. */
+html:root[data-theme-pack] {
+  /* "Thinking" rows are teal in Legacy; in a package they take the learning role. */
+  --color-teal-200: var(--pk-learn-text);
+  --color-teal-300: var(--pk-learn-text);
+  --color-teal-500: var(--pk-learn);
+  --color-teal-600: var(--pk-learn-deep);
+  --color-teal-700: var(--pk-learn-deep);
+  --color-amber-200: var(--pk-warn-text);
+  --color-amber-300: var(--pk-warn-text);
+  --color-amber-400: var(--pk-warn-text);
+  --color-amber-500: var(--pk-warn);
+  --color-amber-600: var(--pk-warn-deep);
+  --color-amber-700: var(--pk-warn-deep);
+  --color-amber-800: var(--pk-warn-deep);
+  --color-yellow-200: var(--pk-warn-text);
+  --color-yellow-300: var(--pk-warn-text);
+  --color-yellow-400: var(--pk-warn-text);
+  --color-yellow-500: var(--pk-warn);
+  --color-yellow-600: var(--pk-warn-deep);
+  --color-yellow-700: var(--pk-warn-deep);
+  --color-yellow-800: var(--pk-warn-deep);
+  --color-orange-200: var(--pk-warn-text);
+  --color-orange-300: var(--pk-warn-text);
+  --color-orange-400: var(--pk-warn-text);
+  --color-orange-500: var(--pk-warn);
+  --color-orange-600: var(--pk-warn-deep);
+  --color-orange-700: var(--pk-warn-deep);
+  --color-orange-800: var(--pk-warn-deep);
+  --color-red-200: var(--pk-danger-text);
+  --color-red-300: var(--pk-danger-text);
+  --color-red-400: var(--pk-danger-text);
+  --color-red-500: var(--pk-danger);
+  --color-red-600: var(--pk-danger-deep);
+  --color-red-700: var(--pk-danger-deep);
+  --color-red-800: var(--pk-danger-deep);
+  --color-rose-200: var(--pk-danger-text);
+  --color-rose-300: var(--pk-danger-text);
+  --color-rose-400: var(--pk-danger-text);
+  --color-rose-500: var(--pk-danger);
+  --color-rose-600: var(--pk-danger-deep);
+  --color-rose-700: var(--pk-danger-deep);
+  --color-rose-800: var(--pk-danger-deep);
+  --color-green-200: var(--pk-success-text);
+  --color-green-300: var(--pk-success-text);
+  --color-green-400: var(--pk-success-text);
+  --color-green-500: var(--pk-success);
+  --color-green-600: var(--pk-success-deep);
+  --color-green-700: var(--pk-success-deep);
+  --color-green-800: var(--pk-success-deep);
+  --color-emerald-200: var(--pk-success-text);
+  --color-emerald-300: var(--pk-success-text);
+  --color-emerald-400: var(--pk-success-text);
+  --color-emerald-500: var(--pk-success);
+  --color-emerald-600: var(--pk-success-deep);
+  --color-emerald-700: var(--pk-success-deep);
+  --color-emerald-800: var(--pk-success-deep);
+  --color-teal-200: var(--pk-success-text);
+  --color-teal-300: var(--pk-success-text);
+  --color-teal-400: var(--pk-success-text);
+  --color-teal-500: var(--pk-success);
+  --color-teal-600: var(--pk-success-deep);
+  --color-teal-700: var(--pk-success-deep);
+  --color-teal-800: var(--pk-success-deep);
+  --color-lime-200: var(--pk-success-text);
+  --color-lime-300: var(--pk-success-text);
+  --color-lime-400: var(--pk-success-text);
+  --color-lime-500: var(--pk-success);
+  --color-lime-600: var(--pk-success-deep);
+  --color-lime-700: var(--pk-success-deep);
+  --color-lime-800: var(--pk-success-deep);
+  --color-blue-200: var(--pk-info-text);
+  --color-blue-300: var(--pk-info-text);
+  --color-blue-400: var(--pk-info-text);
+  --color-blue-500: var(--pk-info);
+  --color-blue-600: var(--pk-info-deep);
+  --color-blue-700: var(--pk-info-deep);
+  --color-blue-800: var(--pk-info-deep);
+  --color-sky-200: var(--pk-info-text);
+  --color-sky-300: var(--pk-info-text);
+  --color-sky-400: var(--pk-info-text);
+  --color-sky-500: var(--pk-info);
+  --color-sky-600: var(--pk-info-deep);
+  --color-sky-700: var(--pk-info-deep);
+  --color-sky-800: var(--pk-info-deep);
+  --color-cyan-200: var(--pk-info-text);
+  --color-cyan-300: var(--pk-info-text);
+  --color-cyan-400: var(--pk-info-text);
+  --color-cyan-500: var(--pk-info);
+  --color-cyan-600: var(--pk-info-deep);
+  --color-cyan-700: var(--pk-info-deep);
+  --color-cyan-800: var(--pk-info-deep);
+  --color-pink-200: var(--pk-review-text);
+  --color-pink-300: var(--pk-review-text);
+  --color-pink-400: var(--pk-review-text);
+  --color-pink-500: var(--pk-review);
+  --color-pink-600: var(--pk-review-deep);
+  --color-pink-700: var(--pk-review-deep);
+  --color-pink-800: var(--pk-review-deep);
+  --color-fuchsia-200: var(--pk-review-text);
+  --color-fuchsia-300: var(--pk-review-text);
+  --color-fuchsia-400: var(--pk-review-text);
+  --color-fuchsia-500: var(--pk-review);
+  --color-fuchsia-600: var(--pk-review-deep);
+  --color-fuchsia-700: var(--pk-review-deep);
+  --color-fuchsia-800: var(--pk-review-deep);
+  --color-violet-200: var(--pk-learn-text);
+  --color-violet-300: var(--pk-learn-text);
+  --color-violet-400: var(--pk-learn-text);
+  --color-violet-500: var(--pk-learn);
+  --color-violet-600: var(--pk-learn-deep);
+  --color-violet-700: var(--pk-learn-deep);
+  --color-violet-800: var(--pk-learn-deep);
+  --color-purple-200: var(--pk-learn-text);
+  --color-purple-300: var(--pk-learn-text);
+  --color-purple-400: var(--pk-learn-text);
+  --color-purple-500: var(--pk-learn);
+  --color-purple-600: var(--pk-learn-deep);
+  --color-purple-700: var(--pk-learn-deep);
+  --color-purple-800: var(--pk-learn-deep);
+  --color-indigo-200: var(--pk-learn-text);
+  --color-indigo-300: var(--pk-learn-text);
+  --color-indigo-400: var(--pk-learn-text);
+  --color-indigo-500: var(--pk-learn);
+  --color-indigo-600: var(--pk-learn-deep);
+  --color-indigo-700: var(--pk-learn-deep);
+  --color-indigo-800: var(--pk-learn-deep);
+}
+:root[data-theme-pack="calm"] {
+  --pk-warn: #e08a00;
+  --pk-warn-text: #8a4b00;
+  --pk-warn-deep: #8a4b00;
+  --pk-danger: #d13a2a;
+  --pk-danger-text: #b42318;
+  --pk-danger-deep: #b42318;
+  --pk-success: #1e9e64;
+  --pk-success-text: #157a4c;
+  --pk-success-deep: #157a4c;
+  --pk-info: #1668b0;
+  --pk-info-text: #124f86;
+  --pk-info-deep: #124f86;
+  --pk-review: #c2417a;
+  --pk-review-text: #9c2c5e;
+  --pk-review-deep: #9c2c5e;
+  --pk-learn: #5b6bd6;
+  --pk-learn-text: #4250b8;
+  --pk-learn-deep: #4250b8;
+}
+:root.dark[data-theme-pack="calm"] {
+  --pk-warn: #e9a23b;
+  --pk-warn-text: #f3b562;
+  --pk-warn-deep: #e9a23b;
+  --pk-danger: #e5594a;
+  --pk-danger-text: #f28b82;
+  --pk-danger-deep: #e5594a;
+  --pk-success: #3cc486;
+  --pk-success-text: #6fd9a6;
+  --pk-success-deep: #3cc486;
+  --pk-info: #5aa9f0;
+  --pk-info-text: #8dc4f5;
+  --pk-info-deep: #5aa9f0;
+  --pk-review: #e0709f;
+  --pk-review-text: #f09ac0;
+  --pk-review-deep: #e0709f;
+  --pk-learn: #8a97f0;
+  --pk-learn-text: #aeb7f6;
+  --pk-learn-deep: #8a97f0;
+}
+:root[data-theme-pack="mission"] {
+  --pk-warn: #d98c00;
+  --pk-warn-text: #8a5300;
+  --pk-warn-deep: #8a5300;
+  --pk-danger: #c8333a;
+  --pk-danger-text: #a3202a;
+  --pk-danger-deep: #a3202a;
+  --pk-success: #16884f;
+  --pk-success-text: #0f6b3d;
+  --pk-success-deep: #0f6b3d;
+  --pk-info: #0a6fc2;
+  --pk-info-text: #085a9e;
+  --pk-info-deep: #085a9e;
+  --pk-review: #b8327a;
+  --pk-review-text: #8f2560;
+  --pk-review-deep: #8f2560;
+  --pk-learn: #6650d0;
+  --pk-learn-text: #4f3bb5;
+  --pk-learn-deep: #4f3bb5;
+}
+:root.dark[data-theme-pack="mission"] {
+  --pk-warn: #f5a524;
+  --pk-warn-text: #f7bb55;
+  --pk-warn-deep: #f5a524;
+  --pk-danger: #f2555a;
+  --pk-danger-text: #f67e82;
+  --pk-danger-deep: #f2555a;
+  --pk-success: #3dd68c;
+  --pk-success-text: #6be2a8;
+  --pk-success-deep: #3dd68c;
+  --pk-info: #3fa9f5;
+  --pk-info-text: #7cc4ff;
+  --pk-info-deep: #3fa9f5;
+  --pk-review: #e05fa0;
+  --pk-review-text: #ee8cbd;
+  --pk-review-deep: #e05fa0;
+  --pk-learn: #9b8cfa;
+  --pk-learn-text: #b9aefc;
+  --pk-learn-deep: #9b8cfa;
+}
+:root[data-theme-pack="peako"] {
+  --pk-warn: #f0a800;
+  --pk-warn-text: #7a5200;
+  --pk-warn-deep: #7a5200;
+  --pk-danger: #e5533d;
+  --pk-danger-text: #b23a26;
+  --pk-danger-deep: #b23a26;
+  --pk-success: #12a67a;
+  --pk-success-text: #0b7a59;
+  --pk-success-deep: #0b7a59;
+  --pk-info: #1770c2;
+  --pk-info-text: #0f5a9e;
+  --pk-info-deep: #0f5a9e;
+  --pk-review: #e0558a;
+  --pk-review-text: #b53a6b;
+  --pk-review-deep: #b53a6b;
+  --pk-learn: #7b5cff;
+  --pk-learn-text: #5b3fd6;
+  --pk-learn-deep: #5b3fd6;
+}
+:root.dark[data-theme-pack="peako"] {
+  --pk-warn: #ffc23d;
+  --pk-warn-text: #ffd66b;
+  --pk-warn-deep: #ffc23d;
+  --pk-danger: #ff7a6b;
+  --pk-danger-text: #ff9a8c;
+  --pk-danger-deep: #ff7a6b;
+  --pk-success: #4cd4a0;
+  --pk-success-text: #7fe3bc;
+  --pk-success-deep: #4cd4a0;
+  --pk-info: #5fb0ff;
+  --pk-info-text: #8fc8ff;
+  --pk-info-deep: #5fb0ff;
+  --pk-review: #ff7eb0;
+  --pk-review-text: #ffa3c7;
+  --pk-review-deep: #ff7eb0;
+  --pk-learn: #a98bff;
+  --pk-learn-text: #c4b0ff;
+  --pk-learn-deep: #a98bff;
+}
+
+/* ── Package character ──────────────────────────────────────────────────────
+   Colours alone made the packages look alike. Each one also sets its own type
+   size, labels and surfaces. Legacy is never touched by these rules. */
+
+/* Calm Desk: roomier type and normal tracking. */
+:root[data-theme-pack="calm"],
+:root[data-theme-pack="calm"] body,
+:root[data-theme-pack="calm"] #root {
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+/* Mission Control: dense, technical. Small uppercase labels become
+   monospace readouts, numbers line up, and chrome is solid, not frosted. */
+:root[data-theme-pack="mission"] body {
+  font-variant-numeric: tabular-nums;
+}
+:root[data-theme-pack="mission"] .uppercase {
+  font-family: var(--font-code);
+  letter-spacing: 0.08em;
+}
+:root[data-theme-pack="mission"] .frost {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background-color: var(--chrome-solid);
+}
+
+/* Peako World: friendlier type size and chunky, pressable primary buttons. */
+:root[data-theme-pack="peako"],
+:root[data-theme-pack="peako"] body,
+:root[data-theme-pack="peako"] #root {
+  font-size: 13px;
+  letter-spacing: 0;
+}
+:root[data-theme-pack="peako"] button.bg-primary {
+  box-shadow: 0 3px 0 color-mix(in oklab, var(--primary) 60%, #000);
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+:root[data-theme-pack="peako"] button.bg-primary:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--primary) 60%, #000);
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Working screens
+   The screens people sit in: a task's transcript while an agent works, the
+   task list, and the canvas. Components mark what each element is with data
+   attributes (data-part, data-attention, data-task-row, data-panel-type…), so
+   these rules style meaning, not utility classes. Legacy carries no package
+   attribute and is never touched.
+
+   Shared by every package, after what agent tools do best (Conductor,
+   Superset, Cursor's agents window): anything waiting for the user is the
+   loudest thing on screen, and looks the same wherever it appears.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Attention is its own hot orange, apart from the amber that means "agent
+   working": the two are the states people most need to tell apart. */
+html:root[data-theme-pack] {
+  --pk-attention: #e8590c;
+  --pk-attention-text: #b8430a;
+  --pk-attention-soft: color-mix(in oklab, var(--pk-attention) 12%, var(--card));
+}
+html:root.dark[data-theme-pack] {
+  --pk-attention: #ff7a33;
+  --pk-attention-text: #ffa070;
+  --pk-attention-soft: color-mix(in oklab, var(--pk-attention) 14%, var(--card));
+}
+
+/* The approval card: solid, edged, never see-through. */
+:root[data-theme-pack] [data-attention="approval"]:not([data-task-row]):not([data-canvas-panel]) {
+  background: var(--pk-attention-soft);
+  border-bottom: 1px solid color-mix(in oklab, var(--pk-attention) 35%, transparent);
+  box-shadow: inset 4px 0 0 var(--pk-attention);
+}
+
+/* A task waiting for the user: its own colour, not the learning blue. */
+:root[data-theme-pack] [data-task-row][data-attention="approval"] {
+  box-shadow: inset 3px 0 0 var(--pk-attention);
+  background: color-mix(in oklab, var(--pk-attention) 8%, transparent);
+}
+:root[data-theme-pack] [data-task-row][data-attention="approval"] [data-status-dot] {
+  background: var(--pk-attention);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--pk-attention) 30%, transparent);
+}
+
+/* A canvas panel waiting for the user stands out among many. */
+:root[data-theme-pack] [data-canvas-panel][data-attention="approval"] {
+  outline: 2px solid var(--pk-attention);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 6px color-mix(in oklab, var(--pk-attention) 18%, transparent), var(--shadow-lg);
+}
+
+/* A question from the agent also waits for the user. */
+:root[data-theme-pack] [data-part="question"] {
+  border-color: color-mix(in oklab, var(--pk-attention) 55%, transparent);
+  box-shadow: inset 3px 0 0 var(--pk-attention);
+}
+
+/* Agent answers at full contrast; tool and thinking rows stay secondary. */
+:root[data-theme-pack] [data-part="answer"] {
+  color: var(--foreground);
+}
+/* A failed tool call reads as failed without opening it. */
+:root[data-theme-pack] [data-part="tool"][data-state="error"] > button {
+  color: var(--pk-danger-text);
+  background: color-mix(in oklab, var(--pk-danger) 8%, transparent);
+}
+
+/* ── Calm Desk: for reviewing ───────────────────────────────────────────────
+   Long answers are comfortable to read; the agent's working steps recede
+   until hovered; nothing is cramped. */
+:root[data-theme-pack="calm"] [data-part="answer"] :is(p, li) {
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+:root[data-theme-pack="calm"] [data-part="answer"] {
+  max-width: 76ch;
+  padding-block: 6px;
+}
+:root[data-theme-pack="calm"] [data-part="user"] {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-xs);
+}
+:root[data-theme-pack="calm"] [data-part="user"] :is(p, li) {
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+:root[data-theme-pack="calm"] [data-part="activity"] {
+  opacity: 0.72;
+  transition: opacity 0.15s ease;
+}
+:root[data-theme-pack="calm"] [data-part="activity"]:hover,
+:root[data-theme-pack="calm"] [data-part="activity"]:focus-within {
+  opacity: 1;
+}
+:root[data-theme-pack="calm"] [data-part="tool"][data-state="error"] {
+  opacity: 1;
+}
+:root[data-theme-pack="calm"] [data-part="question"] {
+  border-radius: 14px;
+}
+:root[data-theme-pack="calm"] [data-task-row] {
+  padding-block: 12px;
+  border-radius: 10px;
+}
+:root[data-theme-pack="calm"] [data-canvas-panel] {
+  box-shadow: var(--shadow-lg);
+}
+
+/* ── Mission Control: for running many agents ──────────────────────────────
+   Dense rows, a log-style activity feed whose rail shows each step's state,
+   and a status edge on every canvas panel so a wall of agents reads at a
+   glance. */
+:root[data-theme-pack="mission"] [data-task-row] {
+  padding-block: 6px;
+  border-radius: 4px;
+}
+:root[data-theme-pack="mission"] [data-part="user"] {
+  border-radius: 4px;
+  border-left: 2px solid var(--primary);
+}
+:root[data-theme-pack="mission"] [data-part="activity"] {
+  border-left-width: 2px;
+  border-left-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent);
+}
+:root[data-theme-pack="mission"] [data-part="tool"] > button,
+:root[data-theme-pack="mission"] [data-part="thinking"] > button {
+  height: 22px;
+  border-radius: 2px;
+}
+:root[data-theme-pack="mission"] [data-part="tool"][data-state="running"] > button {
+  box-shadow: inset 2px 0 0 var(--pk-info);
+  color: var(--foreground);
+}
+:root[data-theme-pack="mission"] [data-part="tool"][data-state="error"] > button {
+  box-shadow: inset 2px 0 0 var(--pk-danger);
+}
+:root[data-theme-pack="mission"] [data-part="question"],
+:root[data-theme-pack="mission"] [data-part="error"],
+:root[data-theme-pack="mission"] [data-part="system"] {
+  border-radius: 4px;
+}
+:root[data-theme-pack="mission"] [data-canvas-panel] {
+  border-radius: 6px;
+}
+:root[data-theme-pack="mission"] [data-canvas-panel] > div {
+  border-radius: 5px;
+}
+:root[data-theme-pack="mission"] [data-canvas-panel][data-task-status] {
+  border-top-width: 3px;
+}
+:root[data-theme-pack="mission"] [data-canvas-panel][data-task-status="agent_working"] { border-top-color: var(--pk-warn); }
+:root[data-theme-pack="mission"] [data-canvas-panel][data-task-status="ready_for_review"] { border-top-color: var(--pk-review); }
+:root[data-theme-pack="mission"] [data-canvas-panel][data-task-status="agent_learning"] { border-top-color: var(--pk-learn); }
+:root[data-theme-pack="mission"] [data-canvas-panel][data-task-status="completed"] { border-top-color: var(--pk-success); }
+
+/* ── Peako World: friendly ─────────────────────────────────────────────────
+   A chat app's shapes: rounded bubbles on both sides, soft cards, and the
+   same chunky, pressable feel as its buttons. */
+:root[data-theme-pack="peako"] [data-part="user"] {
+  border-radius: 18px 18px 6px 18px;
+  background: color-mix(in oklab, var(--primary) 16%, var(--card));
+}
+:root[data-theme-pack="peako"] [data-part="answer"] {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 18px 18px 18px 6px;
+  padding: 10px 14px;
+  max-width: 92%;
+}
+:root[data-theme-pack="peako"] [data-part="answer"] :is(p, li) {
+  line-height: 1.6;
+}
+:root[data-theme-pack="peako"] [data-part="activity"] {
+  border-left: 0;
+  padding-left: 6px;
+}
+:root[data-theme-pack="peako"] [data-part="tool"] > button,
+:root[data-theme-pack="peako"] [data-part="thinking"] > button {
+  border-radius: 999px;
+}
+:root[data-theme-pack="peako"] [data-part="question"] {
+  border-radius: 18px;
+  border-width: 2px;
+}
+:root[data-theme-pack="peako"] [data-attention="approval"]:not([data-task-row]):not([data-canvas-panel]) button {
+  border-radius: 999px;
+}
+:root[data-theme-pack="peako"] [data-task-row] {
+  border-radius: 14px;
+}
+:root[data-theme-pack="peako"] [data-canvas-panel] {
+  border-radius: 20px;
+  border-width: 2px;
+}
+:root[data-theme-pack="peako"] [data-canvas-panel] > div {
+  border-radius: 18px;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Finish and motion
+   Small, quiet polish on the working screens, plus motion that answers what
+   the user does: opening a row, a dialog, a status that changed. The one
+   unprompted movement is the approval card arriving, because it is the one
+   thing on screen that needs the user.
+
+   Rules for motion here: transform and opacity only (colour and shadow on
+   state changes), 110–220 ms, no loops, nothing on transcript rows as they
+   mount (the list is virtualised, so mount animations would replay on every
+   scroll and streamed update), and none at all under reduced motion.
+   Legacy carries no package attribute and gets none of this.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* Each package sets the pace of every existing hover and colour transition
+   through Tailwind's defaults, plus its own entrance timing. */
+:root[data-theme-pack="calm"] {
+  --pk-dur: 190ms;
+  --pk-dur-enter: 220ms;
+  --pk-ease: cubic-bezier(0.25, 0.8, 0.3, 1);
+  --pk-ease-enter: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+:root[data-theme-pack="mission"] {
+  --pk-dur: 110ms;
+  --pk-dur-enter: 140ms;
+  --pk-ease: cubic-bezier(0.3, 0, 0.2, 1);
+  --pk-ease-enter: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+:root[data-theme-pack="peako"] {
+  --pk-dur: 170ms;
+  --pk-dur-enter: 220ms;
+  --pk-ease: cubic-bezier(0.25, 0.8, 0.3, 1);
+  --pk-ease-enter: cubic-bezier(0.34, 1.45, 0.64, 1);
+}
+:root[data-theme-pack] {
+  --default-transition-duration: var(--pk-dur);
+  --default-transition-timing-function: var(--pk-ease);
+}
+
+/* An error message shares the failed tool row's soft red, so the failure and
+   its explanation read as one incident. */
+:root[data-theme-pack] [data-part="error"] {
+  background: color-mix(in oklab, var(--pk-danger) 7%, transparent);
+  border-left-color: var(--pk-danger);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  padding-right: 12px;
+}
+
+/* A question's heading takes the attention colour of its edge. */
+:root[data-theme-pack] [data-part="question"] .text-primary {
+  color: var(--pk-attention-text);
+}
+
+/* Keyboard focus is visible on the rows people move through. */
+:root[data-theme-pack] :is([data-task-row], [data-part="tool"] > button, [data-part="thinking"] > button, [data-part="question"] button):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* Mission Control: the selected task carries a cursor edge, like a log. */
+:root[data-theme-pack="mission"] [data-task-row][aria-current="true"]:not([data-attention]) {
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+
+/* Peako World: answer options are soft and round, like its buttons. */
+:root[data-theme-pack="peako"] [data-part="question"] button {
+  border-radius: 12px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes pk-arrive {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes pk-reveal {
+    from { opacity: 0; transform: translateY(-3px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes pk-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pk-settle {
+    from { opacity: 0; scale: 0.97; }
+    to { opacity: 1; scale: 1; }
+  }
+
+  /* The approval card arrives: the one movement that asks for the user. */
+  :root[data-theme-pack] [data-attention="approval"]:not([data-task-row]):not([data-canvas-panel]) {
+    animation: pk-arrive var(--pk-dur-enter) var(--pk-ease-enter) backwards;
+  }
+
+  /* Opening a tool or thinking row: its details fade in under the header.
+     Expanded state is local, so this only plays when the user opens it. */
+  :root[data-theme-pack] :is([data-part="tool"], [data-part="thinking"]) > button + div {
+    animation: pk-reveal var(--pk-dur-enter) var(--pk-ease) backwards;
+  }
+
+  /* Dialogs settle into place, over a backdrop that fades in. `scale` is its
+     own property, so the dialog's centring translate is untouched. */
+  :root[data-theme-pack] :is([role="dialog"], [role="alertdialog"])[data-state="open"] {
+    animation: pk-settle var(--pk-dur-enter) var(--pk-ease-enter) backwards;
+  }
+  :root[data-theme-pack] [data-state="open"]:has(+ :is([role="dialog"], [role="alertdialog"])) {
+    animation: pk-fade var(--pk-dur-enter) var(--pk-ease) backwards;
+  }
+
+  /* A status change fades the dot to its new colour instead of snapping. */
+  :root[data-theme-pack] [data-status-dot] {
+    transition: background-color var(--pk-dur-enter) var(--pk-ease), box-shadow var(--pk-dur-enter) var(--pk-ease);
+  }
+
+  /* Peako World: rows and answer options press in, like its buttons. */
+  :root[data-theme-pack="peako"] :is([data-task-row], [data-part="question"] button:not(:disabled)) {
+    transition-property: color, background-color, border-color, box-shadow, transform;
+  }
+  :root[data-theme-pack="peako"] :is([data-task-row], [data-part="question"] button:not(:disabled)):active {
+    transform: translateY(1px) scale(0.995);
+    transition-duration: 60ms;
+  }
+}

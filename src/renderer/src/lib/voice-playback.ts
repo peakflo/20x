@@ -27,6 +27,7 @@ const SCHEDULING_LEAD_SECONDS = 0.06
 export class VoicePlayback {
   private context: AudioContext | null = null
   private analyser: AnalyserNode | null = null
+  private gain: GainNode | null = null
   private sources = new Set<AudioBufferSourceNode>()
   private speechId: string | null = null
   private nextStartTime = 0
@@ -68,6 +69,26 @@ export class VoicePlayback {
     this.speechId = speechId
     this.pending = 0
     this.nextStartTime = 0
+    this.unduck()
+  }
+
+  /**
+   * Turns the answer down without stopping it.
+   *
+   * Loudness alone cannot tell the user from the loudspeaker, so a suspected
+   * interruption only lowers the voice. It is stopped once real words are
+   * recognised, and turned back up if none are.
+   */
+  duck(level = 0.2): void {
+    const gain = this.gain
+    if (!gain || !this.context) return
+    gain.gain.setTargetAtTime(level, this.context.currentTime, 0.03)
+  }
+
+  unduck(): void {
+    const gain = this.gain
+    if (!gain || !this.context) return
+    gain.gain.setTargetAtTime(1, this.context.currentTime, 0.05)
   }
 
   /**
@@ -87,7 +108,7 @@ export class VoicePlayback {
     const buffer = toAudioBuffer(context, pcm, sampleRate)
     const source = context.createBufferSource()
     source.buffer = buffer
-    source.connect(this.analyser ?? context.destination)
+    source.connect(this.gain ?? this.analyser ?? context.destination)
 
     const startAt = Math.max(context.currentTime + SCHEDULING_LEAD_SECONDS, this.nextStartTime)
     this.nextStartTime = startAt + buffer.duration
@@ -118,12 +139,15 @@ export class VoicePlayback {
     this.nextStartTime = 0
     this.stopLevelReporting()
     this.handlers.onLevel?.(0)
+    if (this.gain) this.gain.gain.value = 1
   }
 
   /** Releases the audio graph. Used when spoken answers are switched off. */
   async release(): Promise<void> {
     this.stop()
     const context = this.context
+    this.gain?.disconnect()
+    this.gain = null
     this.analyser?.disconnect()
     this.analyser = null
     this.context = null
@@ -141,8 +165,11 @@ export class VoicePlayback {
     const analyser = context.createAnalyser()
     analyser.fftSize = 256
     analyser.connect(context.destination)
+    const gain = context.createGain()
+    gain.connect(analyser)
     this.context = context
     this.analyser = analyser
+    this.gain = gain
     return context
   }
 

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { useUIStore } from '@/stores/ui-store'
 import { useThemeStore } from '@/stores/theme-store'
+import { useMastermindStore } from '@/stores/mastermind-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { useDashboardStore } from '@/stores/dashboard-store'
@@ -66,6 +67,7 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
   const toggleOrchestrator = useUIStore((s) => s.toggleOrchestrator)
   const toggleTheme = useThemeStore((s) => s.toggle)
   const themeResolved = useThemeStore((s) => s.resolved)
+  const assistantName = useMastermindStore((s) => s.assistantName)
   const tasks = useTaskStore((s) => s.tasks)
   const searchCompleted = useTaskStore((s) => s.searchCompleted)
   // Completed history is not preloaded: look it up in the DB as the user types.
@@ -127,8 +129,8 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
       { id: 'copy-pr-url', group: 'Pull request', label: 'Copy pull-request URL', icon: Copy, shortcut: 'Y P', run: () => { actions.copyPullRequestUrl(); close() } },
       { id: 'copy-pr-branch', group: 'Pull request', label: 'Copy pull-request branch', icon: GitBranch, shortcut: 'Y B', run: () => { actions.copyPullRequestBranch(); close() } },
       { id: 'audio-task', group: 'Audio', label: 'Toggle task audio', icon: Mic, shortcut: 'V T', run: () => { actions.toggleTaskAudio(); close() } },
-      { id: 'audio-mastermind', group: 'Audio', label: 'Toggle Mastermind audio', icon: Mic, shortcut: 'V M', run: () => { actions.toggleMastermindAudio(); close() } },
-      { id: 'act-mastermind', group: 'Actions', label: 'Toggle Mastermind', icon: MessageSquare, keywords: 'orchestrator chat', run: () => { toggleOrchestrator(); close() } },
+      { id: 'audio-mastermind', group: 'Audio', label: `Talk to ${assistantName}`, icon: Mic, shortcut: 'V M', run: () => { actions.toggleMastermindAudio(); close() } },
+      { id: 'act-mastermind', group: 'Actions', label: `Open ${assistantName} chat`, icon: MessageSquare, keywords: 'peako mastermind orchestrator chat', run: () => { toggleOrchestrator(); close() } },
       { id: 'act-settings', group: 'Actions', label: 'Open Settings', icon: Settings, keywords: 'preferences config', run: () => { openSettings(); close() } },
       { id: 'act-theme', group: 'Actions', label: themeResolved === 'dark' ? 'Switch to Light mode' : 'Switch to Dark mode', icon: themeResolved === 'dark' ? Sun : Moon, keywords: 'theme dark light appearance', run: () => { toggleTheme(); close() } },
     ]
@@ -179,7 +181,7 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
       : []
 
     return [...filteredBase, ...appItems, ...taskItems, ...skillItems]
-  }, [query, tasks, skills, applications, themeResolved, closeModal, setSidebarView, openCreateModal, toggleOrchestrator, openSettings, toggleTheme, selectTask, selectSkill, openApplication, actions])
+  }, [query, tasks, skills, applications, themeResolved, assistantName, closeModal, setSidebarView, openCreateModal, toggleOrchestrator, openSettings, toggleTheme, selectTask, selectSkill, openApplication, actions])
 
   // Keep highlight within bounds when the list shrinks.
   useEffect(() => { setActive((a) => Math.min(a, Math.max(0, items.length - 1))) }, [items.length])

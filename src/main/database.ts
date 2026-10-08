@@ -1961,6 +1961,7 @@ If user approves (or if you're very confident), use \`update_task\` to apply:
 ## 4. Answering Questions
 
 Handle queries like:
+- "What's going on?" / "What needs me?" → Use \`get_overview\` (one call)
 - "What tasks are pending?" → Use \`list_tasks\` with status="not_started"
 - "Show high priority bugs" → Use \`list_tasks\` with priority="high" and labels=["bug"]
 - "How many tasks does Frontend Agent have?" → Use \`list_tasks\` with agent_id filter
@@ -2067,7 +2068,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
     // Define the tools available in the MCP server
     const tools = [
-      { name: 'list_tasks', description: 'List all tasks with optional filters (status, priority, agent, labels)' },
+      { name: 'get_overview', description: 'What needs the user, what is running, ready, late and next, in one call' },
+      { name: 'list_tasks', description: 'List task summaries with optional filters (status, priority, agent, labels, search)' },
       { name: 'create_task', description: 'Create a new task with title, description, type, priority, labels, assignee, agent_id, skill_ids, due date. Use cron field for recurring tasks (e.g. "0 9 * * 1-5")' },
       { name: 'get_task', description: 'Get detailed information about a specific task by ID' },
       { name: 'update_task', description: 'Update task metadata (labels, skills, agent assignment, priority, status)' },

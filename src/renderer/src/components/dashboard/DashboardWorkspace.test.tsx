@@ -190,7 +190,7 @@ describe('DashboardWorkspace', () => {
 
   it('renders command input', () => {
     render(<DashboardWorkspace />)
-    expect(screen.getByPlaceholderText('Ask Mastermind or describe a task...')).toBeDefined()
+    expect(screen.getByPlaceholderText('Ask Peako or describe a task...')).toBeDefined()
   })
 
   it('renders quick chips', () => {

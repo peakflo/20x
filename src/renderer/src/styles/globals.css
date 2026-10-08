@@ -1,4 +1,12 @@
 @import "tailwindcss";
+/* Fonts ship inside the app (latin subsets), so the UI looks the same offline
+   or behind a proxy. Legacy uses Inter and JetBrains Mono. */
+@import "@fontsource/inter/latin-400.css";
+@import "@fontsource/inter/latin-500.css";
+@import "@fontsource/inter/latin-600.css";
+@import "@fontsource/inter/latin-700.css";
+@import "@fontsource/jetbrains-mono/latin-400.css";
+@import "./theme-packs.css";
 
 /* ══════════════════════════════════════════════════════════════════════════
    20x Design System — "Aperture"
@@ -41,17 +49,17 @@
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-muted: var(--sidebar-muted);
 
-  /* Radii — soft and rounded */
-  --radius-xs: 6px;
-  --radius-sm: 8px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 18px;
-  --radius-2xl: 24px;
+  /* Radii and type families point at runtime variables (set on :root below)
+     so a theme package can reshape corners and change fonts app-wide. */
+  --radius-xs: var(--r-xs);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+  --radius-2xl: var(--r-2xl);
 
-  /* Type families */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-code);
 }
 
 /* ── Light theme (default) — true-gray neutrals, azure brand ──────────────── */
@@ -104,6 +112,17 @@
   --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.09), 0 2px 6px -2px rgba(0, 0, 0, 0.06);
   --shadow-lg: 0 12px 32px -6px rgba(0, 0, 0, 0.14), 0 4px 12px -4px rgba(0, 0, 0, 0.08);
   --shadow-pop: 0 8px 28px -6px rgba(0, 0, 0, 0.16), 0 2px 8px -3px rgba(0, 0, 0, 0.08);
+
+  /* Shape and type — the Legacy values; theme packages override these. */
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+  --r-2xl: 24px;
+  --font-ui: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-code: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --font-display: var(--font-ui);
 
   color-scheme: light;
 }
@@ -200,29 +219,6 @@
   --color-rose-400: #e11d48;
 }
 
-/* ── Web fonts ──────────────────────────────────────────────────────────────
-   Inter (UI) + JetBrains Mono (code / tabular). CDN with strong system
-   fallbacks so the app degrades gracefully offline. */
-@font-face {
-  font-family: "Inter"; font-style: normal; font-weight: 400; font-display: swap;
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-400-normal.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Inter"; font-style: normal; font-weight: 500; font-display: swap;
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-500-normal.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Inter"; font-style: normal; font-weight: 600; font-display: swap;
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-600-normal.woff2") format("woff2");
-}
-@font-face {
-  font-family: "Inter"; font-style: normal; font-weight: 700; font-display: swap;
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/latin-700-normal.woff2") format("woff2");
-}
-@font-face {
-  font-family: "JetBrains Mono"; font-style: normal; font-weight: 400; font-display: swap;
-  src: url("https://cdn.jsdelivr.net/fontsource/fonts/jetbrains-mono@latest/latin-400-normal.woff2") format("woff2");
-}
 
 /* ── Reset ──────────────────────────────────────────────────────────────── */
 @layer base {

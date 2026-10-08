@@ -5,9 +5,9 @@ import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { agentApi, settingsApi } from '@/lib/ipc-client'
-import type { Agent } from '@/types'
+import { useMastermindStore } from '@/stores/mastermind-store'
+import { MASTERMIND_AGENT_SETTING, MASTERMIND_SESSION_ID } from '@shared/peako'
 
-const MASTERMIND_SESSION_ID = 'mastermind-session'
 
 /** Start the agent at app start, so the first sentence does not wait for it. */
 export const MASTERMIND_PREWARM_SETTING = 'mastermind_prewarm'
@@ -17,7 +17,8 @@ interface OrchestratorPanelProps {
 }
 
 export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
-  const [agents, setAgents] = useState<Agent[]>([])
+  const agents = useMastermindStore((state) => state.agents)
+  const assistantName = useMastermindStore((s) => s.assistantName)
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const { start, stop, sendMessage, approve } = useAgentSession(MASTERMIND_SESSION_ID)
   const currentSession = useAgentStore((state) => state.sessions.get(MASTERMIND_SESSION_ID))
@@ -45,28 +46,44 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     }
   }, [])
 
-  // Load agents on mount
+  // Load agents on mount. The saved choice (shared with Peako) wins over the
+  // default agent, as long as that agent still exists.
   useEffect(() => {
-    agentApi.getAll().then((allAgents) => {
-      setAgents(allAgents)
-      // Select default agent or first available
-      const defaultAgent = allAgents.find((a) => a.is_default) || allAgents[0]
-      if (defaultAgent) {
-        setSelectedAgentId(defaultAgent.id)
+    Promise.all([agentApi.getAll(), settingsApi.get(MASTERMIND_AGENT_SETTING).catch(() => null)]).then(
+      ([allAgents, savedAgentId]) => {
+        useMastermindStore.getState().setAgents(allAgents)
+        const chosen =
+          allAgents.find((a) => a.id === savedAgentId) || allAgents.find((a) => a.is_default) || allAgents[0]
+        if (chosen) {
+          setSelectedAgentId(chosen.id)
+          useMastermindStore.getState().setSelectedAgentId(chosen.id)
+        }
       }
-    })
+    )
   }, [])
+
+  const stopConversation = useCallback(async () => {
+    // A start still in flight would re-add the old session after we remove
+    // it, so let it land first and then stop what it started.
+    if (startingRef.current) await startingRef.current.catch(() => {})
+    if (useAgentStore.getState().sessions.get(MASTERMIND_SESSION_ID)?.sessionId) {
+      await stop()
+    }
+    removeSession(MASTERMIND_SESSION_ID)
+  }, [stop, removeSession])
 
   // Switch agent. The new choice is recorded before the old session is
   // stopped, or the warm-up would race in and start the old agent again.
-  const handleAgentChange = async (newAgentId: string) => {
-    selectedAgentIdRef.current = newAgentId
-    setSelectedAgentId(newAgentId)
-    if (currentSession?.sessionId) {
-      await stop()
-      removeSession(MASTERMIND_SESSION_ID)
-    }
-  }
+  const handleAgentChange = useCallback(
+    async (newAgentId: string) => {
+      selectedAgentIdRef.current = newAgentId
+      setSelectedAgentId(newAgentId)
+      useMastermindStore.getState().setSelectedAgentId(newAgentId)
+      void settingsApi.set(MASTERMIND_AGENT_SETTING, newAgentId).catch(() => {})
+      await stopConversation()
+    },
+    [stopConversation]
+  )
 
   /**
    * Brings up the session, or joins the one already starting.
@@ -122,6 +139,20 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     },
     [ensureSession, sendMessage, approve]
   )
+
+  const answerApproval = useCallback((approved: boolean) => approve(approved), [approve])
+
+  // Peako and the Today home ask for these through the shared store; this
+  // panel stays the one owner of the Mastermind session.
+  useEffect(() => {
+    useMastermindStore.getState().registerActions({
+      changeAgent: handleAgentChange,
+      newConversation: stopConversation,
+      send: handleSendMessage,
+      approve: answerApproval
+    })
+    return () => useMastermindStore.getState().registerActions(null)
+  }, [handleAgentChange, stopConversation, handleSendMessage, answerApproval])
 
   /**
    * Start the agent in the background, before there is anything to say.
@@ -184,7 +215,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       {/* Chat interface */}
       {selectedAgentId && (
         <AgentTranscriptPanel
-          title="Mastermind den"
+          title={assistantName}
           messages={currentSession?.messages || []}
           status={currentSession?.status || SessionStatus.IDLE}
           systemStatus={currentSession?.systemStatus}

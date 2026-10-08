@@ -12,6 +12,10 @@ import { useVoiceControl } from '@/hooks/use-voice-control'
 import { useUiRemoteControl } from '@/hooks/use-ui-remote-control'
 import { useRecordingChrome } from '@/hooks/use-recording-chrome'
 import { TopBarVoiceButton } from '@/components/voice/TopBarVoiceButton'
+import { PeakoBridge } from '@/components/peako/PeakoBridge'
+import { useThemeStore } from '@/stores/theme-store'
+import { useMastermindStore } from '@/stores/mastermind-store'
+import { resolveHomeLayout } from '@shared/theme-packs'
 
 // Lazy-load heavy workspace components — only imported when their view is active.
 // This reduces the initial bundle size and speeds up first render significantly.
@@ -21,6 +25,7 @@ const InfiniteCanvas = lazy(() => import('@/components/canvas/InfiniteCanvas').t
 const SkillWorkspace = lazy(() => import('@/components/skills/SkillWorkspace').then(m => ({ default: m.SkillWorkspace })))
 const SettingsWorkspace = lazy(() => import('@/components/settings/SettingsWorkspace').then(m => ({ default: m.SettingsWorkspace })))
 const DashboardWorkspace = lazy(() => import('@/components/dashboard/DashboardWorkspace').then(m => ({ default: m.DashboardWorkspace })))
+const TodayHome = lazy(() => import('@/components/dashboard/TodayHome').then(m => ({ default: m.TodayHome })))
 const OrchestratorPanel = lazy(() => import('@/components/orchestrator/OrchestratorPanel').then(m => ({ default: m.OrchestratorPanel })))
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
@@ -82,6 +87,8 @@ export function AppLayout() {
   const closeDashboardPreview = useUIStore((s) => s.closeDashboardPreview)
   const canvasPendingTaskId = useUIStore((s) => s.canvasPendingTaskId)
   const showOrchestrator = useUIStore((s) => s.showOrchestrator)
+  const homeLayout = useThemeStore((s) => resolveHomeLayout(s.pack, s.layout))
+  const assistantName = useMastermindStore((s) => s.assistantName)
   const setShowOrchestrator = useUIStore((s) => s.setShowOrchestrator)
   const toggleOrchestrator = useUIStore((s) => s.toggleOrchestrator)
   const createTaskPrefill = useUIStore((s) => s.createTaskPrefill)
@@ -487,6 +494,25 @@ export function AppLayout() {
     }, 0)
   }, [setShowOrchestrator, showToast])
 
+  /**
+   * Peako's microphone: always a hands-free conversation with Mastermind, so
+   * each sentence is sent and the answer read aloud. The drawer stays closed;
+   * its composer is mounted either way, and Peako shows the chat.
+   */
+  const togglePeakoVoice = useCallback(() => {
+    const voice = useVoiceStore.getState()
+    if (!selectVoiceReady(voice)) return
+    if (voice.turnId) {
+      void voice.endTurn()
+      return
+    }
+    setActiveComposer(MASTERMIND_COMPOSER_KEY)
+    window.setTimeout(() => {
+      const mode = composerCanSubmit(MASTERMIND_COMPOSER_KEY) ? 'conversation' : 'dictation'
+      void useVoiceStore.getState().toggleTurn(mode)
+    }, 0)
+  }, [])
+
   const commandActions = useMemo(() => ({
     nextTask: () => navigateVisibleTask(1),
     previousTask: () => navigateVisibleTask(-1),
@@ -791,9 +817,9 @@ export function AppLayout() {
             <Settings className="h-3.5 w-3.5" />
           </button>
           <div className="mx-1 h-3.5 w-px bg-border/70" />
-          {/* Start talking to Mastermind from any view. Hidden until voice is on. */}
+          {/* Start talking to Peako from any view. Hidden until voice is on. */}
           <TopBarVoiceButton />
-          {/* Quieter than the microphone beside it: typing to Mastermind is
+          {/* Quieter than the microphone beside it: typing to Peako is
               the fallback, speaking to it is the invitation. */}
           <Button
             variant={showOrchestrator ? 'default' : 'ghost'}
@@ -802,7 +828,7 @@ export function AppLayout() {
             className="h-7 px-2"
           >
             <MessageSquare className="h-3 w-3" />
-            <span className="text-[11px]">Mastermind</span>
+            <span className="text-[11px]">{assistantName}</span>
           </Button>
         </div>
       </div>
@@ -876,7 +902,7 @@ export function AppLayout() {
               </Suspense>
             ) : sidebarView === 'dashboard' ? (
               <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Loading...</div>}>
-                <DashboardWorkspace />
+                {homeLayout === 'calm' ? <TodayHome /> : <DashboardWorkspace />}
               </Suspense>
             ) : sidebarView === 'skills' ? (
               <Suspense fallback={<div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">Loading...</div>}>
@@ -900,7 +926,7 @@ export function AppLayout() {
           </div>
         </main>
 
-        {/* Mastermind drawer — sits beside the workspace, shifts main content left */}
+        {/* Peako's chat drawer — sits beside the workspace, shifts main content left */}
         <div
           className={`flex-shrink-0 transition-all duration-200 ease-in-out overflow-hidden ${
             showOrchestrator ? 'w-[340px]' : 'w-0'
@@ -916,6 +942,9 @@ export function AppLayout() {
 
       {/* Bottom status bar — live agent/task counts + version */}
       <StatusBar />
+
+      {/* Feeds Peako's desktop window; renders nothing. */}
+      <PeakoBridge onToggleVoice={togglePeakoVoice} />
 
       {/* Create Task Dialog — dismiss on outside click */}
       <Dialog open={activeModal === 'create'} onOpenChange={(open) => { if (!open) { closeModal(); clearCreateTaskPrefill() } }}>

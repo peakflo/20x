@@ -11,6 +11,7 @@ import { getLiveViewport } from '@/stores/canvas-live-viewport'
 import { X, Focus, Maximize2, Minimize2, PanelLeft, PanelRight, Columns2, Globe } from 'lucide-react'
 import type { TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
 import { useTaskStore } from '@/stores/task-store'
+import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { TaskStatus } from '@/types'
 import { TaskPanelContent } from './TaskPanelContent'
 import { TranscriptPanelContent } from './TranscriptPanelContent'
@@ -407,6 +408,12 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
     panel.type === 'task' ? s.tasks.find(t => t.id === panel.refId)?.status : undefined,
     [panel.type, panel.refId])
   )
+  // Lets a theme make a panel that waits for the user stand out on a busy canvas.
+  const waitingForUser = useAgentStore(useCallback((s) => {
+    if (panel.type !== 'task' && panel.type !== 'transcript') return false
+    const session = panel.refId ? s.sessions.get(panel.refId) : undefined
+    return Boolean(session?.pendingApproval && session.status !== SessionStatus.IDLE)
+  }, [panel.type, panel.refId]))
 
   useEffect(() => {
     if (panel.type !== 'task') {
@@ -509,6 +516,9 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
       ref={panelRef}
       data-canvas-panel="true"
       data-canvas-panel-selected={isSelected ? 'true' : 'false'}
+      data-panel-type={panel.type}
+      data-task-status={taskStatus}
+      data-attention={waitingForUser ? 'approval' : undefined}
       onMouseDown={handleMouseDown}
       onMouseEnter={handlePanelMouseEnter}
       onMouseLeave={handlePanelMouseLeave}

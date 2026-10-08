@@ -19,6 +19,7 @@ interface FakeSource {
 
 const sources: FakeSource[] = []
 let currentTime = 0
+let lastGain: { value: number } | null = null
 
 class FakeAudioContext {
   state = 'running'
@@ -34,6 +35,16 @@ class FakeAudioContext {
       disconnect: () => {},
       getByteTimeDomainData: (data: Uint8Array) => data.fill(128),
     }
+  }
+  createGain() {
+    const gain = {
+      value: 1,
+      setTargetAtTime: (target: number) => {
+        gain.value = target
+      },
+    }
+    lastGain = gain
+    return { gain, connect: () => {}, disconnect: () => {} }
   }
   createBuffer(_channels: number, length: number, sampleRate: number) {
     const data = new Float32Array(length)
@@ -209,6 +220,28 @@ describe('VoicePlayback', () => {
     playback.play('s1', pcm(1), 24000)
     playback.stop()
     expect(onLevel).toHaveBeenLastCalledWith(0)
+  })
+
+  it('turns an answer down and back up without stopping it', () => {
+    const playback = new VoicePlayback()
+    playback.start('s1')
+    playback.play('s1', pcm(1), 24000)
+
+    playback.duck()
+    expect(lastGain?.value).toBeCloseTo(0.2)
+    expect(playback.isPlaying).toBe(true)
+
+    playback.unduck()
+    expect(lastGain?.value).toBe(1)
+  })
+
+  it('never leaves the next answer turned down', () => {
+    const playback = new VoicePlayback()
+    playback.start('s1')
+    playback.play('s1', pcm(1), 24000)
+    playback.duck()
+    playback.stop()
+    expect(lastGain?.value).toBe(1)
   })
 })
 

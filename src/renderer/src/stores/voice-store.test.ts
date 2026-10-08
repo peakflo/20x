@@ -72,6 +72,26 @@ describe('voice store — words heard while reading', () => {
 
     expect(stop).not.toHaveBeenCalled()
   })
+
+  it('reads on when the words are only its own answer coming back', async () => {
+    const stop = await readingWithTurnOpen()
+    const { spokenEcho } = await import('@/lib/voice-echo')
+    spokenEcho.remember('You have three tasks waiting for review.')
+
+    onPartial({ turnId: 'turn-1', text: 'THREE TASKS WAITING FOR' })
+
+    expect(stop).not.toHaveBeenCalled()
+    expect(useVoiceStore.getState().partial).toBe('')
+    spokenEcho.forget()
+  })
+
+  it('reads on when the word is noise', async () => {
+    const stop = await readingWithTurnOpen()
+
+    onPartial({ turnId: 'turn-1', text: 'uh' })
+
+    expect(stop).not.toHaveBeenCalled()
+  })
 })
 
 describe('voice store — turns', () => {

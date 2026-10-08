@@ -1,0 +1,48 @@
+# Temporary: builds an unsigned Windows installer of this branch for testing
+# before merge. Remove this file before merging the PR.
+name: Test build (Windows)
+
+on:
+  push:
+    branches: [claude/determined-lamport-bzqf94]
+  workflow_dispatch:
+
+concurrency:
+  group: test-build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-win:
+    # Same runner as the release workflow: node-gyp needs VS 2022 for better-sqlite3.
+    runs-on: windows-2022
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build app
+        run: pnpm build
+
+      - name: Package for Windows
+        run: pnpm exec electron-builder --win --x64 --publish never
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: 20x-windows-test-installer
+          path: dist/*.exe
+          retention-days: 14

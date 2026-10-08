@@ -1,0 +1,653 @@
+/* Peako's desktop window. The window itself is transparent; only the mascot
+   and the chat panel paint. Colours come from the app's tokens (globals.css),
+   so Peako follows light and dark mode with the rest of 20x. */
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+.peako-body {
+  font-family: var(--font-sans);
+  color: var(--foreground);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.peako-root {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+.peako-root.panel-left { flex-direction: row-reverse; }
+.peako-root.mascot-bottom .peako-mascot-zone { align-self: flex-end; }
+.peako-root.mascot-top .peako-mascot-zone { align-self: flex-start; }
+
+/* ── Mascot ─────────────────────────────────────────────── */
+
+.peako-mascot-zone {
+  position: relative;
+  flex: none;
+  width: 132px;
+  height: 148px;
+}
+
+.peako-mascot {
+  position: absolute;
+  left: 10px;
+  bottom: 12px;
+  width: 112px;
+  height: 94px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+}
+.peako-mascot.is-dragging { cursor: grabbing; }
+.peako-mascot:focus-visible .peako-svg {
+  filter: drop-shadow(0 0 4px var(--ring));
+}
+
+.peako-bob {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 100%;
+  animation: peako-bob 3.2s ease-in-out infinite;
+}
+.peako-mascot.is-dragging .peako-bob {
+  animation: none;
+  transform: rotate(-6deg) scale(1.05);
+  transition: transform 0.12s ease-out;
+}
+
+.peako-svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.18));
+}
+.peako-body-rect {
+  fill: var(--card);
+  stroke: var(--primary);
+  stroke-width: 9;
+}
+.peako-stroke {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.peako-mouth { stroke-width: 7; }
+.peako-fill { fill: var(--primary); }
+.peako-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.peako-shadow {
+  position: absolute;
+  left: 20%;
+  right: 20%;
+  bottom: -8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #000;
+  opacity: 0.16;
+  filter: blur(3px);
+  animation: peako-shadow 3.2s ease-in-out infinite;
+}
+
+.peako-badge {
+  position: absolute;
+  top: -8px;
+  right: -4px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 12px;
+  background: var(--warning);
+  color: var(--warning-foreground);
+  font: 700 13px/24px var(--font-sans);
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+}
+
+.peako-dots {
+  position: absolute;
+  left: 50%;
+  bottom: -10px;
+  display: flex;
+  gap: 4px;
+  transform: translateX(-50%);
+}
+.peako-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: peako-dot 1s ease-in-out infinite;
+}
+.peako-dots i:nth-child(2) { animation-delay: 0.15s; }
+.peako-dots i:nth-child(3) { animation-delay: 0.3s; }
+
+.peako-zzz {
+  position: absolute;
+  top: -6px;
+  right: 2px;
+  color: var(--muted-foreground);
+  font: 600 14px var(--font-sans);
+  pointer-events: none;
+}
+.peako-zzz i {
+  position: absolute;
+  font-style: normal;
+  opacity: 0;
+  animation: peako-z 3s ease-in infinite;
+}
+.peako-zzz i:nth-child(2) { animation-delay: 1s; font-size: 12px; }
+.peako-zzz i:nth-child(3) { animation-delay: 2s; font-size: 10px; }
+
+.peako-confetti {
+  position: absolute;
+  left: 50%;
+  top: 30%;
+  pointer-events: none;
+}
+.peako-confetti i {
+  position: absolute;
+  width: 6px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--primary);
+  animation: peako-confetti 1.2s cubic-bezier(0.2, 0.6, 0.4, 1) forwards;
+}
+.peako-confetti i:nth-child(3n) { background: var(--warning); }
+.peako-confetti i:nth-child(3n + 1) { background: var(--success); }
+
+/* Mood motion */
+.mood-idle .peako-eyes { animation: peako-blink 4.5s infinite; }
+.mood-working .peako-eyes { animation: peako-scan 2.4s ease-in-out infinite; }
+.mood-working .peako-bob { animation-duration: 1.4s; }
+.mood-thinking .peako-eyes { animation: peako-ponder 2s ease-in-out infinite; }
+.mood-needs .peako-bob { animation: peako-hop 0.9s ease-in-out infinite; }
+.mood-needs .peako-badge { animation: peako-wiggle 0.9s ease-in-out infinite; }
+.mood-party .peako-bob { animation: peako-party 0.7s ease-in-out infinite; }
+.mood-stuck .peako-bob { animation: peako-shake 2.6s ease-in-out infinite; }
+.mood-sleep .peako-bob { animation: peako-breathe 4s ease-in-out infinite; }
+.mood-listening .peako-bar {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: peako-eq 0.6s ease-in-out infinite alternate;
+}
+.peako-talk {
+  fill: var(--primary);
+  transform-box: fill-box;
+  transform-origin: 50% 0;
+  animation: peako-talk 0.28s ease-in-out infinite alternate;
+}
+
+/* Speech bubble shown while the chat is closed */
+.peako-bubble {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  right: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: var(--shadow-md);
+  font: 500 11px/1.35 var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+  animation: peako-pop 0.25s ease-out;
+}
+
+/* ── Chat panel ─────────────────────────────────────────── */
+
+.peako-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  height: calc(100% - 16px);
+  margin: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  color: var(--card-foreground);
+  box-shadow: var(--shadow-lg);
+  user-select: text;
+  -webkit-user-select: text;
+  animation: peako-pop 0.18s ease-out;
+}
+
+.peako-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 10px 8px 14px;
+}
+.peako-head-main { display: grid; gap: 2px; min-width: 0; }
+.peako-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--foreground);
+  font: 650 15px/1.2 var(--font-sans);
+  cursor: text;
+}
+.peako-name svg { color: var(--muted-foreground); opacity: 0; transition: opacity 0.15s; }
+.peako-name:hover svg,
+.peako-name:focus-visible svg { opacity: 1; }
+.peako-rename {
+  width: 180px;
+  padding: 2px 6px;
+  border: 1px solid var(--ring);
+  border-radius: var(--radius-xs);
+  background: var(--background);
+  color: var(--foreground);
+  font: 650 15px/1.2 var(--font-sans);
+  outline: none;
+}
+.peako-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+}
+.peako-meta.warn { color: var(--warning); }
+.peako-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted-foreground);
+}
+.peako-dot.status-working,
+.peako-dot.status-thinking,
+.peako-dot.status-listening,
+.peako-dot.status-speaking { background: var(--primary); }
+.peako-dot.status-needs { background: var(--warning); }
+.peako-dot.status-party { background: var(--success); }
+.peako-dot.status-stuck { background: var(--destructive); }
+
+.peako-head-actions { display: flex; gap: 2px; }
+.peako-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.peako-icon-btn:hover { background: var(--accent); color: var(--foreground); }
+
+.peako-brain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+}
+.peako-brain label {
+  color: var(--muted-foreground);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.peako-brain select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-xs);
+  background: var(--background);
+  color: var(--foreground);
+  font: 12px var(--font-sans);
+  cursor: pointer;
+}
+.peako-brain select:disabled { cursor: default; opacity: 0.75; }
+.peako-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font: 500 11.5px var(--font-sans);
+  cursor: pointer;
+}
+
+.peako-log {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+.peako-empty { display: grid; gap: 10px; color: var(--muted-foreground); font-size: 13px; line-height: 1.5; }
+.peako-empty p { margin: 0; }
+.peako-msg {
+  max-width: 88%;
+  padding: 7px 10px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.peako-msg.role-user {
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.peako-msg.role-user.is-partial { opacity: 0.7; font-style: italic; }
+.peako-msg.role-assistant,
+.peako-msg.role-question {
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+.peako-msg.role-tool {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 0 2px;
+  background: none;
+}
+.peako-tool {
+  color: var(--muted-foreground);
+  font: 11px var(--font-mono);
+}
+.peako-tool::before { content: '↳ '; }
+
+.peako-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.peako-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--foreground);
+  font: 500 12px var(--font-sans);
+  cursor: pointer;
+}
+.peako-chip:hover { border-color: var(--primary); color: var(--primary); }
+
+.peako-approval {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--warning) 55%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warning) 10%, var(--card));
+  font-size: 12.5px;
+}
+.peako-approval p { margin: 0; color: var(--muted-foreground); overflow-wrap: anywhere; }
+.peako-approval-actions { display: flex; gap: 6px; }
+.peako-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--background);
+  color: var(--foreground);
+  font: 600 12px var(--font-sans);
+  cursor: pointer;
+}
+.peako-btn.primary { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+
+.peako-compose {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+.peako-compose textarea {
+  flex: 1;
+  min-width: 0;
+  max-height: 96px;
+  padding: 7px 10px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: var(--background);
+  color: var(--foreground);
+  font: 13px/1.4 var(--font-sans);
+  resize: none;
+  field-sizing: content;
+  outline: none;
+}
+.peako-compose textarea:focus { border-color: var(--ring); }
+.peako-mic,
+.peako-send {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+}
+.peako-mic.is-on {
+  border-color: var(--destructive);
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+  animation: peako-pulse 1.4s ease-in-out infinite;
+}
+.peako-mic.is-speaking { border-color: var(--primary); color: var(--primary); }
+.peako-send { border-color: var(--primary); background: var(--primary); color: var(--primary-foreground); }
+.peako-send:disabled { opacity: 0.45; cursor: default; }
+.peako-send.stop { border-color: var(--border); background: var(--background); color: var(--foreground); }
+
+.peako-icon-btn:focus-visible,
+.peako-tab:focus-visible,
+.peako-task-row:focus-visible,
+.peako-chip:focus-visible,
+.peako-btn:focus-visible,
+.peako-mic:focus-visible,
+.peako-send:focus-visible,
+.peako-link:focus-visible,
+.peako-name:focus-visible,
+.peako-bubble:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* ── Tasks ──────────────────────────────────────────────── */
+
+.peako-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 0 14px 8px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+}
+.peako-tab {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--muted-foreground);
+  font: 500 12px var(--font-sans);
+  cursor: pointer;
+}
+.peako-tab[aria-selected='true'] {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--shadow-sm), inset 0 0 0 1px var(--border);
+}
+.peako-tab-count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--muted-foreground);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+.peako-tab-count.warn { background: var(--warning); color: var(--warning-foreground); }
+
+.peako-tasks {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+.peako-tasks [hidden] { display: none; }
+.peako-task-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 6px 10px;
+}
+.peako-group {
+  padding: 10px 8px 4px;
+  color: var(--muted-foreground);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.peako-group.group-needs { color: var(--warning); }
+.peako-task-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--foreground);
+  font: 13px var(--font-sans);
+  text-align: left;
+  cursor: pointer;
+}
+.peako-task-row:hover { background: var(--accent); }
+.peako-task-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.peako-task-agent {
+  flex-shrink: 0;
+  max-width: 35%;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.peako-task-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--muted-foreground);
+}
+.peako-task-dot.group-needs { background: var(--warning); }
+.peako-task-dot.group-running { background: var(--primary); }
+.peako-task-dot.group-review { background: var(--success); }
+
+.peako-task-chat {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.peako-task-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.peako-task-head-main { display: grid; flex: 1; gap: 2px; min-width: 0; }
+.peako-task-head-title {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.peako-compose textarea:disabled { cursor: not-allowed; opacity: 0.6; }
+
+/* ── Keyframes ──────────────────────────────────────────── */
+
+@keyframes peako-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@keyframes peako-shadow { 0%, 100% { transform: scaleX(1); opacity: 0.16; } 50% { transform: scaleX(0.88); opacity: 0.1; } }
+@keyframes peako-blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+@keyframes peako-scan { 0%, 100% { transform: translateX(-7px); } 50% { transform: translateX(7px); } }
+@keyframes peako-ponder { 0%, 100% { transform: translate(-3px, 0); } 50% { transform: translate(3px, -2px); } }
+@keyframes peako-hop {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  15% { transform: translateY(0) scaleY(0.92); }
+  45% { transform: translateY(-12px) scaleY(1.03); }
+  70% { transform: translateY(0) scaleY(0.95); }
+}
+@keyframes peako-party { 0%, 100% { transform: rotate(-7deg) translateY(0); } 50% { transform: rotate(7deg) translateY(-8px); } }
+@keyframes peako-shake {
+  0%, 80%, 100% { transform: translateX(0); }
+  84% { transform: translateX(-4px); }
+  88% { transform: translateX(4px); }
+  92% { transform: translateX(-2px); }
+  96% { transform: translateX(2px); }
+}
+@keyframes peako-breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.03, 0.96); } }
+@keyframes peako-wiggle { 0%, 100% { transform: rotate(-10deg); } 50% { transform: rotate(10deg); } }
+@keyframes peako-eq { from { transform: scaleY(0.35); } to { transform: scaleY(1.15); } }
+@keyframes peako-talk { from { transform: scaleY(0.4); } to { transform: scaleY(1); } }
+@keyframes peako-dot { 0%, 100% { transform: translateY(0); opacity: 0.5; } 50% { transform: translateY(-4px); opacity: 1; } }
+@keyframes peako-z { 0% { transform: translate(0, 0); opacity: 0; } 20% { opacity: 1; } 100% { transform: translate(14px, -26px); opacity: 0; } }
+@keyframes peako-confetti { to { transform: translate(var(--dx), var(--dy)) rotate(var(--rot)); opacity: 0; } }
+@keyframes peako-pop { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+@keyframes peako-pulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--destructive) 45%, transparent); } 50% { box-shadow: 0 0 0 5px transparent; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .peako-root *,
+  .peako-root *::before,
+  .peako-root *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition: none !important;
+  }
+}

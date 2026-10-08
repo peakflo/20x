@@ -3,6 +3,7 @@ import { settingsApi, voiceApi, voiceTtsApi } from '@/lib/ipc-client'
 import { voiceCapture } from '@/lib/voice-capture'
 import { voicePlayback } from '@/lib/voice-playback'
 import { BargeInGate } from '@/lib/voice-barge-in'
+import { isNoise, spokenEcho } from '@/lib/voice-echo'
 import { clearActiveComposer } from '@/lib/voice-dictation-target'
 import { VOICE_SETTING_KEYS } from '@shared/voice'
 import type { VoiceTtsEngineId, VoiceTtsSnapshot } from '@shared/voice-tts'
@@ -217,6 +218,7 @@ let openPassageId: string | null = null
  * on talking.
  */
 function stopPlaybackForUser(): void {
+  clearSuspectedBargeIn()
   stoppedSpeechId = voicePlayback.currentSpeechId ?? stoppedSpeechId
   openPassageId = null
   voicePlayback.stop()
@@ -227,16 +229,51 @@ function stopPlaybackForUser(): void {
   useVoiceStore.setState({ speaking: false, speechText: '' })
 }
 
+/**
+ * How long a suspected interruption waits for real words.
+ *
+ * The gate judges by loudness, and a loud passage of the answer can pass for
+ * the user. Stopping on loudness alone made 20x cut itself off and then hear
+ * its own sentence as the user's. So the answer is only turned down, the
+ * audio goes to the recogniser, and the first recognised words decide: words
+ * that are not an echo of the answer stop it, and silence turns it back up.
+ */
+export const BARGE_IN_CONFIRM_MS = 1500
+
+let suspectedBargeInTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearSuspectedBargeIn(): void {
+  if (suspectedBargeInTimer !== null) clearTimeout(suspectedBargeInTimer)
+  suspectedBargeInTimer = null
+}
+
+/** Real words over the answer: the user is talking, so 20x stops. */
+function confirmBargeIn(): void {
+  console.info('[voice] barge-in confirmed by words, stopping')
+  stopPlaybackForUser()
+  // This handler belongs to speech to text, which can be present in a
+  // build where spoken answers are not.
+  if (hasTtsBridge()) void voiceTtsApi.stop()
+}
+
 const bargeInGate = new BargeInGate({
   onBargeIn: () => {
-    // Stop in this tick, before the round trip to main: the user is already
-    // speaking and every further word of the answer is talking over them.
-    console.info('[voice] barge-in: the user is talking, stopping', {
-      wasPlaying: voicePlayback.isPlaying,
+    if (!voicePlayback.isPlaying) return
+    // Turn down in this tick, before the round trip to main: if the user is
+    // speaking, every further word at full volume is talking over them.
+    console.info('[voice] possible barge-in, turning the answer down', {
       threshold: bargeInGate.threshold,
     })
-    stopPlaybackForUser()
-    void voiceTtsApi.stop()
+    voicePlayback.duck()
+    clearSuspectedBargeIn()
+    suspectedBargeInTimer = setTimeout(() => {
+      suspectedBargeInTimer = null
+      if (!voicePlayback.isPlaying) return
+      // Nothing was said: it was the loudspeaker. Carry on reading and hold
+      // the microphone again.
+      voicePlayback.unduck()
+      bargeInGate.setSpeaking(true)
+    }, BARGE_IN_CONFIRM_MS)
   },
 })
 
@@ -574,16 +611,10 @@ if (hasVoiceBridge()) {
     // over them, so it stops. This is a net under barge-in, not a substitute
     // for it: the gate is what keeps 20x's own voice out of the recogniser,
     // and it fires 300 ms earlier than the first recognised word.
-    if (event.text.trim() && voicePlayback.isPlaying) {
-      console.warn(
-        '[voice] words recognised while reading — stopping. The gate did not fire:',
-        JSON.stringify({ holding: bargeInGate.isHolding, threshold: bargeInGate.threshold })
-      )
-      stopPlaybackForUser()
-      // This handler belongs to speech to text, which can be present in a
-      // build where spoken answers are not.
-      if (hasTtsBridge()) void voiceTtsApi.stop()
-    }
+    // 20x's own words coming back, or noise: neither is the user talking, and
+    // neither belongs in the listening bubble.
+    if (isNoise(event.text) || spokenEcho.isEcho(event.text)) return
+    if (voicePlayback.isPlaying) confirmBargeIn()
     useVoiceStore.setState({ partial: event.text })
   })
 
@@ -686,6 +717,7 @@ if (hasTtsBridge()) {
       })
     }
     openPassageId = event.speechId
+    spokenEcho.remember(event.text)
     useVoiceStore.setState({ speaking: true, speechText: event.text })
     bargeInGate.setSpeaking(true)
 
@@ -704,7 +736,9 @@ if (hasTtsBridge()) {
         // A pause between sentences, not the end. The gate must keep holding,
         // or the rest of the answer is read with the microphone wide open.
         if (openPassageId === event.speechId) return
-        bargeInGate.setSpeaking(false)
+        clearSuspectedBargeIn()
+        // Finished by itself: the echo of the last word is still in the room.
+        bargeInGate.finishSpeaking()
         useVoiceStore.setState({ speaking: false, speechText: '' })
       },
     })
@@ -733,7 +767,9 @@ if (hasTtsBridge()) {
       return
     }
     voicePlayback.stop()
-    bargeInGate.setSpeaking(false)
+    clearSuspectedBargeIn()
+    if (event.reason === 'complete') bargeInGate.finishSpeaking()
+    else bargeInGate.setSpeaking(false)
     useVoiceStore.setState({ speaking: false, speechText: '' })
     if (event.reason === 'error' && event.message) {
       useVoiceStore.setState({ result: { kind: 'error', message: event.message, at: Date.now() } })

@@ -205,16 +205,35 @@ const mastermindTools: Tool[] = [
   {
     name: 'list_tasks',
     description:
-      'List all tasks with optional filters. Returns task details including title, description, status, priority, labels, agent assignment, and skills.',
+      'List tasks, newest first, with optional filters. Each row is a summary (id, title, status, priority, agent, labels, dates, the start of the description); call get_task for one task in full, or pass detail=true. For "what is going on" or "what needs me", call get_overview instead.',
     inputSchema: {
       type: 'object',
       properties: {
         status: { type: 'string', enum: ['not_started', 'triaging', 'agent_working', 'ready_for_review', 'agent_learning', 'completed'], description: 'Filter by task status' },
+        statuses: { type: 'array', items: { type: 'string', enum: ['not_started', 'triaging', 'agent_working', 'ready_for_review', 'agent_learning', 'completed'] }, description: 'Filter by any of several statuses' },
+        open_only: { type: 'boolean', description: 'Leave out completed tasks' },
+        search: { type: 'string', description: 'Words that must all appear in the title or description' },
+        detail: { type: 'boolean', description: 'Return full task records instead of summaries. Costly; prefer get_task.' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'], description: 'Filter by priority level' },
         has_agent: { type: 'boolean', description: 'Filter tasks with/without assigned agent' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Filter by labels (tasks matching any of these labels)' },
         agent_id: { type: 'string', description: 'Filter by assigned agent ID' },
-        limit: { type: 'number', default: 100, description: 'Max results to return' }
+        updated_after: { type: 'string', description: 'Only tasks changed at or after this ISO date' },
+        updated_before: { type: 'string', description: 'Only tasks changed before this ISO date, for older work' },
+        limit: { type: 'number', default: 50, description: 'Max results to return. Default 50, maximum 200.' },
+        offset: { type: 'number', default: 0, description: 'Skip this many results, to page back to older tasks' }
+      }
+    }
+  },
+  {
+    name: 'get_overview',
+    description:
+      'One-call summary of the whole workspace: what is waiting for the user (approvals), failed, running, ready for review, overdue, due today, up next, and what finished since finished_since (default the last 24 hours), with complete counts and the first few tasks of each. Call this first for "what is going on?", "what needs me?" or "what is pending?". For older or longer lists, use list_tasks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        finished_since: { type: 'string', description: 'ISO date; report tasks finished since then, e.g. a week ago for "what got done this week". Default: 24 hours ago.' },
+        per_group: { type: 'number', description: 'How many tasks to show in each group. Default 10, maximum 50.' }
       }
     }
   },
@@ -267,6 +286,10 @@ const mastermindTools: Tool[] = [
         auto_complete_without_review: { type: 'boolean', description: 'Complete the task automatically when its agent finishes, instead of leaving it for review. Needed for a task that must finish with no 20x window open.' },
         repos: { type: 'array', items: { type: 'string' }, description: 'Set repository paths/URLs for this task' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'] },
+        type: { type: 'string', enum: ['coding', 'manual', 'review', 'approval', 'general'] },
+        assignee: { type: 'string', description: 'Person responsible for the task' },
+        due_date: { type: 'string', description: 'Due date in ISO format; an empty string clears it' },
+        snoozed_until: { type: 'string', description: 'Hide the task from the active list until this ISO date; an empty string wakes it now' },
         status: {
           type: 'string',
           enum: ['not_started', 'triaging', 'agent_working', 'ready_for_review', 'agent_learning', 'completed'],
@@ -1048,7 +1071,9 @@ export async function callToolForScope(
     if (result?.error) {
       return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: true }
     }
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+    // Compact: the reader is a model, and indentation alone added about a
+    // third to every reply's token count.
+    return { content: [{ type: 'text', text: JSON.stringify(result) }] }
   } catch (error: unknown) {
     return {
       content: [{ type: 'text', text: JSON.stringify({ error: (error as Error).message }) }],

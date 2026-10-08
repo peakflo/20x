@@ -4,6 +4,7 @@ import { agentApi, voiceApi } from '@/lib/ipc-client'
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
 import { registerComposer, DASHBOARD_COMPOSER_KEY } from '@/lib/voice-dictation-target'
 import type { Agent } from '@/types'
+import { useMastermindStore } from '@/stores/mastermind-store'
 
 /** Names this composer, so a spoken sentence reaches this box and no other. */
 const VOICE_COMPOSER_KEY = DASHBOARD_COMPOSER_KEY
@@ -14,6 +15,7 @@ interface CommandInputProps {
 }
 
 export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputProps) {
+  const assistantName = useMastermindStore((s) => s.assistantName)
   const [text, setText] = useState('')
   const [agents, setAgents] = useState<Agent[]>([])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
@@ -112,7 +114,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
           value={text}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
-          placeholder="Ask Mastermind or describe a task..."
+          placeholder={`Ask ${assistantName} or describe a task...`}
           rows={1}
           className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground resize-none outline-none leading-relaxed max-h-32 min-h-[32px]"
         />
@@ -164,7 +166,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
           <Paperclip className="h-4 w-4" />
         </button>
 
-        {/* Dictate. With "Keep talking" on, each pause sends to Mastermind. */}
+        {/* Dictate. With "Keep talking" on, each pause sends to Peako. */}
         <VoiceMicButton mode="dictation" onSubmit={submitField} className="h-[30px] w-[30px]" />
 
         {/* Spacer */}
@@ -188,7 +190,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
               ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm'
               : 'bg-accent text-muted-foreground cursor-not-allowed'
           }`}
-          title="Send to Mastermind"
+          title={`Send to ${assistantName}`}
         >
           <ArrowUp className="h-4 w-4" />
         </button>

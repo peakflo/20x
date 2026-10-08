@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { VoiceMicButton } from './VoiceMicButton'
 import { useUIStore } from '@/stores/ui-store'
 import { useVoiceStore } from '@/stores/voice-store'
+import { useMastermindStore } from '@/stores/mastermind-store'
 import { MASTERMIND_COMPOSER_KEY } from '@/lib/voice-dictation-target'
 
 export { MASTERMIND_COMPOSER_KEY } from '@/lib/voice-dictation-target'
@@ -23,6 +24,7 @@ export { MASTERMIND_COMPOSER_KEY } from '@/lib/voice-dictation-target'
 export function TopBarVoiceButton(): React.JSX.Element | null {
   const setShowOrchestrator = useUIStore((s) => s.setShowOrchestrator)
   const conversational = useVoiceStore((s) => s.conversation)
+  const assistantName = useMastermindStore((s) => s.assistantName)
 
   const revealComposer = useCallback(() => {
     setShowOrchestrator(true)
@@ -38,8 +40,8 @@ export function TopBarVoiceButton(): React.JSX.Element | null {
       className="h-7 w-7"
       title={
         conversational
-          ? 'Talk to Mastermind. Each pause sends what you said.'
-          : 'Dictate to Mastermind'
+          ? `Talk to ${assistantName}. Each pause sends what you said.`
+          : `Dictate to ${assistantName}`
       }
     />
   )

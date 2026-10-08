@@ -218,3 +218,37 @@ describe('rmsOfPcm16', () => {
     expect(rmsOfPcm16(new Uint8Array(0))).toBe(0)
   })
 })
+
+describe('after an answer finishes by itself', () => {
+  it('drops the echo of the last word instead of sending it', () => {
+    const gate = new BargeInGate({ onBargeIn: vi.fn(), tailMs: 400 })
+    gate.setSpeaking(true)
+    for (let i = 0; i < 5; i++) gate.push(ECHO)
+
+    gate.finishSpeaking()
+    // The last word still ringing in the room.
+    for (let i = 0; i < 4; i++) expect(gate.push(ECHO)).toEqual([])
+    // Then the microphone is the user's again.
+    expect(gate.push(SPEECH)).toEqual([SPEECH])
+  })
+
+  it('still hears a user who starts talking straight away', () => {
+    const onBargeIn = vi.fn()
+    const gate = new BargeInGate({ onBargeIn, tailMs: 400, holdMs: 300 })
+    gate.setSpeaking(true)
+    for (let i = 0; i < 5; i++) gate.push(ECHO)
+
+    gate.finishSpeaking()
+    const heard = [...gate.push(SPEECH), ...gate.push(SPEECH), ...gate.push(SPEECH), ...gate.push(SPEECH)]
+    expect(heard.length).toBeGreaterThan(0)
+    // Nothing is playing any more, so there is nothing to interrupt.
+    expect(onBargeIn).not.toHaveBeenCalled()
+  })
+
+  it('opens at once when the user stopped the answer', () => {
+    const gate = new BargeInGate({ onBargeIn: vi.fn(), tailMs: 400 })
+    gate.setSpeaking(true)
+    gate.setSpeaking(false)
+    expect(gate.push(SPEECH)).toEqual([SPEECH])
+  })
+})

@@ -10,6 +10,9 @@ import { Select } from '@/components/ui/Select'
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard'
 import { settingsApi, mobileApi, updaterApi, worktreeApi, onWorkspaceCleanupProgress } from '@/lib/ipc-client'
 import { MASTERMIND_PREWARM_SETTING } from '@/components/orchestrator/OrchestratorPanel'
+import { PeakoSettings } from './PeakoSettings'
+import { useMastermindStore } from '@/stores/mastermind-store'
+import { AppearanceSettings } from './AppearanceSettings'
 import { PushNotificationSettings } from './PushNotificationSettings'
 
 /** Human-readable summary of a cleanup run, or null when there is nothing to report. */
@@ -29,6 +32,7 @@ export function GeneralSettings() {
   const [launchAtStartup, setLaunchAtStartup] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
   const [mastermindPrewarm, setMastermindPrewarm] = useState(true)
+  const assistantName = useMastermindStore((s) => s.assistantName)
   const [minimizeToTray, setMinimizeToTray] = useState(false)
   const [mobileLanUrl, setMobileLanUrl] = useState('')
   const [mobileTunnelUrl, setMobileTunnelUrl] = useState<string | null>(null)
@@ -125,7 +129,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
         const warm = await settingsApi.get(MASTERMIND_PREWARM_SETTING)
         setMastermindPrewarm(warm !== 'false')
       } catch (error) {
-        console.error('Failed to load the Mastermind warm-up setting:', error)
+        console.error('Failed to load the Peako warm-up setting:', error)
       }
 
       // Load workspace cleanup settings
@@ -280,6 +284,8 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
 
   return (
     <>
+    <AppearanceSettings />
+
     <SettingsSection
       title="Application Preferences"
       description="Configure general application behavior and preferences"
@@ -302,7 +308,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
 
         <div className="flex items-center justify-between py-2 border-b border-border">
           <div className="space-y-0.5">
-            <Label htmlFor="mastermind-prewarm">Start Mastermind at launch</Label>
+            <Label htmlFor="mastermind-prewarm">Start {assistantName} at launch</Label>
             <p className="text-xs text-muted-foreground">
               Bring the agent up in the background so your first message does not
               wait for it. Costs one idle agent process. Applies at the next launch.
@@ -349,6 +355,8 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
         </div>
       </div>
     </SettingsSection>
+
+    <PeakoSettings />
 
     <SettingsSection
       title="Connect Phone"

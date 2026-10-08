@@ -16,7 +16,7 @@ export function AgentApprovalBanner({ request, onApprove, onReject }: AgentAppro
   if (!request) return null
 
   return (
-    <div className="fixed inset-x-0 top-0 z-50 bg-yellow-500/10 border-b border-yellow-500/20">
+    <div data-attention="approval" className="shrink-0 bg-yellow-500/10 border-b border-yellow-500/20">
       <div className="max-w-4xl mx-auto px-4 py-3">
         <div className="flex items-start gap-3">
           <AlertCircle className="h-5 w-5 text-yellow-500 mt-0.5 flex-shrink-0" />

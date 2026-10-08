@@ -3,6 +3,7 @@ import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } f
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
+import { PEAKO_CHANNELS, type PeakoMainCommand, type PeakoState } from '../shared/peako'
 import {
   USAGE_LIMITS_UPDATED_CHANNEL,
   USAGE_RECORDED_CHANNEL,
@@ -753,6 +754,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('voice:tts:modelProgress', handler)
         return () => ipcRenderer.removeListener('voice:tts:modelProgress', handler)
       }
+    }
+  },
+  peako: {
+    publishState: (state: PeakoState): void => ipcRenderer.send(PEAKO_CHANNELS.publishState, state),
+    setEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke(PEAKO_CHANNELS.setEnabled, enabled),
+    getEnabled: (): Promise<boolean> => ipcRenderer.invoke(PEAKO_CHANNELS.getEnabled),
+    onCommand: (callback: (command: PeakoMainCommand) => void): (() => void) => {
+      const handler = (_: unknown, command: PeakoMainCommand): void => callback(command)
+      ipcRenderer.on(PEAKO_CHANNELS.mainCommand, handler)
+      return () => ipcRenderer.removeListener(PEAKO_CHANNELS.mainCommand, handler)
     }
   },
   browser: {

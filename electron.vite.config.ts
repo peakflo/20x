@@ -74,7 +74,16 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()]
+    plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          // Peako's desktop window gets its own narrow, sandboxed preload.
+          peako: resolve(__dirname, 'src/preload/peako.ts')
+        }
+      }
+    }
   },
   renderer: {
     resolve: {
@@ -83,6 +92,14 @@ export default defineConfig({
         '@shared': resolve('src/shared')
       }
     },
-    plugins: [react(), tailwindcss()]
+    plugins: [react(), tailwindcss()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          peako: resolve(__dirname, 'src/renderer/peako.html')
+        }
+      }
+    }
   }
 })

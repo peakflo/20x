@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 const hotkey = vi.hoisted(() => ({ fire: null as ((event: { action: string }) => void) | null }))
+const segment = vi.hoisted(() => ({ fire: null as ((event: { turnId: string; text: string; index: number }) => void) | null }))
 
 vi.mock('@/lib/ipc-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/ipc-client')>()),
@@ -14,6 +15,12 @@ vi.mock('@/lib/ipc-client', async (importOriginal) => ({
           hotkey.fire = null
         }
       },
+      onSegment: (cb: (event: { turnId: string; text: string; index: number }) => void) => {
+        segment.fire = cb
+        return () => {
+          segment.fire = null
+        }
+      },
     } as Record<string, unknown>,
     {
       get(target, prop: string) {
@@ -25,7 +32,7 @@ vi.mock('@/lib/ipc-client', async (importOriginal) => ({
 }))
 
 import { act, cleanup, render } from '@testing-library/react'
-import { useVoiceControl } from './use-voice-control'
+import { VOICE_SENTENCE_JOIN_MS, useVoiceControl } from './use-voice-control'
 import { useVoiceStore } from '@/stores/voice-store'
 import { useUIStore } from '@/stores/ui-store'
 import {
@@ -33,6 +40,7 @@ import {
   clearDictationTarget,
   getActiveComposer,
   registerComposer,
+  setActiveComposer,
 } from '@/lib/voice-dictation-target'
 
 /**
@@ -108,5 +116,84 @@ describe('the global shortcut', () => {
       hotkey.fire?.({ action: 'toggle' })
     })
     expect(toggleTurn).toHaveBeenCalledWith('dictation')
+  })
+})
+
+describe('spoken sentences in a conversation', () => {
+  function composer() {
+    const field = document.createElement('textarea')
+    document.body.appendChild(field)
+    const sent: string[] = []
+    registerComposer(MASTERMIND_COMPOSER_KEY, {
+      getField: () => field,
+      submit: () => {
+        sent.push(field.value)
+        field.value = ''
+      },
+    })
+    setActiveComposer(MASTERMIND_COMPOSER_KEY)
+    return sent
+  }
+
+  it('joins sentences said with a short pause into one message', async () => {
+    vi.useFakeTimers()
+    try {
+      const sent = composer()
+      await act(async () => {
+        render(<Harness />)
+      })
+      await act(async () => {
+        segment.fire?.({ turnId: 't1', text: 'Start the billing task', index: 0 })
+        vi.advanceTimersByTime(VOICE_SENTENCE_JOIN_MS - 100)
+        segment.fire?.({ turnId: 't1', text: 'and tell me when it is done.', index: 1 })
+      })
+      expect(sent).toEqual([])
+      await act(async () => {
+        vi.advanceTimersByTime(VOICE_SENTENCE_JOIN_MS)
+      })
+      expect(sent).toEqual(['Start the billing task and tell me when it is done.'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends a lone sentence once the pause is over', async () => {
+    vi.useFakeTimers()
+    try {
+      const sent = composer()
+      await act(async () => {
+        render(<Harness />)
+      })
+      await act(async () => {
+        segment.fire?.({ turnId: 't1', text: 'What is pending?', index: 0 })
+        vi.advanceTimersByTime(VOICE_SENTENCE_JOIN_MS)
+      })
+      expect(sent).toEqual(['What is pending?'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('waits while the user is still talking', async () => {
+    vi.useFakeTimers()
+    try {
+      const sent = composer()
+      await act(async () => {
+        render(<Harness />)
+      })
+      await act(async () => {
+        segment.fire?.({ turnId: 't1', text: 'Create a task', index: 0 })
+        useVoiceStore.setState({ partial: 'called fix the' })
+        vi.advanceTimersByTime(VOICE_SENTENCE_JOIN_MS * 2)
+      })
+      expect(sent).toEqual([])
+      await act(async () => {
+        segment.fire?.({ turnId: 't1', text: 'called fix the export.', index: 1 })
+        vi.advanceTimersByTime(VOICE_SENTENCE_JOIN_MS)
+      })
+      expect(sent).toEqual(['Create a task called fix the export.'])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

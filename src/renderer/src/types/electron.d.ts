@@ -1,6 +1,7 @@
 import type { BrowserRecordingManifest } from '@shared/browser-recording'
 import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '@shared/browser-session-import'
 import type { UiCommand } from '@shared/ui-commands'
+import type { PeakoCommand, PeakoLayout, PeakoMainCommand, PeakoState } from '@shared/peako'
 import type {
   WorkfloTask,
   CreateTaskDTO,
@@ -542,6 +543,12 @@ interface ElectronAPI {
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onWorkspaceCleanupProgress: (callback: (event: WorkspaceCleanupProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
+  peako: {
+    publishState: (state: PeakoState) => void
+    setEnabled: (enabled: boolean) => Promise<boolean>
+    getEnabled: () => Promise<boolean>
+    onCommand: (callback: (command: PeakoMainCommand) => void) => () => void
+  }
   browser: {
     listImportSources: () => Promise<BrowserImportSource[]>
     importSessions: (input: BrowserImportRequest) => Promise<BrowserImportResult>
@@ -623,8 +630,22 @@ interface ElectronAPI {
   onOAuthCallback: (callback: (event: { code: string; state: string }) => void) => () => void
 }
 
+export interface PeakoAPI {
+  ready: () => void
+  command: (command: PeakoCommand) => void
+  setExpanded: (expanded: boolean) => Promise<PeakoLayout>
+  dragMove: (x: number, y: number) => void
+  dragEnd: () => void
+  contextMenu: () => void
+  onState: (callback: (state: PeakoState) => void) => () => void
+  onLayout: (callback: (layout: PeakoLayout) => void) => () => void
+  onStartRename: (callback: () => void) => () => void
+}
+
 declare global {
   interface Window {
     electronAPI: ElectronAPI
+    /** Only present in Peako's desktop window. */
+    peakoAPI?: PeakoAPI
   }
 }

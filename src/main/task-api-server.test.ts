@@ -956,3 +956,127 @@ describe('/create_subtask automation inheritance', () => {
     setTaskAutomationTrigger(null)
   })
 })
+
+describe('/list_tasks - cheap for a model to read', () => {
+  it('returns summaries with a short description, and full records only when asked', async () => {
+    db.createTask(makeTask({ title: 'Long one', description: 'x'.repeat(1000) }))
+    const rows = await handleRoute(db, '/list_tasks', {}) as Record<string, unknown>[]
+    expect(rows[0]).not.toHaveProperty('attachments')
+    expect((rows[0].description as string).length).toBeLessThanOrEqual(201)
+
+    const full = await handleRoute(db, '/list_tasks', { detail: true }) as Record<string, unknown>[]
+    expect(full[0]).toHaveProperty('attachments')
+    expect(full[0].description).toHaveLength(1000)
+  })
+
+  it('caps the listing instead of returning every task', async () => {
+    for (let i = 0; i < 60; i++) db.createTask(makeTask({ title: `Task ${i}` }))
+    expect(await handleRoute(db, '/list_tasks', {})).toHaveLength(50)
+    expect(await handleRoute(db, '/list_tasks', { limit: 5 })).toHaveLength(5)
+  })
+
+  it('filters by several statuses, open work and words', async () => {
+    const done = db.createTask(makeTask({ title: 'Invoice export' }))!
+    db.updateTask(done.id, { status: TaskStatus.Completed })
+    const review = db.createTask(makeTask({ title: 'Invoice import' }))!
+    db.updateTask(review.id, { status: TaskStatus.ReadyForReview })
+    db.createTask(makeTask({ title: 'Vendor sync', description: 'nightly invoice pull' }))
+
+    const open = await handleRoute(db, '/list_tasks', { open_only: true }) as Array<{ title: string }>
+    expect(open.map((t) => t.title).sort()).toEqual(['Invoice import', 'Vendor sync'])
+
+    const several = await handleRoute(db, '/list_tasks', { statuses: ['completed', 'ready_for_review'] }) as Array<{ title: string }>
+    expect(several.map((t) => t.title).sort()).toEqual(['Invoice export', 'Invoice import'])
+
+    const found = await handleRoute(db, '/list_tasks', { search: 'invoice nightly' }) as Array<{ title: string }>
+    expect(found.map((t) => t.title)).toEqual(['Vendor sync'])
+
+    // LIKE wildcards in the search are matched literally.
+    expect(await handleRoute(db, '/list_tasks', { search: '%' })).toEqual([])
+  })
+})
+
+describe('/update_task - dates, snoozing and ownership', () => {
+  it('sets and clears the due date and snooze', async () => {
+    const task = db.createTask(makeTask({ title: 'Pay vendor' }))!
+    await handleRoute(db, '/update_task', { task_id: task.id, due_date: '2026-10-05T09:00:00Z', snoozed_until: '2026-10-04T09:00:00Z', assignee: 'Kunal' })
+    let saved = db.getTask(task.id)!
+    expect(saved.due_date).toBe('2026-10-05T09:00:00.000Z')
+    expect(saved.snoozed_until).toBe('2026-10-04T09:00:00.000Z')
+    expect(saved.assignee).toBe('Kunal')
+
+    await handleRoute(db, '/update_task', { task_id: task.id, due_date: '', snoozed_until: '' })
+    saved = db.getTask(task.id)!
+    expect(saved.due_date).toBeNull()
+    expect(saved.snoozed_until).toBeNull()
+  })
+
+  it('refuses a date it cannot read', async () => {
+    const task = db.createTask(makeTask({ title: 'Pay vendor' }))!
+    const result = await handleRoute(db, '/update_task', { task_id: task.id, due_date: 'next Tuesday' }) as { error?: string }
+    expect(result.error).toMatch(/due_date/)
+  })
+})
+
+describe('/get_overview', () => {
+  it('sorts the workspace into what the user needs to know, with live session state', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Backend' }))!
+    const now = new Date('2026-10-02T12:00:00Z')
+    const waiting = db.createTask(makeTask({ title: 'Needs approval' }))!
+    db.updateTask(waiting.id, { agent_id: agent.id, status: TaskStatus.AgentWorking })
+    const running = db.createTask(makeTask({ title: 'Running' }))!
+    db.updateTask(running.id, { status: TaskStatus.AgentWorking })
+    const review = db.createTask(makeTask({ title: 'Ready' }))!
+    db.updateTask(review.id, { status: TaskStatus.ReadyForReview })
+    db.createTask(makeTask({ title: 'Late', due_date: '2026-10-01T09:00:00Z' }))
+    db.createTask(makeTask({ title: 'Later' }))
+
+    const controller = {
+      findSessionByTaskId: (taskId: string) => (taskId === waiting.id ? { sessionId: 's1' } : undefined),
+      getSessionStatus: () => ({ status: 'waiting_approval' })
+    }
+    setTaskApiAgentController(controller as any)
+
+    const { buildOverview } = await import('./task-api-server')
+    const overview = buildOverview(db, controller as any, now) as Record<string, any>
+
+    expect(overview.waiting_for_you).toEqual([{ task_id: waiting.id, title: 'Needs approval', agent: 'Backend' }])
+    expect(overview.running.map((t: { title: string }) => t.title)).toEqual(['Running'])
+    expect(overview.ready_for_review.map((t: { title: string }) => t.title)).toEqual(['Ready'])
+    expect(overview.overdue.map((t: { title: string }) => t.title)).toEqual(['Late'])
+    expect(overview.up_next.map((t: { title: string }) => t.title).sort()).toEqual(['Late', 'Later'])
+    expect(overview.counts.waiting_for_you).toBe(1)
+  })
+})
+
+describe('older tasks stay reachable', () => {
+  it('pages back through list_tasks and filters by when a task last changed', async () => {
+    for (let i = 0; i < 12; i++) {
+      const task = db.createTask(makeTask({ title: `Task ${i}` }))!
+      rawDb.prepare('UPDATE tasks SET created_at = ?, updated_at = ? WHERE id = ?')
+        .run(new Date(Date.UTC(2026, 0, i + 1)).toISOString(), new Date(Date.UTC(2026, 0, i + 1)).toISOString(), task.id)
+    }
+    const second = await handleRoute(db, '/list_tasks', { limit: 5, offset: 5 }) as Array<{ title: string }>
+    expect(second.map((t) => t.title)).toEqual(['Task 6', 'Task 5', 'Task 4', 'Task 3', 'Task 2'])
+
+    const january = await handleRoute(db, '/list_tasks', { updated_before: '2026-01-03T00:00:00Z' }) as Array<{ title: string }>
+    expect(january.map((t) => t.title)).toEqual(['Task 1', 'Task 0'])
+  })
+
+  it('reports work finished over a longer window, newest first, with more per group', async () => {
+    const { buildOverview } = await import('./task-api-server')
+    const now = new Date('2026-10-02T12:00:00Z')
+    for (let day = 1; day <= 6; day++) {
+      const task = db.createTask(makeTask({ title: `Done ${day} days ago` }))!
+      db.updateTask(task.id, { status: TaskStatus.Completed })
+      rawDb.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(new Date(now.getTime() - day * 86_400_000 + 1000).toISOString(), task.id)
+    }
+
+    const day = buildOverview(db, null, now) as Record<string, any>
+    expect(day.counts.finished).toBe(1)
+
+    const week = buildOverview(db, null, now, { finishedSince: new Date('2026-09-25T12:00:00Z'), perGroup: 3 }) as Record<string, any>
+    expect(week.counts.finished).toBe(6)
+    expect(week.finished.map((t: { title: string }) => t.title)).toEqual(['Done 1 days ago', 'Done 2 days ago', 'Done 3 days ago'])
+  })
+})
