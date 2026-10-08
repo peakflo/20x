@@ -45,7 +45,7 @@ You should be able to hand off a task without copying its brief into a new chat,
   <img src="resources/integrations.png" alt="20x integrations: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → 20x ↔ GitLab, Github, MCP → Claude Code, Opencode, OpenAI Codex, Cursor, Pi; Skills automatically improved" />
 </p>
 
-Light mode screenshots below show the app with sample tasks and skills.
+Light mode screenshots below show the app with sample tasks, skills, and browser content.
 
 ### 📊 Dashboard Workspace
 - **Overview dashboard** — See task completion stats, AI autonomy metrics, and agent success rates at a glance
@@ -71,6 +71,14 @@ The task brief, repository, skills, and agent work log stay in the same view.
 
 <p align="center">
   <img src="docs/screenshots/readme-agent-work-light.png" alt="20x light mode task showing an agent work log beside the task brief, repository, and skill" width="960" />
+</p>
+
+### 🕸️ Canvas Workspace
+
+Open a parent task and its subtasks as linked panels. Keep an embedded browser beside them so the agent can work with the same reference page you see. The brief, related work, and browser remain in one workspace as you move between steps.
+
+<p align="center">
+  <img src="docs/screenshots/readme-canvas-light.png" alt="20x light mode canvas with a parent task linked to two subtasks and an embedded browser linked to the implementation subtask" width="960" />
 </p>
 
 ### 🔗 Smart Integrations
