@@ -4824,4 +4824,156 @@ describe('AgentManager serverOverloaded automatic retry', () => {
     await vi.advanceTimersByTimeAsync(OVERLOAD_RETRY_BASE_DELAY_MS * 10)
     expect(sendSpy).not.toHaveBeenCalled()
   })
+
+  it('keeps escalating when the retry itself is rejected directly as serverOverloaded (not just reported later via polling), and still caps', async () => {
+    const mgr = buildManager()
+    const session = buildSession({})
+    ;(mgr as any).sessions.set('session-1', session)
+
+    // Every retry attempt's doSendAdapterMessage (and therefore the
+    // underlying adapter.sendPrompt) rejects outright with the same
+    // capacity error — simulating a provider that refuses the retried
+    // prompt synchronously instead of accepting it and failing later.
+    vi.spyOn(mgr as any, 'doSendAdapterMessage').mockRejectedValue(new Error(OVERLOAD_MESSAGE))
+    const handleErrorSpy = vi.spyOn(mgr as any, 'handleSessionError').mockImplementation(() => undefined)
+
+    for (let attempt = 1; attempt <= MAX_OVERLOAD_RETRY_ATTEMPTS; attempt++) {
+      ;(session as any).status = 'error'
+      await (mgr as any).retryOverloadedSession('session-1')
+      // Each direct rejection schedules the next backoff instead of giving up.
+      expect((mgr as any).overloadRetryTracker.getAttempts('session-1')).toBe(attempt)
+      expect(handleErrorSpy).not.toHaveBeenCalled()
+    }
+
+    // The cap is reached: the next direct rejection falls through to the
+    // normal terminal-error path instead of scheduling a 6th attempt.
+    ;(session as any).status = 'error'
+    await (mgr as any).retryOverloadedSession('session-1')
+    expect(handleErrorSpy).toHaveBeenCalledOnce()
+    expect((mgr as any).overloadRetryTracker.getAttempts('session-1')).toBe(MAX_OVERLOAD_RETRY_ATTEMPTS)
+  })
+})
+
+describe('AgentManager serverOverloaded retry on the initial turn', () => {
+  function buildInitialTurnManager(sendPrompt: ReturnType<typeof vi.fn>) {
+    const task: Record<string, unknown> = {
+      id: 'task-1',
+      title: 'Fix the flaky checkout test',
+      description: 'The checkout.spec.ts suite is flaky under load.',
+      repos: ['org/repo'],
+      skill_ids: [],
+      agent_id: 'agent-1',
+      status: 'not_started'
+    }
+    const mockDb = {
+      getTask: vi.fn(() => ({ ...task })),
+      getSubtasks: vi.fn(() => []),
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Agent', config: { coding_agent: 'codex' } })),
+      getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn(() => null),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+      setSetting: vi.fn(),
+      deleteSetting: vi.fn(),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const adapter = {
+      initialize: vi.fn(async () => undefined),
+      createSession: vi.fn(async () => 'session-1'),
+      sendPrompt,
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.BUSY })),
+    }
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(manager as any, 'writeSkillFiles').mockResolvedValue(undefined)
+    vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(manager as any, 'ensurePollingCoordinator').mockImplementation(() => undefined)
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+    return { manager, adapter, task }
+  }
+
+  beforeEach(() => {
+    // Fake only setTimeout/clearTimeout (what OverloadRetryTracker uses) —
+    // startAdapterSession's own setImmediate-based event-loop yields
+    // (yieldEL) must keep resolving normally, or awaiting startSession()
+    // here would hang forever.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('captures the initial task prompt and resends exactly that prompt on retry, instead of falling back to "continue"', async () => {
+    let calls = 0
+    const sendPrompt = vi.fn(async () => {
+      calls++
+      if (calls === 1) {
+        throw new Error('Selected model is at capacity. Please try a different model. (serverOverloaded)')
+      }
+    })
+    const { manager, adapter } = buildInitialTurnManager(sendPrompt)
+
+    // startSession must resolve with the session id — a capacity error on
+    // the very first turn is not a session-creation failure.
+    const sessionId = await manager.startSession('agent-1', 'task-1', '/tmp/test-workspace')
+    expect(sessionId).toBe('session-1')
+    expect(adapter.sendPrompt).toHaveBeenCalledTimes(1)
+
+    const session = (manager as any).sessions.get('session-1')
+    expect(session.status).toBe('error')
+    expect(session.lastPromptText).toContain('Fix the flaky checkout test')
+    expect((manager as any).overloadRetryTracker.getAttempts('session-1')).toBe(1)
+
+    // Advance to the scheduled retry — it must resend the SAME prompt, not a
+    // generic 'continue' fallback (which is what happened before lastPromptText
+    // was captured for the initial turn).
+    await vi.advanceTimersByTimeAsync(OVERLOAD_RETRY_BASE_DELAY_MS)
+
+    expect(adapter.sendPrompt).toHaveBeenCalledTimes(2)
+    const retryText = (adapter.sendPrompt.mock.calls[1] as unknown as [string, Array<{ text: string }>])[1][0].text
+    expect(retryText).toContain('Fix the flaky checkout test')
+    expect(retryText).toContain('The checkout.spec.ts suite is flaky under load.')
+    expect(retryText).not.toBe('continue')
+  })
+
+  it('keeps retrying with exponential backoff when the provider rejects the initial turn repeatedly, up to the cap', async () => {
+    const sendPrompt = vi.fn(async () => {
+      throw new Error('Selected model is at capacity. Please try a different model. (serverOverloaded)')
+    })
+    const { manager, adapter } = buildInitialTurnManager(sendPrompt)
+
+    const sessionId = await manager.startSession('agent-1', 'task-1', '/tmp/test-workspace')
+    expect(sessionId).toBe('session-1')
+    expect(adapter.sendPrompt).toHaveBeenCalledTimes(1)
+
+    // Each scheduled retry is itself rejected the same way — fire every
+    // pending timer and confirm the backoff keeps escalating instead of
+    // stopping after the first retry.
+    let expectedCalls = 1
+    for (let attempt = 1; attempt < MAX_OVERLOAD_RETRY_ATTEMPTS; attempt++) {
+      const delay = OVERLOAD_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1)
+      await vi.advanceTimersByTimeAsync(delay)
+      expectedCalls++
+      expect(adapter.sendPrompt).toHaveBeenCalledTimes(expectedCalls)
+      expect((manager as any).overloadRetryTracker.getAttempts('session-1')).toBe(attempt + 1)
+    }
+
+    // getAttempts reaching the cap means no further retry will be SCHEDULED —
+    // the cap-th retry that was already scheduled before the cap was hit
+    // still legitimately fires once.
+    await vi.advanceTimersByTimeAsync(OVERLOAD_RETRY_BASE_DELAY_MS * 2 ** (MAX_OVERLOAD_RETRY_ATTEMPTS - 1))
+    expectedCalls++
+    expect(adapter.sendPrompt).toHaveBeenCalledTimes(expectedCalls)
+    expect((manager as any).overloadRetryTracker.getAttempts('session-1')).toBe(MAX_OVERLOAD_RETRY_ATTEMPTS)
+
+    // The cap is reached — no further retry was scheduled, so advancing well
+    // past any possible backoff produces no additional sendPrompt call.
+    await vi.advanceTimersByTimeAsync(OVERLOAD_RETRY_BASE_DELAY_MS * 2 ** (MAX_OVERLOAD_RETRY_ATTEMPTS + 2))
+    expect(adapter.sendPrompt).toHaveBeenCalledTimes(expectedCalls)
+    expect((manager as any).overloadRetryTracker.getAttempts('session-1')).toBe(MAX_OVERLOAD_RETRY_ATTEMPTS)
+  })
 })
