@@ -56,4 +56,29 @@ describe('session feedback completion', () => {
     await finishSessionFeedback(db, {executeAction} as never, taskId)
     expect(executeAction).not.toHaveBeenCalled()
   })
+
+  it('blocks completion while a subtask is only ready_for_review, and never fires the source action', async () => {
+    db.createTask(makeTask({title: 'Draft the summary', status: 'ready_for_review', parent_task_id: taskId}))
+    updateTaskFromUser(db, taskId, {status: 'agent_learning', feedback_rating: 4, complete_at_source: true})
+    const executeAction = vi.fn().mockResolvedValue({success: true})
+    await expect(finishSessionFeedback(db, {executeAction} as never, taskId)).rejects.toThrow(
+      'Subtasks must finish before this task can complete.'
+    )
+    expect(executeAction).not.toHaveBeenCalled()
+    expect(db.getTask(taskId)?.status).toBe('ready_for_review')
+  })
+
+  it('completes once the subtask is explicitly Completed, not merely ready_for_review', async () => {
+    const subtaskId = db.createTask(makeTask({title: 'Draft the summary', status: 'ready_for_review', parent_task_id: taskId}))!.id
+    updateTaskFromUser(db, taskId, {status: 'agent_learning', feedback_rating: 4, complete_at_source: false})
+    const executeAction = vi.fn()
+    await expect(finishSessionFeedback(db, {executeAction} as never, taskId)).rejects.toThrow(
+      'Subtasks must finish before this task can complete.'
+    )
+
+    db.updateTask(subtaskId, {status: 'completed'})
+    updateTaskFromUser(db, taskId, {status: 'agent_learning', feedback_rating: 4, complete_at_source: false})
+    await finishSessionFeedback(db, {executeAction} as never, taskId)
+    expect(db.getTask(taskId)?.status).toBe('completed')
+  })
 })

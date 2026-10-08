@@ -2634,6 +2634,16 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         throw new Error('The task source must confirm completion before this task can close in 20x.')
       }
     }
+    // A parent task can only close once every subtask has explicitly reached Completed —
+    // ReadyForReview or any earlier status does not count, regardless of who is completing
+    // the parent (UI, mobile, agent MCP tool, or heartbeat auto-complete).
+    if (data.status === TaskStatus.Completed && currentTask?.status !== TaskStatus.Completed) {
+      const incompleteSubtasks = this.getSubtasks(id).filter(child => child.status !== TaskStatus.Completed)
+      if (incompleteSubtasks.length > 0) {
+        const names = incompleteSubtasks.map(child => `"${child.title}" (${child.status})`).join(', ')
+        throw new Error(`Complete all subtasks before finishing this task: ${names}`)
+      }
+    }
     const nextStatus = data.status ?? currentTask?.status
     if (data.status !== TaskStatus.Completed && data.heartbeat_enabled === true && (
       nextStatus === TaskStatus.Completed ||
