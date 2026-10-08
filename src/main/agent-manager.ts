@@ -66,6 +66,7 @@ import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/a
 import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../shared/system-authority'
 import { sendMobilePush } from './mobile-push'
 import { AgentPushEvents, type QuestionPart } from './agent-push-events'
+import { formatRetryDelay, isOverloadError, MAX_OVERLOAD_RETRY_ATTEMPTS, OverloadRetryTracker } from './overload-retry'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -170,6 +171,10 @@ interface AgentSession {
   nativeResumeAwaitingAck?: boolean
   /** The first prompt sent after a native resume, kept so it can be resent with a handoff. */
   nativeResumeFirstPrompt?: { message: string; attachments?: MessageAttachmentRef[] }
+  /** The most recent prompt sent via doSendAdapterMessage, kept so an automatic
+   *  serverOverloaded retry can nudge the session with the exact same prompt. */
+  lastPromptText?: string
+  lastPromptAttachments?: MessageAttachmentRef[]
 }
 
 /** The harness instance an agent runs under, as the manager sees it. */
@@ -348,6 +353,9 @@ export class AgentManager extends EventEmitter {
   private limitRecovery: UsageLimitRecoveryScheduler | null | undefined = undefined
   /** Tasks whose continuation is being dispatched by the recovery scheduler (not a user message). */
   private limitRecoveryDispatching = new Set<string>()
+  /** Tracks exponential-backoff retry attempts for sessions hitting a provider
+   *  "at capacity" (serverOverloaded) error — see pollSingleSession's ERROR branch. */
+  private readonly overloadRetryTracker = new OverloadRetryTracker()
   private worktreeManager: WorktreeManager | null = null
   private githubManager: GitHubManager | null = null
   private gitlabManager: GitLabManager | null = null
@@ -2117,7 +2125,7 @@ export class AgentManager extends EventEmitter {
 
     // Store session in sessions map
     this.schedulePowerSaveBlockerUpdate()
-    this.sessions.set(adapterSessionId, {
+    const newSession: AgentSession = {
       id: adapterSessionId,
       agentId,
       taskId,
@@ -2135,7 +2143,8 @@ export class AgentManager extends EventEmitter {
       isTriageSession,
       secretSessionToken: secretToken,
       taskContextMode
-    })
+    }
+    this.sessions.set(adapterSessionId, newSession)
 
     // Store session ID in database
     this.updateTaskFromLocalAgent(taskId, { session_id: adapterSessionId })
@@ -2287,6 +2296,11 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       // the race where the first tick() runs before we get here and forwards
       // the duplicate user message echoed by the adapter.
 
+      // Remember the prompt so an automatic serverOverloaded retry (whether
+      // reported later via polling, or thrown directly below) can nudge the
+      // session with the exact same prompt instead of a generic 'continue'.
+      newSession.lastPromptText = promptText
+
       // Send prompt via adapter. A reassigned task's earlier conversation goes
       // in front of the prompt; the UI keeps showing only the prompt itself.
       const parts: MessagePart[] = [
@@ -2296,6 +2310,15 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         await adapter.sendPrompt(adapterSessionId, parts, sessionConfig)
         if (handoff) this.completeContextHandoff(taskId)
       } catch (sendError) {
+        const sendErrorMessage = sendError instanceof Error ? sendError.message : String(sendError)
+        // The provider can reject the very first turn outright (e.g. an HTTP
+        // 503/"at capacity" response to the initial request) instead of
+        // accepting it and reporting the failure later via polling. Route
+        // that case through the same backoff-retry path as a polled
+        // serverOverloaded error, rather than failing session creation.
+        if (isOverloadError(sendErrorMessage) && this.scheduleOverloadRetry(adapterSessionId, taskId, agentId, sendErrorMessage)) {
+          return adapterSessionId
+        }
         console.error(`[AgentManager] sendPrompt FAILED:`, sendError)
         // Write to crash log for visibility
         const fs = await import('fs')
@@ -2930,6 +2953,19 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
           return
         }
 
+        // Provider-level capacity error (Codex serverOverloaded and similar
+        // "at capacity" responses). Instead of leaving the session idle until
+        // a human retries it, schedule an automatic retry with exponential
+        // backoff (base cadence 5 minutes) that nudges the session with the
+        // same prompt. Capped at MAX_OVERLOAD_RETRY_ATTEMPTS; the backoff
+        // resets once the session is confirmed busy again (see the BUSY branch).
+        if (session && isOverloadError(status.message)) {
+          if (this.scheduleOverloadRetry(sessionId, config.taskId, config.agentId, status.message, batchMessages)) {
+            return
+          }
+          console.log(`[AgentManager] serverOverloaded retry cap (${MAX_OVERLOAD_RETRY_ATTEMPTS}) reached for ${sessionId}; surfacing as a terminal error`)
+        }
+
         if (status.usageLimit) {
           this.recordUsageLimitStop(config.taskId, config.agentId, sessionId, status.usageLimit.resetAt, status.message)
         } else {
@@ -2994,6 +3030,14 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         }
         return
       } else if (status.type === SessionStatusType.BUSY && session) {
+        // The provider accepted a turn again — the session has recovered
+        // from any serverOverloaded error, so the next overload drops back
+        // to the base backoff instead of continuing to escalate.
+        if (this.overloadRetryTracker.getAttempts(sessionId) > 0) {
+          console.log(`[AgentManager] Session ${sessionId} recovered from serverOverloaded; resetting retry backoff`)
+          this.overloadRetryTracker.reset(sessionId)
+        }
+
         // Backend is actively processing — disable the IDLE grace period.
         const peBusy = this.pollingEntries.get(sessionId)
         if (peBusy) {
@@ -4587,6 +4631,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     // Stop polling for this session
     this.stopAdapterPolling(sessionId)
+    // Cancel any pending serverOverloaded retry — the session is going away.
+    this.overloadRetryTracker.reset(sessionId)
 
     // Destroy via adapter
     const adapter = this.getAdapter(session.agentId)
@@ -4794,6 +4840,89 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     })
   }
 
+  /**
+   * Schedules an exponential-backoff retry for a session that just hit a
+   * provider "at capacity" error — called both from the ERROR branch of
+   * pollSingleSession (the error arrived via polling, after sendPrompt had
+   * already returned) and from startAdapterSession's sendPrompt catch (the
+   * provider rejected the very first turn outright). Marks the session
+   * 'error', stops polling, and shows a "Retrying automatically…" notice.
+   *
+   * Returns false when overloadRetryTracker's attempt cap has already been
+   * reached — the caller should then fall through to its normal terminal-
+   * error handling instead of retrying again.
+   */
+  private scheduleOverloadRetry(
+    sessionId: string,
+    taskId: string,
+    agentId: string,
+    errorMessage: string | undefined,
+    dedupeAgainst?: Array<{ content: string; partType?: string; receivedAt?: number }>
+  ): boolean {
+    const session = this.sessions.get(sessionId)
+    if (!session) return false
+
+    const scheduled = this.overloadRetryTracker.scheduleRetry(sessionId, () => {
+      void this.retryOverloadedSession(sessionId)
+    })
+    if (!scheduled) return false
+
+    console.log(`[AgentManager] serverOverloaded detected for ${sessionId}; scheduling retry ${scheduled.attempt + 1}/${MAX_OVERLOAD_RETRY_ATTEMPTS} in ${Math.round(scheduled.delayMs / 1000)}s`)
+    session.status = 'error'
+    session.pollingStarted = false
+    if (!dedupeAgainst || !this.hasMatchingErrorMessage(dedupeAgainst, errorMessage)) {
+      this.sendToRenderer('agent:output', {
+        sessionId,
+        taskId,
+        type: 'message',
+        data: {
+          id: `overload-retry-${Date.now()}`,
+          role: 'system',
+          content: `${errorMessage || 'The provider reported it is at capacity.'}\n\nRetrying automatically in ${formatRetryDelay(scheduled.delayMs)} (attempt ${scheduled.attempt + 1}/${MAX_OVERLOAD_RETRY_ATTEMPTS}).`,
+          partType: 'error'
+        }
+      })
+    }
+    this.sendToRenderer('agent:status', { sessionId, agentId, taskId, status: 'error' })
+    this.stopAdapterPolling(sessionId)
+    return true
+  }
+
+  /**
+   * Fires when a scheduled serverOverloaded backoff timer elapses (see
+   * scheduleOverloadRetry). Nudges the session with the same prompt that was
+   * in flight when the provider reported it was at capacity, reusing
+   * doSendAdapterMessage's existing error-recovery path (it clears the
+   * 'error' status and restarts polling) — the same plumbing the tillDone
+   * idle nudge uses to resend a continuation prompt.
+   */
+  private async retryOverloadedSession(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId)
+    if (!session || session.status !== 'error') {
+      // The user already intervened (sent a message, stopped the session,
+      // or the session is gone) — don't stomp on whatever state it's in now.
+      console.log(`[AgentManager] Skipping serverOverloaded retry for ${sessionId}: session no longer in error state`)
+      return
+    }
+    console.log(`[AgentManager] Retrying serverOverloaded session ${sessionId} with the same prompt`)
+    try {
+      await this.doSendAdapterMessage(session, sessionId, session.lastPromptText || 'continue', session.lastPromptAttachments, { redisplay: false })
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      // The retried prompt can itself be rejected outright as serverOverloaded
+      // (rather than being accepted and failing later via polling). Without
+      // this, a direct rejection would consume the attempt scheduleRetry()
+      // already counted and then fall straight to handleSessionError with no
+      // further retry scheduled — escalation would silently stop after one
+      // attempt. Keep going through the same capped backoff instead.
+      if (isOverloadError(errorMessage) && this.scheduleOverloadRetry(sessionId, session.taskId, session.agentId, errorMessage)) {
+        return
+      }
+      console.error(`[AgentManager] serverOverloaded retry failed for ${sessionId}:`, error)
+      this.handleSessionError(sessionId, session, error)
+    }
+  }
+
   private async doSendAdapterMessage(
     session: AgentSession,
     sessionId: string,
@@ -4806,6 +4935,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       session.heartbeatDisableVersionAtTurnStart = this.db.getSetting(`heartbeat-manual-disable:${session.taskId}`)
     }
     session.autoAbortNotified = false
+    // Remember the prompt so an automatic serverOverloaded retry can nudge
+    // the session with the exact same prompt (see retryOverloadedSession).
+    session.lastPromptText = message
+    session.lastPromptAttachments = attachments
 
     if (session.status === 'error') {
       // Check if this is an incompatible session error (non-recoverable)
