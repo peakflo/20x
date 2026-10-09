@@ -15,6 +15,8 @@ import type { GitLabManager } from './gitlab-manager'
 import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAgentAdapter } from './adapters/acp-adapter'
+import { getAcpInstallManager, getAcpRegistryClient } from './acp-registry/runtime'
+import { resolveAcpInstanceCommand } from './acp-registry/resolve-instance'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
@@ -74,7 +76,9 @@ enum CodingAgentType {
   CLAUDE_CODE = 'claude-code',
   CODEX = 'codex',
   CURSOR = 'cursor',
-  PI = 'pi'
+  PI = 'pi',
+  /** A configured ACP (Agent Client Protocol) registry or local-command agent instance. */
+  ACP = 'acp'
 }
 
 /** Handoff block ready to send with the next prompt of a session. */
@@ -810,7 +814,12 @@ export class AgentManager extends EventEmitter {
     // environment (CODEX_HOME / CLAUDE_CONFIG_DIR) belong to that login, so two
     // instances of one harness can run in parallel.
     const instance = this.resolveAgentInstance(agent)
-    const cacheKey = this.adapterCacheKey(backendType, instance?.id)
+    // An ACP agent's "instance" is which configured ACP agent it is (possibly
+    // an entirely different program), not a subscription login — so it needs
+    // its own id in the cache key too, distinct from resolveAgentInstance's
+    // claude-code/codex-only notion of instance.
+    const acpInstanceId = backendType === CodingAgentType.ACP ? agent.config?.acp_instance_id : undefined
+    const cacheKey = this.adapterCacheKey(backendType, instance?.id ?? acpInstanceId)
 
     // Return cached adapter
     if (this.adapters.has(cacheKey)) {
@@ -846,6 +855,31 @@ export class AgentManager extends EventEmitter {
         console.log('[AgentManager] Creating new PiAdapter')
         adapter = new PiAdapter(this.db)
         break
+      case CodingAgentType.ACP: {
+        if (!acpInstanceId) {
+          console.warn('[AgentManager] ACP agent has no configured instance (acp_instance_id)')
+          return null
+        }
+        const acpInstance = this.db.getAcpAgentInstance(acpInstanceId)
+        if (!acpInstance) {
+          console.warn(`[AgentManager] ACP agent instance not found: ${acpInstanceId}`)
+          return null
+        }
+        console.log('[AgentManager] Creating new AcpAgentAdapter for ACP instance', acpInstance.display_name)
+        // Command/args resolve lazily in initialize() — installing a registry
+        // agent (or just finding its binary) can need network/filesystem
+        // work, and getAdapter() itself must stay synchronous.
+        adapter = new AcpAgentAdapter({
+          command: '',
+          args: [],
+          registryAgentId: acpInstance.registry_agent_id ?? undefined,
+          resolveProcessConfig: async () => {
+            const { index } = await getAcpRegistryClient().load()
+            return resolveAcpInstanceCommand(acpInstance, { registryIndex: index, installManager: getAcpInstallManager() })
+          }
+        })
+        break
+      }
       default:
         console.warn(`[AgentManager] Unknown coding agent type: ${backendType}`)
         return null
@@ -911,6 +945,32 @@ export class AgentManager extends EventEmitter {
     if (!agent) return true
     if (agent.config?.auth_method === 'api_key') return false
     return this.resolveAgentInstance(agent)?.shareable ?? true
+  }
+
+  /**
+   * Whether a same-harness switch between two agents can resume the same
+   * backend session id natively. For Claude Code/Codex this is "are both
+   * sides' logins shareable" (`sharesSessionHistory`), since every shareable
+   * instance of one harness type links into the same real session store.
+   *
+   * ACP is different: `coding_agent === 'acp'` only says "some configured
+   * ACP agent," not which one — two ACP agents can be entirely different,
+   * incompatible programs (e.g. one registry agent vs. another, or a local
+   * command). So for ACP, "shared" additionally requires both sides to
+   * reference the exact same `acp_instance_id`; otherwise this always
+   * returns false and the switch falls through to a handoff.
+   */
+  private sessionsShareHistory(a: AgentRecord | undefined, b: AgentRecord | undefined): boolean {
+    const isAcp = a?.config?.coding_agent === 'acp' || b?.config?.coding_agent === 'acp'
+    if (isAcp) {
+      return (
+        a?.config?.coding_agent === 'acp' &&
+        b?.config?.coding_agent === 'acp' &&
+        !!a.config.acp_instance_id &&
+        a.config.acp_instance_id === b?.config?.acp_instance_id
+      )
+    }
+    return this.sharesSessionHistory(a) && this.sharesSessionHistory(b)
   }
 
   /** Display label of an instance for usage and notes. Reads the current name, so renames show at once. */
@@ -6377,7 +6437,7 @@ Important:
         // Reachability is only known once the first prompt is answered. A
         // missing session then falls back to a handoff (see fallBackToHandoff).
         sessionReachable: true,
-        sessionsShared: this.sharesSessionHistory(from) && this.sharesSessionHistory(to)
+        sessionsShared: this.sessionsShareHistory(from, to)
       }
     )
   }
@@ -6418,7 +6478,7 @@ Important:
       {
         hasHistory: transcript.length > 0,
         sessionReachable: false,
-        sessionsShared: this.sharesSessionHistory(previous) && this.sharesSessionHistory(current)
+        sessionsShared: this.sessionsShareHistory(previous, current)
       }
     )
     if (plan !== 'handoff') {

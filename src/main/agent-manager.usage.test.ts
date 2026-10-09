@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
-vi.mock('child_process', () => ({ spawn: vi.fn() }))
+vi.mock('child_process', () => ({ spawn: vi.fn(), execFile: vi.fn() }))
 vi.mock('./adapters/opencode-adapter', () => ({ OpencodeAdapter: vi.fn() }))
 vi.mock('./adapters/acp-adapter', () => ({ AcpAdapter: vi.fn() }))
 vi.mock('./adapters/pi-adapter', () => ({ PiAdapter: vi.fn() }))

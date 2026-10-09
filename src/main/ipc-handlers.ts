@@ -534,11 +534,17 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('acpInstance:update', (_, id: string, data: UpdateAcpAgentInstanceData) => {
-    return db.updateAcpAgentInstance(id, data)
+    const updated = db.updateAcpAgentInstance(id, data)
+    // A command/args/env/auth change must not keep running against a cached
+    // adapter built from the old config.
+    agentManager.forgetHarnessInstanceAdapters(id)
+    return updated
   })
 
   ipcMain.handle('acpInstance:delete', (_, id: string) => {
-    return db.deleteAcpAgentInstance(id)
+    const removed = db.deleteAcpAgentInstance(id)
+    agentManager.forgetHarnessInstanceAdapters(id)
+    return removed
   })
 
   /**

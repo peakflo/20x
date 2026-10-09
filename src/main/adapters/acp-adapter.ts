@@ -81,6 +81,16 @@ export interface AcpAgentAdapterOptions extends AcpAgentProcessConfig {
   enableFs?: boolean
   /** Advertise + serve `terminal/*`. Default: false — off unless explicitly requested. */
   enableTerminal?: boolean
+  /**
+   * Resolves the real process config asynchronously (e.g. a registry agent
+   * that may need installing first). `getAdapter`-style callers are
+   * necessarily synchronous, so a registry-backed instance is constructed
+   * with placeholder `command`/`args` and this resolver instead; it's run
+   * once, in `initialize()` — which every caller already awaits before
+   * `createSession`/`resumeSession`/the deep health check — and overwrites
+   * the placeholder before anything is ever spawned.
+   */
+  resolveProcessConfig?: () => Promise<AcpAgentProcessConfig>
 }
 
 // ============================================================================
@@ -246,11 +256,15 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
   private limitsRead: Promise<ProviderUsageLimits | null> | null = null
   private lastLimitsReadAt = 0
 
+  private resolveProcessConfig?: () => Promise<AcpAgentProcessConfig>
+  private processConfigResolved = false
+
   constructor(options: AcpAgentAdapterOptions) {
     this.processConfig = { command: options.command, args: options.args, env: options.env }
     this.wrapperHooks = options.wrapperHooks ?? getWrapperHooks(options.registryAgentId)
     this.enableFs = options.enableFs ?? false
     this.enableTerminal = options.enableTerminal ?? false
+    this.resolveProcessConfig = options.resolveProcessConfig
     this.debugRpcLogs = AcpAgentAdapter.isDebugLogLevel(process.env.LOG_LEVEL)
   }
 
@@ -261,6 +275,10 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
   }
 
   async initialize(): Promise<void> {
+    if (this.resolveProcessConfig && !this.processConfigResolved) {
+      this.processConfig = await this.resolveProcessConfig()
+      this.processConfigResolved = true
+    }
     const health = await this.checkHealth()
     if (!health.available) {
       throw new Error(health.reason || 'ACP agent not available')

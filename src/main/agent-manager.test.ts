@@ -33,7 +33,7 @@ vi.mock('fs/promises', () => ({
 }))
 
 // Mock heavy dependencies to avoid loading electron/native modules
-vi.mock('child_process', () => ({ spawn: vi.fn() }))
+vi.mock('child_process', () => ({ spawn: vi.fn(), execFile: vi.fn() }))
 const notificationInstances: Array<{ show: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn>; _listeners: Map<string, () => void>; opts: { title: string; body: string } }> = []
 
 vi.mock('electron', () => {
@@ -4278,6 +4278,43 @@ describe('Workflo task execution owner', () => {
     const db = createMockDb()
     vi.mocked(db.getSetting).mockImplementation(key => key === 'workflo-upload:task-1' ? '{}' : undefined)
     await expect(new AgentManager(db).startSession('agent-1', 'task-1', '/tmp/workflo-guard')).rejects.toThrow('Wait for the Workflo task upload')
+  })
+})
+
+describe('AgentManager sessionsShareHistory (ACP instance-pair awareness)', () => {
+  function acpAgent(id: string, acpInstanceId?: string) {
+    return { id, config: { coding_agent: 'acp', ...(acpInstanceId ? { acp_instance_id: acpInstanceId } : {}) } }
+  }
+  function codexAgent(id: string) {
+    return { id, config: { coding_agent: 'codex' } }
+  }
+
+  function shareHistory(a: unknown, b: unknown): boolean {
+    const db = createMockDb() as any
+    const mgr = new AgentManager(db)
+    return (mgr as any).sessionsShareHistory(a, b)
+  }
+
+  it('two ACP agents referencing the same instance share history', () => {
+    expect(shareHistory(acpAgent('a1', 'acp_devin'), acpAgent('a2', 'acp_devin'))).toBe(true)
+  })
+
+  it('two ACP agents referencing different instances do NOT share history, even though both are "acp"', () => {
+    expect(shareHistory(acpAgent('a1', 'acp_devin'), acpAgent('a2', 'acp_goose'))).toBe(false)
+  })
+
+  it('an ACP agent with no configured instance never shares history', () => {
+    expect(shareHistory(acpAgent('a1'), acpAgent('a2', 'acp_devin'))).toBe(false)
+    expect(shareHistory(acpAgent('a1'), acpAgent('a2'))).toBe(false)
+  })
+
+  it('an ACP agent paired with a non-ACP agent does not share history', () => {
+    expect(shareHistory(acpAgent('a1', 'acp_devin'), codexAgent('a2'))).toBe(false)
+  })
+
+  it('non-ACP agents keep the existing per-side shareable-instance rule, unaffected by the ACP branch', () => {
+    expect(shareHistory(codexAgent('a1'), codexAgent('a2'))).toBe(true)
+    expect(shareHistory(undefined, codexAgent('a2'))).toBe(true) // no "from" agent: default to shareable
   })
 })
 

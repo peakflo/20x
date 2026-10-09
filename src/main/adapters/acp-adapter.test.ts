@@ -704,6 +704,33 @@ describe('AcpAgentAdapter - wrapper hook dispatch', () => {
   })
 })
 
+describe('AcpAgentAdapter - lazy process config resolution', () => {
+  it('resolves the real command/args/env once, in initialize(), before any spawn', async () => {
+    const resolveProcessConfig = vi.fn().mockResolvedValue({ command: 'resolved-agent', args: ['--real'], env: { REAL: '1' } })
+    const adapter = new AcpAgentAdapter({ command: '', args: [], resolveProcessConfig })
+    await adapter.initialize()
+
+    expect(resolveProcessConfig).toHaveBeenCalledTimes(1)
+    const priv = adapter as unknown as { processConfig: { command: string; args: string[]; env?: Record<string, string> } }
+    expect(priv.processConfig).toEqual({ command: 'resolved-agent', args: ['--real'], env: { REAL: '1' } })
+  })
+
+  it('only resolves once across repeated initialize() calls', async () => {
+    const resolveProcessConfig = vi.fn().mockResolvedValue({ command: 'resolved-agent', args: [] })
+    const adapter = new AcpAgentAdapter({ command: '', args: [], resolveProcessConfig })
+    await adapter.initialize()
+    await adapter.initialize()
+
+    expect(resolveProcessConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('propagates a resolution failure (e.g. install error) instead of spawning a placeholder', async () => {
+    const resolveProcessConfig = vi.fn().mockRejectedValue(new Error('install failed: checksum mismatch'))
+    const adapter = new AcpAgentAdapter({ command: '', args: [], resolveProcessConfig })
+    await expect(adapter.initialize()).rejects.toThrow('install failed: checksum mismatch')
+  })
+})
+
 describe('AcpAgentAdapter - sign-in flow', () => {
   it('terminal auth method returns the command/args/env to run in 20x\'s terminal', async () => {
     const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: ['serve'] })
