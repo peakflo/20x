@@ -14,7 +14,7 @@ import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
 import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
-import { AcpAdapter } from './adapters/acp-adapter'
+import { AcpAgentAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
@@ -29,7 +29,7 @@ import { analytics } from './analytics-service'
 import { UsageTracker, type UsageLimitsProbeTarget } from './usage/usage-tracker'
 import { agentInstanceId, harnessInstanceDisplayName, harnessTypeLabel, harnessTypeOf, defaultHarnessInstanceId, isDefaultHarnessInstanceId, isHarnessType, type HarnessInstanceView, type HarnessType } from '../shared/harness-instances'
 import { instanceHomeError, instanceHomeFor, linkSharedHistory, normalizeHomePath, realHomeFor } from './harness-instances'
-import { CURSOR_KEYCHAIN_ACCESS_SETTING } from './usage/cursor-limits'
+import { CURSOR_KEYCHAIN_ACCESS_SETTING, probeCursorUsageLimits } from './usage/cursor-limits'
 import { UsageLimitRecoveryScheduler, UsageLimitRecoveryStore } from './usage/usage-limit-recovery'
 import {
   AUTO_RESUME_LIMITED_TASKS_SETTING,
@@ -834,10 +834,14 @@ export class AgentManager extends EventEmitter {
         console.log('[AgentManager] Creating new CodexAppServerAdapter for', instance?.id ?? 'default')
         adapter = new CodexAppServerAdapter({ harnessHome: instance?.home })
         break
-      case CodingAgentType.CURSOR:
-        console.log('[AgentManager] Creating new AcpAdapter for Cursor')
-        adapter = new AcpAdapter('cursor')
+      case CodingAgentType.CURSOR: {
+        console.log('[AgentManager] Creating new AcpAgentAdapter for Cursor')
+        // TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR; this shim keeps it on the generic ACP client until then.
+        const cursorAdapter = new AcpAgentAdapter({ command: 'cursor-agent', args: ['acp'] })
+        this.wireCursorPlanLimits(cursorAdapter)
+        adapter = cursorAdapter
         break
+      }
       case CodingAgentType.PI:
         console.log('[AgentManager] Creating new PiAdapter')
         adapter = new PiAdapter(this.db)
@@ -1036,14 +1040,32 @@ export class AgentManager extends EventEmitter {
 
   /** Usage and plan limits of an adapter are attributed to the harness instance it serves. */
   private wireUsageTracking(adapter: CodingAgentAdapter, instanceId: string): void {
-    if (adapter instanceof AcpAdapter) {
-      adapter.cursorKeychainAccess = () => this.db.getSetting(CURSOR_KEYCHAIN_ACCESS_SETTING) === 'true'
-    }
     adapter.onUsage = (report) => {
       this.getUsageTracker()?.recordUsage({ ...report, instanceId })
     }
     adapter.onUsageLimits = (event) => {
       this.getUsageTracker()?.applyLimitsEvent({ ...event, instanceId })
+    }
+  }
+
+  /**
+   * TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR. Until
+   * then it runs on the generic AcpAgentAdapter, which has no Cursor-shaped
+   * fields (the generic client's `probeUsageLimits` always resolves to
+   * null). This overrides that one instance's `probeUsageLimits` with
+   * Cursor's own CLI/Keychain-based plan-limit probe, reading the user's
+   * Keychain-access consent live (not captured once at creation time) so
+   * toggling `setCursorKeychainAccess` takes effect on the next probe.
+   */
+  private wireCursorPlanLimits(adapter: AcpAgentAdapter): void {
+    let inFlight: Promise<ProviderUsageLimits | null> | null = null
+    adapter.probeUsageLimits = () => {
+      if (inFlight) return inFlight
+      const pending = probeCursorUsageLimits({
+        allowKeychain: this.db.getSetting(CURSOR_KEYCHAIN_ACCESS_SETTING) === 'true'
+      }).finally(() => { inFlight = null })
+      inFlight = pending
+      return pending
     }
   }
 
@@ -2856,7 +2878,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
       // Check for pending approval (ACP + OpenCode adapters) — include in same batch
       if ('getPendingApproval' in adapter && typeof adapter.getPendingApproval === 'function') {
-        const approval = (adapter as unknown as AcpAdapter).getPendingApproval(sessionId)
+        const approval = (adapter as unknown as AcpAgentAdapter).getPendingApproval(sessionId)
         if (approval && !entry.seenPartIds.has(`approval-${approval.toolCallId}`)) {
           entry.seenPartIds.add(`approval-${approval.toolCallId}`)
 
@@ -5099,7 +5121,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const adapter = this.getAdapter(session.agentId)
 
     const approvalAdapter = adapter && 'respondToApproval' in adapter
-      && typeof (adapter as unknown as AcpAdapter).respondToApproval === 'function'
+      && typeof (adapter as unknown as AcpAgentAdapter).respondToApproval === 'function'
 
     // --- Question responses: pass structured answers ---
     // OpenCode implements both response methods. The renderer must identify a
@@ -5206,7 +5228,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       }
       console.log(`[AgentManager] Responding to ACP adapter approval with: ${selectedOption}`)
       // OpenCode adapter returns boolean (true=handled, false=no permission found).
-      // AcpAdapter returns void. Cast to boolean|void to handle both.
+      // AcpAgentAdapter returns void. Cast to boolean|void to handle both.
       const handled = await (adapter as unknown as {
         respondToApproval: (sid: string, approved: boolean, opt?: string, requestId?: string) => Promise<boolean | void>
       }).respondToApproval(sessionId, approved, selectedOption, requestId)
@@ -5239,7 +5261,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
       // If no pending permission was found (stale prompt after watchdog abort
       // or app restart), send a continuation message so the session recovers.
-      // AcpAdapter returns void (undefined), which won't match === false.
+      // AcpAgentAdapter returns void (undefined), which won't match === false.
       if (handled === false && approved) {
         console.log(`[AgentManager] No pending permission found for ${sessionId}, sending continuation message to recover session`)
         this.doSendAdapterMessage(session, sessionId, 'continue').catch((err) => {
