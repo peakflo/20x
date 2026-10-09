@@ -11,9 +11,16 @@ export enum TaskStatus {
   AgentWorking = 'agent_working',
   ReadyForReview = 'ready_for_review',
   AgentLearning = 'agent_learning',
-  Completed = 'completed'
+  Completed = 'completed',
+  Cancelled = 'cancelled',
+  Expired = 'expired'
 }
 
+export function isTaskClosed(status: string): boolean {
+  return status === TaskStatus.Completed || status === TaskStatus.Cancelled || status === TaskStatus.Expired
+}
+
+/** Statuses a person can choose locally. Workflo owns cancelled and expired states. */
 export const TASK_STATUSES: { value: TaskStatus; label: string }[] = [
   { value: TaskStatus.NotStarted, label: 'Not Started' },
   { value: TaskStatus.Triaging, label: 'Triaging' },

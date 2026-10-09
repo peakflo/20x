@@ -2,8 +2,10 @@ import { memo, useMemo } from 'react'
 import { Calendar, AlarmClockOff, Repeat, HeartPulse, ListTree, ChevronRight } from 'lucide-react'
 import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
+import { TaskStatusBadge } from './TaskStatusBadge'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { TaskStatus } from '@/types'
+import { isTaskClosed } from '@shared/constants'
 import type { WorkfloTask, RecurrencePattern, RecurrencePatternObject } from '@/types'
 
 function ordinal(n: number): string {
@@ -68,7 +70,9 @@ const statusDotColor: Record<TaskStatus, string> = {
   [TaskStatus.AgentWorking]: 'bg-amber-400',
   [TaskStatus.ReadyForReview]: 'bg-pink-400',
   [TaskStatus.AgentLearning]: 'bg-blue-400',
-  [TaskStatus.Completed]: 'bg-emerald-400'
+  [TaskStatus.Completed]: 'bg-emerald-400',
+  [TaskStatus.Cancelled]: 'bg-muted-foreground',
+  [TaskStatus.Expired]: 'bg-muted-foreground'
 }
 
 interface TaskListItemProps {
@@ -82,7 +86,7 @@ interface TaskListItemProps {
 }
 
 export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSelect, subtaskCount, isSubtask, isExpanded, onToggleExpand }: TaskListItemProps) {
-  const isActive = task.status !== TaskStatus.Completed
+  const isActive = !isTaskClosed(task.status)
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
   // Use a stable selector that only triggers re-renders when this task's session status/approval changes
@@ -144,6 +148,7 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
           </div>
           <div className="flex items-center gap-2 mt-1">
             <TaskPriorityBadge priority={task.priority} />
+            {(task.status === TaskStatus.Cancelled || task.status === TaskStatus.Expired) && <TaskStatusBadge status={task.status} />}
             {task.due_date && (
               <span className={cn('flex items-center gap-1 text-xs', overdue ? 'text-destructive' : dueSoon ? 'text-amber-400' : 'text-muted-foreground')}>
                 <Calendar className="h-3 w-3" />

@@ -104,4 +104,11 @@ describe('resolveRunShortcut', () => {
     })
     expect(resolveRunShortcut({ ...base, taskStatus: TaskStatus.Completed })).toMatchObject({ action: null })
   })
+
+  it.each([TaskStatus.Cancelled, TaskStatus.Expired])('never runs a %s task', (status) => {
+    expect(resolveRunShortcut({ ...base, assignedAgent: 'agent-1', taskStatus: status })).toEqual({
+      action: null,
+      blockedReason: 'This task is closed'
+    })
+  })
 })

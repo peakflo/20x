@@ -310,6 +310,8 @@ export interface WorkfloTask {
   server_managed?: boolean
   server_execution_mode?: 'human' | 'autonomous'
   server_cron?: string | null
+  server_space_name?: string | null
+  server_triage_reason?: string | null
   server_sync_pending?: boolean
   server_sync_error?: string
   id: string

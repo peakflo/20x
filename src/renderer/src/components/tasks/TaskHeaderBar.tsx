@@ -9,6 +9,7 @@ import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { CodingAgentType, TASK_STATUSES, TaskStatus } from '@/types'
 import type { Agent, WorkfloTask } from '@/types'
+import { isTaskClosed } from '@shared/constants'
 
 export enum TaskPrimaryAction {
   START = 'start',
@@ -146,7 +147,7 @@ export function TaskHeaderBar({
   const actionMeta = action ? ACTION_META[action] : null
   const ActionIcon = actionMeta?.icon
   const HarnessIcon = getHarnessLogo(agent)
-  const showStandaloneComplete = task.status !== TaskStatus.Completed
+  const showStandaloneComplete = !isTaskClosed(task.status)
     && !!onComplete
     && (action !== TaskPrimaryAction.COMPLETE || !onAction)
 
@@ -182,13 +183,14 @@ export function TaskHeaderBar({
         <button
           type="button"
           onClick={() => setStatusMenuOpen((open) => !open)}
+          disabled={task.server_managed && isTaskClosed(task.status)}
           className="group inline-flex items-center gap-0.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
           aria-label="Change task status"
           aria-haspopup="menu"
           aria-expanded={statusMenuOpen}
         >
           <TaskStatusBadge status={task.status} />
-          <ChevronDown className="h-3 w-3 text-muted-foreground transition-colors group-hover:text-foreground" />
+          {!(task.server_managed && isTaskClosed(task.status)) && <ChevronDown className="h-3 w-3 text-muted-foreground transition-colors group-hover:text-foreground" />}
         </button>
         {statusMenuOpen && (
           <div role="menu" aria-label="Task status" className="absolute right-0 top-7 z-50 w-48 overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
@@ -284,7 +286,7 @@ export function TaskHeaderBar({
           </AgentHoverCard>
         )}
       </div>
-      {actionMeta && onAction && task.server_execution_mode !== 'autonomous' && (
+      {actionMeta && onAction && !isTaskClosed(task.status) && task.server_execution_mode !== 'autonomous' && (
         <Button size="sm" onClick={onAction} className="h-8 gap-1.5 px-3" data-testid={`header-cta-${action}`}>
           {ActionIcon && <ActionIcon className="h-3.5 w-3.5" />}
           {actionMeta.label}

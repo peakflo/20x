@@ -8,7 +8,7 @@ import { PeakfloPlugin } from './plugins/peakflo-plugin'
 import { TaskAutomationScheduler } from './task-automation-scheduler'
 import type { AgentManager } from './agent-manager'
 import { SyncManager } from './sync-manager'
-import { serverTaskFields } from './workflo-task-sync'
+import { serverTaskFields, serverTaskStatus } from './workflo-task-sync'
 
 let db: DatabaseManager
 let sourceId: string
@@ -55,6 +55,26 @@ it('pulls canonical status and never installs a second schedule', async () => {
   expect(db.getTask(local.id)).toMatchObject({ status: 'ready_for_review', server_managed: true, is_recurring: false, auto_start_agent: false })
   expect(listTaskCache).toHaveBeenCalledWith(undefined)
   expect(JSON.parse(db.getSetting(`workflo-task:${local.id}`)!)).toMatchObject({ cron: '* * * * *', version: 3 })
+})
+
+it.each(['cancelled', 'expired'] as const)('keeps the %s server status in closed history', async (status) => {
+  const listTaskCache = vi.fn().mockResolvedValue({ tasks: [remote(status)], nextCursor: null })
+  await new PeakfloPlugin().importTasks(sourceId, {}, context({ listTaskCache }))
+  const local = db.getTaskByExternalId(sourceId, 'remote-1')!
+  expect(serverTaskStatus(status)).toBe(status)
+  expect(local.status).toBe(status)
+  expect(db.getOpenTasks().some(task => task.id === local.id)).toBe(false)
+  expect(db.getCompletedTasksPage(0, 10).tasks).toContainEqual(expect.objectContaining({ id: local.id, status }))
+})
+
+it('shows optional Space name and triage reason from the server snapshot', async () => {
+  const listTaskCache = vi.fn().mockResolvedValue({ tasks: [{
+    ...remote(), spaceName: 'Finance', metadata: { triage: { reason: 'An agent has the needed skill.' } }
+  }], nextCursor: null })
+  await new PeakfloPlugin().importTasks(sourceId, {}, context({ listTaskCache }))
+  const local = db.getTaskByExternalId(sourceId, 'remote-1')!
+  expect(db.getTask(local.id)).toMatchObject({ server_space_name: 'Finance', server_triage_reason: 'An agent has the needed skill.' })
+  expect(serverTaskFields(db, remote())).not.toHaveProperty('server_space_name')
 })
 
 it('does not start or complete a server task from stale local automation flags', async () => {

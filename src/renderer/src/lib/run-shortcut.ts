@@ -1,4 +1,5 @@
 import { TaskStatus } from '@/types'
+import { isTaskClosed } from '@shared/constants'
 
 /**
  * What the R shortcut does for the selected task. The first four are the same
@@ -48,8 +49,8 @@ export type RunShortcutDecision =
  * so the user gets feedback instead of a key press that silently does nothing.
  */
 export function resolveRunShortcut(input: RunShortcutInput): RunShortcutDecision {
-  if (input.taskStatus === TaskStatus.Completed) {
-    return { action: null, blockedReason: 'This task is already completed' }
+  if (isTaskClosed(input.taskStatus)) {
+    return { action: null, blockedReason: input.taskStatus === TaskStatus.Completed ? 'This task is already completed' : 'This task is closed' }
   }
   if (input.liveSessionPendingSend || (!input.liveSessionIdle && !input.liveSessionErrored)) {
     return { action: null, blockedReason: 'The agent is already running on this task' }

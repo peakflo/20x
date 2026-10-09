@@ -17,7 +17,9 @@ const STATUS_ORDER: Record<TaskStatus, number> = {
   [TaskStatus.Triaging]: 3,
   [TaskStatus.ReadyForReview]: 2,
   [TaskStatus.NotStarted]: 1,
-  [TaskStatus.Completed]: 0
+  [TaskStatus.Completed]: 0,
+  [TaskStatus.Cancelled]: 0,
+  [TaskStatus.Expired]: 0
 }
 
 export function useTasks() {

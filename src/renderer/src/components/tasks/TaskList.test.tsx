@@ -42,7 +42,7 @@ describe('TaskList', () => {
       />
     )
     expect(screen.getByText('1200')).toBeTruthy()
-    fireEvent.click(screen.getByText('Completed'))
+    fireEvent.click(screen.getByText('Closed'))
     expect(onLoadMore).toHaveBeenCalledTimes(1)
   })
 
@@ -59,7 +59,7 @@ describe('TaskList', () => {
         onLoadMoreCompleted={onLoadMore}
       />
     )
-    fireEvent.click(screen.getByText('Completed'))
+    fireEvent.click(screen.getByText('Closed'))
     // Less than one page loaded: opening fetches the next page.
     expect(onLoadMore).toHaveBeenCalledTimes(1)
     expect(screen.getAllByText(/^Task 10\d$/)).toHaveLength(3)
@@ -77,7 +77,14 @@ describe('TaskList', () => {
         hasMoreCompleted={false}
       />
     )
-    fireEvent.click(screen.getByText('Completed'))
+    fireEvent.click(screen.getByText('Closed'))
     expect(screen.queryByText('Show more')).toBeNull()
+  })
+
+  it('shows cancelled and expired tasks in closed history with their status', () => {
+    render(<TaskList tasks={[makeTask(1, TaskStatus.Cancelled), makeTask(2, TaskStatus.Expired)]} selectedTaskId={null} onSelectTask={vi.fn()} />)
+    fireEvent.click(screen.getByText('Closed'))
+    expect(screen.getByText('Cancelled')).toBeTruthy()
+    expect(screen.getByText('Expired')).toBeTruthy()
   })
 })
