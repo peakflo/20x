@@ -117,8 +117,6 @@ export function AgentsSettings() {
 
   return (
     <>
-      <HarnessInstancesSection />
-      <AcpAgentsSection />
       <SettingsSection
         title="Coding Agents"
         description="Manage AI coding agents for task execution"
@@ -279,6 +277,9 @@ export function AgentsSettings() {
           </div>
         )}
       </SettingsSection>
+
+      <HarnessInstancesSection />
+      <AcpAgentsSection />
 
       <AgentFormDialog
         agent={agentDialog.agent}
