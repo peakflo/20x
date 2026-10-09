@@ -101,7 +101,14 @@ describe('resolveAcpInstanceCommand: registry', () => {
       command_args: [],
       env: {}
     }
-    const resolved = await resolveAcpInstanceCommand(instance, { registryIndex, installManager: manager() })
+    // Pinned so this binary-distribution fixture resolves the same way on
+    // every CI platform (it only declares a darwin-aarch64 target), not just
+    // whatever machine happens to run the test.
+    const resolved = await resolveAcpInstanceCommand(instance, {
+      registryIndex,
+      installManager: manager(),
+      platformTarget: 'darwin-aarch64'
+    })
     expect(resolved.command).toContain('devin')
   })
 
@@ -115,7 +122,11 @@ describe('resolveAcpInstanceCommand: registry', () => {
       command_args: ['--extra'],
       env: { MY_VAR: '1' }
     }
-    const resolved = await resolveAcpInstanceCommand(instance, { registryIndex, installManager: manager() })
+    const resolved = await resolveAcpInstanceCommand(instance, {
+      registryIndex,
+      installManager: manager(),
+      platformTarget: 'darwin-aarch64'
+    })
     expect(resolved.command).toBe('/opt/custom/devin-override')
     expect(resolved.args).toEqual(['--extra'])
     expect(resolved.env).toEqual({ MY_VAR: '1' })

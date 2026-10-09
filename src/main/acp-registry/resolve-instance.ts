@@ -7,7 +7,7 @@
  * override while always keeping the registry's own args/env.
  */
 
-import type { AcpRegistryIndex } from './registry-types'
+import type { AcpPlatformTarget, AcpRegistryIndex } from './registry-types'
 import { resolveDistribution, type DistributionKind } from './registry-client'
 import type { InstallManager } from './install-manager'
 
@@ -57,7 +57,8 @@ function resolveLocal(instance: AcpInstanceConfigLike): ResolvedAcpCommand {
 async function resolveRegistry(
   instance: AcpInstanceConfigLike,
   registryIndex: AcpRegistryIndex,
-  installManager: InstallManager
+  installManager: InstallManager,
+  platformTarget?: AcpPlatformTarget | null
 ): Promise<ResolvedAcpCommand> {
   const entry = registryIndex.agents.find((a) => a.id === instance.registry_agent_id)
   if (!entry) {
@@ -71,7 +72,10 @@ async function resolveRegistry(
   }
 
   const preferred: DistributionKind | 'auto' = instance.distribution
-  const resolved = await resolveDistribution(entry, { preferred })
+  // `platformTarget` undefined means "detect the real machine" (production);
+  // tests pin an explicit target so a binary-distribution fixture resolves
+  // the same way on every CI platform, not just the one the test was written on.
+  const resolved = await resolveDistribution(entry, platformTarget === undefined ? { preferred } : { preferred, platformTarget })
   if (!('kind' in resolved) || (resolved.kind !== 'binary' && resolved.kind !== 'npx' && resolved.kind !== 'uvx')) {
     const failure = resolved as { kind: string; message: string }
     const kind =
@@ -93,8 +97,8 @@ async function resolveRegistry(
 
 export async function resolveAcpInstanceCommand(
   instance: AcpInstanceConfigLike,
-  deps: { registryIndex: AcpRegistryIndex; installManager: InstallManager }
+  deps: { registryIndex: AcpRegistryIndex; installManager: InstallManager; platformTarget?: AcpPlatformTarget | null }
 ): Promise<ResolvedAcpCommand> {
   if (instance.source === 'local') return resolveLocal(instance)
-  return resolveRegistry(instance, deps.registryIndex, deps.installManager)
+  return resolveRegistry(instance, deps.registryIndex, deps.installManager, deps.platformTarget)
 }
