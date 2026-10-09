@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import type { CursorAuthStatus, CursorLoginCompleteEvent } from '@shared/cursor-auth'
 
 const status = vi.fn()
@@ -119,5 +120,54 @@ describe('CursorSettingsCard', () => {
     await screen.findByText(/not signed in/i)
     unmount()
     expect(unsubscribe).toHaveBeenCalled()
+  })
+
+  describe('embedded inside the agent form', () => {
+    // Regression: this card is embedded inside AgentForm's <form>, not a
+    // standalone Settings section. A <button> with no explicit `type`
+    // defaults to type="submit" inside a <form> — clicking it submits the
+    // whole agent form and closes the edit dialog. Every button here must
+    // opt out of that with type="button", verified by actually submitting
+    // the surrounding form, not just inspecting the attribute.
+    function renderInsideAForm(ui: ReactElement, onSubmit: () => void) {
+      return render(
+        <form onSubmit={(e) => { e.preventDefault(); onSubmit() }}>
+          {ui}
+        </form>
+      )
+    }
+
+    it('"Sign in with browser" does not submit the surrounding form', async () => {
+      const onSubmit = vi.fn()
+      renderInsideAForm(<CursorSettingsCard />, onSubmit)
+      await screen.findByRole('button', { name: /sign in with browser/i })
+
+      fireEvent.click(screen.getByRole('button', { name: /sign in with browser/i }))
+      await waitFor(() => expect(startBrowserLogin).toHaveBeenCalled())
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('"Reopen" and "Cancel" do not submit the surrounding form', async () => {
+      const onSubmit = vi.fn()
+      renderInsideAForm(<CursorSettingsCard />, onSubmit)
+      await screen.findByRole('button', { name: /sign in with browser/i })
+      fireEvent.click(screen.getByRole('button', { name: /sign in with browser/i }))
+      await screen.findByRole('button', { name: /reopen/i })
+
+      fireEvent.click(screen.getByRole('button', { name: /reopen/i }))
+      fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('"Sign out" does not submit the surrounding form (the reported bug)', async () => {
+      status.mockResolvedValue(signedIn('dev@example.com'))
+      const onSubmit = vi.fn()
+      renderInsideAForm(<CursorSettingsCard />, onSubmit)
+      await screen.findByRole('button', { name: /sign out/i })
+
+      fireEvent.click(screen.getByRole('button', { name: /sign out/i }))
+      await waitFor(() => expect(logout).toHaveBeenCalled())
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
   })
 })

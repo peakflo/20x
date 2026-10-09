@@ -91,7 +91,7 @@ export function CursorSettingsCard() {
             {status.email && <p className="text-xs text-muted-foreground truncate">{status.email}</p>}
             {status.reason && <p className="text-xs text-yellow-500 truncate">{status.reason}</p>}
           </div>
-          <Button size="sm" variant="ghost" onClick={() => void signOut()}>
+          <Button type="button" size="sm" variant="ghost" onClick={() => void signOut()}>
             <LogOut className="h-3.5 w-3.5" />
             Sign out
           </Button>
@@ -108,17 +108,17 @@ export function CursorSettingsCard() {
               </p>
               <code className="block rounded bg-muted px-2 py-1 text-[11px] break-all">{pendingUrl}</code>
               <div className="flex items-center gap-2">
-                <Button size="sm" variant="ghost" onClick={() => openLoginUrl(pendingUrl)}>
+                <Button type="button" size="sm" variant="ghost" onClick={() => openLoginUrl(pendingUrl)}>
                   <ExternalLink className="h-3.5 w-3.5" />
                   Reopen
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => void cancelSignIn()}>
+                <Button type="button" size="sm" variant="ghost" onClick={() => void cancelSignIn()}>
                   Cancel
                 </Button>
               </div>
             </div>
           ) : (
-            <Button size="sm" onClick={() => void startSignIn()} disabled={starting}>
+            <Button type="button" size="sm" onClick={() => void startSignIn()} disabled={starting}>
               {starting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Sign in with browser
             </Button>
