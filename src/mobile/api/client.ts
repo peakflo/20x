@@ -10,6 +10,7 @@ import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageSummary, Usage
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { PushPreferences } from '@shared/push-notifications'
 import type { HarnessInstanceView } from '@shared/harness-instances'
+import type { AcpAgentInstanceView } from '@shared/acp-registry'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -109,6 +110,9 @@ export const api = {
   },
   harnessInstances: {
     list: () => get<HarnessInstanceView[]>('/api/harness-instances')
+  },
+  acpInstances: {
+    list: () => get<AcpAgentInstanceView[]>('/api/acp-instances')
   },
   usage: {
     limits: () => get<ProviderUsageLimits[]>('/api/usage/limits'),

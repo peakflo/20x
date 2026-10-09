@@ -7,7 +7,7 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { mkdir, writeFile } from 'fs/promises'
 import { Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
-import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
+import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord } from './database'
 import { TaskStatus, SessionStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -975,6 +975,10 @@ export class AgentManager extends EventEmitter {
 
   /** Display label of an instance for usage and notes. Reads the current name, so renames show at once. */
   harnessInstanceLabel(instanceId: string, provider: UsageProvider): string {
+    if (provider === 'acp') {
+      const acpInstance = this.db.getAcpAgentInstance(instanceId)
+      return acpInstance?.display_name ?? harnessTypeLabel(provider)
+    }
     if (isDefaultHarnessInstanceId(instanceId)) return harnessTypeLabel(provider)
     const stored = this.db.getHarnessInstance(instanceId)
     return stored ? harnessInstanceDisplayName(stored.harness_type, stored.label) : harnessTypeLabel(provider)
@@ -1167,6 +1171,11 @@ export class AgentManager extends EventEmitter {
     return this.db.listHarnessInstances().map((instance) => this.toInstanceView(instance))
   }
 
+  /** Configured ACP agent instances (registry installs or local commands). Read-only on mobile. */
+  listAcpAgentInstances(): AcpAgentInstanceRecord[] {
+    return this.db.listAcpAgentInstances()
+  }
+
   createHarnessInstance(data: CreateHarnessInstanceData): HarnessInstanceView {
     if (!isHarnessType(data.harness_type)) throw new Error('Choose Claude Code or Codex for this account.')
     const label = data.label?.trim()
@@ -1248,7 +1257,11 @@ export class AgentManager extends EventEmitter {
     for (const agent of this.db.getAgents()) {
       const provider = agent.config?.coding_agent
       if (!isUsageProvider(provider) || agent.config?.auth_method === 'api_key') continue
-      const instanceId = this.resolveAgentInstance(agent)?.id ?? defaultHarnessInstanceId(provider)
+      // resolveAgentInstance only knows Claude Code/Codex accounts; an ACP
+      // agent's instance is which configured ACP agent it is, from its own config.
+      const instanceId = provider === 'acp'
+        ? agent.config?.acp_instance_id ?? defaultHarnessInstanceId(provider)
+        : this.resolveAgentInstance(agent)?.id ?? defaultHarnessInstanceId(provider)
       if (probed.has(instanceId)) continue
       const adapter = this.getAdapter(agent.id)
       if (!adapter?.probeUsageLimits) continue

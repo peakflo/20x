@@ -9,12 +9,14 @@ import { Checkbox } from '@/components/ui/Checkbox'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { useHarnessInstanceStore } from '@/stores/harness-instance-store'
+import { useAcpInstanceStore } from '@/stores/acp-instance-store'
 import { useMcpStore } from '@/stores/mcp-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
 import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
 import { HARNESS_INSTANCE_PREFIX, harnessDropdownOptions } from '@shared/harness-instances'
+import { ACP_INSTANCE_PREFIX, acpInstanceDropdownOptions, parseAcpInstanceDropdownValue } from '@shared/harness-instances'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode, AgentSandboxMode } from '@/types'
 import type { ReasoningEffort } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS } from '@/types'
@@ -58,6 +60,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const harnessInstances = useHarnessInstanceStore((s) => s.instances)
   const loadHarnessInstances = useHarnessInstanceStore((s) => s.load)
   useEffect(() => { void loadHarnessInstances() }, [loadHarnessInstances])
+  // An ACP agent IS its instance — picking one in the dropdown sets both codingAgent and this.
+  const [acpInstanceId, setAcpInstanceId] = useState<string>(agent?.config.acp_instance_id ?? '')
+  const acpInstances = useAcpInstanceStore((s) => s.instances)
+  const loadAcpInstances = useAcpInstanceStore((s) => s.load)
+  useEffect(() => { void loadAcpInstances() }, [loadAcpInstances])
   const [model, setModel] = useState(agent?.config.model ?? '')
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | ''>(agent?.config.reasoning_effort ?? '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.config.system_prompt ?? '')
@@ -135,11 +142,19 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       setModel(CURSOR_MODELS[0].id)
     } else if (codingAgent === CodingAgentType.PI) {
       fetchModels()
+    } else if (codingAgent === CodingAgentType.ACP) {
+      // Models are whatever the selected instance's config declares as
+      // custom models (see Settings → Agents → ACP agents). Live model
+      // discovery from the running agent's own config options happens once
+      // a session exists, not here in the form.
+      const instance = acpInstances.find((i) => i.id === acpInstanceId)
+      const models = (instance?.custom_models ?? []).map((id) => ({ id, name: id }))
+      setAvailableModels(models)
     } else {
       setAvailableModels([])
       setModel('')
     }
-  }, [codingAgent, serverUrl])
+  }, [codingAgent, serverUrl, acpInstanceId, acpInstances])
 
   // Reset auth method for agents that don't expose a subscription/api_key choice
   useEffect(() => {
@@ -254,6 +269,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           && !usesApiKeyLogin(codingAgent, authMethod)
           ? harnessInstanceId
           : undefined,
+        acp_instance_id: codingAgent === CodingAgentType.ACP ? (acpInstanceId || undefined) : undefined,
         model: model.trim() || undefined,
         reasoning_effort: supportsReasoningEffort && supportedReasoningEfforts.has(reasoningEffort)
           ? reasoningEffort || undefined
@@ -352,7 +368,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       </div>
 
       {/* Only show Server URL for OpenCode */}
-      {codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.CODEX && codingAgent !== CodingAgentType.CURSOR && (
+      {codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.CODEX && codingAgent !== CodingAgentType.CURSOR && codingAgent !== CodingAgentType.ACP && (
         <div className="space-y-1.5">
           <Label htmlFor="agent-url">Server URL</Label>
           <Input
@@ -380,12 +396,23 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           Cursor runs locally via CLI and doesn't require a server URL
         </p>
       )}
+      {codingAgent === CodingAgentType.ACP && (
+        <p className="text-sm text-muted-foreground">
+          Runs the selected ACP (Agent Client Protocol) agent locally and doesn't require a server URL
+        </p>
+      )}
 
       <div className="space-y-1.5">
         <Label htmlFor="coding-agent">Coding Agent</Label>
         <select
           id="coding-agent"
-          value={harnessInstanceId ? `${HARNESS_INSTANCE_PREFIX}${harnessInstanceId}` : codingAgent}
+          value={
+            harnessInstanceId
+              ? `${HARNESS_INSTANCE_PREFIX}${harnessInstanceId}`
+              : acpInstanceId
+                ? `${ACP_INSTANCE_PREFIX}${acpInstanceId}`
+                : codingAgent
+          }
           onChange={(e) => {
             const value = e.target.value
             if (value.startsWith(HARNESS_INSTANCE_PREFIX)) {
@@ -393,9 +420,16 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
               const instance = harnessInstances.find((i) => i.id === id)
               setCodingAgent((instance?.harness_type as CodingAgentType) ?? '')
               setHarnessInstanceId(id)
+              setAcpInstanceId('')
+            } else if (value.startsWith(ACP_INSTANCE_PREFIX)) {
+              const id = parseAcpInstanceDropdownValue(value)
+              setCodingAgent(CodingAgentType.ACP)
+              setAcpInstanceId(id ?? '')
+              setHarnessInstanceId('')
             } else {
               setCodingAgent(value as CodingAgentType | '')
               setHarnessInstanceId('')
+              setAcpInstanceId('')
             }
           }}
           className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
@@ -404,7 +438,15 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           {harnessDropdownOptions(harnessInstances, CODING_AGENTS).map((option) => (
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
+          {acpInstanceDropdownOptions(acpInstances).map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
         </select>
+        {codingAgent === CodingAgentType.ACP && acpInstances.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            No ACP agents configured yet. Add one in Settings → Agents.
+          </p>
+        )}
       </div>
 
       {(codingAgent === CodingAgentType.OPENCODE || codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX || codingAgent === CodingAgentType.CURSOR || codingAgent === CodingAgentType.PI) && (
