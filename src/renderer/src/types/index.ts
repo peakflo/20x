@@ -61,6 +61,13 @@ export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
   { value: CodingAgentType.PI, label: 'Pi' }
 ]
 
+/**
+ * Fallback shown in the model picker before Cursor's live catalog loads (or
+ * if it fails to) — see AgentForm.tsx's `fetchCursorModels`, backed by
+ * CursorSdkAdapter.getProviders (`Cursor.models.list`). Not the only source
+ * of Cursor models anymore; kept small and hardcoded only so the picker is
+ * never empty.
+ */
 export const CURSOR_MODELS: { id: string; name: string }[] = [
   { id: 'composer-2.5', name: 'Composer 2.5' },
   { id: 'grok-4.5', name: 'Grok 4.5' }

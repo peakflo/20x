@@ -12,6 +12,7 @@ import type {
   LocalCommandValidationResult,
   UpdateAcpAgentInstanceDTO
 } from '@shared/acp-registry'
+import type { CursorAuthStatus, CursorLoginCompleteEvent, CursorLoginUrlResult } from '@shared/cursor-auth'
 import type {
   MicrophonePermission,
   VoiceActionOutcome,
@@ -175,6 +176,28 @@ export const acpInstanceApi = {
 
   validateLocalCommand: (executable: string): Promise<LocalCommandValidationResult> => {
     return window.electronAPI.acpInstances.validateLocalCommand(executable)
+  }
+}
+
+export const cursorAuthApi = {
+  status: (): Promise<CursorAuthStatus> => {
+    return window.electronAPI.cursor.authStatus()
+  },
+
+  startBrowserLogin: (): Promise<CursorLoginUrlResult> => {
+    return window.electronAPI.cursor.startBrowserLogin()
+  },
+
+  cancelBrowserLogin: (): Promise<void> => {
+    return window.electronAPI.cursor.cancelBrowserLogin()
+  },
+
+  logout: (): Promise<void> => {
+    return window.electronAPI.cursor.logout()
+  },
+
+  onLoginComplete: (callback: (event: CursorLoginCompleteEvent) => void): (() => void) => {
+    return window.electronAPI.cursor.onLoginComplete(callback)
   }
 }
 

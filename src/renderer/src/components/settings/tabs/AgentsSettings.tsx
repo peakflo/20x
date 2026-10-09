@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { SettingsSection } from '../SettingsSection'
 import { HarnessInstancesSection } from './HarnessInstancesSection'
 import { AcpAgentsSection } from './AcpAgentsSection'
+import { CursorSettingsCard } from './CursorSettingsCard'
 import { AgentFormDialog } from '../forms/AgentFormDialog'
 import { OpenCodeLogo, AnthropicLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
 import { useAgentStore } from '@/stores/agent-store'
@@ -308,6 +309,7 @@ export function AgentsSettings() {
       </SettingsSection>
 
       <HarnessInstancesSection />
+      <CursorSettingsCard />
       <AcpAgentsSection />
 
       <AgentFormDialog
