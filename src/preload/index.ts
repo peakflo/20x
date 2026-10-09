@@ -102,6 +102,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     update: (id: string, data: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('harnessInstance:update', id, data),
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('harnessInstance:delete', id)
   },
+  acpRegistry: {
+    search: (query: string): Promise<unknown[]> => ipcRenderer.invoke('acpRegistry:search', query)
+  },
+  acpInstances: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('acpInstance:list'),
+    create: (data: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('acpInstance:create', data),
+    update: (id: string, data: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('acpInstance:update', id, data),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('acpInstance:delete', id),
+    install: (id: string): Promise<unknown> => ipcRenderer.invoke('acpInstance:install', id),
+    validateLocalCommand: (executable: string): Promise<unknown> =>
+      ipcRenderer.invoke('acpInstance:validateLocalCommand', executable)
+  },
   mcpServers: {
     getAll: (): Promise<unknown[]> => ipcRenderer.invoke('mcp:getAll'),
     get: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:get', id),

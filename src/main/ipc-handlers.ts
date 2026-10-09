@@ -27,6 +27,8 @@ import type {
   UpdateAgentData,
   CreateHarnessInstanceData,
   UpdateHarnessInstanceData,
+  CreateAcpAgentInstanceData,
+  UpdateAcpAgentInstanceData,
   CreateMcpServerData,
   UpdateMcpServerData,
   CreateTaskSourceData,
@@ -55,6 +57,10 @@ import { writeArtifactFileToClipboard } from './artifact-clipboard'
 import { ArtifactClipboardMode, type ArtifactCopyFileResult } from '../shared/artifacts'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { resolveTerminalCwd } from './terminal-cwd'
+import { getAcpInstallManager, getAcpRegistryClient } from './acp-registry/runtime'
+import { searchAgents, filterInstallableOnThisPlatform } from './acp-registry/registry-client'
+import { resolveAcpInstanceCommand } from './acp-registry/resolve-instance'
+import { validateLocalCommand } from './acp-registry/local-command'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -496,6 +502,66 @@ export function registerIpcHandlers(
 
   ipcMain.handle('harnessInstance:delete', (_, id: string) => {
     return agentManager.deleteHarnessInstance(id)
+  })
+
+  // ACP agents: registry search + configured instances (registry install or local command)
+  ipcMain.handle('acpRegistry:search', async (_, query: string) => {
+    const client = getAcpRegistryClient()
+    const { index } = await client.load()
+    const matches = searchAgents(index, query ?? '')
+    const installable = await filterInstallableOnThisPlatform(matches)
+    const installableIds = new Set(installable.map((a) => a.id))
+    return matches.slice(0, 50).map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      description: agent.description ?? null,
+      version: agent.version,
+      license: agent.license ?? null,
+      licenseUrl: agent.license_url ?? null,
+      repository: agent.repository ?? null,
+      website: agent.website ?? null,
+      icon: agent.icon ?? null,
+      installableHere: installableIds.has(agent.id)
+    }))
+  })
+
+  ipcMain.handle('acpInstance:list', () => {
+    return db.listAcpAgentInstances()
+  })
+
+  ipcMain.handle('acpInstance:create', (_, data: CreateAcpAgentInstanceData) => {
+    return db.createAcpAgentInstance(data)
+  })
+
+  ipcMain.handle('acpInstance:update', (_, id: string, data: UpdateAcpAgentInstanceData) => {
+    return db.updateAcpAgentInstance(id, data)
+  })
+
+  ipcMain.handle('acpInstance:delete', (_, id: string) => {
+    return db.deleteAcpAgentInstance(id)
+  })
+
+  /**
+   * Pre-warms (downloads/installs) a registry-sourced instance ahead of use,
+   * so the "Add agent" flow can show real install progress/errors instead of
+   * discovering them on the agent's first prompt. Local-command instances
+   * need no install step and resolve immediately.
+   */
+  ipcMain.handle('acpInstance:install', async (_, id: string) => {
+    const instance = db.getAcpAgentInstance(id)
+    if (!instance) return { ok: false as const, error: 'ACP agent instance not found' }
+    try {
+      const { index } = await getAcpRegistryClient().load()
+      const resolved = await resolveAcpInstanceCommand(instance, { registryIndex: index, installManager: getAcpInstallManager() })
+      return { ok: true as const, command: resolved.command }
+    } catch (err) {
+      return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('acpInstance:validateLocalCommand', async (_, executable: string) => {
+    const failure = await validateLocalCommand({ executable })
+    return failure ? { ok: false as const, kind: failure.kind, message: failure.message } : { ok: true as const }
   })
 
   // Agent Session handlers

@@ -38,6 +38,14 @@ import type {
 } from './index'
 import type { PullRequestDetails } from '@shared/artifacts'
 import type { HarnessInstanceView } from '@shared/harness-instances'
+import type {
+  AcpAgentInstanceView,
+  AcpInstallResult,
+  AcpRegistrySearchResult,
+  CreateAcpAgentInstanceDTO,
+  LocalCommandValidationResult,
+  UpdateAcpAgentInstanceDTO
+} from '@shared/acp-registry'
 import type { ArtifactApi } from '@shared/artifacts'
 import type {
   VoiceActionOutcome,
@@ -269,6 +277,17 @@ interface ElectronAPI {
     create: (data: { harness_type: 'claude-code' | 'codex'; label: string; home_path: string }) => Promise<HarnessInstanceView>
     update: (id: string, data: { label?: string; home_path?: string }) => Promise<HarnessInstanceView | undefined>
     delete: (id: string) => Promise<boolean>
+  }
+  acpRegistry: {
+    search: (query: string) => Promise<AcpRegistrySearchResult[]>
+  }
+  acpInstances: {
+    list: () => Promise<AcpAgentInstanceView[]>
+    create: (data: CreateAcpAgentInstanceDTO) => Promise<AcpAgentInstanceView>
+    update: (id: string, data: UpdateAcpAgentInstanceDTO) => Promise<AcpAgentInstanceView | undefined>
+    delete: (id: string) => Promise<boolean>
+    install: (id: string) => Promise<AcpInstallResult>
+    validateLocalCommand: (executable: string) => Promise<LocalCommandValidationResult>
   }
   agentSession: {
     start: (agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => Promise<AgentSessionStartResult>

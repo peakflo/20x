@@ -5,6 +5,14 @@ import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { HarnessInstanceView } from '@shared/harness-instances'
 import type {
+  AcpAgentInstanceView,
+  AcpInstallResult,
+  AcpRegistrySearchResult,
+  CreateAcpAgentInstanceDTO,
+  LocalCommandValidationResult,
+  UpdateAcpAgentInstanceDTO
+} from '@shared/acp-registry'
+import type {
   MicrophonePermission,
   VoiceActionOutcome,
   VoiceModelState,
@@ -135,6 +143,38 @@ export const harnessInstanceApi = {
 
   delete: (id: string): Promise<boolean> => {
     return window.electronAPI.harnessInstances.delete(id)
+  }
+}
+
+export const acpRegistryApi = {
+  search: (query: string): Promise<AcpRegistrySearchResult[]> => {
+    return window.electronAPI.acpRegistry.search(query)
+  }
+}
+
+export const acpInstanceApi = {
+  list: (): Promise<AcpAgentInstanceView[]> => {
+    return window.electronAPI.acpInstances.list()
+  },
+
+  create: (data: CreateAcpAgentInstanceDTO): Promise<AcpAgentInstanceView> => {
+    return window.electronAPI.acpInstances.create(data)
+  },
+
+  update: (id: string, data: UpdateAcpAgentInstanceDTO): Promise<AcpAgentInstanceView | undefined> => {
+    return window.electronAPI.acpInstances.update(id, data)
+  },
+
+  delete: (id: string): Promise<boolean> => {
+    return window.electronAPI.acpInstances.delete(id)
+  },
+
+  install: (id: string): Promise<AcpInstallResult> => {
+    return window.electronAPI.acpInstances.install(id)
+  },
+
+  validateLocalCommand: (executable: string): Promise<LocalCommandValidationResult> => {
+    return window.electronAPI.acpInstances.validateLocalCommand(executable)
   }
 }
 

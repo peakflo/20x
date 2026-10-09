@@ -3,6 +3,7 @@ import { Plus, Loader2, Wifi, WifiOff, RefreshCw, Edit3, Trash2, Terminal } from
 import { Button } from '@/components/ui/Button'
 import { SettingsSection } from '../SettingsSection'
 import { HarnessInstancesSection } from './HarnessInstancesSection'
+import { AcpAgentsSection } from './AcpAgentsSection'
 import { AgentFormDialog } from '../forms/AgentFormDialog'
 import { OpenCodeLogo, AnthropicLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
 import { useAgentStore } from '@/stores/agent-store'
@@ -117,6 +118,7 @@ export function AgentsSettings() {
   return (
     <>
       <HarnessInstancesSection />
+      <AcpAgentsSection />
       <SettingsSection
         title="Coding Agents"
         description="Manage AI coding agents for task execution"
