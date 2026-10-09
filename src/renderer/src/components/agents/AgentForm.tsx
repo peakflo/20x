@@ -14,6 +14,7 @@ import { useMcpStore } from '@/stores/mcp-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
+import { CursorSettingsCard } from '@/components/settings/tabs/CursorSettingsCard'
 import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
 import { HARNESS_INSTANCE_PREFIX, harnessDropdownOptions } from '@shared/harness-instances'
 import { ACP_INSTANCE_PREFIX, acpInstanceDropdownOptions, parseAcpInstanceDropdownValue } from '@shared/harness-instances'
@@ -634,20 +635,27 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
               onChange={(e) => setAuthMethod(e.target.value as ClaudeAuthMethod)}
               className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
             >
-              <option value="subscription">Cursor CLI Login (default)</option>
+              <option value="subscription">Cursor Sign-in (default)</option>
               <option value="api_key">API Key</option>
             </select>
             {authMethod === 'subscription' && (
               <p className="text-xs text-muted-foreground">
-                Uses your existing Cursor CLI login, exactly like running <code>cursor-agent</code> in a terminal.
+                Uses the Cursor sign-in below. This credential is shared by every agent using this method.
                 {hasCursorEnv && (
                   <span className="block mt-1 text-yellow-500">
-                    Note: CURSOR_API_KEY found in environment but will be ignored in CLI login mode.
+                    Note: CURSOR_API_KEY found in environment but will be ignored while signed in this way.
                   </span>
                 )}
               </p>
             )}
           </div>
+
+          {authMethod === 'subscription' && (
+            <div className="space-y-1.5">
+              <Label>Cursor Sign-in</Label>
+              <CursorSettingsCard />
+            </div>
+          )}
 
           {authMethod === 'api_key' && (
             <div className="space-y-1.5">

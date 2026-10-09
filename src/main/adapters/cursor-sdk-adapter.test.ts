@@ -750,3 +750,77 @@ describe('CursorSdkAdapter browser login', () => {
     }
   })
 })
+
+describe('CursorSdkAdapter.whoAmI', () => {
+  function storeCreds(db: ReturnType<typeof makeMockDb>, overrides: Partial<Record<string, unknown>> = {}): void {
+    db.setSetting('cursor-sdk-credentials', Buffer.from(JSON.stringify({
+      version: 1,
+      backendUrl: 'x',
+      apiKey: 'stored-key',
+      email: 'stored@example.com',
+      createdAtMs: 1,
+      ...overrides
+    })).toString('base64'))
+  }
+
+  it('reports not signed in when no credential is stored', async () => {
+    const adapter = new CursorSdkAdapter({ db: makeMockDb() })
+    await expect(adapter.whoAmI()).resolves.toEqual({ authenticated: false, reason: 'Not signed in' })
+  })
+
+  it('reports not signed in when the stored credential has expired', async () => {
+    const db = makeMockDb()
+    storeCreds(db, { apiKeyExpiresAtMs: Date.now() - 1000 })
+    const adapter = new CursorSdkAdapter({ db })
+    await expect(adapter.whoAmI()).resolves.toEqual({ authenticated: false, reason: 'Not signed in' })
+  })
+
+  it('reports authenticated with the live email when the lookup succeeds', async () => {
+    const db = makeMockDb()
+    storeCreds(db)
+    sdkMocks.CursorMeMock.mockResolvedValueOnce({ userEmail: 'live@example.com' })
+    const adapter = new CursorSdkAdapter({ db })
+    await expect(adapter.whoAmI()).resolves.toEqual({ authenticated: true, email: 'live@example.com' })
+    expect(sdkMocks.CursorMeMock).toHaveBeenCalledWith({ apiKey: 'stored-key' })
+  })
+
+  it('reports not authenticated when the stored credential is actually invalid (AuthenticationError)', async () => {
+    const db = makeMockDb()
+    storeCreds(db)
+    sdkMocks.CursorMeMock.mockRejectedValueOnce(new sdkMocks.AuthenticationError('revoked'))
+    const adapter = new CursorSdkAdapter({ db })
+    await expect(adapter.whoAmI()).resolves.toEqual({ authenticated: false, reason: 'Not authenticated' })
+  })
+
+  it('stays authenticated on a transient lookup failure instead of bouncing back to "sign in again"', async () => {
+    // Regression: a stored credential is real evidence of sign-in. A
+    // network blip or momentary backend hiccup verifying it live (most
+    // likely right after a fresh sign-in) must not flip the UI back to
+    // "not signed in" — only a definite AuthenticationError should.
+    const db = makeMockDb()
+    storeCreds(db)
+    sdkMocks.CursorMeMock.mockRejectedValueOnce(new Error('ECONNRESET'))
+    const adapter = new CursorSdkAdapter({ db })
+    const result = await adapter.whoAmI()
+    expect(result.authenticated).toBe(true)
+    expect(result.email).toBe('stored@example.com')
+    expect(result.reason).toMatch(/could not reach cursor/i)
+  })
+
+  it('reports a specific, actionable reason when the account is signed in but lacks a plan the SDK requires', async () => {
+    // Seen live as a 403 `plan_required` from Cursor.me() for a free-tier
+    // account — permanent, not a network blip, so it must not collapse into
+    // the generic "could not reach Cursor" fallback above.
+    const db = makeMockDb()
+    storeCreds(db)
+    const planError = new sdkMocks.CursorSdkError('[plan_required] Cloud Agent is not available for free users. Please upgrade to Pro.')
+    Object.assign(planError, { code: 'plan_required' })
+    sdkMocks.CursorMeMock.mockRejectedValueOnce(planError)
+    const adapter = new CursorSdkAdapter({ db })
+    const result = await adapter.whoAmI()
+    expect(result.authenticated).toBe(true)
+    expect(result.email).toBe('stored@example.com')
+    expect(result.reason).toMatch(/plan doesn't support the sdk/i)
+    expect(result.reason).toMatch(/plan_required/i)
+  })
+})

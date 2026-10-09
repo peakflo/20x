@@ -56,7 +56,7 @@ describe('CursorSettingsCard', () => {
     expect(screen.getByRole('button', { name: /sign out/i })).toBeTruthy()
   })
 
-  it('starts a browser login and shows the URL with an explicit "Open in browser" confirmation, never auto-opening it', async () => {
+  it('starts a browser login and opens it immediately, while still showing the URL and a way to reopen it', async () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
     render(<CursorSettingsCard />)
     await screen.findByRole('button', { name: /sign in with browser/i })
@@ -64,11 +64,14 @@ describe('CursorSettingsCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /sign in with browser/i }))
     await waitFor(() => expect(startBrowserLogin).toHaveBeenCalled())
 
+    await waitFor(() =>
+      expect(openSpy).toHaveBeenCalledWith('https://cursor.com/login?token=abc', '_blank', 'noopener,noreferrer')
+    )
     const urlNode = await screen.findByText('https://cursor.com/login?token=abc')
     expect(urlNode).toBeTruthy()
-    expect(openSpy).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: /open in browser/i }))
+    openSpy.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: /reopen/i }))
     expect(openSpy).toHaveBeenCalledWith('https://cursor.com/login?token=abc', '_blank', 'noopener,noreferrer')
   })
 
