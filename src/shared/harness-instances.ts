@@ -45,6 +45,7 @@ export function harnessTypeLabel(harness: string | null | undefined): string {
     case 'opencode': return 'OpenCode'
     case 'cursor': return 'Cursor'
     case 'pi': return 'Pi'
+    case 'acp': return 'ACP agent'
     default: return 'agent'
   }
 }
@@ -148,4 +149,33 @@ export function agentInstanceId(
   if (!harness || !config?.harness_instance_id || config.auth_method === 'api_key') return null
   const instance = instances.find((i) => i.id === config.harness_instance_id)
   return instance && instance.harness_type === harness ? instance.id : null
+}
+
+// ── ACP agent instance dropdown options ──────────────────────
+//
+// Unlike a Claude Code/Codex harness instance (one subscription login of an
+// otherwise-fixed harness), each ACP agent instance IS its own harness choice:
+// two different ACP instances can be entirely different programs with
+// incompatible sessions (e.g. one registry agent vs. another, or a local
+// command), not just two logins of the same CLI. So each instance gets its
+// own top-level dropdown entry — never grouped under one flat "ACP" option —
+// labeled with its configured display name.
+
+/** Value prefix for an ACP agent instance dropdown option. */
+export const ACP_INSTANCE_PREFIX = 'acp-instance:'
+
+/** Builds one dropdown option per configured ACP agent instance. */
+export function acpInstanceDropdownOptions(
+  acpInstances: ReadonlyArray<{ id: string; display_name: string }>
+): Array<{ value: string; label: string }> {
+  return acpInstances.map((instance) => ({
+    value: `${ACP_INSTANCE_PREFIX}${instance.id}`,
+    label: instance.display_name
+  }))
+}
+
+/** Extracts the ACP instance id from a dropdown value built by `acpInstanceDropdownOptions`, or null. */
+export function parseAcpInstanceDropdownValue(value: string | null | undefined): string | null {
+  if (!value || !value.startsWith(ACP_INSTANCE_PREFIX)) return null
+  return value.slice(ACP_INSTANCE_PREFIX.length) || null
 }

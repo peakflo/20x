@@ -92,6 +92,7 @@ export function harnessLabel(codingAgent: string | undefined): string {
     case 'opencode': return 'OpenCode'
     case 'cursor': return 'Cursor'
     case 'pi': return 'Pi'
+    case 'acp': return 'ACP agent'
     default: return 'agent'
   }
 }

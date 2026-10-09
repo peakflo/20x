@@ -38,12 +38,17 @@ export interface AgentMcpServerEntry {
 }
 
 export interface AgentConfigRecord {
-  coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor' | 'pi'
+  coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor' | 'pi' | 'acp'
   /**
    * Harness instance (one subscription login of the coding_agent). Unset means
    * the default instance of the coding_agent. Ignored for API-key agents.
    */
   harness_instance_id?: string
+  /**
+   * ACP agent instance this agent runs (one row of `acp_agent_instances`).
+   * Required when coding_agent is 'acp'; ignored otherwise.
+   */
+  acp_instance_id?: string
   model?: string
   reasoning_effort?: ReasoningEffort
   auth_method?: 'subscription' | 'api_key'
@@ -80,6 +85,73 @@ export interface CreateHarnessInstanceData {
 export interface UpdateHarnessInstanceData {
   label?: string
   home_path?: string
+}
+
+/** How an ACP agent instance's command was obtained. */
+export type AcpInstanceSource = 'registry' | 'local'
+/** Which distribution channel the registry resolver picked (or was pinned to). */
+export type AcpInstanceDistribution = 'auto' | 'binary' | 'npx' | 'uvx'
+
+/** A configured ACP (Agent Client Protocol) agent instance: a registry install or a local command. */
+export interface AcpAgentInstanceRecord {
+  id: string
+  display_name: string
+  source: AcpInstanceSource
+  /** Registry agent id (e.g. "devin"). Null for a local-command instance. */
+  registry_agent_id: string | null
+  /** Registry agent version this instance was installed at. Null for local commands. */
+  version: string | null
+  distribution: AcpInstanceDistribution
+  /** Executable override (registry instances) or the local command's executable (local instances). */
+  command_path: string | null
+  command_args: string[]
+  /** Non-secret env vars, stored as plain text. */
+  env: Record<string, string>
+  /** `secrets` table ids providing additional env vars (secret env vars never stored in plain text). */
+  secret_ids: string[]
+  auth_method_id: string | null
+  custom_models: string[]
+  created_at: string
+}
+
+interface AcpAgentInstanceRow {
+  id: string
+  display_name: string
+  source: string
+  registry_agent_id: string | null
+  version: string | null
+  distribution: string
+  command_path: string | null
+  command_args: string
+  env: string
+  secret_ids: string
+  auth_method_id: string | null
+  custom_models: string
+  created_at: string
+}
+
+export interface CreateAcpAgentInstanceData {
+  display_name: string
+  source: AcpInstanceSource
+  registry_agent_id?: string | null
+  version?: string | null
+  distribution?: AcpInstanceDistribution
+  command_path?: string | null
+  command_args?: string[]
+  env?: Record<string, string>
+  secret_ids?: string[]
+  auth_method_id?: string | null
+  custom_models?: string[]
+}
+
+export interface UpdateAcpAgentInstanceData {
+  display_name?: string
+  command_path?: string | null
+  command_args?: string[]
+  env?: Record<string, string>
+  secret_ids?: string[]
+  auth_method_id?: string | null
+  custom_models?: string[]
 }
 
 export interface McpServerConfigRecord {
@@ -623,6 +695,24 @@ function deserializeHarnessInstance(row: HarnessInstanceRow): HarnessInstanceRec
     harness_type: row.harness_type as HarnessType,
     label: row.label,
     home_path: row.home_path,
+    created_at: row.created_at
+  }
+}
+
+function deserializeAcpAgentInstance(row: AcpAgentInstanceRow): AcpAgentInstanceRecord {
+  return {
+    id: row.id,
+    display_name: row.display_name,
+    source: row.source as AcpInstanceSource,
+    registry_agent_id: row.registry_agent_id,
+    version: row.version,
+    distribution: row.distribution as AcpInstanceDistribution,
+    command_path: row.command_path,
+    command_args: JSON.parse(row.command_args || '[]') as string[],
+    env: JSON.parse(row.env || '{}') as Record<string, string>,
+    secret_ids: JSON.parse(row.secret_ids || '[]') as string[],
+    auth_method_id: row.auth_method_id,
+    custom_models: JSON.parse(row.custom_models || '[]') as string[],
     created_at: row.created_at
   }
 }
@@ -1191,6 +1281,22 @@ export class DatabaseManager {
         harness_type TEXT NOT NULL CHECK (harness_type IN ('claude-code', 'codex')),
         label TEXT NOT NULL,
         home_path TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS acp_agent_instances (
+        id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('registry', 'local')),
+        registry_agent_id TEXT,
+        version TEXT,
+        distribution TEXT NOT NULL DEFAULT 'auto' CHECK (distribution IN ('auto', 'binary', 'npx', 'uvx')),
+        command_path TEXT,
+        command_args TEXT NOT NULL DEFAULT '[]',
+        env TEXT NOT NULL DEFAULT '{}',
+        secret_ids TEXT NOT NULL DEFAULT '[]',
+        auth_method_id TEXT,
+        custom_models TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL
       );
 
@@ -2950,6 +3056,106 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       }
     })
     run()
+  }
+
+  // ── ACP agent instance CRUD ────────────────────────────────
+
+  listAcpAgentInstances(): AcpAgentInstanceRecord[] {
+    const rows = this.db.prepare('SELECT * FROM acp_agent_instances ORDER BY display_name ASC').all() as AcpAgentInstanceRow[]
+    return rows.map(deserializeAcpAgentInstance)
+  }
+
+  getAcpAgentInstance(id: string): AcpAgentInstanceRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM acp_agent_instances WHERE id = ?').get(id) as AcpAgentInstanceRow | undefined
+    return row ? deserializeAcpAgentInstance(row) : undefined
+  }
+
+  createAcpAgentInstance(data: CreateAcpAgentInstanceData): AcpAgentInstanceRecord {
+    const id = `acp_${createId()}`
+    const now = new Date().toISOString()
+    const distribution = data.distribution ?? 'auto'
+    this.db.prepare(`
+      INSERT INTO acp_agent_instances
+        (id, display_name, source, registry_agent_id, version, distribution, command_path, command_args, env, secret_ids, auth_method_id, custom_models, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      data.display_name.trim(),
+      data.source,
+      data.registry_agent_id ?? null,
+      data.version ?? null,
+      distribution,
+      data.command_path ?? null,
+      JSON.stringify(data.command_args ?? []),
+      JSON.stringify(data.env ?? {}),
+      JSON.stringify(data.secret_ids ?? []),
+      data.auth_method_id ?? null,
+      JSON.stringify(data.custom_models ?? []),
+      now
+    )
+    return this.getAcpAgentInstance(id) as AcpAgentInstanceRecord
+  }
+
+  updateAcpAgentInstance(id: string, data: UpdateAcpAgentInstanceData): AcpAgentInstanceRecord | undefined {
+    const setClauses: string[] = []
+    const values: unknown[] = []
+    if (data.display_name !== undefined) {
+      setClauses.push('display_name = ?')
+      values.push(data.display_name.trim())
+    }
+    if (data.command_path !== undefined) {
+      setClauses.push('command_path = ?')
+      values.push(data.command_path)
+    }
+    if (data.command_args !== undefined) {
+      setClauses.push('command_args = ?')
+      values.push(JSON.stringify(data.command_args))
+    }
+    if (data.env !== undefined) {
+      setClauses.push('env = ?')
+      values.push(JSON.stringify(data.env))
+    }
+    if (data.secret_ids !== undefined) {
+      setClauses.push('secret_ids = ?')
+      values.push(JSON.stringify(data.secret_ids))
+    }
+    if (data.auth_method_id !== undefined) {
+      setClauses.push('auth_method_id = ?')
+      values.push(data.auth_method_id)
+    }
+    if (data.custom_models !== undefined) {
+      setClauses.push('custom_models = ?')
+      values.push(JSON.stringify(data.custom_models))
+    }
+    if (setClauses.length > 0) {
+      this.db.prepare(`UPDATE acp_agent_instances SET ${setClauses.join(', ')} WHERE id = ?`).run(...values, id)
+    }
+    return this.getAcpAgentInstance(id)
+  }
+
+  /** Agents (by id) whose config currently points at this ACP instance. */
+  agentsReferencingAcpInstance(id: string): AgentRecord[] {
+    return this.getAgents().filter((agent) => agent.config?.acp_instance_id === id)
+  }
+
+  /**
+   * Removes an ACP agent instance row. Any agent still pointing at it has its
+   * `acp_instance_id` cleared (its `coding_agent` config is left as `'acp'`
+   * with no instance, which the UI surfaces as "needs reconfiguration" —
+   * unlike Claude Code/Codex harness instances, there is no implicit default
+   * ACP instance to fall back to).
+   */
+  deleteAcpAgentInstance(id: string): boolean {
+    const run = this.db.transaction((): boolean => {
+      for (const agent of this.agentsReferencingAcpInstance(id)) {
+        const config = { ...agent.config }
+        delete config.acp_instance_id
+        this.updateAgent(agent.id, { config })
+      }
+      this.usage.forgetInstance(id)
+      return this.db.prepare('DELETE FROM acp_agent_instances WHERE id = ?').run(id).changes > 0
+    })
+    return run()
   }
 
   // ── MCP Server CRUD ────────────────────────────────────────

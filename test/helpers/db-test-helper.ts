@@ -34,6 +34,22 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS acp_agent_instances (
+      id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('registry', 'local')),
+      registry_agent_id TEXT,
+      version TEXT,
+      distribution TEXT NOT NULL DEFAULT 'auto' CHECK (distribution IN ('auto', 'binary', 'npx', 'uvx')),
+      command_path TEXT,
+      command_args TEXT NOT NULL DEFAULT '[]',
+      env TEXT NOT NULL DEFAULT '{}',
+      secret_ids TEXT NOT NULL DEFAULT '[]',
+      auth_method_id TEXT,
+      custom_models TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
