@@ -91,6 +91,26 @@ export function signInCommand(harness: HarnessType, homePath: string, shell: She
   return `${envName}="${escapePosix(homePath)}" ${login}`
 }
 
+function slugifyAccountLabel(label: string): string {
+  return label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+/**
+ * Suggested home-folder path for a new instance, derived from the harness and
+ * account name, e.g. "~/.codex-work", "~/.claude-work". Falls back to the bare
+ * harness folder ("~/.codex") until a name is typed. Meant as an editable
+ * starting point in the "Add account" form, not a final value.
+ */
+export function suggestHarnessInstanceHome(harness: HarnessType, label: string): string {
+  const base = harness === 'claude-code' ? '.claude' : '.codex'
+  const slug = slugifyAccountLabel(label)
+  return slug ? `~/${base}-${slug}` : `~/${base}`
+}
+
 function escapePosix(value: string): string {
   return value.replace(/(["\\$`])/g, '\\$1')
 }
