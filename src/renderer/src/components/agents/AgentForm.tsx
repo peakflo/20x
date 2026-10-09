@@ -351,36 +351,6 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         />
       </div>
 
-      {/* Only show Server URL for OpenCode */}
-      {codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.CODEX && codingAgent !== CodingAgentType.CURSOR && (
-        <div className="space-y-1.5">
-          <Label htmlFor="agent-url">Server URL</Label>
-          <Input
-            id="agent-url"
-            value={serverUrl}
-            onChange={(e) => setServerUrl(e.target.value)}
-            placeholder="http://localhost:4096"
-          />
-        </div>
-      )}
-
-      {/* Show info for CLI-based agents */}
-      {codingAgent === CodingAgentType.CLAUDE_CODE && (
-        <p className="text-sm text-muted-foreground">
-          Claude Code runs locally via CLI and doesn't require a server URL
-        </p>
-      )}
-      {codingAgent === CodingAgentType.CODEX && (
-        <p className="text-sm text-muted-foreground">
-          Codex runs locally via CLI and doesn't require a server URL
-        </p>
-      )}
-      {codingAgent === CodingAgentType.CURSOR && (
-        <p className="text-sm text-muted-foreground">
-          Cursor runs locally via CLI and doesn't require a server URL
-        </p>
-      )}
-
       <div className="space-y-1.5">
         <Label htmlFor="coding-agent">Coding Agent</Label>
         <select
@@ -406,6 +376,19 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           ))}
         </select>
       </div>
+
+      {/* Only OpenCode talks to a server; every other harness runs locally. */}
+      {codingAgent === CodingAgentType.OPENCODE && (
+        <div className="space-y-1.5">
+          <Label htmlFor="agent-url">Server URL</Label>
+          <Input
+            id="agent-url"
+            value={serverUrl}
+            onChange={(e) => setServerUrl(e.target.value)}
+            placeholder="http://localhost:4096"
+          />
+        </div>
+      )}
 
       {(codingAgent === CodingAgentType.OPENCODE || codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX || codingAgent === CodingAgentType.CURSOR || codingAgent === CodingAgentType.PI) && (
         <>
