@@ -1050,20 +1050,42 @@ export class CursorSdkAdapter implements CodingAgentAdapter {
 
   // ── Account / auth ────────────────────────────────────────────
 
-  /** "Am I signed in, as whom" — always live, never cached. ~15s timeout. */
+  /**
+   * "Am I signed in, as whom" — ~15s timeout on the live lookup. A stored
+   * credential is authenticated-until-proven-otherwise: only a definite
+   * `AuthenticationError` (the credential itself is invalid/revoked) flips
+   * this to "not signed in". Any other failure (network blip, timeout, a
+   * momentary backend hiccup — most likely right after a fresh sign-in,
+   * before the first lookup can land) falls back to the email this
+   * adapter's own store already has on disk, so a transient failure here
+   * can't bounce a genuinely signed-in user back to "sign in again".
+   */
   async whoAmI(): Promise<{ authenticated: boolean; email?: string; reason?: string }> {
     const sdk = await this.ensureSDKLoaded()
-    const apiKey = await resolveCursorApiKey(undefined, this.credentialStore)
-    if (!apiKey) return { authenticated: false, reason: 'Not signed in' }
+    const stored = await this.credentialStore.load()
+    const expired = stored?.apiKeyExpiresAtMs !== undefined && stored.apiKeyExpiresAtMs <= Date.now()
+    if (!stored || expired) return { authenticated: false, reason: 'Not signed in' }
     try {
       const user = await Promise.race([
-        sdk.Cursor.me({ apiKey }),
+        sdk.Cursor.me({ apiKey: stored.apiKey }),
         new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Cursor account lookup timed out')), 15_000))
       ])
       return { authenticated: true, email: user.userEmail }
     } catch (error) {
       if (error instanceof sdk.AuthenticationError) return { authenticated: false, reason: 'Not authenticated' }
-      return { authenticated: false, reason: 'Status unknown' }
+      // The account is genuinely signed in but lacks a plan the SDK requires
+      // (seen as a 403 `plan_required` even for calls that don't touch Cloud
+      // Agent) — a permanent condition, not a network blip, so it gets its
+      // own accurate, actionable message instead of the generic fallback.
+      if (error instanceof sdk.CursorSdkError && error.code === 'plan_required') {
+        return {
+          authenticated: true,
+          email: stored.email,
+          reason: `Signed in, but this Cursor account's plan doesn't support the SDK yet: ${error.message}`
+        }
+      }
+      console.warn('[CursorSdkAdapter] whoAmI live verification failed, falling back to stored sign-in:', error)
+      return { authenticated: true, email: stored.email, reason: 'Could not reach Cursor to verify just now; showing the last known sign-in.' }
     }
   }
 
