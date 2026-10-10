@@ -197,21 +197,25 @@ function extractHomebrewName(realPath: string): string | null {
 }
 
 /**
- * The installer/lock-key/update-command for a resolved binary, with Pi's
- * self-update override applied. Used everywhere an update action is decided
- * (status computation, and both the initial and re-confirmed resolution
- * inside `runHarnessUpdate`) so the lock key acquired up front always matches
- * the one re-checked after the lock — otherwise a legitimate update aborts
- * with a false "installation changed".
+ * The installer/lock-key/update-command for a resolved binary. Used
+ * everywhere an update action is decided (status computation, and both the
+ * initial and re-confirmed resolution inside `runHarnessUpdate`) so the lock
+ * key acquired up front always matches the one re-checked after the lock —
+ * otherwise a legitimate update aborts with a false "installation changed".
  *
- * Pi's own updater is documented to cover its own installer and npm/pnpm/
- * yarn/bun globals itself, so prefer `pi update --self` whenever the binary
- * isn't version-manager-pinned (manual-only stays manual: the version there
- * is pinned in that manager's config, not something `pi update` should touch).
+ * Pi gets `pi update --self` only for a genuine native (non-package-manager)
+ * install — 20x's own installer never produces one today, so in practice
+ * this never fires yet; it's kept for a future standalone Pi installer.
+ * Verifying this for real surfaced that `--self` is unreliable even where it
+ * does apply (it crashed on a pre-existing bug in Pi 0.84.3 itself, on a
+ * real npm-global-under-Homebrew-node install on this machine), so every
+ * package-manager-owned Pi install instead updates the same way 20x's own
+ * installer installs it: through that package manager, with `--ignore-scripts`.
  */
 function resolveUpdateAction(harness: HarnessKey, binaryPath: string, npmPackageName: string | null): InstallerDetectionResult {
   const detection = detectInstaller(harness, binaryPath, npmPackageName)
-  if (harness === 'pi' && detection.installer !== 'manual' && detection.installer !== 'unknown') {
+  if (harness !== 'pi') return detection
+  if (detection.installer === 'native') {
     return {
       installer: detection.installer,
       updateCommand: 'pi update --self',
@@ -219,7 +223,25 @@ function resolveUpdateAction(harness: HarnessKey, binaryPath: string, npmPackage
       lockKey: 'native:pi'
     }
   }
-  return detection
+  return withIgnoreScripts(detection)
+}
+
+/**
+ * Reinserts `--ignore-scripts` right after the package manager's "global
+ * add/install" flag — Pi's npm package runs a postinstall step that 20x's
+ * own installer has always skipped (see `agent-installer/install.js`), so
+ * an update through the same package manager should skip it too.
+ */
+function withIgnoreScripts(detection: InstallerDetectionResult): InstallerDetectionResult {
+  if (!detection.updateArgv) return detection
+  const { cmd, args } = detection.updateArgv
+  if (args.includes('--ignore-scripts')) return detection
+
+  const flagIndex = detection.installer === 'yarn-global' ? args.indexOf('add') : args.indexOf('-g')
+  if (flagIndex === -1) return detection
+
+  const newArgs = [...args.slice(0, flagIndex + 1), '--ignore-scripts', ...args.slice(flagIndex + 1)]
+  return { ...detection, updateArgv: { cmd, args: newArgs }, updateCommand: `${cmd} ${newArgs.join(' ')}` }
 }
 
 let lastStatuses: HarnessMaintenanceStatus[] | null = null
@@ -365,9 +387,8 @@ export async function runHarnessUpdate(
     }
 
     // The writable-prefix check only makes sense for an actual `npm install -g
-    // --prefix <dir> ...` argv — not merely because the underlying installer
-    // happens to be npm-global while Pi's self-update override replaced the
-    // argv with `pi update --self`.
+    // --prefix <dir> ...` argv — not every update action has one (e.g. a
+    // native self-updater's `<cmd> update` takes no --prefix at all).
     const prefixIndex = argv.args.indexOf('--prefix')
     if (prefixIndex !== -1) {
       const prefix = argv.args[prefixIndex + 1]

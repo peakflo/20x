@@ -148,14 +148,63 @@ describe('computeHarnessStatus', () => {
     expect(status.status).toBe('unsupported')
   })
 
-  it("prefers Pi's own self-update over the detected package manager", async () => {
+  it("updates a package-manager-owned Pi install through that package manager, not pi update --self", async () => {
+    // pi update --self is unreliable in practice (a real crash was reproduced on this
+    // exact install shape — see maintenance-service.ts's resolveUpdateAction comment),
+    // so npm/pnpm/yarn/bun-owned installs go through the package manager instead,
+    // the same way 20x's own installer installs Pi (--ignore-scripts included).
     resolveBinaryPathMock.mockResolvedValue('/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/bin/pi')
     const status = await computeHarnessStatus('pi', { installed: true, version: '0.84.0' }, {
       checksEnabled: false,
       cache: new (await import('./npm-registry')).NpmLatestVersionCache()
     })
-    expect(status.updateCommand).toBe('pi update --self')
+    expect(status.installer).toBe('npm-global')
+    expect(status.updateCommand).toBe('npm install -g --ignore-scripts --prefix /usr/local @earendil-works/pi-coding-agent@latest')
     expect(status.canUpdate).toBe(true)
+  })
+
+  it('inserts --ignore-scripts for a pnpm-owned Pi install', async () => {
+    resolveBinaryPathMock.mockResolvedValue('/Users/dev/Library/pnpm/global/5/node_modules/.bin/pi')
+    const status = await computeHarnessStatus('pi', { installed: true, version: '0.84.0' }, {
+      checksEnabled: false,
+      cache: new (await import('./npm-registry')).NpmLatestVersionCache()
+    })
+    expect(status.installer).toBe('pnpm-global')
+    expect(status.updateCommand).toBe('pnpm add -g --ignore-scripts @earendil-works/pi-coding-agent@latest')
+  })
+
+  it('inserts --ignore-scripts after "add" for a yarn-owned Pi install', async () => {
+    resolveBinaryPathMock.mockResolvedValue('/Users/dev/.config/yarn/global/node_modules/.bin/pi')
+    const status = await computeHarnessStatus('pi', { installed: true, version: '0.84.0' }, {
+      checksEnabled: false,
+      cache: new (await import('./npm-registry')).NpmLatestVersionCache()
+    })
+    expect(status.installer).toBe('yarn-global')
+    expect(status.updateCommand).toBe('yarn global add --ignore-scripts @earendil-works/pi-coding-agent@latest')
+  })
+
+  it('does not add --ignore-scripts to a Homebrew-owned Pi update (the flag is npm/pnpm/yarn/bun-specific)', async () => {
+    resolveBinaryPathMock.mockResolvedValue('/opt/homebrew/Cellar/pi/0.84.0/bin/pi')
+    const status = await computeHarnessStatus('pi', { installed: true, version: '0.84.0' }, {
+      checksEnabled: false,
+      cache: new (await import('./npm-registry')).NpmLatestVersionCache(),
+      brewExec: vi.fn(async () => { throw new Error('not called in this test') })
+    })
+    expect(status.installer).toBe('homebrew-formula')
+    expect(status.updateCommand).toBe('brew upgrade pi')
+  })
+
+  it('leaves a version-manager-pinned Pi install manual-only, same as any other harness', async () => {
+    // detectInstaller has no native-path pattern for Pi, so `pi update --self` is
+    // currently unreachable in practice — 20x's own installer always installs Pi
+    // through npm. mise/asdf/volta/nvm-pinned installs correctly stay manual-only.
+    resolveBinaryPathMock.mockResolvedValue('/Users/dev/.asdf/installs/pi/0.84.0/bin/pi')
+    const status = await computeHarnessStatus('pi', { installed: true, version: '0.84.0' }, {
+      checksEnabled: false,
+      cache: new (await import('./npm-registry')).NpmLatestVersionCache()
+    })
+    expect(status.installer).toBe('manual')
+    expect(status.canUpdate).toBe(false)
   })
 })
 

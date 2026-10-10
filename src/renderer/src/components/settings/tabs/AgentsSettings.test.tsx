@@ -42,6 +42,20 @@ vi.mock('@/lib/ipc-client', () => ({
     list: vi.fn().mockResolvedValue([]),
     create: vi.fn(),
     delete: vi.fn()
+  },
+  // ...and HarnessesSection (version checks for the harness CLIs), which loads these on mount.
+  harnessMaintenanceApi: {
+    get: vi.fn().mockResolvedValue([]),
+    refresh: vi.fn().mockResolvedValue([]),
+    update: vi.fn(),
+    updateAll: vi.fn(),
+    onUpdated: vi.fn(() => vi.fn()),
+    onProgress: vi.fn(() => vi.fn())
+  },
+  settingsApi: {
+    get: vi.fn().mockResolvedValue(null),
+    set: vi.fn().mockResolvedValue(undefined),
+    getAll: vi.fn().mockResolvedValue({})
   }
 }))
 
