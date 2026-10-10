@@ -5,11 +5,13 @@ import {
   usageCardAriaLabel,
   type UsageCardSummary
 } from '@shared/usage-card'
-import type { UsageParallelismResponse } from '@shared/usage'
+import type { UsageDayRow, UsageParallelismResponse } from '@shared/usage'
 import { waitForFonts } from '@shared/wait-for-fonts'
 
 interface UsageHeroCardProps {
   data: UsageParallelismResponse | null
+  /** Same per-day token summary the tokens-per-day chart reads — feeds the calendar's per-day value, so the two always agree on which days were busy. */
+  byDay: UsageDayRow[]
   loading: boolean
   /** Total tokens for the same period — from the existing token-usage summary fetch, not a second parallelism-specific one. */
   tokens: number
@@ -24,10 +26,10 @@ interface UsageHeroCardProps {
  * same as the mock's `renderHero`. Clicking it opens the Share dialog, same
  * as the Share button.
  */
-export function UsageHeroCard({ data, loading, tokens, periodLabel, name, onOpenShare }: UsageHeroCardProps) {
+export function UsageHeroCard({ data, byDay, loading, tokens, periodLabel, name, onOpenShare }: UsageHeroCardProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
-  const built = data ? buildUsageCardSummary(data, tokens, periodLabel) : null
+  const built = data ? buildUsageCardSummary(data, byDay, tokens, periodLabel) : null
   const summary: UsageCardSummary | null = built?.summary ?? null
 
   useEffect(() => {

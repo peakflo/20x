@@ -146,7 +146,11 @@ export function UsageSettings() {
   const periodTokens = totals ? totalTokens(totals) : 0
   const periodLabel = usagePeriodLabel(periodDays)
 
-  const cardBuild = parallelism.data ? buildUsageCardSummary(parallelism.data, periodTokens, periodLabel) : null
+  // The calendar's per-day value comes from the SAME summary.byDay the
+  // tokens-per-day chart below reads (see usage-card.ts's module docstring)
+  // — [] when the token summary hasn't loaded yet is fine, it just means
+  // every calendar cell starts at 0 until it does.
+  const cardBuild = parallelism.data ? buildUsageCardSummary(parallelism.data, summary?.byDay ?? [], periodTokens, periodLabel) : null
   const cardSummary: UsageCardSummary | null = cardBuild?.summary ?? null
 
   const records: Array<[string, string]> = []
@@ -199,6 +203,7 @@ export function UsageSettings() {
 
         <UsageHeroCard
           data={parallelism.data}
+          byDay={summary?.byDay ?? []}
           loading={parallelism.loading}
           tokens={periodTokens}
           periodLabel={periodLabel}

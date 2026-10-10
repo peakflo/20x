@@ -14,8 +14,29 @@
  * session, bars per run, on the single busiest day) tested as confusing —
  * a real user couldn't tell what it was showing. It's replaced with a
  * GitHub-style activity calendar: one cell per calendar day in the period,
- * colour intensity by that day's agent hours. See `buildCalendarGrid` /
- * the "calendar heatmap" section of `drawCard`.
+ * colour intensity by that day's token volume. See `buildCalendarGrid` /
+ * the "calendar" section of `drawCard`.
+ *
+ * The calendar's per-day value is each day's total TOKEN count — the exact
+ * same `summary.byDay` the Token usage tab's own tokens-per-day chart
+ * reads, via `totalTokens()` (shared/usage.ts), not a second data source.
+ * It used to read the agent-run-intervals pipeline's per-day run hours
+ * instead; that pipeline's backfill is newer and less proven, and a real
+ * user's calendar came out almost empty while the token chart right below
+ * it (fed by the long-running token_usage_events pipeline) showed rich
+ * historical data for the same days. Using the same source the chart
+ * already trusts sidesteps that gap entirely. The day-by-day SCAFFOLD
+ * (which calendar dates exist, in order) still comes from
+ * `ParallelismSummary.perDay` — that part is just date bookkeeping, dense
+ * by construction, and unaffected by which pipeline is "proven"; only the
+ * per-day VALUE looked up for each date switched source. See
+ * `buildUsageCardSummary`.
+ *
+ * At 7 days or fewer the weeks×weekdays grid reads as 1-2 sparse columns,
+ * so short periods switch to a different layout in the same footprint: one
+ * column per day, each an isotype-style stack of unit blocks sized to that
+ * day's share of the period's busiest day — see the "short period: one
+ * column per day" branch in `drawCard`.
  *
  * ── Ratio vs. aggregate, two different gates ─────────────────
  * The multiplier (the big number + "N hours of agent work in M hours")
@@ -38,25 +59,27 @@
  * check that enforces this.
  */
 
-import { formatMultiplier, type UsageParallelismResponse } from './usage'
+import { formatMultiplier, totalTokens, type UsageDayRow, type UsageParallelismResponse } from './usage'
 
 // ── Data contract ────────────────────────────────────────────
 
 /**
- * One calendar day's agent-hours, for the GitHub-style activity calendar.
- * `day` is a `YYYY-MM-DD` local-calendar-day key (see `ParallelismDayRow.day`
- * in shared/usage.ts) — no session, task, or agent identity travels with it,
- * just a date and an hour figure.
+ * One calendar day's total token volume, for the activity calendar. `day`
+ * is a `YYYY-MM-DD` local-calendar-day key (see `ParallelismDayRow.day` in
+ * shared/usage.ts, which supplies the dense date scaffold — see the module
+ * docstring) — no session, task, or agent identity travels with it, just a
+ * date and a token count.
  *
- * Includes backfilled (best-effort historical) hours, unlike the
- * multiplier/hours/wall trio below. The calendar is a plain per-day
- * aggregate, not a ratio — a day's worth of real historical activity is
- * useful context here even before this feature's own live tracking began,
- * so it is never filtered down to live-only like the ratio is.
+ * Sourced from the same `summary.byDay` (+ `totalTokens()`) the tokens-per-
+ * day chart reads, so the calendar and the chart always agree on which
+ * days were busy. Includes the full period's token history — token
+ * accounting has no "live vs. backfilled" distinction the way agent-run
+ * intervals do, so unlike the multiplier/hours/wall trio below there is no
+ * live-only filtering question here.
  */
 export interface UsageCardCalendarDay {
   day: string
-  hours: number
+  tokens: number
 }
 
 export interface UsageCardPeakDay {
@@ -105,7 +128,7 @@ export interface UsageCardSummary {
   tasksShipped: number
   /** Total tokens processed in the period — a count, never a cost. */
   tokens: number
-  /** One entry per calendar day in the period (live + backfilled agent-hours) — drawn as a GitHub-style activity calendar. See `UsageCardCalendarDay`. */
+  /** One entry per calendar day in the period, each day's total token volume — drawn as the activity calendar. See `UsageCardCalendarDay`. */
   calendar: UsageCardCalendarDay[]
 }
 
@@ -268,13 +291,17 @@ export function fitText(ctx: UsageCardContext2D, text: string, maxWidth: number,
   return s + 1
 }
 
-// ── Activity calendar (GitHub-style contribution grid) ──────
+// ── Activity calendar — two layouts sharing one data source ──
+//
+// `summary.calendar` (per-day token totals) feeds BOTH layouts below. Which
+// one draws is purely a function of how many days are in the period — see
+// `drawCard`'s "activity calendar" section for the switch.
 
-/** One placed cell in the calendar grid: `col` = week index (0 = earliest week), `row` = weekday (0 = Sunday .. 6 = Saturday). */
+/** One placed cell in the long-period grid: `col` = week index (0 = earliest week), `row` = weekday (0 = Sunday .. 6 = Saturday). */
 interface UsageCardCalendarCell {
   col: number
   row: number
-  hours: number
+  tokens: number
 }
 
 /**
@@ -284,7 +311,8 @@ interface UsageCardCalendarCell {
  * across columns — exactly how github.com's own contribution graph reads.
  * The first day's weekday determines how far down its column it lands, so
  * every later day's cell is anchored to its true weekday, not just "the
- * Nth day since the period started".
+ * Nth day since the period started". Used for longer periods (30+ days) —
+ * see `USAGE_CARD_CALENDAR_COLUMN_LAYOUT_MAX_DAYS`.
  *
  * `day` is parsed as a UTC midnight timestamp purely to recover its
  * weekday — these are already resolved local-calendar-day keys (see
@@ -296,7 +324,7 @@ function buildCalendarGrid(calendar: UsageCardCalendarDay[]): { cols: number; ce
   const firstWeekday = new Date(`${calendar[0].day}T00:00:00Z`).getUTCDay() // 0 = Sun .. 6 = Sat
   const cells: UsageCardCalendarCell[] = calendar.map((d, i) => {
     const offset = i + firstWeekday
-    return { col: Math.floor(offset / 7), row: offset % 7, hours: d.hours }
+    return { col: Math.floor(offset / 7), row: offset % 7, tokens: d.tokens }
   })
   const cols = Math.max(...cells.map((c) => c.col)) + 1
   return { cols, cells }
@@ -305,13 +333,15 @@ function buildCalendarGrid(calendar: UsageCardCalendarDay[]): { cols: number; ce
 /**
  * GitHub's own 5-level bucketing (0 = none, 1..4 = increasing activity),
  * scaled relative to the busiest day in the period rather than to a fixed
- * hour count — so a quiet week and a packed one each use the full range.
- * A 0-hour day is always level 0, drawn in the theme's `faint` token so it
+ * token count — so a quiet week and a packed one each use the full range.
+ * A 0-token day is always level 0, drawn in the theme's `faint` token so it
  * reads as "clearly empty" rather than "the lightest shade of present".
+ * Grid layout only — the short-period column layout encodes level as block
+ * COUNT instead (see `drawCard`), not opacity.
  */
-function calendarLevel(hours: number, maxHours: number): 0 | 1 | 2 | 3 | 4 {
-  if (hours <= 0 || maxHours <= 0) return 0
-  const frac = hours / maxHours
+function calendarLevel(tokens: number, maxTokens: number): 0 | 1 | 2 | 3 | 4 {
+  if (tokens <= 0 || maxTokens <= 0) return 0
+  const frac = tokens / maxTokens
   if (frac > 0.75) return 4
   if (frac > 0.5) return 3
   if (frac > 0.25) return 2
@@ -319,6 +349,22 @@ function calendarLevel(hours: number, maxHours: number): 0 | 1 | 2 | 3 | 4 {
 }
 
 const USAGE_CARD_CALENDAR_LEVEL_OPACITY = [0, 0.28, 0.48, 0.7, 0.94] as const
+
+/** At or below this many days, the calendar switches from the weeks×weekdays grid to one column per day — the grid reads as 1-2 sparse columns otherwise. */
+const USAGE_CARD_CALENDAR_COLUMN_LAYOUT_MAX_DAYS = 7
+/**
+ * Tallest a single day's unit-block stack can get in the column layout —
+ * the busiest day in the period, scaled to this. Lower for `wide`: that
+ * shape has the calendar sitting directly under the headline sentence with
+ * no stats block above it to push it down first (square/tall both have
+ * the 4-stat block in between, leaving far more vertical room), so a tall
+ * stack there collides with the sentence. 7 blocks at `wide`'s block
+ * height reproduces the exact footprint the old 7-row weeks grid always
+ * used — a size already proven to fit.
+ */
+function usageCardCalendarMaxBlocks(wide: boolean): number {
+  return wide ? 7 : 12
+}
 
 // ── The card ──────────────────────────────────────────────────
 
@@ -453,36 +499,79 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
     })
   }
 
-  // The activity calendar: a GitHub-style contribution grid, one cell per
-  // calendar day, colour intensity by that day's live agent-hours relative
-  // to the period's busiest day. Replaces the mock's "peak day as lanes"
-  // block in the same footprint — see the module docstring for why.
+  // The activity calendar — one of two layouts, same data (summary.calendar,
+  // each day's token total), same footprint. Replaces the mock's "peak day
+  // as lanes" block — see the module docstring for the full history.
   const availW = wide ? 600 : W - pad * 2
-  const { cols, cells } = buildCalendarGrid(summary.calendar)
-  const maxHours = cells.reduce((m, c) => Math.max(m, c.hours), 0)
-  let cellSize = wide ? 13 : 15
-  let gap = wide ? 3 : 4
-  if (cols > 0) {
-    const naturalW = cols * cellSize + (cols - 1) * gap
-    if (naturalW > availW) {
-      const shrink = availW / naturalW
-      cellSize *= shrink
-      gap *= shrink
-    }
-  }
-  const gridH = 7 * cellSize + 6 * gap
-  const gy = H - pad - gridH - (wide ? 0 : 44)
   const [r0, g0, b0] = t.cell
-  const radius = Math.max(1.5, cellSize * 0.22)
-  cells.forEach(({ col, row, hours }) => {
-    const x = pad + col * (cellSize + gap)
-    const y = gy + row * (cellSize + gap)
-    const level = calendarLevel(hours, maxHours)
-    ctx.fillStyle = level === 0 ? t.faint : `rgba(${r0},${g0},${b0},${USAGE_CARD_CALENDAR_LEVEL_OPACITY[level]})`
-    ctx.beginPath()
-    ctx.roundRect(x, y, cellSize, cellSize, radius)
-    ctx.fill()
-  })
+  let gy: number
+  if (summary.calendar.length > 0 && summary.calendar.length <= USAGE_CARD_CALENDAR_COLUMN_LAYOUT_MAX_DAYS) {
+    // Short period: a weeks×weekdays grid would be 1-2 sparse columns, so
+    // instead draw one column per day, each an isotype-style stack of unit
+    // blocks — the day's share of the period's busiest day, in block COUNT
+    // (not opacity, unlike the grid below: a stack of identical solid
+    // blocks is the clearer "quantity" signal when there are only a
+    // handful of columns to fill the same width). A day with no tokens
+    // still gets one faint "slot" block at the baseline — same "clearly
+    // empty, not absent" language the grid uses for its own 0-level cells
+    // — so every column reads as present even when quiet.
+    const dayCount = summary.calendar.length
+    const blockH = wide ? 13 : 15
+    const blockGapY = wide ? 3 : 4
+    const colGap = wide ? 10 : 14
+    const maxBlocks = usageCardCalendarMaxBlocks(wide)
+    const colW = (availW - (dayCount - 1) * colGap) / dayCount
+    const stackH = maxBlocks * blockH + (maxBlocks - 1) * blockGapY
+    gy = H - pad - stackH - (wide ? 0 : 44)
+    const radius = Math.max(1.5, blockH * 0.22)
+    const maxTokens = summary.calendar.reduce((m, d) => Math.max(m, d.tokens), 0)
+    const floorY = gy + stackH - blockH
+    summary.calendar.forEach((d, i) => {
+      const x = pad + i * (colW + colGap)
+      const blocks = maxTokens > 0 && d.tokens > 0 ? Math.max(1, Math.round((d.tokens / maxTokens) * maxBlocks)) : 0
+      if (blocks === 0) {
+        ctx.fillStyle = t.faint
+        ctx.beginPath()
+        ctx.roundRect(x, floorY, colW, blockH, radius)
+        ctx.fill()
+        return
+      }
+      ctx.fillStyle = `rgba(${r0},${g0},${b0},${opts.theme === 'azure' ? 0.95 : 0.9})`
+      for (let b = 0; b < blocks; b++) {
+        const y = floorY - b * (blockH + blockGapY)
+        ctx.beginPath()
+        ctx.roundRect(x, y, colW, blockH, radius)
+        ctx.fill()
+      }
+    })
+  } else {
+    // Longer period: the GitHub-style contribution grid, colour intensity
+    // by that day's token volume relative to the period's busiest day.
+    const { cols, cells } = buildCalendarGrid(summary.calendar)
+    const maxTokens = cells.reduce((m, c) => Math.max(m, c.tokens), 0)
+    let cellSize = wide ? 13 : 15
+    let gap = wide ? 3 : 4
+    if (cols > 0) {
+      const naturalW = cols * cellSize + (cols - 1) * gap
+      if (naturalW > availW) {
+        const shrink = availW / naturalW
+        cellSize *= shrink
+        gap *= shrink
+      }
+    }
+    const gridH = 7 * cellSize + 6 * gap
+    gy = H - pad - gridH - (wide ? 0 : 44)
+    const radius = Math.max(1.5, cellSize * 0.22)
+    cells.forEach(({ col, row, tokens }) => {
+      const x = pad + col * (cellSize + gap)
+      const y = gy + row * (cellSize + gap)
+      const level = calendarLevel(tokens, maxTokens)
+      ctx.fillStyle = level === 0 ? t.faint : `rgba(${r0},${g0},${b0},${USAGE_CARD_CALENDAR_LEVEL_OPACITY[level]})`
+      ctx.beginPath()
+      ctx.roundRect(x, y, cellSize, cellSize, radius)
+      ctx.fill()
+    })
+  }
   ctx.fillStyle = t.soft
   ctx.textBaseline = 'alphabetic'
   ctx.textAlign = 'left'
@@ -550,9 +639,11 @@ export interface UsageCardBuildResult {
 const MIN_EVIDENCE_RUN_MS = 60 * 60 * 1000 // 1 hour
 
 /**
- * Maps the backend's `UsageParallelismResponse` (+ the token count, which
- * comes from the existing token-usage summary, not this response) into the
- * narrow `UsageCardSummary` the card is allowed to draw.
+ * Maps the backend's `UsageParallelismResponse` + the token-usage summary's
+ * `byDay` (same array `TokensPerDayChart` renders — see the module
+ * docstring for why the calendar reads this instead of the parallelism
+ * response's own `perDay`) into the narrow `UsageCardSummary` the card is
+ * allowed to draw.
  *
  * Returns a null `summary` only when there's no agent-run data at all (live
  * or backfilled) — `hasData`/`peak` come from the backend's full (not
@@ -568,12 +659,22 @@ const MIN_EVIDENCE_RUN_MS = 60 * 60 * 1000 // 1 hour
  * aggregate, not a ratio, and is always populated whenever there's any
  * underlying data, live or backfilled.
  */
-export function buildUsageCardSummary(response: UsageParallelismResponse, tokens: number, periodLabel: string): UsageCardBuildResult {
+export function buildUsageCardSummary(response: UsageParallelismResponse, byDay: UsageDayRow[], tokens: number, periodLabel: string): UsageCardBuildResult {
   const p = response.parallelism
   if (!p.hasData || !p.peak) {
     return { summary: null, emptyReason: 'no-agent-data' }
   }
   const ratioReady = p.totalRunMs >= MIN_EVIDENCE_RUN_MS && p.multiplier !== null
+  // `perDay` supplies the dense, correctly-bucketed date SCAFFOLD (it
+  // always has one entry per calendar day in the period, by construction —
+  // see usage-parallelism.ts's buildPerDay); `byDay` is sparse (only days
+  // with at least one recorded token_usage_events row appear in it at
+  // all), so it supplies VALUES looked up per date, defaulting to 0 for a
+  // day with no token activity. This keeps the calendar's weekday-grid
+  // math correct (it depends on a dense, gap-free day sequence) while
+  // still sourcing every value from the same place the tokens-per-day
+  // chart does.
+  const tokensByDay = new Map(byDay.map((d) => [d.day, totalTokens(d)]))
   return {
     summary: {
       periodLabel,
@@ -583,7 +684,7 @@ export function buildUsageCardSummary(response: UsageParallelismResponse, tokens
       peakDay: { atMs: p.peak.atMs, peak: p.peak.count },
       tasksShipped: response.tasksShipped,
       tokens,
-      calendar: p.perDay.map((d) => ({ day: d.day, hours: d.runHours }))
+      calendar: p.perDay.map((d) => ({ day: d.day, tokens: tokensByDay.get(d.day) ?? 0 }))
     },
     emptyReason: null
   }

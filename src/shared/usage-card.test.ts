@@ -17,7 +17,7 @@ import {
   type UsageCardShape,
   type UsageCardTheme
 } from './usage-card'
-import type { UsageParallelismResponse } from './usage'
+import type { UsageDayRow, UsageParallelismResponse } from './usage'
 
 // ── A lightweight mock Canvas 2D context ─────────────────────
 // This repo has no canvas-rendering test convention (no node-canvas
@@ -66,6 +66,16 @@ function makeMockContext(): UsageCardContext2D & { calls: Record<string, unknown
   return ctx
 }
 
+// A 30-day calendar by default — long enough to exercise the weeks×weekdays
+// grid layout (the default/common case for most of the tests below). Tests
+// specifically about the short-period column layout build their own
+// 7-day-or-fewer `calendar` override instead.
+const DEFAULT_CALENDAR_PATTERN = [
+  0, 2_000, 5_000, 8_000, 3_000, 0, 6_000, 9_000, 4_000, 1_000,
+  7_000, 10_000, 2_000, 0, 5_000, 8_000, 11_000, 3_000, 6_000, 0,
+  9_000, 4_000, 7_000, 2_000, 10_000, 5_000, 0, 8_000, 6_000, 3_000
+]
+
 function makeSummary(overrides: Partial<UsageCardSummary> = {}): UsageCardSummary {
   return {
     periodLabel: 'Last 30 days',
@@ -75,13 +85,10 @@ function makeSummary(overrides: Partial<UsageCardSummary> = {}): UsageCardSummar
     peakDay: { atMs: Date.UTC(2026, 0, 15, 12, 0, 0), peak: 5 },
     tasksShipped: 12,
     tokens: 45_000_000,
-    calendar: [
-      { day: '2026-01-01', hours: 0 },
-      { day: '2026-01-02', hours: 2 },
-      { day: '2026-01-03', hours: 6 },
-      { day: '2026-01-04', hours: 4 },
-      { day: '2026-01-05', hours: 8 }
-    ],
+    calendar: DEFAULT_CALENDAR_PATTERN.map((tokens, i) => ({
+      day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10),
+      tokens
+    })),
     ...overrides
   }
 }
@@ -178,9 +185,39 @@ describe('drawCard', () => {
     const [W, H] = USAGE_CARD_SHAPES.wide
     const calendar = Array.from({ length: 182 }, (_, i) => ({
       day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10),
-      hours: i % 7
+      tokens: i % 7
     }))
     drawCard(ctx, W, H, makeSummary({ calendar }), makeOptions())
+    expect(ctx.calls.roundRect).toHaveLength(1 /* logo */ + calendar.length)
+  })
+
+  it('switches to one-column-per-day unit-block stacks for short periods (7 days or fewer)', () => {
+    const ctx = makeMockContext()
+    const [W, H] = USAGE_CARD_SHAPES.wide
+    const tokensByDay = [0, 100, 50, 0, 200, 10, 150]
+    const calendar = tokensByDay.map((tokens, i) => ({ day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10), tokens }))
+    drawCard(ctx, W, H, makeSummary({ calendar }), makeOptions())
+    // Same block-count formula as drawCard's column layout: a 0-token day draws
+    // one faint "empty slot" (not a block); a nonzero day draws at least 1 block,
+    // scaled up to usageCardCalendarMaxBlocks(wide) against the period's max — 7
+    // for the `wide` shape used here (lower than square/tall's 12 — wide has less
+    // vertical room; see that function's docstring).
+    const maxTokens = Math.max(...tokensByDay)
+    const maxBlocks = 7
+    const expectedShapeCount = tokensByDay.reduce((sum, tokens) => {
+      const blocks = tokens > 0 ? Math.max(1, Math.round((tokens / maxTokens) * maxBlocks)) : 0
+      return sum + Math.max(1, blocks) // 0 blocks still draws exactly one faint slot shape
+    }, 0)
+    expect(ctx.calls.roundRect).toHaveLength(1 /* logo */ + expectedShapeCount)
+  })
+
+  it('still uses the weeks×weekdays grid (not columns) once there are more than 7 days', () => {
+    const ctx = makeMockContext()
+    const [W, H] = USAGE_CARD_SHAPES.wide
+    const calendar = Array.from({ length: 8 }, (_, i) => ({ day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10), tokens: i }))
+    drawCard(ctx, W, H, makeSummary({ calendar }), makeOptions())
+    // Grid layout draws exactly one roundRect per day; the column layout would draw a
+    // variable number of stacked blocks per day instead — this count pins it to the grid.
     expect(ctx.calls.roundRect).toHaveLength(1 /* logo */ + calendar.length)
   })
 
@@ -326,6 +363,25 @@ describe('privacy: no cost/task-title/repo/model field is reachable from the car
 
 // ── buildUsageCardSummary ────────────────────────────────────
 
+/** A minimal valid `UsageDayRow` with `inputTokens` set so `totalTokens()` equals `tokens` exactly. */
+function makeDayRow(day: string, tokens: number): UsageDayRow {
+  return {
+    day,
+    inputTokens: tokens,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    costUsd: null,
+    reportedCostUsd: null,
+    estimatedCostUsd: null,
+    cacheSavingsUsd: null,
+    records: 1,
+    unpricedRecords: 0,
+    byProvider: []
+  }
+}
+
 function makeParallelismResponse(overrides: Partial<UsageParallelismResponse['parallelism']> = {}): UsageParallelismResponse {
   return {
     periodDays: 30,
@@ -353,8 +409,10 @@ function makeParallelismResponse(overrides: Partial<UsageParallelismResponse['pa
 }
 
 describe('buildUsageCardSummary', () => {
-  it('maps a real response into the card summary', () => {
-    const { summary, emptyReason } = buildUsageCardSummary(makeParallelismResponse(), 10_000_000, 'Last 30 days')
+  const byDay = [makeDayRow('2026-01-01', 1_000), makeDayRow('2026-01-02', 4_000)]
+
+  it('maps a real response into the card summary, with the calendar sourced from byDay (the same data the tokens-per-day chart reads), not from perDay.runHours', () => {
+    const { summary, emptyReason } = buildUsageCardSummary(makeParallelismResponse(), byDay, 10_000_000, 'Last 30 days')
     expect(emptyReason).toBeNull()
     expect(summary).not.toBeNull()
     expect(summary!.multiplier).toBe(3)
@@ -363,22 +421,40 @@ describe('buildUsageCardSummary', () => {
     expect(summary!.tasksShipped).toBe(7)
     expect(summary!.tokens).toBe(10_000_000)
     expect(summary!.peakDay).toEqual({ atMs: 500, peak: 4 })
+    // Values are byDay's token totals (1000, 4000) — NOT perDay's runHours (2, 4), even
+    // though those happen to share the same day keys in this fixture.
     expect(summary!.calendar).toEqual([
-      { day: '2026-01-01', hours: 2 },
-      { day: '2026-01-02', hours: 4 }
+      { day: '2026-01-01', tokens: 1_000 },
+      { day: '2026-01-02', tokens: 4_000 }
+    ])
+  })
+
+  it('defaults a day to 0 tokens when it appears in the parallelism response\'s dense per-day scaffold but is absent from byDay (no token_usage_events rows that day)', () => {
+    const response = makeParallelismResponse({
+      perDay: [
+        { day: '2026-01-01', runHours: 2, wallHours: 1 },
+        { day: '2026-01-02', runHours: 4, wallHours: 1 },
+        { day: '2026-01-03', runHours: 0, wallHours: 0 } // in the scaffold, but no byDay entry at all
+      ]
+    })
+    const { summary } = buildUsageCardSummary(response, byDay, 10_000_000, 'Last 30 days')
+    expect(summary!.calendar).toEqual([
+      { day: '2026-01-01', tokens: 1_000 },
+      { day: '2026-01-02', tokens: 4_000 },
+      { day: '2026-01-03', tokens: 0 }
     ])
   })
 
   it('returns no-agent-data (a null summary) when there is no agent-run data at all', () => {
     const response = makeParallelismResponse({ hasData: false, totalRunMs: 0, wallMs: 0, multiplier: null, peak: null, peakDayLanes: [] })
-    const { summary, emptyReason } = buildUsageCardSummary(response, 0, 'Last 30 days')
+    const { summary, emptyReason } = buildUsageCardSummary(response, byDay, 0, 'Last 30 days')
     expect(summary).toBeNull()
     expect(emptyReason).toBe('no-agent-data')
   })
 
   it('still returns a real (non-null) summary — with a null multiplier/hours/wall — when there is live agent data but under an hour of it', () => {
     const response = makeParallelismResponse({ hasData: true, totalRunMs: 30 * 60 * 1000 })
-    const { summary, emptyReason } = buildUsageCardSummary(response, 10_000_000, 'Last 30 days')
+    const { summary, emptyReason } = buildUsageCardSummary(response, byDay, 10_000_000, 'Last 30 days')
     expect(emptyReason).toBeNull()
     expect(summary).not.toBeNull()
     expect(summary!.multiplier).toBeNull()
@@ -389,14 +465,14 @@ describe('buildUsageCardSummary', () => {
     expect(summary!.tasksShipped).toBe(7)
     expect(summary!.tokens).toBe(10_000_000)
     expect(summary!.calendar).toEqual([
-      { day: '2026-01-01', hours: 2 },
-      { day: '2026-01-02', hours: 4 }
+      { day: '2026-01-01', tokens: 1_000 },
+      { day: '2026-01-02', tokens: 4_000 }
     ])
   })
 
   it('still returns a real (non-null) summary — with a null multiplier/hours/wall — when enough agent data exists but the multiplier cannot be computed (no screen-time data)', () => {
     const response = makeParallelismResponse({ hasData: true, multiplier: null, screenTimeMs: 0 })
-    const { summary, emptyReason } = buildUsageCardSummary(response, 10_000_000, 'Last 30 days')
+    const { summary, emptyReason } = buildUsageCardSummary(response, byDay, 10_000_000, 'Last 30 days')
     expect(emptyReason).toBeNull()
     expect(summary).not.toBeNull()
     expect(summary!.multiplier).toBeNull()
@@ -406,21 +482,17 @@ describe('buildUsageCardSummary', () => {
     expect(summary!.calendar.length).toBeGreaterThan(0)
   })
 
-  it('includes backfilled-inclusive calendar/peak data even when the ratio is pending — the calendar is never empty just because the multiplier is', () => {
+  it('the calendar still shows real token data even when the ratio is pending — it is never empty just because the multiplier is', () => {
     const response = makeParallelismResponse({
       hasData: true,
-      totalRunMs: 10 * 60 * 1000, // under the 1-hour evidence threshold
-      perDay: [
-        { day: '2026-01-01', runHours: 14, wallHours: 1 }, // mostly backfilled history — way more than the tiny live totalRunMs above
-        { day: '2026-01-02', runHours: 9, wallHours: 1 }
-      ]
+      totalRunMs: 10 * 60 * 1000 // under the 1-hour evidence threshold
     })
-    const { summary } = buildUsageCardSummary(response, 0, 'Last 30 days')
+    const { summary } = buildUsageCardSummary(response, byDay, 0, 'Last 30 days')
     expect(summary).not.toBeNull()
     expect(summary!.multiplier).toBeNull() // still gated — ratio stays live-only/evidence-gated
     expect(summary!.calendar).toEqual([
-      { day: '2026-01-01', hours: 14 }, // calendar reflects the FULL (backfilled-inclusive) perDay figure, not the gated ratio
-      { day: '2026-01-02', hours: 9 }
+      { day: '2026-01-01', tokens: 1_000 },
+      { day: '2026-01-02', tokens: 4_000 }
     ])
   })
 })

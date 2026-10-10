@@ -9,7 +9,7 @@ import {
   usagePeriodLabel,
   type UsageCardSummary
 } from '@shared/usage-card'
-import { USAGE_RECORDED_CHANNEL, totalTokens, type UsageParallelismResponse } from '@shared/usage'
+import { USAGE_RECORDED_CHANNEL, totalTokens, type UsageDayRow, type UsageParallelismResponse } from '@shared/usage'
 import { waitForFonts } from '@shared/wait-for-fonts'
 
 /** Fixed period for the mobile hero — matches the approved mock's own default. No period switcher on mobile; this view is read-only. */
@@ -19,6 +19,7 @@ const PERIOD_DAYS = 30
 export function UsageHeroSection() {
   const [data, setData] = useState<UsageParallelismResponse | null>(null)
   const [tokens, setTokens] = useState(0)
+  const [byDay, setByDay] = useState<UsageDayRow[]>([])
   const [loading, setLoading] = useState(true)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -31,6 +32,8 @@ export function UsageHeroSection() {
       .then(([parallelism, summary]) => {
         setData(parallelism)
         setTokens(summary ? totalTokens(summary.totals) : 0)
+        // Same per-day token summary the desktop chart reads — feeds the calendar's per-day value.
+        setByDay(summary?.byDay ?? [])
       })
       .catch(() => undefined)
       .finally(() => setLoading(false))
@@ -43,7 +46,7 @@ export function UsageHeroSection() {
   }, [load])
 
   const periodLabel = usagePeriodLabel(PERIOD_DAYS)
-  const built = data ? buildUsageCardSummary(data, tokens, periodLabel) : null
+  const built = data ? buildUsageCardSummary(data, byDay, tokens, periodLabel) : null
   const summary: UsageCardSummary | null = built?.summary ?? null
 
   useEffect(() => {
