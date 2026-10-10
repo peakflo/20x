@@ -2,7 +2,7 @@ import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, 
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
-import type { ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
+import type { CustomModelPrice, ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { HarnessInstanceView } from '@shared/harness-instances'
 import type {
   AcpAgentInstanceView,
@@ -362,11 +362,27 @@ export const usageApi = {
   },
   setLimitRecoveryAutoResume(taskId: string, autoResume: boolean): Promise<UsageLimitRecovery | null> {
     return window.electronAPI.usage.setLimitRecoveryAutoResume(taskId, autoResume)
+  },
+  refreshRates(options?: { force?: boolean }): Promise<{ refreshed: boolean; fetchedAt: number }> {
+    return window.electronAPI.usage.refreshRates(options)
+  },
+  listModelPrices(): Promise<CustomModelPrice[]> {
+    return window.electronAPI.usage.listModelPrices()
+  },
+  setModelPrice(price: CustomModelPrice): Promise<CustomModelPrice[]> {
+    return window.electronAPI.usage.setModelPrice(price)
+  },
+  resetModelPrice(model: string): Promise<CustomModelPrice[]> {
+    return window.electronAPI.usage.resetModelPrice(model)
   }
 }
 
 export const onUsageLimitRecoveryUpdated = (callback: (recovery: UsageLimitRecovery) => void): (() => void) => {
   return window.electronAPI.onUsageLimitRecoveryUpdated(callback)
+}
+
+export const onUsageModelPricesUpdated = (callback: (prices: CustomModelPrice[]) => void): (() => void) => {
+  return window.electronAPI.onUsageModelPricesUpdated(callback)
 }
 
 export const onUsageLimitsUpdated = (callback: (limits: ProviderUsageLimits) => void): (() => void) => {

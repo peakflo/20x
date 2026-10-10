@@ -11,6 +11,10 @@ const getLimits = vi.fn()
 const refreshLimits = vi.fn()
 const getSummary = vi.fn()
 const setCursorKeychainAccess = vi.fn()
+const refreshRates = vi.fn()
+const listModelPrices = vi.fn()
+const setModelPrice = vi.fn()
+const resetModelPrice = vi.fn()
 
 const settingsGet = vi.fn(async () => null as string | null)
 const settingsSet = vi.fn(async () => undefined)
@@ -24,7 +28,11 @@ vi.mock('@/lib/ipc-client', () => ({
     getLimits: (...args: unknown[]) => getLimits(...args),
     refreshLimits: (...args: unknown[]) => refreshLimits(...args),
     getSummary: (...args: unknown[]) => getSummary(...args),
-    setCursorKeychainAccess: (...args: unknown[]) => setCursorKeychainAccess(...args)
+    setCursorKeychainAccess: (...args: unknown[]) => setCursorKeychainAccess(...args),
+    refreshRates: (...args: unknown[]) => refreshRates(...args),
+    listModelPrices: (...args: unknown[]) => listModelPrices(...args),
+    setModelPrice: (...args: unknown[]) => setModelPrice(...args),
+    resetModelPrice: (...args: unknown[]) => resetModelPrice(...args)
   },
   onUsageLimitsUpdated: (cb: (limits: ProviderUsageLimits) => void) => {
     listeners.limits = cb
@@ -33,7 +41,8 @@ vi.mock('@/lib/ipc-client', () => ({
   onUsageRecorded: (cb: () => void) => {
     listeners.recorded = cb
     return () => { listeners.recorded = null }
-  }
+  },
+  onUsageModelPricesUpdated: () => () => undefined
 }))
 
 import { UsageSettings } from './UsageSettings'
@@ -66,6 +75,9 @@ const aggregate = {
   outputTokens: 9_000,
   reasoningTokens: 2_000,
   costUsd: 3.21,
+  reportedCostUsd: 3.21,
+  estimatedCostUsd: null,
+  cacheSavingsUsd: null,
   records: 4,
   unpricedRecords: 1
 }
@@ -75,7 +87,7 @@ const summary: UsageSummary = {
   untilMs: 1,
   totals: aggregate,
   byProvider: [{ provider: 'claude-code', ...aggregate }],
-  byModel: [{ provider: 'claude-code', model: 'claude-opus-4-7', ...aggregate }],
+  byModel: [{ provider: 'claude-code', model: 'claude-opus-4-7', costSource: 'reported' as const, ...aggregate }],
   byDay: [{ day: '2026-10-04', ...aggregate }, { day: '2026-10-05', ...aggregate }],
   topTasks: [{ taskId: 't1', title: 'Fix login flow', ...aggregate }]
 }
@@ -86,6 +98,10 @@ beforeEach(() => {
   getLimits.mockReset().mockResolvedValue([claude, codexUnsupported])
   refreshLimits.mockReset().mockResolvedValue({ limits: [claude, codexUnsupported], refreshed: [] })
   getSummary.mockReset().mockResolvedValue(summary)
+  refreshRates.mockReset().mockResolvedValue({ refreshed: true, fetchedAt: Date.now() })
+  listModelPrices.mockReset().mockResolvedValue([])
+  setModelPrice.mockReset().mockResolvedValue([])
+  resetModelPrice.mockReset().mockResolvedValue([])
 })
 
 describe('UsageSettings', () => {
@@ -112,10 +128,10 @@ describe('UsageSettings', () => {
   it('shows token totals, per-model rows and top tasks with an estimate disclaimer', async () => {
     render(<UsageSettings />)
     expect(await screen.findByText('$3.21', { selector: 'div' })).toBeInTheDocument()
-    expect(screen.getByText('partial — some providers do not report cost')).toBeInTheDocument()
+    expect(screen.getByText('partial — some models have no known price')).toBeInTheDocument()
     expect(screen.getByText('claude-opus-4-7')).toBeInTheDocument()
     expect(screen.getByText('Fix login flow')).toBeInTheDocument()
-    expect(screen.getByText(/subscription plans bill separately/)).toBeInTheDocument()
+    expect(screen.getByText(/not your subscription bill/)).toBeInTheDocument()
   })
 
   it('reloads the summary for a different period', async () => {
@@ -176,5 +192,37 @@ describe('UsageSettings', () => {
     render(<UsageSettings />)
     expect(await screen.findByText('No plan limits yet')).toBeInTheDocument()
     expect(screen.getByText(/No token usage recorded in this period/)).toBeInTheDocument()
+  })
+
+  it('marks an estimated cost and shows "No price · Set price" for a fully unpriced model', async () => {
+    getSummary.mockResolvedValue({
+      ...summary,
+      byModel: [
+        { provider: 'codex', model: 'gpt-6-astra', ...aggregate, reportedCostUsd: null, estimatedCostUsd: 0.5, costUsd: 0.5, costSource: 'estimated' as const },
+        { provider: 'opencode', model: 'some-custom-model', ...aggregate, costUsd: null, reportedCostUsd: null, estimatedCostUsd: null, costSource: 'unpriced' as const }
+      ]
+    })
+    render(<UsageSettings />)
+    expect(await screen.findByText('gpt-6-astra')).toBeInTheDocument()
+    expect(screen.getByTitle('Estimated from public API rates')).toBeInTheDocument()
+    expect(screen.getByText(/No price · Set price/)).toBeInTheDocument()
+  })
+
+  it('opens the Model prices dialog prefilled when "Set price" is clicked', async () => {
+    getSummary.mockResolvedValue({
+      ...summary,
+      byModel: [{ provider: 'opencode', model: 'some-custom-model', ...aggregate, costUsd: null, reportedCostUsd: null, estimatedCostUsd: null, costSource: 'unpriced' as const }]
+    })
+    render(<UsageSettings />)
+    fireEvent.click(await screen.findByText(/No price · Set price/))
+    await waitFor(() => expect(listModelPrices).toHaveBeenCalled())
+    expect(await screen.findByLabelText('Model id')).toHaveValue('some-custom-model')
+  })
+
+  it('refreshing the Usage page also refreshes the rate table', async () => {
+    render(<UsageSettings />)
+    await screen.findByTestId('usage-limits-claude-code')
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
+    await waitFor(() => expect(refreshRates).toHaveBeenCalledWith({ force: true }))
   })
 })

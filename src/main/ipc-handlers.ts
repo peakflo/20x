@@ -16,7 +16,7 @@ import { panelBrowserBroker } from './panel-browser-broker'
 import { getAgentBrowserSession } from './agent-browser-session'
 import { listBrowserImportSources, importBrowserSessions, clearImportedBrowserSessions, normalizeDomains } from './browser-session-import'
 import type { BrowserImportRequest } from '../shared/browser-session-import'
-import type { UsageSummaryQuery } from '../shared/usage'
+import type { CustomModelPrice, UsageSummaryQuery } from '../shared/usage'
 import { sanitizeUsageSummaryQuery } from './usage/usage-query'
 import type {
   DatabaseManager,
@@ -665,6 +665,22 @@ export function registerIpcHandlers(
 
   ipcMain.handle('usage:getSummary', (_, query?: UsageSummaryQuery) => {
     return agentManager.getUsageSummary(sanitizeUsageSummaryQuery(query))
+  })
+
+  ipcMain.handle('usage:refreshRates', async (_, options?: { force?: boolean }) => {
+    return await agentManager.refreshUsageRates({ force: options?.force === true })
+  })
+
+  ipcMain.handle('usage:listModelPrices', () => {
+    return agentManager.listUsageModelPrices()
+  })
+
+  ipcMain.handle('usage:setModelPrice', (_, price: CustomModelPrice) => {
+    return agentManager.setUsageModelPrice(price)
+  })
+
+  ipcMain.handle('usage:resetModelPrice', (_, model: string) => {
+    return agentManager.resetUsageModelPrice(model)
   })
 
   // Durable transcript snapshot: the renderer hydrates transcript state from

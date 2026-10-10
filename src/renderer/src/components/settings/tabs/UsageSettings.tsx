@@ -5,17 +5,20 @@ import { cn } from '@/lib/utils'
 import { SettingsSection } from '../SettingsSection'
 import { useSubscriptionUsage } from '@/hooks/use-subscription-usage'
 import { ProviderLimitsCard } from '@/components/usage/ProviderLimitsCard'
+import { ModelPricesDialog } from '@/components/usage/ModelPricesDialog'
 import { Switch } from '@/components/ui/Switch'
 import { Label } from '@/components/ui/Label'
-import { settingsApi } from '@/lib/ipc-client'
+import { settingsApi, usageApi } from '@/lib/ipc-client'
 import { AUTO_RESUME_LIMITED_TASKS_SETTING, isAutoResumeSettingEnabled } from '@shared/usage-limit-recovery'
 import {
   USAGE_PROVIDER_LABELS,
+  costSourceTooltip,
   formatTokenCount,
   formatUsd,
   totalTokens,
-  type UsageAggregate,
+  usageCostHint,
   type UsageDayRow,
+  type UsageModelRow,
   type UsagePeriod
 } from '@shared/usage'
 
@@ -35,11 +38,36 @@ function StatTile({ label, value, hint }: { label: string; value: string; hint?:
   )
 }
 
-function costHint(aggregate: UsageAggregate): string | undefined {
-  if (aggregate.records === 0) return undefined
-  if (aggregate.unpricedRecords === aggregate.records) return 'not reported'
-  if (aggregate.unpricedRecords > 0) return 'partial — some providers do not report cost'
-  return 'API-equivalent estimate'
+/** Small superscript marker next to a cost that was estimated or set by the user, rather than reported by the harness. */
+function CostSourceMarker({ source }: { source: UsageModelRow['costSource'] }) {
+  const tooltip = costSourceTooltip(source)
+  if (!tooltip) return null
+  return (
+    <span className="ml-1 text-[9px] font-semibold text-muted-foreground align-super cursor-help" title={tooltip}>
+      {source === 'custom' ? '✎' : '≈'}
+    </span>
+  )
+}
+
+/** Per-model cost cell: the amount with a source marker, or "No price" + a "Set price" action when nothing is known. */
+function ModelCostCell({ row, onSetPrice }: { row: UsageModelRow; onSetPrice: (model: string) => void }) {
+  if (row.costSource === 'unpriced') {
+    return (
+      <button
+        type="button"
+        className="text-[11px] text-primary hover:underline"
+        onClick={() => onSetPrice(row.model)}
+      >
+        No price · Set price
+      </button>
+    )
+  }
+  return (
+    <span>
+      {formatUsd(row.costUsd)}
+      <CostSourceMarker source={row.costSource} />
+    </span>
+  )
 }
 
 /** Single-series daily bars (tokens processed per day) with per-bar hover details. */
@@ -128,8 +156,26 @@ function AutoResumeSetting() {
 
 export function UsageSettings() {
   const [period, setPeriod] = useState<UsagePeriod>('7d')
-  const { limits, summary, loading, refreshing, error, refreshLimits, runLimitsAction } = useSubscriptionUsage(period)
+  const { limits, summary, loading, refreshing, error, refreshLimits, runLimitsAction, reloadSummary } = useSubscriptionUsage(period)
   const totals = summary?.totals
+  const [pricesDialogOpen, setPricesDialogOpen] = useState(false)
+  const [prefillModel, setPrefillModel] = useState<string | null>(null)
+  const [ratesRefreshing, setRatesRefreshing] = useState(false)
+
+  const openSetPrice = (model: string): void => {
+    setPrefillModel(model)
+    setPricesDialogOpen(true)
+  }
+
+  const handleRefresh = async (): Promise<void> => {
+    setRatesRefreshing(true)
+    try {
+      await Promise.all([refreshLimits(), usageApi.refreshRates({ force: true })])
+      await reloadSummary()
+    } finally {
+      setRatesRefreshing(false)
+    }
+  }
 
   return (
     <>
@@ -141,9 +187,9 @@ export function UsageSettings() {
           <p className="text-xs text-muted-foreground">
             Only subscription logins report plan limits (Claude Pro/Max/Team, ChatGPT plans, Cursor, OpenCode Go).
           </p>
-          <Button size="sm" variant="outline" onClick={() => void refreshLimits()} disabled={refreshing}>
-            <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
-            {refreshing ? 'Checking…' : 'Refresh'}
+          <Button size="sm" variant="outline" onClick={() => void handleRefresh()} disabled={refreshing || ratesRefreshing}>
+            <RefreshCw className={cn('h-3.5 w-3.5', (refreshing || ratesRefreshing) && 'animate-spin')} />
+            {refreshing || ratesRefreshing ? 'Checking…' : 'Refresh'}
           </Button>
         </div>
 
@@ -177,26 +223,31 @@ export function UsageSettings() {
 
       <SettingsSection
         title="Token usage"
-        description="Tokens consumed by agent turns in 20x, including subagents. Cost is the provider-reported API-equivalent estimate — subscription plans bill separately."
+        description="Tokens consumed by agent turns in 20x, including subagents. Cost is an API-equivalent estimate — not your subscription bill — priced from the provider's own report where given, and from public rates (or a custom price) otherwise."
       >
-        <div className="flex items-center gap-1" role="tablist" aria-label="Usage period">
-          {PERIODS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              role="tab"
-              aria-selected={period === option.value}
-              onClick={() => setPeriod(option.value)}
-              className={cn(
-                'px-3 py-1 text-xs font-medium rounded-md transition-colors',
-                period === option.value
-                  ? 'bg-accent text-foreground'
-                  : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
-              )}
-            >
-              {option.label}
-            </button>
-          ))}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1" role="tablist" aria-label="Usage period">
+            {PERIODS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                role="tab"
+                aria-selected={period === option.value}
+                onClick={() => setPeriod(option.value)}
+                className={cn(
+                  'px-3 py-1 text-xs font-medium rounded-md transition-colors',
+                  period === option.value
+                    ? 'bg-accent text-foreground'
+                    : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <Button size="sm" variant="outline" onClick={() => { setPrefillModel(null); setPricesDialogOpen(true) }}>
+            Model prices
+          </Button>
         </div>
 
         {!totals || totals.records === 0 ? (
@@ -214,8 +265,14 @@ export function UsageSettings() {
                 hint={`${formatTokenCount(totals.cacheReadTokens)} read · ${formatTokenCount(totals.cacheWriteTokens)} write`}
               />
               <StatTile label="Output" value={formatTokenCount(totals.outputTokens)} hint={totals.reasoningTokens > 0 ? `${formatTokenCount(totals.reasoningTokens)} reasoning` : undefined} />
-              <StatTile label="Est. cost" value={formatUsd(totals.costUsd)} hint={costHint(totals)} />
+              <StatTile label="Est. cost" value={formatUsd(totals.costUsd)} hint={usageCostHint(totals)} />
             </div>
+
+            {totals.cacheSavingsUsd !== null && totals.cacheSavingsUsd > 0 && (
+              <p className="text-[11px] text-muted-foreground">
+                Cache reads saved an estimated {formatUsd(totals.cacheSavingsUsd)} vs. paying the input rate.
+              </p>
+            )}
 
             {summary && <DailyUsageBars days={summary.byDay} />}
 
@@ -243,7 +300,9 @@ export function UsageSettings() {
                         <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(row.cacheReadTokens)}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(row.cacheWriteTokens)}</td>
                         <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(row.outputTokens)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatUsd(row.costUsd)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">
+                          <ModelCostCell row={row} onSetPrice={openSetPrice} />
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -276,6 +335,12 @@ export function UsageSettings() {
           </>
         )}
       </SettingsSection>
+
+      <ModelPricesDialog
+        open={pricesDialogOpen}
+        onOpenChange={setPricesDialogOpen}
+        initialModel={prefillModel}
+      />
     </>
   )
 }

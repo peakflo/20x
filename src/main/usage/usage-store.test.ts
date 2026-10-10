@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import Database from 'better-sqlite3'
 import { UsageStore } from './usage-store'
 import type { UsageBucket, UsageTotals } from './usage-normalize'
+import { createRateResolver, type RateTable } from './usage-pricing'
+import type { CustomModelPrice } from '../../shared/usage'
 
 function totals(partial: Partial<UsageTotals> = {}): UsageTotals {
   return {
@@ -212,6 +214,108 @@ describe('UsageStore.getUsageSummary', () => {
     expect(summary.byDay.map((d) => d.day)).toEqual(['2026-10-04', '2026-10-05'])
     const shifted = store.getUsageSummary({ sinceMs: NOW - 7 * DAY, untilMs: NOW + 1, utcOffsetMinutes: 13 * 60 })
     expect(shifted.byDay.map((d) => d.day)).toEqual(['2026-10-05', '2026-10-06'])
+  })
+})
+
+describe('UsageStore.getUsageSummary — pricing', () => {
+  const RATE_TABLE: RateTable = {
+    'claude-opus-4-7': { standard: { input: 1e-6, output: 2e-6, cacheRead: 1e-7, cacheWrite: 2e-7 } },
+    'gpt-6-astra': { standard: { input: 2e-6, output: 4e-6, cacheRead: 2e-7, cacheWrite: 4e-7 } }
+  }
+
+  function resolverWith(customPrices: CustomModelPrice[] = []) {
+    return createRateResolver(customPrices, RATE_TABLE)
+  }
+
+  beforeEach(() => {
+    // A: reported cost — kept as-is when no custom price overrides it.
+    store.recordCumulativeUsage({
+      provider: 'claude-code', sessionId: 's-a', taskId: 't1', newSession: true,
+      buckets: [bucket('claude-opus-4-7', { inputTokens: 1_000, outputTokens: 500, costUsd: 2 })],
+      observedAt: NOW
+    })
+    // B: never reports a cost (Codex) — priced from the public rate table.
+    store.recordCumulativeUsage({
+      provider: 'codex', sessionId: 's-b', taskId: 't2', newSession: true,
+      buckets: [bucket('gpt-6-astra', { inputTokens: 2_000, outputTokens: 1_000, costUsd: null })],
+      observedAt: NOW
+    })
+    // C: reports a $0 cost alongside non-zero tokens (subscription login) — treated as "not reported".
+    store.recordCumulativeUsage({
+      provider: 'pi', sessionId: 's-c', taskId: 't3', newSession: true,
+      buckets: [bucket('claude-opus-4-7', { inputTokens: 500, outputTokens: 200, costUsd: 0 })],
+      observedAt: NOW
+    })
+    // D: a model nobody prices and nobody reports a cost for — stays genuinely unpriced.
+    store.recordCumulativeUsage({
+      provider: 'opencode', sessionId: 's-d', taskId: 't4', newSession: true,
+      buckets: [bucket('totally-unknown-model', { inputTokens: 100, outputTokens: 50, costUsd: null })],
+      observedAt: NOW
+    })
+  })
+
+  it('estimates cost for a provider that never reports one, from the public rate table', () => {
+    const summary = store.getUsageSummary({ sinceMs: NOW - DAY, untilMs: NOW + 1 }, resolverWith())
+    const row = summary.byModel.find((r) => r.provider === 'codex')!
+    expect(row.costSource).toBe('estimated')
+    expect(row.reportedCostUsd).toBeNull()
+    expect(row.estimatedCostUsd).toBeCloseTo(2_000 * 2e-6 + 1_000 * 4e-6)
+    expect(row.costUsd).toBeCloseTo(row.estimatedCostUsd!)
+  })
+
+  it('treats a reported $0 alongside non-zero tokens as "not reported" and estimates it instead', () => {
+    const summary = store.getUsageSummary({ sinceMs: NOW - DAY, untilMs: NOW + 1 }, resolverWith())
+    const row = summary.byModel.find((r) => r.provider === 'pi')!
+    expect(row.costSource).toBe('estimated')
+    expect(row.reportedCostUsd).toBeNull()
+    expect(row.estimatedCostUsd).toBeCloseTo(500 * 1e-6 + 200 * 2e-6)
+  })
+
+  it('keeps a genuine provider-reported cost untouched', () => {
+    const summary = store.getUsageSummary({ sinceMs: NOW - DAY, untilMs: NOW + 1 }, resolverWith())
+    const row = summary.byModel.find((r) => r.provider === 'claude-code')!
+    expect(row.costSource).toBe('reported')
+    expect(row.reportedCostUsd).toBe(2)
+    expect(row.estimatedCostUsd).toBeNull()
+    expect(row.costUsd).toBe(2)
+  })
+
+  it('leaves a model with no reported cost and no known rate genuinely unpriced', () => {
+    const summary = store.getUsageSummary({ sinceMs: NOW - DAY, untilMs: NOW + 1 }, resolverWith())
+    const row = summary.byModel.find((r) => r.provider === 'opencode')!
+    expect(row.costSource).toBe('unpriced')
+    expect(row.costUsd).toBeNull()
+    expect(row.unpricedRecords).toBe(1)
+  })
+
+  it('splits totals into reported vs. estimated, and unpricedRecords only counts the truly unpriced row', () => {
+    const summary = store.getUsageSummary({ sinceMs: NOW - DAY, untilMs: NOW + 1 }, resolverWith())
+    expect(summary.totals.reportedCostUsd).toBe(2)
+    expect(summary.totals.estimatedCostUsd).toBeCloseTo((2_000 * 2e-6 + 1_000 * 4e-6) + (500 * 1e-6 + 200 * 2e-6))
+    expect(summary.totals.costUsd).toBeCloseTo(summary.totals.reportedCostUsd! + summary.totals.estimatedCostUsd!)
+    expect(summary.totals.unpricedRecords).toBe(1)
+    expect(summary.totals.records).toBe(4)
+  })
+
+  it('a custom price overrides a genuinely reported cost, retroactively, on the very next read', () => {
+    const withoutCustom = store.getUsageSummary({ sinceMs: NOW - DAY, untilMs: NOW + 1 }, resolverWith())
+    expect(withoutCustom.byModel.find((r) => r.provider === 'claude-code')!.costUsd).toBe(2)
+
+    const withCustom = store.getUsageSummary(
+      { sinceMs: NOW - DAY, untilMs: NOW + 1 },
+      resolverWith([{ model: 'claude-opus-4-7', inputPerMTok: 3, outputPerMTok: 6 }])
+    )
+    const row = withCustom.byModel.find((r) => r.provider === 'claude-code')!
+    expect(row.costSource).toBe('custom')
+    expect(row.reportedCostUsd).toBeNull()
+    expect(row.costUsd).toBeCloseTo(1_000 * 3e-6 + 500 * 6e-6)
+  })
+
+  it('without a resolver, prices exactly as before (nothing estimated)', () => {
+    const summary = store.getUsageSummary({ sinceMs: NOW - DAY, untilMs: NOW + 1 })
+    expect(summary.totals.reportedCostUsd).toBe(2)
+    expect(summary.totals.estimatedCostUsd).toBeNull()
+    expect(summary.totals.unpricedRecords).toBe(3)
   })
 })
 

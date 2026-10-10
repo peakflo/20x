@@ -229,6 +229,32 @@ export function totalTokens(counts: TokenCounts): number {
  */
 export type UsageCostSource = 'reported' | 'unavailable'
 
+/**
+ * Cost source of an *aggregated* row (query-time, after pricing), shown to the
+ * user as a marker next to the amount:
+ *
+ * - `reported`: every contributing record had a (trustworthy) provider-reported cost.
+ * - `estimated`: some or all of the cost was computed from the public rate table.
+ * - `custom`: a user-set price for this model was used (overrides reported and estimated).
+ * - `unpriced`: no reported cost and no known rate — the amount is unknown.
+ */
+export type UsageCostEstimateSource = 'reported' | 'estimated' | 'custom' | 'unpriced'
+
+/**
+ * A user-set price for a model the public rate table does not know, or whose
+ * published rate the user wants to override. Rates are USD per million tokens
+ * for readability; `0` means free. Cache rates default to the input rate when
+ * left blank (`undefined`), matching the public rate table's own fallback.
+ */
+export interface CustomModelPrice {
+  /** Normalised model id (lowercase, no provider prefix) this price applies to. */
+  model: string
+  inputPerMTok: number
+  outputPerMTok: number
+  cacheReadPerMTok?: number | null
+  cacheWritePerMTok?: number | null
+}
+
 export interface TokenUsageRecord extends TokenCounts {
   id: string
   taskId: string | null
@@ -259,17 +285,32 @@ export interface UsageSummaryQuery {
 }
 
 export interface UsageAggregate extends TokenCounts {
-  /** Sum of reported cost. Null when no record in the group reported cost. */
+  /**
+   * Total cost: reported + estimated (from the public rate table or a custom
+   * price). Null only when nothing in the group is priced at all.
+   */
   costUsd: number | null
+  /** Portion of `costUsd` the provider itself reported. Null when nothing was reported. */
+  reportedCostUsd: number | null
+  /** Portion of `costUsd` computed from a public rate or a custom price. Null when nothing was estimated. */
+  estimatedCostUsd: number | null
   /** Number of usage records (one per model per completed turn). */
   records: number
-  /** Records whose cost was not reported. */
+  /** Records with neither a reported cost nor a known rate — the true "unknown price" count. */
   unpricedRecords: number
+  /**
+   * Estimated USD saved by cache reads vs. paying the input rate for the same
+   * tokens: `cacheReadTokens × (inputRate − cacheReadRate)`. Null when no rate
+   * (public or custom) was known for any contributing model.
+   */
+  cacheSavingsUsd: number | null
 }
 
 export interface UsageModelRow extends UsageAggregate {
   provider: UsageProvider
   model: string
+  /** Where this row's `costUsd` came from. Drives the "estimated" / "custom" / "No price" UI markers. */
+  costSource: UsageCostEstimateSource
 }
 
 export interface UsageDayRow extends UsageAggregate {
@@ -298,6 +339,8 @@ export interface UsageSummary {
 export const USAGE_LIMITS_UPDATED_CHANNEL = 'usage:limits-updated'
 /** Payload: `TokenUsageRecord[]` recorded for one turn. */
 export const USAGE_RECORDED_CHANNEL = 'usage:recorded'
+/** Payload: `CustomModelPrice[]` — fires after a custom price is set or reset. */
+export const USAGE_MODEL_PRICES_UPDATED_CHANNEL = 'usage:modelPricesUpdated'
 
 // ── Formatting helpers (renderer + mobile) ──────────────────
 
@@ -314,6 +357,21 @@ export function formatUsd(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—'
   if (value > 0 && value < 0.01) return '<$0.01'
   return `$${value.toFixed(2)}`
+}
+
+/** Tooltip text for the small marker shown next to an estimated/custom cost. Null for `reported`/`unpriced` (no marker). */
+export function costSourceTooltip(source: UsageCostEstimateSource): string | null {
+  if (source === 'estimated') return 'Estimated from public API rates'
+  if (source === 'custom') return 'Custom price'
+  return null
+}
+
+/** Short hint shown next to "Est. cost": absent once everything is priced, "partial" only while something is truly unpriced. */
+export function usageCostHint(aggregate: Pick<UsageAggregate, 'records' | 'unpricedRecords'>): string | undefined {
+  if (aggregate.records === 0) return undefined
+  if (aggregate.unpricedRecords === aggregate.records) return 'not reported'
+  if (aggregate.unpricedRecords > 0) return 'partial — some models have no known price'
+  return 'API-equivalent estimate — not your subscription bill'
 }
 
 /** "in 2h 14m", "in 3d 4h", "now" — relative to `nowMs`. */

@@ -5,7 +5,9 @@ import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRe
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
 import {
   USAGE_LIMITS_UPDATED_CHANNEL,
+  USAGE_MODEL_PRICES_UPDATED_CHANNEL,
   USAGE_RECORDED_CHANNEL,
+  type CustomModelPrice,
   type ProviderUsageLimits,
   type TokenUsageRecord,
   type UsageLimitsRefreshResult,
@@ -229,12 +231,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getLimitRecovery: (taskId: string): Promise<UsageLimitRecovery | null> =>
       ipcRenderer.invoke('usage:getLimitRecovery', taskId),
     setLimitRecoveryAutoResume: (taskId: string, autoResume: boolean): Promise<UsageLimitRecovery | null> =>
-      ipcRenderer.invoke('usage:setLimitRecoveryAutoResume', taskId, autoResume)
+      ipcRenderer.invoke('usage:setLimitRecoveryAutoResume', taskId, autoResume),
+    refreshRates: (options?: { force?: boolean }): Promise<{ refreshed: boolean; fetchedAt: number }> =>
+      ipcRenderer.invoke('usage:refreshRates', options),
+    listModelPrices: (): Promise<CustomModelPrice[]> => ipcRenderer.invoke('usage:listModelPrices'),
+    setModelPrice: (price: CustomModelPrice): Promise<CustomModelPrice[]> =>
+      ipcRenderer.invoke('usage:setModelPrice', price),
+    resetModelPrice: (model: string): Promise<CustomModelPrice[]> =>
+      ipcRenderer.invoke('usage:resetModelPrice', model)
   },
   onUsageLimitRecoveryUpdated: (callback: (recovery: UsageLimitRecovery) => void): (() => void) => {
     const handler = (_: unknown, data: UsageLimitRecovery): void => callback(data)
     ipcRenderer.on(USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL, handler)
     return () => ipcRenderer.removeListener(USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL, handler)
+  },
+  onUsageModelPricesUpdated: (callback: (prices: CustomModelPrice[]) => void): (() => void) => {
+    const handler = (_: unknown, data: CustomModelPrice[]): void => callback(data)
+    ipcRenderer.on(USAGE_MODEL_PRICES_UPDATED_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(USAGE_MODEL_PRICES_UPDATED_CHANNEL, handler)
   },
   onUsageLimitsUpdated: (callback: (limits: ProviderUsageLimits) => void): (() => void) => {
     const handler = (_: unknown, data: ProviderUsageLimits): void => callback(data)
