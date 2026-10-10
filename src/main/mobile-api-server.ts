@@ -497,6 +497,12 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
     return agentRef!.listHarnessInstances()
   }
 
+  // GET /api/acp-instances — configured ACP agents (registry installs or local
+  // commands), read-only on mobile. Adding/editing is desktop only.
+  if (pathname === '/api/acp-instances') {
+    return agentRef!.listAcpAgentInstances()
+  }
+
   // GET /api/usage/limits — subscription plan limits per harness instance (Claude Code, Codex)
   if (pathname === '/api/usage/limits') {
     return agentRef!.getUsageLimits()

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api/client'
 import type { Route } from '../App'
 import { SubscriptionUsageSection } from '../components/SubscriptionUsageSection'
+import { AcpAgentsSection } from '../components/AcpAgentsSection'
 import { PushSettings } from '../components/PushSettings'
 
 interface TaskSource {
@@ -107,6 +108,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
         )}
 
         <SubscriptionUsageSection />
+        <AcpAgentsSection />
         <PushSettings />
 
         <div className="rounded-md border border-border/30 p-3">

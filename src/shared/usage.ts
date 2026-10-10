@@ -15,16 +15,17 @@
  */
 
 /** Every coding-agent harness 20x runs. Ids match `coding_agent` on agent configs. */
-export type UsageProvider = 'claude-code' | 'codex' | 'opencode' | 'cursor' | 'pi'
+export type UsageProvider = 'claude-code' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'acp'
 
-export const USAGE_PROVIDERS: readonly UsageProvider[] = ['claude-code', 'codex', 'opencode', 'cursor', 'pi'] as const
+export const USAGE_PROVIDERS: readonly UsageProvider[] = ['claude-code', 'codex', 'opencode', 'cursor', 'pi', 'acp'] as const
 
 export const USAGE_PROVIDER_LABELS: Record<UsageProvider, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
   cursor: 'Cursor',
-  pi: 'Pi'
+  pi: 'Pi',
+  acp: 'ACP agent'
 }
 
 export function isUsageProvider(value: unknown): value is UsageProvider {

@@ -24,7 +24,8 @@ const SHORT_LABELS: Record<UsageProvider, string> = {
   codex: 'Codex',
   opencode: 'OpenCode',
   cursor: 'Cursor',
-  pi: 'Pi'
+  pi: 'Pi',
+  acp: 'ACP'
 }
 
 /** The window closest to its limit decides what the status bar shows. */

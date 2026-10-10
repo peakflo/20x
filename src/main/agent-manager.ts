@@ -7,14 +7,16 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { mkdir, writeFile } from 'fs/promises'
 import { Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
-import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
+import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord } from './database'
 import { TaskStatus, SessionStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
 import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
-import { AcpAdapter } from './adapters/acp-adapter'
+import { AcpAgentAdapter } from './adapters/acp-adapter'
+import { getAcpInstallManager, getAcpRegistryClient } from './acp-registry/runtime'
+import { resolveAcpInstanceCommand } from './acp-registry/resolve-instance'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
@@ -29,7 +31,7 @@ import { analytics } from './analytics-service'
 import { UsageTracker, type UsageLimitsProbeTarget } from './usage/usage-tracker'
 import { agentInstanceId, harnessInstanceDisplayName, harnessTypeLabel, harnessTypeOf, defaultHarnessInstanceId, isDefaultHarnessInstanceId, isHarnessType, type HarnessInstanceView, type HarnessType } from '../shared/harness-instances'
 import { instanceHomeError, instanceHomeFor, linkSharedHistory, normalizeHomePath, realHomeFor } from './harness-instances'
-import { CURSOR_KEYCHAIN_ACCESS_SETTING } from './usage/cursor-limits'
+import { CURSOR_KEYCHAIN_ACCESS_SETTING, probeCursorUsageLimits } from './usage/cursor-limits'
 import { UsageLimitRecoveryScheduler, UsageLimitRecoveryStore } from './usage/usage-limit-recovery'
 import {
   AUTO_RESUME_LIMITED_TASKS_SETTING,
@@ -74,7 +76,9 @@ enum CodingAgentType {
   CLAUDE_CODE = 'claude-code',
   CODEX = 'codex',
   CURSOR = 'cursor',
-  PI = 'pi'
+  PI = 'pi',
+  /** A configured ACP (Agent Client Protocol) registry or local-command agent instance. */
+  ACP = 'acp'
 }
 
 /** Handoff block ready to send with the next prompt of a session. */
@@ -810,7 +814,12 @@ export class AgentManager extends EventEmitter {
     // environment (CODEX_HOME / CLAUDE_CONFIG_DIR) belong to that login, so two
     // instances of one harness can run in parallel.
     const instance = this.resolveAgentInstance(agent)
-    const cacheKey = this.adapterCacheKey(backendType, instance?.id)
+    // An ACP agent's "instance" is which configured ACP agent it is (possibly
+    // an entirely different program), not a subscription login — so it needs
+    // its own id in the cache key too, distinct from resolveAgentInstance's
+    // claude-code/codex-only notion of instance.
+    const acpInstanceId = backendType === CodingAgentType.ACP ? agent.config?.acp_instance_id : undefined
+    const cacheKey = this.adapterCacheKey(backendType, instance?.id ?? acpInstanceId)
 
     // Return cached adapter
     if (this.adapters.has(cacheKey)) {
@@ -834,14 +843,43 @@ export class AgentManager extends EventEmitter {
         console.log('[AgentManager] Creating new CodexAppServerAdapter for', instance?.id ?? 'default')
         adapter = new CodexAppServerAdapter({ harnessHome: instance?.home })
         break
-      case CodingAgentType.CURSOR:
-        console.log('[AgentManager] Creating new AcpAdapter for Cursor')
-        adapter = new AcpAdapter('cursor')
+      case CodingAgentType.CURSOR: {
+        console.log('[AgentManager] Creating new AcpAgentAdapter for Cursor')
+        // TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR; this shim keeps it on the generic ACP client until then.
+        const cursorAdapter = new AcpAgentAdapter({ command: 'cursor-agent', args: ['acp'] })
+        this.wireCursorPlanLimits(cursorAdapter)
+        adapter = cursorAdapter
         break
+      }
       case CodingAgentType.PI:
         console.log('[AgentManager] Creating new PiAdapter')
         adapter = new PiAdapter(this.db)
         break
+      case CodingAgentType.ACP: {
+        if (!acpInstanceId) {
+          console.warn('[AgentManager] ACP agent has no configured instance (acp_instance_id)')
+          return null
+        }
+        const acpInstance = this.db.getAcpAgentInstance(acpInstanceId)
+        if (!acpInstance) {
+          console.warn(`[AgentManager] ACP agent instance not found: ${acpInstanceId}`)
+          return null
+        }
+        console.log('[AgentManager] Creating new AcpAgentAdapter for ACP instance', acpInstance.display_name)
+        // Command/args resolve lazily in initialize() — installing a registry
+        // agent (or just finding its binary) can need network/filesystem
+        // work, and getAdapter() itself must stay synchronous.
+        adapter = new AcpAgentAdapter({
+          command: '',
+          args: [],
+          registryAgentId: acpInstance.registry_agent_id ?? undefined,
+          resolveProcessConfig: async () => {
+            const { index } = await getAcpRegistryClient().load()
+            return resolveAcpInstanceCommand(acpInstance, { registryIndex: index, installManager: getAcpInstallManager() })
+          }
+        })
+        break
+      }
       default:
         console.warn(`[AgentManager] Unknown coding agent type: ${backendType}`)
         return null
@@ -909,8 +947,38 @@ export class AgentManager extends EventEmitter {
     return this.resolveAgentInstance(agent)?.shareable ?? true
   }
 
+  /**
+   * Whether a same-harness switch between two agents can resume the same
+   * backend session id natively. For Claude Code/Codex this is "are both
+   * sides' logins shareable" (`sharesSessionHistory`), since every shareable
+   * instance of one harness type links into the same real session store.
+   *
+   * ACP is different: `coding_agent === 'acp'` only says "some configured
+   * ACP agent," not which one — two ACP agents can be entirely different,
+   * incompatible programs (e.g. one registry agent vs. another, or a local
+   * command). So for ACP, "shared" additionally requires both sides to
+   * reference the exact same `acp_instance_id`; otherwise this always
+   * returns false and the switch falls through to a handoff.
+   */
+  private sessionsShareHistory(a: AgentRecord | undefined, b: AgentRecord | undefined): boolean {
+    const isAcp = a?.config?.coding_agent === 'acp' || b?.config?.coding_agent === 'acp'
+    if (isAcp) {
+      return (
+        a?.config?.coding_agent === 'acp' &&
+        b?.config?.coding_agent === 'acp' &&
+        !!a.config.acp_instance_id &&
+        a.config.acp_instance_id === b?.config?.acp_instance_id
+      )
+    }
+    return this.sharesSessionHistory(a) && this.sharesSessionHistory(b)
+  }
+
   /** Display label of an instance for usage and notes. Reads the current name, so renames show at once. */
   harnessInstanceLabel(instanceId: string, provider: UsageProvider): string {
+    if (provider === 'acp') {
+      const acpInstance = this.db.getAcpAgentInstance(instanceId)
+      return acpInstance?.display_name ?? harnessTypeLabel(provider)
+    }
     if (isDefaultHarnessInstanceId(instanceId)) return harnessTypeLabel(provider)
     const stored = this.db.getHarnessInstance(instanceId)
     return stored ? harnessInstanceDisplayName(stored.harness_type, stored.label) : harnessTypeLabel(provider)
@@ -1036,14 +1104,32 @@ export class AgentManager extends EventEmitter {
 
   /** Usage and plan limits of an adapter are attributed to the harness instance it serves. */
   private wireUsageTracking(adapter: CodingAgentAdapter, instanceId: string): void {
-    if (adapter instanceof AcpAdapter) {
-      adapter.cursorKeychainAccess = () => this.db.getSetting(CURSOR_KEYCHAIN_ACCESS_SETTING) === 'true'
-    }
     adapter.onUsage = (report) => {
       this.getUsageTracker()?.recordUsage({ ...report, instanceId })
     }
     adapter.onUsageLimits = (event) => {
       this.getUsageTracker()?.applyLimitsEvent({ ...event, instanceId })
+    }
+  }
+
+  /**
+   * TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR. Until
+   * then it runs on the generic AcpAgentAdapter, which has no Cursor-shaped
+   * fields (the generic client's `probeUsageLimits` always resolves to
+   * null). This overrides that one instance's `probeUsageLimits` with
+   * Cursor's own CLI/Keychain-based plan-limit probe, reading the user's
+   * Keychain-access consent live (not captured once at creation time) so
+   * toggling `setCursorKeychainAccess` takes effect on the next probe.
+   */
+  private wireCursorPlanLimits(adapter: AcpAgentAdapter): void {
+    let inFlight: Promise<ProviderUsageLimits | null> | null = null
+    adapter.probeUsageLimits = () => {
+      if (inFlight) return inFlight
+      const pending = probeCursorUsageLimits({
+        allowKeychain: this.db.getSetting(CURSOR_KEYCHAIN_ACCESS_SETTING) === 'true'
+      }).finally(() => { inFlight = null })
+      inFlight = pending
+      return pending
     }
   }
 
@@ -1083,6 +1169,11 @@ export class AgentManager extends EventEmitter {
 
   listHarnessInstances(): HarnessInstanceView[] {
     return this.db.listHarnessInstances().map((instance) => this.toInstanceView(instance))
+  }
+
+  /** Configured ACP agent instances (registry installs or local commands). Read-only on mobile. */
+  listAcpAgentInstances(): AcpAgentInstanceRecord[] {
+    return this.db.listAcpAgentInstances()
   }
 
   createHarnessInstance(data: CreateHarnessInstanceData): HarnessInstanceView {
@@ -1166,7 +1257,11 @@ export class AgentManager extends EventEmitter {
     for (const agent of this.db.getAgents()) {
       const provider = agent.config?.coding_agent
       if (!isUsageProvider(provider) || agent.config?.auth_method === 'api_key') continue
-      const instanceId = this.resolveAgentInstance(agent)?.id ?? defaultHarnessInstanceId(provider)
+      // resolveAgentInstance only knows Claude Code/Codex accounts; an ACP
+      // agent's instance is which configured ACP agent it is, from its own config.
+      const instanceId = provider === 'acp'
+        ? agent.config?.acp_instance_id ?? defaultHarnessInstanceId(provider)
+        : this.resolveAgentInstance(agent)?.id ?? defaultHarnessInstanceId(provider)
       if (probed.has(instanceId)) continue
       const adapter = this.getAdapter(agent.id)
       if (!adapter?.probeUsageLimits) continue
@@ -2856,7 +2951,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
       // Check for pending approval (ACP + OpenCode adapters) — include in same batch
       if ('getPendingApproval' in adapter && typeof adapter.getPendingApproval === 'function') {
-        const approval = (adapter as unknown as AcpAdapter).getPendingApproval(sessionId)
+        const approval = (adapter as unknown as AcpAgentAdapter).getPendingApproval(sessionId)
         if (approval && !entry.seenPartIds.has(`approval-${approval.toolCallId}`)) {
           entry.seenPartIds.add(`approval-${approval.toolCallId}`)
 
@@ -5099,7 +5194,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const adapter = this.getAdapter(session.agentId)
 
     const approvalAdapter = adapter && 'respondToApproval' in adapter
-      && typeof (adapter as unknown as AcpAdapter).respondToApproval === 'function'
+      && typeof (adapter as unknown as AcpAgentAdapter).respondToApproval === 'function'
 
     // --- Question responses: pass structured answers ---
     // OpenCode implements both response methods. The renderer must identify a
@@ -5206,7 +5301,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       }
       console.log(`[AgentManager] Responding to ACP adapter approval with: ${selectedOption}`)
       // OpenCode adapter returns boolean (true=handled, false=no permission found).
-      // AcpAdapter returns void. Cast to boolean|void to handle both.
+      // AcpAgentAdapter returns void. Cast to boolean|void to handle both.
       const handled = await (adapter as unknown as {
         respondToApproval: (sid: string, approved: boolean, opt?: string, requestId?: string) => Promise<boolean | void>
       }).respondToApproval(sessionId, approved, selectedOption, requestId)
@@ -5239,7 +5334,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
       // If no pending permission was found (stale prompt after watchdog abort
       // or app restart), send a continuation message so the session recovers.
-      // AcpAdapter returns void (undefined), which won't match === false.
+      // AcpAgentAdapter returns void (undefined), which won't match === false.
       if (handled === false && approved) {
         console.log(`[AgentManager] No pending permission found for ${sessionId}, sending continuation message to recover session`)
         this.doSendAdapterMessage(session, sessionId, 'continue').catch((err) => {
@@ -6355,7 +6450,7 @@ Important:
         // Reachability is only known once the first prompt is answered. A
         // missing session then falls back to a handoff (see fallBackToHandoff).
         sessionReachable: true,
-        sessionsShared: this.sharesSessionHistory(from) && this.sharesSessionHistory(to)
+        sessionsShared: this.sessionsShareHistory(from, to)
       }
     )
   }
@@ -6396,7 +6491,7 @@ Important:
       {
         hasHistory: transcript.length > 0,
         sessionReachable: false,
-        sessionsShared: this.sharesSessionHistory(previous) && this.sharesSessionHistory(current)
+        sessionsShared: this.sessionsShareHistory(previous, current)
       }
     )
     if (plan !== 'handoff') {

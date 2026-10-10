@@ -33,7 +33,7 @@ vi.mock('fs/promises', () => ({
 }))
 
 // Mock heavy dependencies to avoid loading electron/native modules
-vi.mock('child_process', () => ({ spawn: vi.fn() }))
+vi.mock('child_process', () => ({ spawn: vi.fn(), execFile: vi.fn() }))
 const notificationInstances: Array<{ show: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn>; _listeners: Map<string, () => void>; opts: { title: string; body: string } }> = []
 
 vi.mock('electron', () => {
@@ -58,7 +58,7 @@ vi.mock('electron', () => {
 })
 vi.mock('./adapters/opencode-adapter', () => ({ OpencodeAdapter: vi.fn() }))
 vi.mock('./adapters/claude-code-adapter', () => ({ ClaudeCodeAdapter: vi.fn() }))
-vi.mock('./adapters/acp-adapter', () => ({ AcpAdapter: vi.fn() }))
+vi.mock('./adapters/acp-adapter', () => ({ AcpAgentAdapter: vi.fn() }))
 vi.mock('./adapters/codex-app-server-adapter', () => ({ CodexAppServerAdapter: vi.fn() }))
 vi.mock('./adapters/pi-adapter', () => ({ PiAdapter: vi.fn() }))
 vi.mock('./task-api-server', () => ({ getTaskApiPort: vi.fn(), waitForTaskApiServer: vi.fn() }))
@@ -71,7 +71,7 @@ vi.mock('./secret-broker', () => ({
 
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
-import { AcpAdapter } from './adapters/acp-adapter'
+import { AcpAgentAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import { getTaskApiPort } from './task-api-server'
@@ -229,7 +229,7 @@ describe('AgentManager skill file paths', () => {
 
       expect(adapter).toBeInstanceOf(CodexAppServerAdapter)
       expect(CodexAppServerAdapter).toHaveBeenCalledOnce()
-      expect(AcpAdapter).not.toHaveBeenCalled()
+      expect(AcpAgentAdapter).not.toHaveBeenCalled()
     })
 
     it('uses the app server even if the old ACP override is set', () => {
@@ -241,7 +241,7 @@ describe('AgentManager skill file paths', () => {
 
       expect(adapter).toBeInstanceOf(CodexAppServerAdapter)
       expect(CodexAppServerAdapter).toHaveBeenCalledOnce()
-      expect(AcpAdapter).not.toHaveBeenCalled()
+      expect(AcpAgentAdapter).not.toHaveBeenCalled()
     })
 
     it('uses ACP for Cursor agents', () => {
@@ -250,8 +250,10 @@ describe('AgentManager skill file paths', () => {
 
       const adapter = (manager as any).getAdapter('agent-1')
 
-      expect(adapter).toBeInstanceOf(AcpAdapter)
-      expect(AcpAdapter).toHaveBeenCalledWith('cursor')
+      // TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR; this
+      // shim keeps it on the generic ACP client until then (see agent-manager.ts).
+      expect(adapter).toBeInstanceOf(AcpAgentAdapter)
+      expect(AcpAgentAdapter).toHaveBeenCalledWith({ command: 'cursor-agent', args: ['acp'] })
     })
 
     it('uses the Pi RPC adapter for Pi agents', () => {
@@ -4276,6 +4278,43 @@ describe('Workflo task execution owner', () => {
     const db = createMockDb()
     vi.mocked(db.getSetting).mockImplementation(key => key === 'workflo-upload:task-1' ? '{}' : undefined)
     await expect(new AgentManager(db).startSession('agent-1', 'task-1', '/tmp/workflo-guard')).rejects.toThrow('Wait for the Workflo task upload')
+  })
+})
+
+describe('AgentManager sessionsShareHistory (ACP instance-pair awareness)', () => {
+  function acpAgent(id: string, acpInstanceId?: string) {
+    return { id, config: { coding_agent: 'acp', ...(acpInstanceId ? { acp_instance_id: acpInstanceId } : {}) } }
+  }
+  function codexAgent(id: string) {
+    return { id, config: { coding_agent: 'codex' } }
+  }
+
+  function shareHistory(a: unknown, b: unknown): boolean {
+    const db = createMockDb() as any
+    const mgr = new AgentManager(db)
+    return (mgr as any).sessionsShareHistory(a, b)
+  }
+
+  it('two ACP agents referencing the same instance share history', () => {
+    expect(shareHistory(acpAgent('a1', 'acp_devin'), acpAgent('a2', 'acp_devin'))).toBe(true)
+  })
+
+  it('two ACP agents referencing different instances do NOT share history, even though both are "acp"', () => {
+    expect(shareHistory(acpAgent('a1', 'acp_devin'), acpAgent('a2', 'acp_goose'))).toBe(false)
+  })
+
+  it('an ACP agent with no configured instance never shares history', () => {
+    expect(shareHistory(acpAgent('a1'), acpAgent('a2', 'acp_devin'))).toBe(false)
+    expect(shareHistory(acpAgent('a1'), acpAgent('a2'))).toBe(false)
+  })
+
+  it('an ACP agent paired with a non-ACP agent does not share history', () => {
+    expect(shareHistory(acpAgent('a1', 'acp_devin'), codexAgent('a2'))).toBe(false)
+  })
+
+  it('non-ACP agents keep the existing per-side shareable-instance rule, unaffected by the ACP branch', () => {
+    expect(shareHistory(codexAgent('a1'), codexAgent('a2'))).toBe(true)
+    expect(shareHistory(undefined, codexAgent('a2'))).toBe(true) // no "from" agent: default to shareable
   })
 })
 
