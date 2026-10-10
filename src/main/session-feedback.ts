@@ -35,9 +35,6 @@ export async function finishSessionFeedback(db: DatabaseManager, sync: SyncManag
   const { completeAtSource } = JSON.parse(pending) as { completeAtSource: boolean }
   db.deleteSetting(feedbackKey(taskId))
   try {
-    if (db.getSubtasks(taskId).some(child => child.status !== TaskStatus.Completed && child.status !== TaskStatus.ReadyForReview)) {
-      throw new Error('Subtasks must finish before this task can complete.')
-    }
     if (task.source_id && completeAtSource) {
       if (!sync) throw new Error('Task source is unavailable.')
       const result = await sync.executeAction(getTaskCompletionAction(task.output_fields), task, undefined, task.source_id)

@@ -252,6 +252,19 @@ describe('getHeartbeatDueTasks', () => {
   })
 })
 
+describe('Task completion', () => {
+  it('completes a parent task even while its subtasks are still open', () => {
+    const parent = db.createTask(makeTask({ title: 'Parent', status: 'ready_for_review' }))!
+    const subtask = db.createTask(makeTask({ title: 'Write the report', status: 'not_started', parent_task_id: parent.id }))!
+
+    const updated = db.updateTask(parent.id, { status: 'completed' })
+
+    expect(updated?.status).toBe('completed')
+    // Finishing the parent doesn't touch the subtask's own status.
+    expect(db.getTask(subtask.id)?.status).toBe('not_started')
+  })
+})
+
 describe('Agent CRUD', () => {
   it('creates and retrieves an agent', () => {
     const agent = db.createAgent(makeAgent({ name: 'My Agent' }))
