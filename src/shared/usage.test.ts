@@ -135,6 +135,33 @@ describe('buildUsageChartSeries', () => {
     expect(series.every((s) => s.color.startsWith('#'))).toBe(true)
   })
 
+  it('pins claude-code to orange and codex to blue, in both themes', () => {
+    const dark = buildUsageChartSeries(['cursor', 'claude-code', 'codex'], 'dark')
+    expect(dark.find((s) => s.key === 'claude-code')!.color).toBe('#d95926')
+    expect(dark.find((s) => s.key === 'codex')!.color).toBe('#3987e5')
+
+    const light = buildUsageChartSeries(['cursor', 'claude-code', 'codex'], 'light')
+    expect(light.find((s) => s.key === 'claude-code')!.color).toBe('#eb6834')
+    expect(light.find((s) => s.key === 'codex')!.color).toBe('#2a78d6')
+
+    // cursor isn't pinned — it just gets whatever's left of the pool, and must not collide with either pinned colour.
+    const cursorColor = dark.find((s) => s.key === 'cursor')!.color
+    expect(cursorColor).not.toBe('#d95926')
+    expect(cursorColor).not.toBe('#3987e5')
+  })
+
+  it('frees a pinned colour for the next provider in canonical order when its owner is absent', () => {
+    // No claude-code: codex still gets blue (its own pin), and orange — freed from claude-code — goes to opencode instead of disappearing.
+    const withoutClaudeCode = buildUsageChartSeries(['codex', 'opencode', 'cursor'], 'dark')
+    expect(withoutClaudeCode.find((s) => s.key === 'codex')!.color).toBe('#3987e5')
+    expect(withoutClaudeCode.find((s) => s.key === 'opencode')!.color).toBe('#d95926')
+
+    // No codex: claude-code still gets orange (its own pin), and blue — freed from codex — goes to opencode instead.
+    const withoutCodex = buildUsageChartSeries(['claude-code', 'opencode', 'cursor'], 'dark')
+    expect(withoutCodex.find((s) => s.key === 'claude-code')!.color).toBe('#d95926')
+    expect(withoutCodex.find((s) => s.key === 'opencode')!.color).toBe('#3987e5')
+  })
+
   it('folds a 5th+ provider into one "Other" series instead of growing the palette', () => {
     const series = buildUsageChartSeries(['claude-code', 'codex', 'opencode', 'cursor', 'pi', 'acp'], 'dark')
     expect(series).toHaveLength(5)

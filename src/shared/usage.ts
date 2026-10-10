@@ -37,10 +37,30 @@ export const USAGE_PROVIDER_LABELS: Record<UsageProvider, string> = {
 // first 4 providers that actually have data in the period get a real
 // colour; a 5th+ (ACP agents can add arbitrary providers) folds into one
 // neutral "Other" series instead of growing the palette indefinitely.
+//
+// Two identities are pinned regardless of position: claude-code is always
+// orange and codex is always blue (user requirement — these two specific
+// colours matter, everything else just needs to stay visually distinct).
+// Pinning is per-identity, not per-slot: if one of them is absent from a
+// given call, its colour returns to the general pool for whichever other
+// present provider is next in canonical order, rather than leaving a gap
+// or changing meaning. Every other provider keeps the old purely
+// positional behaviour, walking what's left of the pool in canonical
+// order — "any colour works" for them.
 export const USAGE_CHART_COLORS_DARK: readonly string[] = ['#3987e5', '#d95926', '#199e70', '#c98500']
 export const USAGE_CHART_COLORS_LIGHT: readonly string[] = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100']
 export const USAGE_CHART_OTHER_COLOR_DARK = '#8e8d91'
 export const USAGE_CHART_OTHER_COLOR_LIGHT = '#6b7280'
+
+/** Pinned per-identity colours — claude-code=orange, codex=blue — independent of slot position. See the comment above the colour arrays. */
+const USAGE_CHART_RESERVED_COLORS_DARK: Partial<Record<UsageProvider, string>> = {
+  'claude-code': '#d95926',
+  codex: '#3987e5'
+}
+const USAGE_CHART_RESERVED_COLORS_LIGHT: Partial<Record<UsageProvider, string>> = {
+  'claude-code': '#eb6834',
+  codex: '#2a78d6'
+}
 
 export interface UsageChartSeries {
   /** The provider id for a dedicated series, or the literal `'other'` for the folded bucket. */
@@ -56,19 +76,33 @@ export interface UsageChartSeries {
  * series: the first 4 (by `USAGE_PROVIDERS` order) get a real colour, any
  * rest fold into one "Other" series. Order of the returned array is the
  * stacking/legend order.
+ *
+ * claude-code and codex get their pinned colour (orange / blue) whenever
+ * they're among those first 4, regardless of slot position. The remaining
+ * providers split whatever's left of the 4-colour pool — walked in
+ * canonical order, same positional behaviour as before — so a pinned
+ * colour that isn't claimed this call (its provider absent, or folded into
+ * "Other") goes to the next provider in line instead of leaving a gap.
  */
 export function buildUsageChartSeries(presentProviders: readonly UsageProvider[], theme: 'dark' | 'light'): UsageChartSeries[] {
   const colors = theme === 'dark' ? USAGE_CHART_COLORS_DARK : USAGE_CHART_COLORS_LIGHT
   const otherColor = theme === 'dark' ? USAGE_CHART_OTHER_COLOR_DARK : USAGE_CHART_OTHER_COLOR_LIGHT
+  const reserved = theme === 'dark' ? USAGE_CHART_RESERVED_COLORS_DARK : USAGE_CHART_RESERVED_COLORS_LIGHT
   const present = new Set(presentProviders)
   const ordered = USAGE_PROVIDERS.filter((p) => present.has(p))
   const main = ordered.slice(0, 4)
   const rest = ordered.slice(4)
 
-  const series: UsageChartSeries[] = main.map((provider, i) => ({
+  // Pull any pinned colour claimed by a reserved provider actually in `main`
+  // out of the general pool, so it isn't also handed to someone else.
+  const claimedColors = new Set(main.map((p) => reserved[p]).filter((c): c is string => c !== undefined))
+  const pool = colors.filter((c) => !claimedColors.has(c))
+  let poolIndex = 0
+
+  const series: UsageChartSeries[] = main.map((provider) => ({
     key: provider,
     label: USAGE_PROVIDER_LABELS[provider],
-    color: colors[i],
+    color: reserved[provider] ?? pool[poolIndex++],
     providers: [provider]
   }))
   if (rest.length > 0) {
