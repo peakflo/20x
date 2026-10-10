@@ -145,7 +145,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       fetchModels()
     } else if (codingAgent === CodingAgentType.ACP) {
       // Models are whatever the selected instance's config declares as
-      // custom models (see Settings → Agents → ACP agents). Live model
+      // custom models (see Settings → Harnesses → ACP agents). Live model
       // discovery from the running agent's own config options happens once
       // a session exists, not here in the form.
       const instance = acpInstances.find((i) => i.id === acpInstanceId)
@@ -410,7 +410,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </select>
         {codingAgent === CodingAgentType.ACP && acpInstances.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            No ACP agents configured yet. Add one in Settings → Agents.
+            No ACP agents configured yet. Add one in Settings → Harnesses.
           </p>
         )}
         {codingAgent && <HarnessVersionWarning codingAgent={codingAgent} />}

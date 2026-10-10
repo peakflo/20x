@@ -2,9 +2,6 @@ import { useState, useEffect } from 'react'
 import { Plus, Loader2, Wifi, WifiOff, RefreshCw, Edit3, Trash2, Terminal, Plug } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { SettingsSection } from '../SettingsSection'
-import { HarnessInstancesSection } from './HarnessInstancesSection'
-import { AcpAgentsSection } from './AcpAgentsSection'
-import { HarnessesSection } from './HarnessesSection'
 import { AgentFormDialog } from '../forms/AgentFormDialog'
 import { OpenCodeLogo, AnthropicLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
 import { useAgentStore } from '@/stores/agent-store'
@@ -307,10 +304,6 @@ export function AgentsSettings() {
           </div>
         )}
       </SettingsSection>
-
-      <HarnessInstancesSection />
-      <HarnessesSection />
-      <AcpAgentsSection />
 
       <AgentFormDialog
         agent={agentDialog.agent}

@@ -7,7 +7,7 @@ import { isHarnessKey } from '@shared/harness-versions'
 /**
  * Small warning shown in the agent form when the selected harness's CLI is
  * below 20x's recommended version, or below the minimum it supports. Reads
- * the same harness-maintenance store as Settings → Agents, so it never
+ * the same harness-maintenance store as Settings → Harnesses, so it never
  * re-checks on its own — just renders whatever the last check found.
  */
 export function HarnessVersionWarning({ codingAgent }: { codingAgent: string }) {
@@ -21,8 +21,8 @@ export function HarnessVersionWarning({ codingAgent }: { codingAgent: string }) 
   if (!status || (status.status !== 'below_recommended' && status.status !== 'unsupported')) return null
 
   const message = status.status === 'unsupported'
-    ? `${harnessDisplayLabel(codingAgent)} ${status.version ?? ''} is unsupported — tasks on this agent may fail. Update it in Settings → Agents.`
-    : `${harnessDisplayLabel(codingAgent)} ${status.version ?? ''} is below 20x's recommended version. Update it in Settings → Agents.`
+    ? `${harnessDisplayLabel(codingAgent)} ${status.version ?? ''} is unsupported — tasks on this agent may fail. Update it in Settings → Harnesses.`
+    : `${harnessDisplayLabel(codingAgent)} ${status.version ?? ''} is below 20x's recommended version. Update it in Settings → Harnesses.`
 
   return (
     <p

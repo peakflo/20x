@@ -71,14 +71,14 @@ describe('HarnessUpdateNotice', () => {
     expect(screen.getByTestId('harness-update-notice').textContent).toContain('2 harness updates available')
   })
 
-  it('"Review" opens Settings on the Agents tab and dismisses the notice', async () => {
+  it('"Review" opens Settings on the Harnesses tab and dismisses the notice', async () => {
     get.mockResolvedValue([statusFor({ harness: 'codex', status: 'behind_latest' })])
     await act(async () => { render(<HarnessUpdateNotice />) })
 
     fireEvent.click(screen.getByRole('button', { name: 'Review' }))
 
     expect(useUIStore.getState().activeModal).toBe('settings')
-    expect(useUIStore.getState().settingsTab).toBe(SettingsTab.AGENTS)
+    expect(useUIStore.getState().settingsTab).toBe(SettingsTab.HARNESSES)
     expect(screen.queryByTestId('harness-update-notice')).toBeNull()
   })
 

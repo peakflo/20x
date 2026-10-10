@@ -150,7 +150,7 @@ function HarnessRow({ status }: { status: HarnessMaintenanceStatus }) {
 }
 
 /**
- * Settings → Agents: version checks and one-click updates for the harness
+ * Settings → Harnesses: version checks and one-click updates for the harness
  * CLIs agents run on (Claude Code, Codex, OpenCode, Pi). Cursor shows as
  * "Updates with 20x" (or manual, until it moves onto `@cursor/sdk`).
  * Updates never run without this component's explicit "Update now" click.

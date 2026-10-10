@@ -6,8 +6,8 @@ import { statusNeedsAttention } from '@shared/harness-maintenance'
 
 /**
  * A subtle status-bar dot when any harness has an update, is below 20x's
- * recommended version, or is unsupported. Click opens Settings → Agents. No
- * OS notification here — this is the one quiet, always-available indicator.
+ * recommended version, or is unsupported. Click opens Settings → Harnesses.
+ * No OS notification here — this is the one quiet, always-available indicator.
  */
 export function HarnessUpdateIndicator() {
   const statuses = useHarnessMaintenanceStore((s) => s.statuses)
@@ -26,7 +26,7 @@ export function HarnessUpdateIndicator() {
 
   return (
     <button
-      onClick={() => { setSettingsTab(SettingsTab.AGENTS); openSettings() }}
+      onClick={() => { setSettingsTab(SettingsTab.HARNESSES); openSettings() }}
       className="flex items-center gap-1"
       title={title}
       aria-label={title}

@@ -100,7 +100,7 @@ export function HarnessUpdateNotice() {
         <Button
           size="sm"
           onClick={() => {
-            setSettingsTab(SettingsTab.AGENTS)
+            setSettingsTab(SettingsTab.HARNESSES)
             openSettings()
             markNotified()
           }}
