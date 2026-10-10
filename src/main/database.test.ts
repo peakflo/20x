@@ -293,19 +293,13 @@ describe('agent permission_mode — always allow by default', () => {
    * Injects an in-memory DB and builds the real schema, so private seed/
    * migration methods can run against exact rows.
    */
-  function makeRawManager(withMigrations = false): { manager: DatabaseManager; rawDb: InstanceType<typeof RawDatabase> } {
+  function makeRawManager(): { manager: DatabaseManager; rawDb: InstanceType<typeof RawDatabase> } {
     const rawDb = new RawDatabase(':memory:')
     rawDb.pragma('journal_mode = WAL')
     rawDb.pragma('foreign_keys = ON')
     const manager = new RealDatabaseManager()
     ;(manager as unknown as { db: unknown }).db = rawDb
     ;(manager as unknown as { createTables(): void }).createTables()
-    if (withMigrations) {
-      // The seed runs inside runMigrations — the fresh-install path
-      // (initialize() calls createTables() then runMigrations() when the
-      // stored schema version is behind).
-      ;(manager as unknown as { runMigrations(): void }).runMigrations()
-    }
     return { manager, rawDb }
   }
 
@@ -334,13 +328,31 @@ describe('agent permission_mode — always allow by default', () => {
   }
 
   it('seeds the Default Agent with permission_mode allow on a fresh install', () => {
-    const { manager, rawDb } = makeRawManager(true)
+    // seedDefaultAgent runs on EVERY startup (initialize()), not behind the
+    // schema-version gate — a fresh install gets the Default Agent on first
+    // launch, always with always-allow permissions.
+    const { manager, rawDb } = makeRawManager()
     try {
+      ;(manager as unknown as { seedDefaultAgent(): void }).seedDefaultAgent()
+
       const agents = manager.getAgents()
       expect(agents).toHaveLength(1)
       expect(agents[0].name).toBe('Default Agent')
       expect(agents[0].is_default).toBe(true)
       expect(agents[0].config.permission_mode).toBe('allow')
+    } finally {
+      rawDb.close()
+    }
+  })
+
+  it('seed is a no-op once any agent exists (no duplicate Default Agent)', () => {
+    const { manager, rawDb } = makeRawManager()
+    try {
+      manager.createAgent(makeAgent({ name: 'Only Agent' }))
+
+      ;(manager as unknown as { seedDefaultAgent(): void }).seedDefaultAgent()
+
+      expect(manager.getAgents().map((a) => a.name)).toEqual(['Only Agent'])
     } finally {
       rawDb.close()
     }

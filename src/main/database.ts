@@ -1160,8 +1160,10 @@ export class DatabaseManager {
 
     // These must run on EVERY startup (not just during migrations)
     // because they start runtime services (task API server) and
-    // ensure default records exist (MCP server, orchestrator skill).
+    // ensure default records exist (default agent, MCP server,
+    // orchestrator skill).
     this.ensureTranscriptRevColumn()
+    this.seedDefaultAgent()
     this.migrateAgentPermissionDefaults()
     this.initializeTasksFts()
     this.initializeTaskManagementMcpServer()
@@ -1952,16 +1954,19 @@ export class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_skills_enterprise_id ON skills(enterprise_skill_id);
     `)
 
-    this.seedDefaultAgent()
-
     // Migration v4: FTS5 full-text search index for similar task search
     this.initializeTasksFts()
   }
 
   /**
-   * Seeds the Default Agent on a fresh install. Its config starts with
-   * `permission_mode: 'allow'` ("Allow automatically") — the app-wide default;
-   * the user can still change it in the agent editor.
+   * Ensures the Default Agent exists, seeded with `permission_mode: 'allow'`
+   * ("Allow automatically") — the app-wide default; the user can still change
+   * it in the agent editor.
+   *
+   * Runs on EVERY startup (not behind the schema-version gate): a fresh
+   * install gets the Default Agent on first launch, and an install whose
+   * agents were all removed gets it back — always with always-allow
+   * permissions. A no-op once any agent exists.
    */
   private seedDefaultAgent(): void {
     const agentCount = this.db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number }
