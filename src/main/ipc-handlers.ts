@@ -1,7 +1,7 @@
 import { updateTaskFromUser } from './session-feedback'
-import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
+import { ipcMain, dialog, shell, Notification, app, session, clipboard as electronClipboard, ClipboardItem } from 'electron'
 import * as childProcess from 'child_process'
-import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
+import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join, basename, extname } from 'path'
 import { networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
@@ -17,7 +17,7 @@ import { getAgentBrowserSession } from './agent-browser-session'
 import { listBrowserImportSources, importBrowserSessions, clearImportedBrowserSessions, normalizeDomains } from './browser-session-import'
 import type { BrowserImportRequest } from '../shared/browser-session-import'
 import type { CustomModelPrice, UsageSummaryQuery } from '../shared/usage'
-import { sanitizeUsageSummaryQuery } from './usage/usage-query'
+import { sanitizeUsageSummaryQuery, sanitizeUsageParallelismQuery } from './usage/usage-query'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -681,6 +681,38 @@ export function registerIpcHandlers(
 
   ipcMain.handle('usage:resetModelPrice', (_, model: string) => {
     return agentManager.resetUsageModelPrice(model)
+  })
+
+  // "My multiplier" — parallel-agent summary for the usage hero card + records panel.
+  ipcMain.handle('usage:getParallelismSummary', (_, query?: { days?: number; utcOffsetMinutes?: number }) => {
+    return agentManager.getUsageParallelismSummary(sanitizeUsageParallelismQuery(query))
+  })
+
+  // Share dialog: put the exported PNG on the OS clipboard as an image.
+  // The DOM `Clipboard` interface shadows Electron's in the main-process type
+  // graph (see artifact-clipboard.ts), so the import is narrowed back here too.
+  // This Electron version's clipboard module is the Web Clipboard API shape
+  // (ClipboardItem + write), not the older writeImage/nativeImage one.
+  ipcMain.handle('usage:copyImageToClipboard', async (_, pngBytes: ArrayBuffer) => {
+    const clipboard = electronClipboard as unknown as Electron.Clipboard
+    try {
+      await clipboard.write([new ClipboardItem({ 'image/png': new Blob([pngBytes], { type: 'image/png' }) })])
+      return { success: true }
+    } catch (error) {
+      console.error('[IPC] usage:copyImageToClipboard failed:', error)
+      return { success: false }
+    }
+  })
+
+  // Share dialog: save the exported PNG to disk via a native save dialog.
+  ipcMain.handle('usage:saveImage', async (_, pngBytes: ArrayBuffer, defaultFileName: string) => {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      defaultPath: defaultFileName,
+      filters: [{ name: 'PNG Image', extensions: ['png'] }]
+    })
+    if (canceled || !filePath) return { saved: false }
+    writeFileSync(filePath, Buffer.from(pngBytes))
+    return { saved: true, filePath }
   })
 
   // Durable transcript snapshot: the renderer hydrates transcript state from

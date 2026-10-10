@@ -7,7 +7,7 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { mkdir, writeFile } from 'fs/promises'
 import { app, Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
-import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord } from './database'
+import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord, AgentRunIntervalRecord } from './database'
 import { TaskStatus, SessionStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -74,6 +74,18 @@ import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../s
 import { sendMobilePush } from './mobile-push'
 import { AgentPushEvents, type QuestionPart } from './agent-push-events'
 import { formatRetryDelay, isOverloadError, MAX_OVERLOAD_RETRY_ATTEMPTS, OverloadRetryTracker } from './overload-retry'
+import {
+  recordAgentStatusTransition,
+  closeSessionIntervalOnDestroy,
+  renameSessionOnRekey,
+  recoverCrashedIntervals,
+  runAgentRunIntervalBackfill,
+  isAgentSessionStatus,
+  type AgentRunContext,
+  type AgentSessionStatus
+} from './usage/agent-run-intervals'
+import { computeParallelismSummary, periodBoundsForDays, type UsageParallelismResponse, type ParallelismSummary } from './usage/usage-parallelism'
+import type { UsageParallelismQuery } from './usage/usage-query'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -241,8 +253,18 @@ function isCodexAppServerAdapter(adapter: CodingAgentAdapter): boolean {
   return adapter instanceof CodexAppServerAdapter || adapter.constructor?.name === 'CodexAppServerAdapter'
 }
 
-function getAgentProvider(agent: { config?: { coding_agent?: string } } | null | undefined): string {
+export function getAgentProvider(agent: { config?: { coding_agent?: string } } | null | undefined): string {
   return agent?.config?.coding_agent || CodingAgentType.OPENCODE
+}
+
+/**
+ * The harness instance (subscription account) an agent's config points at, or
+ * null for the default instance / an API-key agent. Reused by
+ * agent-run-intervals.ts so run-interval rows record the same instance
+ * identity as the rest of agent-manager.ts, without hardcoding a provider list.
+ */
+export function getAgentHarnessInstanceId(agent: { config?: { harness_instance_id?: string } } | null | undefined): string | null {
+  return agent?.config?.harness_instance_id ?? null
 }
 
 /**
@@ -486,7 +508,91 @@ export class AgentManager extends EventEmitter {
   constructor(db: DatabaseManager) {
     super()
     this.db = db
+
+    // Crash recovery: close any agent_run_intervals row left open by a
+    // previous run that crashed or was force-quit, before anything else
+    // (including the idle-session reaper, or any IPC call) can observe or
+    // query stale open intervals. `this.sessions` is empty at this point in
+    // a normal cold start, so every open row found here predates this
+    // process and is closed; see recoverCrashedIntervals' isSessionActive
+    // param for the (currently theoretical) "still genuinely running" case.
+    try {
+      const { recovered, skippedStillActive } = recoverCrashedIntervals(this.db, (sessionId) => this.sessions.has(sessionId), Date.now())
+      if (recovered > 0 || skippedStillActive > 0) {
+        console.log(`[AgentManager] agent_run_intervals crash recovery: closed ${recovered}, left ${skippedStillActive} open (still active)`)
+      }
+    } catch (err) {
+      console.error('[AgentManager] agent_run_intervals crash recovery failed:', err)
+    }
+
+    // Best-effort backfill of historical intervals (from before this table
+    // existed) from token_usage_events. One-time (guarded by a settings
+    // flag) and can touch a lot of rows, so it's deferred off the startup
+    // path entirely rather than run inline here.
+    setImmediate(() => {
+      try {
+        const result = runAgentRunIntervalBackfill(this.db)
+        if (result.sessionsInserted > 0 || result.sessionsSkipped > 0) {
+          console.log(`[AgentManager] agent_run_intervals backfill: ${result.sessionsInserted} sessions (${result.intervalsInserted} intervals), ${result.sessionsSkipped} skipped`)
+        }
+      } catch (err) {
+        console.error('[AgentManager] agent_run_intervals backfill failed:', err)
+      }
+    })
+
     this.startIdleSessionReaper()
+  }
+
+  /**
+   * Resolves the per-session identity agent-run-intervals.ts needs to
+   * open/close a row: provider and harness instance come from the agent's
+   * config (same fields the rest of this file already reads via
+   * `getAgentProvider`/`getAgentHarnessInstanceId`), task status comes from
+   * the live task record (for the AgentLearning exclusion).
+   */
+  private buildAgentRunContext(sessionId: string, agentId: string, taskId: string, isTriageSession: boolean): AgentRunContext {
+    const agent = this.db.getAgent(agentId)
+    const task = this.db.getTask(taskId)
+    return {
+      taskId,
+      agentId,
+      sessionId,
+      provider: getAgentProvider(agent),
+      harnessInstanceId: getAgentHarnessInstanceId(agent),
+      isTriageSession,
+      taskStatus: task?.status
+    }
+  }
+
+  // ── agent_run_intervals: defensive wrappers ──────────────────
+  // This bookkeeping must never be the reason a session fails to start,
+  // send, or stop — every call site below goes through one of these instead
+  // of calling agent-run-intervals.ts directly, so a DB error (or, in tests,
+  // a minimal mock `db` that doesn't implement these methods) is logged and
+  // swallowed rather than breaking the actual session operation in progress.
+
+  private recordAgentRunTransition(ctx: AgentRunContext, prevStatus: AgentSessionStatus | undefined, nextStatus: AgentSessionStatus, atMs: number): void {
+    try {
+      recordAgentStatusTransition(this.db, ctx, prevStatus, nextStatus, atMs)
+    } catch (err) {
+      console.error('[AgentManager] agent_run_intervals recordAgentStatusTransition failed:', err)
+    }
+  }
+
+  private closeAgentRunInterval(sessionId: string, atMs: number, endReason: string): void {
+    try {
+      closeSessionIntervalOnDestroy(this.db, sessionId, atMs, endReason)
+    } catch (err) {
+      console.error('[AgentManager] agent_run_intervals closeSessionIntervalOnDestroy failed:', err)
+    }
+  }
+
+  private renameAgentRunIntervalSession(oldSessionId: string, newSessionId: string): void {
+    try {
+      renameSessionOnRekey(this.db, oldSessionId, newSessionId)
+    } catch (err) {
+      console.error('[AgentManager] agent_run_intervals renameSessionOnRekey failed:', err)
+    }
   }
 
   /** True when the tool delegates to subagents or blocks on subtask progress —
@@ -1264,6 +1370,97 @@ export class AgentManager extends EventEmitter {
     // bundled fallback) and kicks off a background refresh if the 24h TTL has lapsed — never awaited here.
     void this.getUsagePricingService().ensureFresh().catch(() => undefined)
     return this.getUsageTracker()?.getSummary(query) ?? null
+  }
+
+  /**
+   * The "my multiplier" card data for one of the four fixed periods
+   * (7/30/90/182 days) ending now: the parallelism summary (multiplier, peak,
+   * peak-day lanes, per-day run hours) plus tasks shipped and the earliest
+   * interval on record (phase 2's "counting from <date>" hint when coverage
+   * is thin). `nowMs` is a parameter — not read from inside this method via
+   * a default — purely so callers/tests can pin it; production call sites
+   * simply omit it.
+   */
+  getUsageParallelismSummary(query: UsageParallelismQuery, nowMs: number = Date.now()): UsageParallelismResponse {
+    const { periodStartMs, periodEndMs } = periodBoundsForDays(query.days, nowMs)
+    const utcOffsetMinutes = query.utcOffsetMinutes ?? -new Date(nowMs).getTimezoneOffset()
+
+    // Only the multiplier RATIO (totalRunMs/wallMs/multiplier below) is
+    // live-only — a best-effort backfilled span (derived from
+    // transcript_parts/token_usage_events, not actually observed by the
+    // status-transition writer) must never count toward "how much agent
+    // work got done per hour you watched". Everything else the card draws
+    // — peak concurrency, the peak day, and the per-day activity calendar —
+    // is a plain aggregate/count, not a ratio, and backfilled history is
+    // legitimate, useful context for those (that's the whole reason
+    // backfill exists). So this method sweeps the SAME underlying rows
+    // twice: once unfiltered (`fullSummary`, feeds peak/peakDayLanes/perDay
+    // and `hasData` — whether there's anything to draw AT ALL) and once
+    // live-only (`liveSummary`, feeds totalRunMs/wallMs/multiplier only).
+    const allRows = this.db.getAgentRunIntervalsOverlapping(periodStartMs, periodEndMs)
+    const toRawInterval = (iv: AgentRunIntervalRecord) => ({
+      sessionId: iv.sessionId,
+      taskId: iv.taskId,
+      agentId: iv.agentId,
+      provider: iv.provider,
+      harnessInstanceId: iv.harnessInstanceId,
+      startedAtMs: iv.startedAtMs,
+      endedAtMs: iv.endedAtMs
+    })
+    const rawIntervalsAll = allRows.map(toRawInterval)
+    const rawIntervalsLive = allRows.filter((iv) => iv.endReason !== 'backfilled').map(toRawInterval)
+
+    const rawFocusIntervals = this.db.getAppFocusIntervalsOverlapping(periodStartMs, periodEndMs).map((iv) => ({
+      startedAtMs: iv.startedAtMs,
+      endedAtMs: iv.endedAtMs
+    }))
+
+    const fullSummary = computeParallelismSummary(rawIntervalsAll, rawFocusIntervals, periodStartMs, periodEndMs, utcOffsetMinutes)
+    const liveSummary = computeParallelismSummary(rawIntervalsLive, rawFocusIntervals, periodStartMs, periodEndMs, utcOffsetMinutes)
+
+    const parallelism: ParallelismSummary = {
+      periodStartMs,
+      periodEndMs,
+      // Whether there's anything to draw at all — true if ANY agent-run
+      // interval (live or backfilled) overlaps the period, matching
+      // `fullSummary`'s own notion of "no data" rather than the live-only
+      // sweep's (which would incorrectly report "no data" for a user with
+      // only pre-release backfilled history and no live time yet).
+      hasData: fullSummary.hasData,
+      totalRunMs: liveSummary.totalRunMs,
+      // Full (live + backfilled) total — the "agent hours" stat tile's own number, distinct
+      // from the live-only totalRunMs above that feeds the ratio/sentence.
+      totalRunMsAll: fullSummary.totalRunMs,
+      wallMs: liveSummary.wallMs,
+      screenTimeMs: liveSummary.screenTimeMs,
+      multiplier: liveSummary.multiplier,
+      peak: fullSummary.peak,
+      peakDayLanes: fullSummary.peakDayLanes,
+      perDay: fullSummary.perDay
+    }
+
+    // The multiplier needs BOTH series — agent-run intervals and app-focus
+    // intervals — so "counting from" is the LATER of their two earliest
+    // starts (the earlier series' head is still "no data for the ratio"
+    // until the later one begins too). The agent side only counts LIVE
+    // rows — backfilled history doesn't move this date forward, since this
+    // date is specifically about the ratio's own evidence window, not
+    // about the calendar/peak context (which has no "counting from" notion
+    // — backfilled days just show up in it like any other day).
+    const earliestAgent = this.db.getEarliestLiveAgentRunIntervalStart()
+    const earliestFocus = this.db.getEarliestAppFocusIntervalStart()
+    const countingFromMs = earliestAgent !== null && earliestFocus !== null
+      ? Math.max(earliestAgent, earliestFocus)
+      : null
+
+    return {
+      periodDays: query.days,
+      periodStartMs,
+      periodEndMs,
+      parallelism,
+      tasksShipped: this.db.getTasksShippedCount(periodStartMs, periodEndMs),
+      countingFromMs
+    }
   }
 
   /** Re-fetches the public rate table. `force` ignores the 24h TTL but never the 60s floor. */
@@ -2876,6 +3073,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         if (session) {
           this.sessions.delete(sessionId)
           this.sessions.set(realSessionId, session)
+          // An open run interval (if any) was opened under the temp id — carry it over,
+          // otherwise it would never close (nothing else ever queries the old id again).
+          this.renameAgentRunIntervalSession(sessionId, realSessionId)
 
           // Record redirect so stale IDs from the renderer still resolve.
           // Cap the redirects map to prevent unbounded growth across many sessions.
@@ -4502,6 +4702,11 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     // In learning mode, skip output extraction, task status, and renderer notification
     if (session.learningMode) {
+      // No agent:status broadcast follows on this path, so the usual hook
+      // never runs — close directly. (`learningMode` is not currently set
+      // anywhere, but this keeps the status mutation and the interval close
+      // inseparable regardless.)
+      this.closeAgentRunInterval(sessionId, Date.now(), 'idle')
       session.status = 'idle'
       return
     }
@@ -4742,6 +4947,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const session = this.sessions.get(sessionId)
     if (!session) return
 
+    // Defensive close, independent of the agent:status broadcast hook: both
+    // callers of this method (triage completion, learn-from-session) release
+    // the backend session without necessarily going through a 'working' ->
+    // other status broadcast first. No-op if nothing is open (the common
+    // case — the session was already idle, or excluded).
+    this.closeAgentRunInterval(sessionId, Date.now(), reason)
+
     this.stopAdapterPolling(sessionId)
     const adapter = session.adapter ?? this.getAdapter(session.agentId)
     if (!adapter) return
@@ -4770,6 +4982,14 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       provider: getAgentProvider(this.db.getAgent(session.agentId)),
       resetTaskStatus
     })
+
+    // Defensive close, independent of the agent:status broadcast hook: this
+    // method's own final 'idle' broadcast (below) fires AFTER `this.sessions`
+    // and `this.lastSentStatus` are already cleared, so the broadcast hook
+    // has no session to look up and no real prevStatus to compare against by
+    // then. Close here instead, while `session` is still known. No-op if
+    // nothing is open (session was already idle, or excluded).
+    this.closeAgentRunInterval(sessionId, Date.now(), 'stopped')
 
     // Stop polling for this session
     this.stopAdapterPolling(sessionId)
@@ -6746,10 +6966,23 @@ Important:
     // Show OS notification when agent transitions from working to idle/waiting_approval
     // and the app window is not focused
     if (channel === 'agent:status' && data && typeof data === 'object') {
-      const { sessionId, status, taskId } = data as { sessionId?: string; status?: string; taskId?: string }
+      const { sessionId, status, taskId, agentId } = data as { sessionId?: string; status?: string; taskId?: string; agentId?: string }
       if (sessionId && status) {
         const prevStatus = this.lastSentStatus.get(sessionId)
         this.lastSentStatus.set(sessionId, status)
+
+        // agent_run_intervals: open on entering 'working', close on leaving it.
+        // Only reachable while the session is still in `this.sessions` — the
+        // one destroy path that deletes before this broadcast (stopSession)
+        // closes its interval explicitly instead of relying on this hook.
+        if (agentId && taskId && isAgentSessionStatus(status) && (prevStatus === undefined || isAgentSessionStatus(prevStatus))) {
+          const liveSession = this.sessions.get(sessionId)
+          if (liveSession) {
+            const ctx = this.buildAgentRunContext(sessionId, agentId, taskId, !!liveSession.isTriageSession)
+            this.recordAgentRunTransition(ctx, prevStatus as AgentSessionStatus | undefined, status, Date.now())
+          }
+        }
+
         const pushEvent = this.pushEvents.statusChanged(sessionId, prevStatus, status)
         const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
         if (pushEvent && taskId && isWindowInactive) {

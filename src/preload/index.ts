@@ -11,6 +11,7 @@ import {
   type ProviderUsageLimits,
   type TokenUsageRecord,
   type UsageLimitsRefreshResult,
+  type UsageParallelismResponse,
   type UsageSummary,
   type UsageSummaryQuery
 } from '../shared/usage'
@@ -238,7 +239,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setModelPrice: (price: CustomModelPrice): Promise<CustomModelPrice[]> =>
       ipcRenderer.invoke('usage:setModelPrice', price),
     resetModelPrice: (model: string): Promise<CustomModelPrice[]> =>
-      ipcRenderer.invoke('usage:resetModelPrice', model)
+      ipcRenderer.invoke('usage:resetModelPrice', model),
+    getParallelismSummary: (query: { days: number; utcOffsetMinutes?: number }): Promise<UsageParallelismResponse> =>
+      ipcRenderer.invoke('usage:getParallelismSummary', query),
+    copyImageToClipboard: (pngBytes: ArrayBuffer): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('usage:copyImageToClipboard', pngBytes),
+    saveImage: (pngBytes: ArrayBuffer, defaultFileName: string): Promise<{ saved: boolean; filePath?: string }> =>
+      ipcRenderer.invoke('usage:saveImage', pngBytes, defaultFileName)
   },
   onUsageLimitRecoveryUpdated: (callback: (recovery: UsageLimitRecovery) => void): (() => void) => {
     const handler = (_: unknown, data: UsageLimitRecovery): void => callback(data)

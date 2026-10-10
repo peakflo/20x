@@ -4,8 +4,14 @@ import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { SettingsSection } from '../SettingsSection'
 import { useSubscriptionUsage } from '@/hooks/use-subscription-usage'
+import { useUsageParallelism } from '@/hooks/use-usage-parallelism'
+import { useUsageCardName } from '@/hooks/use-usage-card-name'
+import { useThemeStore } from '@/stores/theme-store'
 import { ProviderLimitsCard } from '@/components/usage/ProviderLimitsCard'
 import { ModelPricesDialog } from '@/components/usage/ModelPricesDialog'
+import { UsageHeroCard } from '@/components/usage/UsageHeroCard'
+import { ShareUsageDialog } from '@/components/usage/ShareUsageDialog'
+import { TokensPerDayChart } from '@/components/usage/TokensPerDayChart'
 import { Switch } from '@/components/ui/Switch'
 import { Label } from '@/components/ui/Label'
 import { settingsApi, usageApi } from '@/lib/ipc-client'
@@ -13,19 +19,22 @@ import { AUTO_RESUME_LIMITED_TASKS_SETTING, isAutoResumeSettingEnabled } from '@
 import {
   USAGE_PROVIDER_LABELS,
   costSourceTooltip,
+  formatMultiplier,
   formatTokenCount,
   formatUsd,
   totalTokens,
   usageCostHint,
-  type UsageDayRow,
+  usagePeriodForParallelismDays,
   type UsageModelRow,
-  type UsagePeriod
+  type UsageParallelismPeriod
 } from '@shared/usage'
+import { buildUsageCardSummary, usagePeriodLabel, type UsageCardSummary } from '@shared/usage-card'
 
-const PERIODS: Array<{ value: UsagePeriod; label: string }> = [
-  { value: '24h', label: '24 hours' },
-  { value: '7d', label: '7 days' },
-  { value: '30d', label: '30 days' }
+const PERIOD_OPTIONS: Array<{ days: UsageParallelismPeriod; label: string }> = [
+  { days: 7, label: '7 days' },
+  { days: 30, label: '30 days' },
+  { days: 90, label: '90 days' },
+  { days: 182, label: '6 months' }
 ]
 
 function StatTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -70,55 +79,6 @@ function ModelCostCell({ row, onSetPrice }: { row: UsageModelRow; onSetPrice: (m
   )
 }
 
-/** Single-series daily bars (tokens processed per day) with per-bar hover details. */
-function DailyUsageBars({ days }: { days: UsageDayRow[] }) {
-  const [hovered, setHovered] = useState<string | null>(null)
-  if (days.length === 0) return null
-  const max = Math.max(...days.map((d) => totalTokens(d)), 1)
-  const active = days.find((d) => d.day === hovered) ?? null
-  return (
-    <div className="rounded-lg border border-border bg-card p-4 space-y-2">
-      <div className="flex items-baseline justify-between text-xs">
-        <span className="font-medium text-foreground">Tokens per day</span>
-        <span className="text-muted-foreground tabular-nums" aria-live="polite">
-          {active
-            ? `${active.day} · ${formatTokenCount(totalTokens(active))} tokens · ${formatUsd(active.costUsd)}`
-            : `Peak ${formatTokenCount(max)}`}
-        </span>
-      </div>
-      <div className="flex items-end gap-0.5 h-24" role="img" aria-label="Tokens processed per day">
-        {days.map((day) => {
-          const value = totalTokens(day)
-          return (
-            <button
-              key={day.day}
-              type="button"
-              className="flex-1 h-full flex items-end focus-visible:outline-none group"
-              onMouseEnter={() => setHovered(day.day)}
-              onMouseLeave={() => setHovered(null)}
-              onFocus={() => setHovered(day.day)}
-              onBlur={() => setHovered(null)}
-              aria-label={`${day.day}: ${formatTokenCount(value)} tokens`}
-            >
-              <span
-                className={cn(
-                  'w-full rounded-t-[4px] bg-primary/70 group-hover:bg-primary group-focus-visible:bg-primary',
-                  value > 0 && 'min-h-[2px]'
-                )}
-                style={{ height: `${(value / max) * 100}%` }}
-              />
-            </button>
-          )
-        })}
-      </div>
-      <div className="flex justify-between text-[10px] text-muted-foreground tabular-nums">
-        <span>{days[0].day}</span>
-        {days.length > 1 && <span>{days[days.length - 1].day}</span>}
-      </div>
-    </div>
-  )
-}
-
 function AutoResumeSetting() {
   const [enabled, setEnabled] = useState(true)
   const [loaded, setLoaded] = useState(false)
@@ -155,12 +115,17 @@ function AutoResumeSetting() {
 }
 
 export function UsageSettings() {
-  const [period, setPeriod] = useState<UsagePeriod>('7d')
+  const [periodDays, setPeriodDays] = useState<UsageParallelismPeriod>(30)
+  const period = usagePeriodForParallelismDays(periodDays)
   const { limits, summary, loading, refreshing, error, refreshLimits, runLimitsAction, reloadSummary } = useSubscriptionUsage(period)
-  const totals = summary?.totals
+  const parallelism = useUsageParallelism(periodDays)
+  const cardName = useUsageCardName()
+  const resolvedTheme = useThemeStore((s) => s.resolved)
+
   const [pricesDialogOpen, setPricesDialogOpen] = useState(false)
   const [prefillModel, setPrefillModel] = useState<string | null>(null)
   const [ratesRefreshing, setRatesRefreshing] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
 
   const openSetPrice = (model: string): void => {
     setPrefillModel(model)
@@ -177,8 +142,94 @@ export function UsageSettings() {
     }
   }
 
+  const totals = summary?.totals
+  const periodTokens = totals ? totalTokens(totals) : 0
+  const periodLabel = usagePeriodLabel(periodDays)
+
+  // The activity grid's per-day/per-day-hour values come from the SAME
+  // summary.byDay/byDayHour the tokens-per-day chart below reads (see
+  // usage-card.ts's module docstring) — [] when the token summary hasn't
+  // loaded yet is fine, it just means every grid cell starts at 0 until it does.
+  const cardBuild = parallelism.data ? buildUsageCardSummary(parallelism.data, summary?.byDay ?? [], summary?.byDayHour ?? [], periodTokens, periodLabel) : null
+  const cardSummary: UsageCardSummary | null = cardBuild?.summary ?? null
+
+  const records: Array<[string, string]> = []
+  if (cardSummary) {
+    // "Most agents at once" is a plain aggregate (live + backfilled), always shown whenever there's any agent-run data.
+    records.push(['Most agents at once', `${cardSummary.peakDay.peak} on ${new Date(cardSummary.peakDay.atMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`])
+    // The multiplier/hours-based records are ratio-derived — only shown once the ratio itself is ready (both null together, never independently).
+    if (cardSummary.multiplier !== null) {
+      const multiplierText = formatMultiplier(cardSummary.multiplier)
+      // formatMultiplier already includes the "×" for the capped ">1000×" case — every other branch returns the bare number.
+      records.push(['Agents in parallel, on average', multiplierText.endsWith('×') ? multiplierText : `${multiplierText}×`])
+    }
+    // Describes the RATIO's own inputs, so this uses `liveHours` (live-only), not the
+    // always-full `hours` stat tile shown on the card itself — same reasoning as the
+    // card's own sentence. `wall`/`liveHours` go null together.
+    if (cardSummary.wall !== null && cardSummary.liveHours !== null) {
+      records.push(['Agent work done', `${Math.round(cardSummary.liveHours).toLocaleString('en-US')} hours in ${Math.round(cardSummary.wall).toLocaleString('en-US')}`])
+    }
+  }
+  if (summary && summary.byDay.length > 0) {
+    const biggest = summary.byDay.reduce((a, d) => (totalTokens(d) > totalTokens(a) ? d : a), summary.byDay[0])
+    if (totalTokens(biggest) > 0) {
+      const label = new Date(`${biggest.day}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      records.push(['Busiest day by tokens', `${formatTokenCount(totalTokens(biggest))} on ${label}`])
+    }
+  }
+
+  // Token-level tracking (token_usage_events — the tokens-per-day chart and the activity grid's
+  // byDayHour source) is a newer pipeline than agent-run-interval tracking, so its own history
+  // can start well after the selected period does. Rather than let a mostly-empty chart/grid
+  // read as broken, say so plainly whenever the requested period reaches further back than real
+  // token data exists — mirrors the hero card's own "Counting from <date>" pattern for the
+  // multiplier's countingFromMs, just for this separate pipeline's own boundary.
+  const tokenCountingFromLabel = summary && summary.countingFromMs !== null && summary.countingFromMs > summary.sinceMs
+    ? new Date(summary.countingFromMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : null
+
   return (
     <>
+      <SettingsSection title="Usage" description="">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="inline-flex items-center gap-1 rounded-full border border-border bg-card p-1" role="tablist" aria-label="Period">
+            {PERIOD_OPTIONS.map((opt) => (
+              <button
+                key={opt.days}
+                type="button"
+                role="tab"
+                aria-selected={periodDays === opt.days}
+                onClick={() => setPeriodDays(opt.days)}
+                className={cn(
+                  'px-3 py-1.5 text-xs font-medium rounded-full transition-colors',
+                  periodDays === opt.days ? 'bg-accent text-foreground' : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <Button size="sm" onClick={() => setShareOpen(true)}>
+            Share
+          </Button>
+        </div>
+
+        <UsageHeroCard
+          data={parallelism.data}
+          byDay={summary?.byDay ?? []}
+          byDayHour={summary?.byDayHour ?? []}
+          loading={parallelism.loading}
+          tokens={periodTokens}
+          periodLabel={periodLabel}
+          name={cardName.name}
+          onOpenShare={() => setShareOpen(true)}
+        />
+        <p className="text-xs text-muted-foreground px-0.5">
+          The multiplier is how much agent work got done per hour you spent in 20x: total agent run time divided
+          by your screen time in the app.
+        </p>
+      </SettingsSection>
+
       <SettingsSection
         title="Subscription limits"
         description="How much of each subscription plan window is used, as reported by the provider. Updated as agents run."
@@ -225,26 +276,7 @@ export function UsageSettings() {
         title="Token usage"
         description="Tokens consumed by agent turns in 20x, including subagents. Cost is an API-equivalent estimate — not your subscription bill — priced from the provider's own report where given, and from public rates (or a custom price) otherwise."
       >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1" role="tablist" aria-label="Usage period">
-            {PERIODS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                role="tab"
-                aria-selected={period === option.value}
-                onClick={() => setPeriod(option.value)}
-                className={cn(
-                  'px-3 py-1 text-xs font-medium rounded-md transition-colors',
-                  period === option.value
-                    ? 'bg-accent text-foreground'
-                    : 'text-muted-foreground hover:bg-accent/60 hover:text-foreground'
-                )}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
+        <div className="flex items-center justify-end">
           <Button size="sm" variant="outline" onClick={() => { setPrefillModel(null); setPricesDialogOpen(true) }}>
             Model prices
           </Button>
@@ -274,72 +306,103 @@ export function UsageSettings() {
               </p>
             )}
 
-            {summary && <DailyUsageBars days={summary.byDay} />}
-
-            {summary && summary.byModel.length > 0 && (
-              <div className="rounded-lg border border-border bg-card overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead className="bg-muted/50 text-muted-foreground">
-                    <tr>
-                      <th className="text-left font-medium px-3 py-2">Model</th>
-                      <th className="text-right font-medium px-3 py-2">Input</th>
-                      <th className="text-right font-medium px-3 py-2">Cache read</th>
-                      <th className="text-right font-medium px-3 py-2">Cache write</th>
-                      <th className="text-right font-medium px-3 py-2">Output</th>
-                      <th className="text-right font-medium px-3 py-2">Est. cost</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summary.byModel.map((row) => (
-                      <tr key={`${row.provider}:${row.model}`} className="border-t border-border">
-                        <td className="px-3 py-2">
-                          <div className="font-medium text-foreground truncate">{row.model}</div>
-                          <div className="text-[10px] text-muted-foreground">{USAGE_PROVIDER_LABELS[row.provider]}</div>
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(row.inputTokens)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(row.cacheReadTokens)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(row.cacheWriteTokens)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(row.outputTokens)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          <ModelCostCell row={row} onSetPrice={openSetPrice} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            {summary && (
+              <div className="rounded-lg border border-border bg-card p-4">
+                <TokensPerDayChart days={summary.byDay} colorScheme={resolvedTheme} />
               </div>
             )}
 
-            {summary && summary.topTasks.length > 0 && (
-              <div className="rounded-lg border border-border bg-card overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead className="bg-muted/50 text-muted-foreground">
-                    <tr>
-                      <th className="text-left font-medium px-3 py-2">Top tasks</th>
-                      <th className="text-right font-medium px-3 py-2">Tokens</th>
-                      <th className="text-right font-medium px-3 py-2">Est. cost</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summary.topTasks.map((row) => (
-                      <tr key={row.taskId} className="border-t border-border">
-                        <td className="px-3 py-2 text-foreground truncate max-w-[22rem]">{row.title ?? 'Deleted task'}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(totalTokens(row))}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{formatUsd(row.costUsd)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            {tokenCountingFromLabel && (
+              <p className="text-[11px] text-muted-foreground px-0.5">
+                Counting from {tokenCountingFromLabel} — token usage tracking (and the activity grid in the card above) doesn't go back further than this, even though the selected period does.
+              </p>
             )}
           </>
         )}
       </SettingsSection>
 
+      <div className="grid gap-3 sm:grid-cols-2">
+        {summary && summary.topTasks.length > 0 && (
+          <SettingsSection title="Top tasks" description="Where the tokens and the cost went">
+            <div className="rounded-lg border border-border bg-card overflow-hidden">
+              <table className="w-full text-xs">
+                <tbody>
+                  {summary.topTasks.map((row) => (
+                    <tr key={row.taskId} className="border-t border-border first:border-t-0">
+                      <td className="px-3 py-2 text-foreground truncate max-w-[16rem]">{row.title ?? 'Deleted task'}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(totalTokens(row))}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{formatUsd(row.costUsd)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </SettingsSection>
+        )}
+
+        {records.length > 0 && (
+          <SettingsSection title="Records in this period" description="Your personal bests">
+            <ul className="divide-y divide-border rounded-lg border border-border bg-card">
+              {records.map(([label, value]) => (
+                <li key={label} className="flex items-center justify-between gap-3 px-3 py-2.5 text-xs">
+                  <span className="text-muted-foreground">{label}</span>
+                  <span className="font-semibold tabular-nums">{value}</span>
+                </li>
+              ))}
+            </ul>
+          </SettingsSection>
+        )}
+      </div>
+
+      {summary && summary.byModel.length > 0 && (
+        <SettingsSection title="Models" description="Cost is the provider's figure where it reports one, otherwise estimated from public API rates">
+          <div className="rounded-lg border border-border bg-card overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-muted/50 text-muted-foreground">
+                <tr>
+                  <th className="text-left font-medium px-3 py-2">Model</th>
+                  <th className="text-right font-medium px-3 py-2">Input</th>
+                  <th className="text-right font-medium px-3 py-2">Cache read</th>
+                  <th className="text-right font-medium px-3 py-2">Cache write</th>
+                  <th className="text-right font-medium px-3 py-2">Output</th>
+                  <th className="text-right font-medium px-3 py-2">Est. cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.byModel.map((row) => (
+                  <tr key={`${row.provider}:${row.model}`} className="border-t border-border">
+                    <td className="px-3 py-2">
+                      <div className="font-medium text-foreground truncate">{row.model}</div>
+                      <div className="text-[10px] text-muted-foreground">{USAGE_PROVIDER_LABELS[row.provider]}</div>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(row.inputTokens)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(row.cacheReadTokens)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(row.cacheWriteTokens)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">{formatTokenCount(row.outputTokens)}</td>
+                    <td className="px-3 py-2 text-right tabular-nums">
+                      <ModelCostCell row={row} onSetPrice={openSetPrice} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </SettingsSection>
+      )}
+
       <ModelPricesDialog
         open={pricesDialogOpen}
         onOpenChange={setPricesDialogOpen}
         initialModel={prefillModel}
+      />
+
+      <ShareUsageDialog
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+        summary={cardSummary}
+        periodDaysLabel={`${periodDays}d`}
+        name={cardName.name}
+        onNameChange={cardName.setName}
       />
     </>
   )

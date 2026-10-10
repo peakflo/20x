@@ -551,6 +551,9 @@ interface ElectronAPI {
     listModelPrices: () => Promise<import('@shared/usage').CustomModelPrice[]>
     setModelPrice: (price: import('@shared/usage').CustomModelPrice) => Promise<import('@shared/usage').CustomModelPrice[]>
     resetModelPrice: (model: string) => Promise<import('@shared/usage').CustomModelPrice[]>
+    getParallelismSummary: (query: { days: number; utcOffsetMinutes?: number }) => Promise<import('@shared/usage').UsageParallelismResponse>
+    copyImageToClipboard: (pngBytes: ArrayBuffer) => Promise<{ success: boolean }>
+    saveImage: (pngBytes: ArrayBuffer, defaultFileName: string) => Promise<{ saved: boolean; filePath?: string }>
   }
   onUsageLimitRecoveryUpdated: (callback: (recovery: import('@shared/usage-limit-recovery').UsageLimitRecovery) => void) => () => void
   onUsageModelPricesUpdated: (callback: (prices: import('@shared/usage').CustomModelPrice[]) => void) => () => void

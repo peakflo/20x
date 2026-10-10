@@ -22,7 +22,7 @@ import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
 import type { Artifact, ArtifactFileEntry } from '../shared/artifacts'
 import { MOBILE_VOICE_CAPABILITIES } from '../shared/voice'
 import { TaskStatus } from '../shared/constants'
-import { sanitizeUsageSummaryQuery } from './usage/usage-query'
+import { sanitizeUsageSummaryQuery, sanitizeUsageParallelismQuery } from './usage/usage-query'
 import { guardStream } from './child-stream-guards'
 import type { ArtifactMcpCall } from '../shared/artifact-mcp'
 import { getVapidPublicKey, isPushSubscription, sendMobilePush, PUSH_PREFERENCES_KEY } from './mobile-push'
@@ -511,6 +511,15 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
   // GET /api/usage/summary?sinceMs=&untilMs=&utcOffsetMinutes=&taskId=
   if (pathname === '/api/usage/summary') {
     return agentRef!.getUsageSummary(sanitizeUsageSummaryQuery(Object.fromEntries(url.searchParams)))
+  }
+
+  // GET /api/usage/parallelism?days=7|30|90|182&utcOffsetMinutes=
+  // The "my multiplier" card: average agents running in parallel over the
+  // period, peak concurrency (+ day), peak-day lanes, per-day run hours,
+  // tasks shipped. `days` defaults to 30 and snaps to the nearest supported
+  // period when given something else.
+  if (pathname === '/api/usage/parallelism') {
+    return agentRef!.getUsageParallelismSummary(sanitizeUsageParallelismQuery(Object.fromEntries(url.searchParams)))
   }
 
   // GET /api/sessions

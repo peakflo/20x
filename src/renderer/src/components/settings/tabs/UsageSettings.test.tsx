@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, act } from '@testing-library/react'
-import type { ProviderUsageLimits, UsageSummary } from '@shared/usage'
+import type { ProviderUsageLimits, UsageParallelismResponse, UsageSummary } from '@shared/usage'
 
 const listeners: {
   limits: ((limits: ProviderUsageLimits) => void) | null
@@ -10,11 +10,14 @@ const listeners: {
 const getLimits = vi.fn()
 const refreshLimits = vi.fn()
 const getSummary = vi.fn()
+const getParallelismSummary = vi.fn()
 const setCursorKeychainAccess = vi.fn()
 const refreshRates = vi.fn()
 const listModelPrices = vi.fn()
 const setModelPrice = vi.fn()
 const resetModelPrice = vi.fn()
+const copyImageToClipboard = vi.fn()
+const saveImage = vi.fn()
 
 const settingsGet = vi.fn(async () => null as string | null)
 const settingsSet = vi.fn(async () => undefined)
@@ -28,11 +31,14 @@ vi.mock('@/lib/ipc-client', () => ({
     getLimits: (...args: unknown[]) => getLimits(...args),
     refreshLimits: (...args: unknown[]) => refreshLimits(...args),
     getSummary: (...args: unknown[]) => getSummary(...args),
+    getParallelismSummary: (...args: unknown[]) => getParallelismSummary(...args),
     setCursorKeychainAccess: (...args: unknown[]) => setCursorKeychainAccess(...args),
     refreshRates: (...args: unknown[]) => refreshRates(...args),
     listModelPrices: (...args: unknown[]) => listModelPrices(...args),
     setModelPrice: (...args: unknown[]) => setModelPrice(...args),
-    resetModelPrice: (...args: unknown[]) => resetModelPrice(...args)
+    resetModelPrice: (...args: unknown[]) => resetModelPrice(...args),
+    copyImageToClipboard: (...args: unknown[]) => copyImageToClipboard(...args),
+    saveImage: (...args: unknown[]) => saveImage(...args)
   },
   onUsageLimitsUpdated: (cb: (limits: ProviderUsageLimits) => void) => {
     listeners.limits = cb
@@ -88,8 +94,36 @@ const summary: UsageSummary = {
   totals: aggregate,
   byProvider: [{ provider: 'claude-code', ...aggregate }],
   byModel: [{ provider: 'claude-code', model: 'claude-opus-4-7', costSource: 'reported' as const, ...aggregate }],
-  byDay: [{ day: '2026-10-04', ...aggregate }, { day: '2026-10-05', ...aggregate }],
-  topTasks: [{ taskId: 't1', title: 'Fix login flow', ...aggregate }]
+  byDay: [
+    { day: '2026-10-04', ...aggregate, byProvider: [{ provider: 'claude-code', tokens: 10_000 }] },
+    { day: '2026-10-05', ...aggregate, byProvider: [{ provider: 'claude-code', tokens: 20_000 }] }
+  ],
+  byDayHour: ['2026-10-04', '2026-10-05'].flatMap((day) => [3, 4, 5].map((bucket) => ({ day, bucket, tokens: 5_000 }))),
+  topTasks: [{ taskId: 't1', title: 'Fix login flow', ...aggregate }],
+  // null by default — most tests want the normal, nothing-to-explain page; the dedicated
+  // "counting from" tests below override this to exercise the note itself.
+  countingFromMs: null
+}
+
+const parallelismResponse: UsageParallelismResponse = {
+  periodDays: 30,
+  periodStartMs: 0,
+  periodEndMs: 1,
+  tasksShipped: 5,
+  countingFromMs: null,
+  parallelism: {
+    periodStartMs: 0,
+    periodEndMs: 1,
+    hasData: true,
+    totalRunMs: 6 * 60 * 60 * 1000,
+    totalRunMsAll: 8 * 60 * 60 * 1000,
+    wallMs: 5 * 60 * 60 * 1000,
+    screenTimeMs: 2 * 60 * 60 * 1000,
+    multiplier: 3,
+    peak: { count: 4, atMs: Date.now(), day: '2026-10-04' },
+    peakDayLanes: [{ sessionId: 's1', taskId: 't1', agentId: 'a1', provider: 'claude-code', harnessInstanceId: null, segments: [{ startFrac: 0, endFrac: 1 }] }],
+    perDay: []
+  }
 }
 
 beforeEach(() => {
@@ -98,10 +132,13 @@ beforeEach(() => {
   getLimits.mockReset().mockResolvedValue([claude, codexUnsupported])
   refreshLimits.mockReset().mockResolvedValue({ limits: [claude, codexUnsupported], refreshed: [] })
   getSummary.mockReset().mockResolvedValue(summary)
+  getParallelismSummary.mockReset().mockResolvedValue(parallelismResponse)
   refreshRates.mockReset().mockResolvedValue({ refreshed: true, fetchedAt: Date.now() })
   listModelPrices.mockReset().mockResolvedValue([])
   setModelPrice.mockReset().mockResolvedValue([])
   resetModelPrice.mockReset().mockResolvedValue([])
+  copyImageToClipboard.mockReset().mockResolvedValue({ success: true })
+  saveImage.mockReset().mockResolvedValue({ saved: true })
 })
 
 describe('UsageSettings', () => {
@@ -134,14 +171,50 @@ describe('UsageSettings', () => {
     expect(screen.getByText(/not your subscription bill/)).toBeInTheDocument()
   })
 
+  it('does not show a "counting from" note when token tracking already covers the whole selected period', async () => {
+    render(<UsageSettings />)
+    await screen.findByText('claude-opus-4-7')
+    expect(screen.queryByText(/Counting from/)).not.toBeInTheDocument()
+  })
+
+  it('shows an honest "counting from <date>" note when token tracking starts after the period\'s own start — not a silently mostly-empty chart/grid', async () => {
+    getSummary.mockResolvedValue({ ...summary, sinceMs: Date.UTC(2026, 8, 10), countingFromMs: Date.UTC(2026, 9, 4) })
+    render(<UsageSettings />)
+    const note = await screen.findByText(/Counting from Oct 4, 2026/)
+    expect(note.textContent).toContain('token usage tracking')
+    expect(note.textContent).toContain('activity grid')
+  })
+
+  it('does not show the note when countingFromMs is before (or exactly at) the period start — real coverage, nothing to explain', async () => {
+    getSummary.mockResolvedValue({ ...summary, sinceMs: Date.UTC(2026, 9, 1), countingFromMs: Date.UTC(2026, 8, 1) })
+    render(<UsageSettings />)
+    await screen.findByText('claude-opus-4-7')
+    expect(screen.queryByText(/Counting from/)).not.toBeInTheDocument()
+  })
+
+  it('renders Top tasks and Models subtitles through SettingsSection\'s description prop, not a manual negative-margin <p>', async () => {
+    render(<UsageSettings />)
+    const topTasksSubtitle = await screen.findByText('Where the tokens and the cost went')
+    expect(topTasksSubtitle.tagName).toBe('P')
+    expect(topTasksSubtitle.className).toContain('text-sm')
+    expect(topTasksSubtitle.className).not.toContain('-mt-2')
+
+    const modelsSubtitle = screen.getByText("Cost is the provider's figure where it reports one, otherwise estimated from public API rates")
+    expect(modelsSubtitle.tagName).toBe('P')
+    expect(modelsSubtitle.className).toContain('text-sm')
+    expect(modelsSubtitle.className).not.toContain('-mt-2')
+  })
+
   it('reloads the summary for a different period', async () => {
     render(<UsageSettings />)
     await screen.findByText('claude-opus-4-7')
     const before = getSummary.mock.calls.length
-    fireEvent.click(screen.getByRole('tab', { name: '30 days' }))
+    // Default period is 30 days (matches the approved mock) — click a different tab.
+    fireEvent.click(screen.getByRole('tab', { name: '7 days' }))
     await waitFor(() => expect(getSummary.mock.calls.length).toBeGreaterThan(before))
     const query = getSummary.mock.calls.at(-1)?.[0] as { sinceMs: number; untilMs: number }
-    expect(query.untilMs - query.sinceMs).toBeGreaterThanOrEqual(30 * 24 * 60 * 60 * 1000)
+    expect(query.untilMs - query.sinceMs).toBeGreaterThanOrEqual(7 * 24 * 60 * 60 * 1000)
+    expect(query.untilMs - query.sinceMs).toBeLessThan(8 * 24 * 60 * 60 * 1000)
   })
 
   it('applies live plan-limit updates', async () => {
@@ -224,5 +297,53 @@ describe('UsageSettings', () => {
     await screen.findByTestId('usage-limits-claude-code')
     fireEvent.click(screen.getByRole('button', { name: /refresh/i }))
     await waitFor(() => expect(refreshRates).toHaveBeenCalledWith({ force: true }))
+  })
+
+  it('shows the hero card once the parallelism summary loads, with the multiplier in its aria-label', async () => {
+    render(<UsageSettings />)
+    const canvas = await screen.findByRole('img', { name: /agents in parallel on average/ })
+    expect(canvas).toBeInTheDocument()
+    expect(canvas.getAttribute('aria-label')).toContain('3 agents in parallel on average')
+  })
+
+  it('shows an inviting empty state (not 0x or NaN) when there is no agent-run data yet', async () => {
+    getParallelismSummary.mockResolvedValue({
+      periodDays: 30,
+      periodStartMs: 0,
+      periodEndMs: 1,
+      tasksShipped: 0,
+      countingFromMs: null,
+      parallelism: {
+        periodStartMs: 0,
+        periodEndMs: 1,
+        hasData: false,
+        totalRunMs: 0,
+        totalRunMsAll: 0,
+        wallMs: 0,
+        screenTimeMs: 0,
+        multiplier: null,
+        peak: null,
+        peakDayLanes: [],
+        perDay: []
+      }
+    })
+    render(<UsageSettings />)
+    expect(await screen.findByText(/Run a few agents at once/)).toBeInTheDocument()
+    expect(screen.queryByText('0×')).not.toBeInTheDocument()
+    expect(screen.queryByText('NaN×')).not.toBeInTheDocument()
+  })
+
+  it('opens the Share dialog from the Share button — the only one on the page, the hero card has no floating duplicate', async () => {
+    render(<UsageSettings />)
+    await screen.findByText('claude-opus-4-7')
+    const shareButtons = await screen.findAllByRole('button', { name: 'Share' })
+    expect(shareButtons).toHaveLength(1)
+    fireEvent.click(shareButtons[0])
+    expect(await screen.findByText(/The image is made on your computer/)).toBeInTheDocument()
+  })
+
+  it('shows the screen-time explanation sentence, not the old "agent wall time" wording', async () => {
+    render(<UsageSettings />)
+    expect(await screen.findByText(/your screen time in the app/)).toBeInTheDocument()
   })
 })

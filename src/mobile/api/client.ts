@@ -6,7 +6,7 @@
 import { getAuthToken } from './auth'
 import type { Artifact, ArtifactContent, PullRequestDetails } from '@shared/artifacts'
 import type { VoiceCapabilities } from '@shared/voice'
-import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
+import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageParallelismPeriod, UsageParallelismResponse, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { PushPreferences } from '@shared/push-notifications'
 import type { HarnessInstanceView } from '@shared/harness-instances'
@@ -127,7 +127,10 @@ export const api = {
       }
       const qs = params.toString()
       return get<UsageSummary | null>(`/api/usage/summary${qs ? `?${qs}` : ''}`)
-    }
+    },
+    /** "My multiplier" — the read-only hero card data for one of the four fixed periods. */
+    parallelism: (days: UsageParallelismPeriod, utcOffsetMinutes = -new Date().getTimezoneOffset()) =>
+      get<UsageParallelismResponse>(`/api/usage/parallelism?days=${days}&utcOffsetMinutes=${utcOffsetMinutes}`)
   },
   capabilities: {
     /** What this client can do. Voice capture is desktop-only in phase 1. */

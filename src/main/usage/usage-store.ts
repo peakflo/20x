@@ -19,6 +19,7 @@ import type {
   ProviderUsageLimits,
   TokenUsageRecord,
   UsageAggregate,
+  UsageDayHourRow,
   UsageDayRow,
   UsageModelRow,
   UsageProvider,
@@ -521,6 +522,12 @@ export class UsageStore {
        ORDER BY day`
     ).all(params) as Array<ModelGroupSqlRow & { day: string }>).filter((row) => isUsageProvider(row.provider))
     const byDayAcc = new Map<string, ReturnType<typeof newPricingAccumulator>>()
+    // Token totals only (no pricing) per (day, provider) — the stacked
+    // tokens-per-day chart's bar segments. Built from the same already-
+    // grouped `dayGroupRows` as `byDay` itself, so this needs no second SQL
+    // query; only token counts are needed here (not cost), since the chart's
+    // tooltip shows cost once for the day's total, not per provider.
+    const byDayProviderTokens = new Map<string, Map<UsageProvider, number>>()
     const dayOrder: string[] = []
     for (const row of dayGroupRows) {
       const group = toModelUsageGroup(row)
@@ -530,8 +537,40 @@ export class UsageStore {
         dayOrder.push(row.day)
       }
       accumulatePricedGroup(byDayAcc.get(row.day)!, group, priced)
+
+      const providerTokens = byDayProviderTokens.get(row.day) ?? new Map<UsageProvider, number>()
+      providerTokens.set(group.provider, (providerTokens.get(group.provider) ?? 0) + groupTotalTokens(group))
+      byDayProviderTokens.set(row.day, providerTokens)
     }
-    const byDay: UsageDayRow[] = dayOrder.map((day) => ({ day, ...finalizePricingAccumulator(byDayAcc.get(day)!) }))
+    const byDay: UsageDayRow[] = dayOrder.map((day) => ({
+      day,
+      ...finalizePricingAccumulator(byDayAcc.get(day)!),
+      byProvider: Array.from(byDayProviderTokens.get(day) ?? [])
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([provider, tokens]) => ({ provider, tokens }))
+    }))
+
+    // Per (calendar day, 3-hour-of-day bucket), local time — the usage
+    // card's day×hour-of-day activity grid: one column per day, 8 rows
+    // (00:00, 03:00, ... 21:00). `byDay` has no intra-day resolution at
+    // all, so this needs its own query rather than being derivable from
+    // it. Token totals only, no cost or per-provider split — the grid only
+    // needs one number per cell. `bucket` is local hour-of-day (the same
+    // offset-shifted `strftime('%H', ...)` the retired hour-only version of
+    // this query used) integer-divided by 3, giving 0-7. Sparse — only
+    // (day, bucket) pairs with at least one matching row appear at all; the
+    // usage card densifies this against its own day scaffold and 0-7
+    // bucket range, filling every missing cell with 0 (see
+    // `buildUsageCardSummary` / `UsageDayHourRow`).
+    const dayHourRows = this.db.prepare(
+      `SELECT date(created_at / 1000 + @offset, 'unixepoch') AS day,
+         CAST(strftime('%H', created_at / 1000 + @offset, 'unixepoch') AS INTEGER) / 3 AS bucket,
+         COALESCE(SUM(input_tokens + cache_read_tokens + cache_write_tokens + output_tokens), 0) AS tokens
+       FROM token_usage_events ${where}
+       GROUP BY day, bucket
+       ORDER BY day, bucket`
+    ).all(params) as UsageDayHourRow[]
+    const byDayHour: UsageDayHourRow[] = dayHourRows
 
     const hasTasksTable = !!this.db.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"
@@ -574,7 +613,13 @@ export class UsageStore {
       }))
     }
 
-    return { sinceMs, untilMs, totals, byProvider, byModel, byDay, topTasks }
+    // Global earliest token event — deliberately NOT scoped to sinceMs/untilMs (this is "when
+    // did token tracking itself begin", not "earliest event in this query's window"). See the
+    // field's own doc comment on UsageSummary for why callers need this distinction.
+    const earliestEventRow = this.db.prepare(`SELECT MIN(created_at) AS m FROM token_usage_events`).get() as { m: number | null }
+    const countingFromMs = earliestEventRow.m ?? null
+
+    return { sinceMs, untilMs, totals, byProvider, byModel, byDay, byDayHour, topTasks, countingFromMs }
   }
 
   getProviderUsageLimits(): ProviderUsageLimits[] {
@@ -613,5 +658,49 @@ export class UsageStore {
   prune(nowMs = Date.now()): void {
     this.db.prepare('DELETE FROM token_usage_session_totals WHERE updated_at < ?').run(nowMs - SESSION_TOTALS_RETENTION_MS)
     this.db.prepare('DELETE FROM token_usage_events WHERE created_at < ?').run(nowMs - USAGE_EVENTS_RETENTION_MS)
+  }
+
+  /**
+   * Latest usage event timestamp for a session after `afterMs`. Used by
+   * agent-run-intervals.ts crash recovery as the preferred "last known
+   * activity" signal (token_usage_events has a real `session_id` column,
+   * unlike transcript_parts) before falling back to transcript activity.
+   */
+  getLatestEventAtForSession(sessionId: string, afterMs: number): number | null {
+    const row = this.db.prepare(`
+      SELECT MAX(created_at) AS m FROM token_usage_events WHERE session_id = ? AND created_at > ?
+    `).get(sessionId, afterMs) as { m: number | null }
+    return row.m ?? null
+  }
+
+  /**
+   * Every usage event with a session id, oldest first — the backfill job's
+   * primary source for deriving approximate historical run intervals (it has
+   * real per-session granularity, unlike transcript_parts which is scoped to
+   * task_id only). One row per (session_id, provider, model, turn); the
+   * caller groups by session_id and merges consecutive activity.
+   */
+  getUsageEventActivityForBackfill(): Array<{
+    sessionId: string
+    taskId: string | null
+    agentId: string | null
+    provider: string
+    instanceId: string | null
+    createdAt: number
+  }> {
+    const rows = this.db.prepare(`
+      SELECT session_id, task_id, agent_id, provider, instance_id, created_at
+      FROM token_usage_events
+      WHERE session_id IS NOT NULL
+      ORDER BY session_id ASC, created_at ASC
+    `).all() as Array<{ session_id: string; task_id: string | null; agent_id: string | null; provider: string; instance_id: string | null; created_at: number }>
+    return rows.map((row) => ({
+      sessionId: row.session_id,
+      taskId: row.task_id,
+      agentId: row.agent_id,
+      provider: row.provider,
+      instanceId: row.instance_id,
+      createdAt: row.created_at
+    }))
   }
 }

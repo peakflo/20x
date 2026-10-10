@@ -2,7 +2,7 @@ import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, 
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
-import type { CustomModelPrice, ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
+import type { CustomModelPrice, ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageParallelismResponse, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { HarnessInstanceView } from '@shared/harness-instances'
 import type {
   AcpAgentInstanceView,
@@ -374,6 +374,15 @@ export const usageApi = {
   },
   resetModelPrice(model: string): Promise<CustomModelPrice[]> {
     return window.electronAPI.usage.resetModelPrice(model)
+  },
+  getParallelismSummary(query: { days: number; utcOffsetMinutes?: number }): Promise<UsageParallelismResponse> {
+    return window.electronAPI.usage.getParallelismSummary(query)
+  },
+  copyImageToClipboard(pngBytes: ArrayBuffer): Promise<{ success: boolean }> {
+    return window.electronAPI.usage.copyImageToClipboard(pngBytes)
+  },
+  saveImage(pngBytes: ArrayBuffer, defaultFileName: string): Promise<{ saved: boolean; filePath?: string }> {
+    return window.electronAPI.usage.saveImage(pngBytes, defaultFileName)
   }
 }
 

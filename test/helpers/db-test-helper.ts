@@ -272,6 +272,30 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_rev ON transcript_parts(task_id, rev);
     CREATE INDEX IF NOT EXISTS idx_transcript_parts_rev ON transcript_parts(rev);
     CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_created ON transcript_parts(task_id, created_at, seq);
+
+    CREATE TABLE IF NOT EXISTS agent_run_intervals (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      harness_instance_id TEXT,
+      started_at_ms INTEGER NOT NULL,
+      ended_at_ms INTEGER,
+      end_reason TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_started ON agent_run_intervals(started_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_ended ON agent_run_intervals(ended_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_session_open ON agent_run_intervals(session_id, ended_at_ms);
+
+    CREATE TABLE IF NOT EXISTS app_focus_intervals (
+      id TEXT PRIMARY KEY,
+      started_at_ms INTEGER NOT NULL,
+      ended_at_ms INTEGER,
+      last_heartbeat_ms INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_started ON app_focus_intervals(started_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_ended ON app_focus_intervals(ended_at_ms);
   `)
 
   const manager = new DatabaseManager()
