@@ -20,6 +20,12 @@
  * only ever opens a row while a session is 'working'.
  */
 
+// Re-exported for backward compatibility — the canonical definition moved to
+// shared/usage.ts so the renderer/mobile usage card (src/shared/usage-card.ts)
+// can format the multiplier with the exact same rule without reaching into
+// src/main.
+export { formatMultiplier } from '../../shared/usage'
+
 /** One `agent_run_intervals` row, as read from the database (possibly still open). */
 export interface RawAgentRunInterval {
   sessionId: string
@@ -104,13 +110,6 @@ export interface ParallelismSummary {
 
 const MS_PER_HOUR = 60 * 60 * 1000
 const MS_PER_DAY = 24 * MS_PER_HOUR
-
-/** Formats the multiplier per the UI rule: an integer at 10×+, one decimal below that. Pure string formatting — kept separate from the numeric `multiplier` field so callers can still do their own math with the raw number. */
-export function formatMultiplier(raw: number): string {
-  if (!Number.isFinite(raw)) return '—'
-  if (raw >= 10) return String(Math.round(raw))
-  return raw.toFixed(1)
-}
 
 /** `YYYY-MM-DD` for `ms`, shifted by `utcOffsetMinutes` east of UTC before formatting. */
 function dayKeyFor(ms: number, utcOffsetMinutes: number): string {

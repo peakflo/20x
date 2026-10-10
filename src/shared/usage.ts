@@ -359,6 +359,22 @@ export function formatUsd(value: number | null | undefined): string {
   return `$${value.toFixed(2)}`
 }
 
+/**
+ * Formats the "my multiplier" figure per the UI rule: an integer at 10×+,
+ * one decimal below that (e.g. "3.4", "14"). Pure string formatting — kept
+ * separate from the raw numeric multiplier so callers can still do their own
+ * math with it. Canonical home for this rule: both the parallelism query
+ * engine (src/main/usage/usage-parallelism.ts, which re-exports this) and
+ * the shared usage card (src/shared/usage-card.ts) use it, so the number on
+ * the Usage page and the number drawn into the shared image can never drift
+ * apart.
+ */
+export function formatMultiplier(raw: number): string {
+  if (!Number.isFinite(raw)) return '—'
+  if (raw >= 10) return String(Math.round(raw))
+  return raw.toFixed(1)
+}
+
 /** Tooltip text for the small marker shown next to an estimated/custom cost. Null for `reported`/`unpriced` (no marker). */
 export function costSourceTooltip(source: UsageCostEstimateSource): string | null {
   if (source === 'estimated') return 'Estimated from public API rates'
