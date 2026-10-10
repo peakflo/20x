@@ -612,7 +612,14 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
   // module docstring for the full history.
   const availW = wide ? 600 : W - pad * 2
   const [r0, g0, b0] = t.cell
-  let gy: number
+  // The caption's y (baseline) — set inside each branch below. The day×hour
+  // grid's header (caption + a 2-row month/day-tick label strip above 8
+  // cell rows) needs more vertical budget than the weeks grid's single
+  // caption line, so it's anchored TOP-DOWN from `sentenceY` (defined
+  // above) instead of bottom-up from the footer — a bottom-up calc here
+  // collided with the sentence on the `wide` shape during visual QA, since
+  // the footer-anchored budget didn't account for the extra header rows.
+  let captionY: number
   if (summary.dailyCalendar.length > 0 && summary.periodDays <= USAGE_CARD_DAY_HOUR_GRID_MAX_DAYS) {
     // Short/medium period: a day×hour-of-day grid — one column per day, 8
     // rows (3-hour buckets, 00:00..21:00), both axes meaningful at once.
@@ -622,21 +629,31 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
     const rows = 8
     const days = summary.dailyCalendar
     const dayCount = days.length
-    const hourLabelW = wide ? 50 : 60
+    const hourLabelW = wide ? 46 : 60
     const cellsW = availW - hourLabelW
     const cellGapX = wide ? 2 : 3
     const rawCellW = (cellsW - (dayCount - 1) * cellGapX) / dayCount
     const cellW = Math.min(rawCellW, wide ? 60 : 80)
-    const cellH = wide ? 18 : 24
-    const rowGapY = wide ? 2 : 3
-    const cellsH = rows * cellH + (rows - 1) * rowGapY
-    const monthRowH = wide ? 14 : 16
-    const dayTickRowH = wide ? 14 : 18
-    const headerGap = wide ? 4 : 6
-    const headerH = monthRowH + dayTickRowH + headerGap
-    gy = H - pad - headerH - cellsH - (wide ? 0 : 44)
+    const cellH = wide ? 12 : 26
+    const rowGapY = wide ? 1 : 2
+    const monthRowH = wide ? 11 : 13
+    const dayTickRowH = wide ? 11 : 14
+    // `wide`'s stats sit in a separate right-hand column (not above the
+    // grid), so the grid's own top edge is anchored to the sentence
+    // directly; square/tall stack stats ABOVE the grid in the same left
+    // column, so the grid anchors below them instead. These two
+    // approximate "stats block bottom" figures are tuned against the
+    // stats-drawing code above (`stats.forEach` — square: 1 row at `tall ?
+    // 68 : 50`px values + a 60px label offset; tall: 2 rows at 142px
+    // apart) — see that block for the real geometry this approximates.
+    const statsBottom = wide ? sentenceY : (H > W ? sentenceY + 70 + 142 + 80 : sentenceY + 52 + 60 + 20)
+    captionY = statsBottom + (wide ? 45 : 50)
+    const headerTopGap = wide ? 14 : 18
+    const monthBaselineY = captionY + headerTopGap + monthRowH
+    const dayTickBaselineY = monthBaselineY + dayTickRowH
+    const cellsTop = dayTickBaselineY + (wide ? 6 : 8)
+    const gy = monthBaselineY - monthRowH // top of the header strip, for the month/day-tick fillText calls below
     const gridLeft = pad + hourLabelW
-    const cellsTop = gy + headerH
     const radius = Math.max(1.5, Math.min(cellW, cellH) * 0.25)
 
     // Dense lookup: `hourlyCells` already has one entry per (day, bucket)
@@ -710,7 +727,8 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
       }
     }
     const gridH = 7 * cellSize + 6 * gap
-    gy = H - pad - gridH - (wide ? 0 : 44)
+    const gy = H - pad - gridH - (wide ? 0 : 44)
+    captionY = gy - (wide ? 12 : 16)
     const radius = Math.max(1.5, cellSize * 0.22)
     cells.forEach(({ col, row, tokens }) => {
       const x = pad + col * (cellSize + gap)
@@ -726,7 +744,7 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
   ctx.textBaseline = 'alphabetic'
   ctx.textAlign = 'left'
   ctx.font = `500 ${wide ? 16 : 22}px ${USAGE_CARD_SANS_FONT}`
-  ctx.fillText(`${fmtDate(summary.peakDay.atMs)}, my busiest day: ${summary.peakDay.peak} agents at once`, pad, gy - (wide ? 12 : 16))
+  ctx.fillText(`${fmtDate(summary.peakDay.atMs)}, my busiest day: ${summary.peakDay.peak} agents at once`, pad, captionY)
 
   // Footer — the literal repo URL, same as the mock, not a dynamically resolved one.
   ctx.textAlign = 'right'
