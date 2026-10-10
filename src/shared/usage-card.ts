@@ -283,14 +283,15 @@ export function drawTimes(ctx: UsageCardContext2D, x: number, y: number, size: n
  * own baseline.
  *
  * `thickness` is an explicit, separate parameter from `width` (not a fixed
- * fraction of it) specifically so the call site can make this chunky
- * enough to occupy a comparable vertical footprint to the real numeral it
- * replaces — a thin stroke sized like an underline still reads as "a small
- * disconnected mark floating in a mostly-empty number-sized box", even
- * once its bottom edge is correctly baseline-anchored (an earlier version
- * learned this the hard way: baseline-anchoring alone fixed the gap to the
- * sentence below but left most of the numeral's usual height empty above
- * it, which still read as broken).
+ * fraction of it), and matters in BOTH directions: too thin (a hairline)
+ * reads as a small disconnected mark floating in a mostly-empty
+ * number-sized box; too thick (an earlier version tried `width * 0.5`+,
+ * roughly digit-stroke-to-digit-height proportions) loses all "line"
+ * quality to the round caps and reads as a solid filled capsule/blob, not
+ * a dash — effectively a blank loading-skeleton shape instead of a "—".
+ * The call site keeps this in the same ballpark as `drawTimes`'s own
+ * `size * 0.2` stroke weight (the "×" stays legible as two crossing lines
+ * at that ratio) rather than anywhere near `width`'s own magnitude.
  */
 export function drawDash(ctx: UsageCardContext2D, x: number, y: number, width: number, thickness: number, color: string): void {
   ctx.save()
@@ -446,7 +447,7 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
     // numeral it replaces so the sentence/caption/calendar below sit at
     // their normal distances either way. The rest of the card (calendar/
     // peak/tasks/tokens) still draws normally around it.
-    drawDash(ctx, pad, baseline, numSize * 0.9, numSize * 0.5, t.ink)
+    drawDash(ctx, pad, baseline, numSize * 0.9, numSize * 0.15, t.ink)
   } else {
     const mult = formatMultiplier(summary.multiplier)
     const isCapped = mult.endsWith('×')

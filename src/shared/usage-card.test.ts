@@ -151,6 +151,30 @@ describe('drawCard', () => {
     expect(ctx.calls.roundRect).toHaveLength(expectedRoundRects)
   })
 
+  it('sizes the pending-multiplier dash like a line, not a filled blob, at all three shapes', () => {
+    for (const shape of Object.keys(USAGE_CARD_SHAPES) as UsageCardShape[]) {
+      const ctx = makeMockContext()
+      const [W, H] = USAGE_CARD_SHAPES[shape]
+      drawCard(ctx, W, H, makeSummary({ multiplier: null, hours: 1, wall: null }), makeOptions())
+      // Recover the dash's own width/thickness from its moveTo/lineTo/lineWidth calls
+      // (nothing after it in drawCard touches ctx.lineWidth, so the final value is still
+      // the dash's). "Looks like a dash, not a blob" means thickness stays a modest
+      // fraction of its own length — close to drawTimes's own 0.2-of-size ratio for the
+      // "×" glyph, not anywhere near half, which loses all "line" quality to the round
+      // caps and reads as a solid filled capsule instead (a real regression caught
+      // during visual QA: an earlier version used thickness = width * 0.5+).
+      // The dash is the LAST stroke drawn before stats/calendar/footer (none of which
+      // call moveTo/lineTo), so its calls are always the final moveTo/lineTo pair —
+      // logo's own crossed-eye strokes come first and must not be mistaken for it.
+      const x0 = ctx.calls.moveTo.at(-1)![0] as number
+      const x1 = ctx.calls.lineTo.at(-1)![0] as number
+      const dashWidth = x1 - x0
+      const ratio = ctx.lineWidth / dashWidth
+      expect(ratio).toBeGreaterThan(0.08)
+      expect(ratio).toBeLessThan(0.25)
+    }
+  })
+
   it('drawDash strokes a single round-capped horizontal line — a bespoke glyph, not font text', () => {
     const ctx = makeMockContext()
     drawDash(ctx, 0, 0, 40, 8, '#fff')
