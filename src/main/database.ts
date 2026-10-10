@@ -465,6 +465,28 @@ export interface AgentRunIntervalRecord {
   endReason: string | null
 }
 
+interface AppFocusIntervalRow {
+  id: string
+  started_at_ms: number
+  ended_at_ms: number | null
+  last_heartbeat_ms: number
+}
+
+/**
+ * One span the main window was focused/visible — the "my multiplier"
+ * denominator (the user's own screen time in the app). See
+ * src/main/usage/app-focus-intervals.ts (writer) and
+ * src/main/usage/usage-parallelism.ts (reader).
+ */
+export interface AppFocusIntervalRecord {
+  id: string
+  startedAtMs: number
+  /** Null while the window is still focused. */
+  endedAtMs: number | null
+  /** Last time this still-open interval was touched — crash recovery's close time, not `startedAtMs`. */
+  lastHeartbeatMs: number
+}
+
 export interface TaskRecord {
   server_pending_edits?: Record<string, unknown>
   server_managed?: boolean
@@ -760,6 +782,15 @@ function deserializeAgentRunInterval(row: AgentRunIntervalRow): AgentRunInterval
     startedAtMs: row.started_at_ms,
     endedAtMs: row.ended_at_ms,
     endReason: row.end_reason
+  }
+}
+
+function deserializeAppFocusInterval(row: AppFocusIntervalRow): AppFocusIntervalRecord {
+  return {
+    id: row.id,
+    startedAtMs: row.started_at_ms,
+    endedAtMs: row.ended_at_ms,
+    lastHeartbeatMs: row.last_heartbeat_ms
   }
 }
 
@@ -1542,6 +1573,27 @@ export class DatabaseManager {
       -- currently-open interval for that session) and by open-ness on crash
       -- recovery (startup sweep for ended_at_ms IS NULL rows).
       CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_session_open ON agent_run_intervals(session_id, ended_at_ms);
+
+      -- One row per span the main window was focused/visible — the "my
+      -- multiplier" denominator is the user's own screen time in the app, not
+      -- agent wall-clock time. Single-user local app: no session/agent/task
+      -- columns. Opened on window focus, closed on blur/hide/minimize/quit.
+      -- See src/main/usage/app-focus-intervals.ts for the writer.
+      --
+      -- last_heartbeat_ms is touched periodically while the window stays
+      -- focused (not just at open/close) so a crash mid-session leaves a
+      -- precise, bounded trail instead of an open row that would otherwise
+      -- read as "focused" for however long until the next app start — crash
+      -- recovery closes any row still open at startup using this column, not
+      -- started_at_ms.
+      CREATE TABLE IF NOT EXISTS app_focus_intervals (
+        id TEXT PRIMARY KEY,
+        started_at_ms INTEGER NOT NULL,
+        ended_at_ms INTEGER,
+        last_heartbeat_ms INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_started ON app_focus_intervals(started_at_ms);
+      CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_ended ON app_focus_intervals(ended_at_ms);
     `)
   }
 
@@ -2885,6 +2937,83 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         AND updated_at >= ? AND updated_at < ?
     `).get(TaskStatus.Completed, startIso, endIso) as { n: number }
     return row.n
+  }
+
+  // ── app_focus_intervals ──────────────────────────────────────
+  // See src/main/usage/app-focus-intervals.ts (writer: window focus/blur
+  // hooks, heartbeat, crash recovery) and src/main/usage/usage-parallelism.ts
+  // (reader — the "my multiplier" denominator). Single-user local app: at
+  // most one row is open at a time in the normal case, but every method here
+  // is still written defensively (idempotent open, no-op close when nothing
+  // is open) the same way the agent_run_intervals methods are.
+
+  /** Opens a new focus interval, unless one is already open (idempotent — a duplicate focus signal is a no-op). */
+  openAppFocusInterval(startedAtMs: number): AppFocusIntervalRecord {
+    if (!this.ensureDbOpen()) throw new Error('Database not open')
+    const existing = this.getOpenAppFocusIntervals()[0]
+    if (existing) return existing
+
+    const id = createId()
+    this.db.prepare(`
+      INSERT INTO app_focus_intervals (id, started_at_ms, ended_at_ms, last_heartbeat_ms)
+      VALUES (?, ?, NULL, ?)
+    `).run(id, startedAtMs, startedAtMs)
+    return { id, startedAtMs, endedAtMs: null, lastHeartbeatMs: startedAtMs }
+  }
+
+  /** Touches the open interval's heartbeat (periodic liveness signal, so crash recovery has a tight bound instead of `startedAtMs`). No-op if nothing is open. */
+  touchOpenAppFocusInterval(atMs: number): void {
+    if (!this.ensureDbOpen()) return
+    this.db.prepare(`UPDATE app_focus_intervals SET last_heartbeat_ms = ? WHERE ended_at_ms IS NULL`).run(atMs)
+  }
+
+  /** Closes the open interval, if any. Idempotent: no-op (returns null) when nothing is open. */
+  closeOpenAppFocusInterval(endedAtMs: number): AppFocusIntervalRecord | null {
+    if (!this.ensureDbOpen()) return null
+    const existing = this.getOpenAppFocusIntervals()[0]
+    if (!existing) return null
+    const resolvedEndedAtMs = Math.max(endedAtMs, existing.startedAtMs)
+    this.db.prepare(`UPDATE app_focus_intervals SET ended_at_ms = ?, last_heartbeat_ms = ? WHERE id = ?`)
+      .run(resolvedEndedAtMs, resolvedEndedAtMs, existing.id)
+    return { ...existing, endedAtMs: resolvedEndedAtMs, lastHeartbeatMs: resolvedEndedAtMs }
+  }
+
+  /**
+   * Closes one specific interval by id, regardless of whether it's the most
+   * recently-opened one — used by crash recovery so closing N open rows
+   * (an edge case; normally there is at most one) doesn't depend on
+   * `closeOpenAppFocusInterval`'s "most recent" semantics lining up with a
+   * caller's own iteration order.
+   */
+  closeAppFocusIntervalById(id: string, endedAtMs: number): void {
+    if (!this.ensureDbOpen()) return
+    this.db.prepare(`UPDATE app_focus_intervals SET ended_at_ms = ?, last_heartbeat_ms = ? WHERE id = ? AND ended_at_ms IS NULL`)
+      .run(endedAtMs, endedAtMs, id)
+  }
+
+  /** Every interval left open (`ended_at_ms IS NULL`) — crash-recovery candidates on startup. */
+  getOpenAppFocusIntervals(): AppFocusIntervalRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const rows = this.db.prepare(`SELECT * FROM app_focus_intervals WHERE ended_at_ms IS NULL ORDER BY started_at_ms DESC`).all() as AppFocusIntervalRow[]
+    return rows.map(deserializeAppFocusInterval)
+  }
+
+  /** Intervals that could overlap `[startMs, endMs)` — a still-open interval always qualifies. Callers clip to the exact bounds. */
+  getAppFocusIntervalsOverlapping(startMs: number, endMs: number): AppFocusIntervalRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const rows = this.db.prepare(`
+      SELECT * FROM app_focus_intervals
+      WHERE started_at_ms < ? AND (ended_at_ms IS NULL OR ended_at_ms > ?)
+      ORDER BY started_at_ms ASC
+    `).all(endMs, startMs) as AppFocusIntervalRow[]
+    return rows.map(deserializeAppFocusInterval)
+  }
+
+  /** Earliest focus interval on record — combined with the earliest agent-run interval, this is the "counting from <date>" bound for the multiplier (both series are needed to compute it). */
+  getEarliestAppFocusIntervalStart(): number | null {
+    if (!this.ensureDbOpen()) return null
+    const row = this.db.prepare(`SELECT MIN(started_at_ms) AS m FROM app_focus_intervals`).get() as { m: number | null }
+    return row.m ?? null
   }
 
   /**

@@ -58,11 +58,16 @@ export interface UsageCardPeakDay {
 export interface UsageCardSummary {
   /** e.g. "Last 30 days" or "Last 6 months" — see `usagePeriodLabel`. */
   periodLabel: string
-  /** Raw multiplier (agent hours ÷ wall hours). Callers only build this once there IS data — "no data yet" is a UI-level empty state, handled before calling `drawCard`. */
+  /**
+   * Raw multiplier: agent run hours ÷ the user's own screen time in the app
+   * (NOT agent wall-clock time — see usage-parallelism.ts's ParallelismSummary
+   * for why). Callers only build this once there IS data — "no data yet" is a
+   * UI-level empty state, handled before calling `drawCard`.
+   */
   multiplier: number
-  /** Total agent run time in the period, in hours. */
+  /** Total agent run time in the period, in hours. The multiplier's numerator. */
   hours: number
-  /** Wall-clock time in the period with ≥1 agent running, in hours. */
+  /** The user's own screen time in the app in the period, in hours — how long 20x was actually on screen. The multiplier's denominator ("N hours of agent work in M hours"). */
   wall: number
   peakDay: UsageCardPeakDay
   /** Tasks that reached completed in the period. */

@@ -1,18 +1,26 @@
 /**
- * The "my multiplier" query engine: how many agents worked in parallel on
- * average over a period, vs. one agent working alone.
+ * The "my multiplier" query engine: how much agent work got done per hour
+ * the user actually spent with 20x on screen.
  *
  *   multiplier = (total agent run time across all concurrent agents)
- *              ÷ (wall-clock time during which ≥1 agent was running)
+ *              ÷ (the user's own screen time in the app)
  *
- * One agent running alone for its whole life is exactly 1×. The peak is a
- * separate, smaller fact: the maximum number of agents running at the same
- * instant in the period.
+ * This deliberately rewards agents working while the user wasn't looking —
+ * that is the point of the metric. (An earlier version of this comment, and
+ * of the formula, used the wall-clock time with ≥1 agent running as the
+ * denominator — i.e. "vs. one agent working alone". That undercounted the
+ * exact scenario this metric exists to surface, so the denominator is now
+ * the user's screen time, tracked by src/main/usage/app-focus-intervals.ts.)
+ *
+ * The peak (max simultaneous agents + which day + that day's lanes) and the
+ * per-day agent-run hours are unaffected by this — they come entirely from
+ * the agent-run sweep, independent of screen time.
  *
  * Pure functions only — no Date.now(), no DB access. Callers (agent-manager.ts,
- * the mobile API) resolve `agent_run_intervals` rows via database.ts and pass
- * explicit period bounds, which keeps this module trivially unit-testable and
- * safe to run against large synthetic fixtures (perf tests).
+ * the mobile API) resolve `agent_run_intervals`/`app_focus_intervals` rows via
+ * database.ts and pass explicit period bounds, which keeps this module
+ * trivially unit-testable and safe to run against large synthetic fixtures
+ * (perf tests).
  *
  * "Running" means the session was in a working/busy state — waiting-for-
  * approval, idle, errored and stopped time does not count. That distinction
@@ -20,23 +28,32 @@
  * only ever opens a row while a session is 'working'.
  */
 
-// Re-exported for backward compatibility — the canonical definition moved to
-// shared/usage.ts so the renderer/mobile usage card (src/shared/usage-card.ts)
-// can format the multiplier with the exact same rule without reaching into
-// src/main.
-export { formatMultiplier } from '../../shared/usage'
-
-/** One `agent_run_intervals` row, as read from the database (possibly still open). */
-export interface RawAgentRunInterval {
-  sessionId: string
-  taskId: string
-  agentId: string
-  provider: string
-  harnessInstanceId: string | null
-  startedAtMs: number
-  /** Null means the session is still working as of the query — treated as running through `periodEndMs`. */
-  endedAtMs: number | null
-}
+// Types are defined in shared/usage.ts (not here) so the renderer, mobile,
+// and preload bridge can reference them without reaching into src/main — see
+// the "my multiplier" wire types section there. Re-exported here for this
+// module's own internal use and for existing call sites that import them
+// from this file.
+export {
+  formatMultiplier,
+  type RawAgentRunInterval,
+  type RawAppFocusInterval,
+  type ParallelismPeak,
+  type ParallelismLaneSegment,
+  type ParallelismLane,
+  type ParallelismDayRow,
+  type ParallelismSummary,
+  type ParallelismPeriodDays,
+  type UsageParallelismResponse
+} from '../../shared/usage'
+import type {
+  RawAgentRunInterval,
+  RawAppFocusInterval,
+  ParallelismPeak,
+  ParallelismLane,
+  ParallelismDayRow,
+  ParallelismSummary,
+  ParallelismPeriodDays
+} from '../../shared/usage'
 
 /** An interval clipped to the query period, guaranteed `start < end`. */
 interface ClippedInterval {
@@ -47,65 +64,6 @@ interface ClippedInterval {
   harnessInstanceId: string | null
   start: number
   end: number
-}
-
-export interface ParallelismPeak {
-  /** Max number of sessions running at the same instant. */
-  count: number
-  /** First timestamp (ms) at which that max was reached. */
-  atMs: number
-  /** Calendar day `atMs` falls on, as `YYYY-MM-DD` in the query's chosen offset. */
-  day: string
-}
-
-/** One run segment on the peak day's lane chart, normalized to 0..1 across that day's active window. */
-export interface ParallelismLaneSegment {
-  startFrac: number
-  endFrac: number
-}
-
-/** All of one session's segments on the peak day — the `laneRuns`-equivalent for phase 2's UI. */
-export interface ParallelismLane {
-  sessionId: string
-  taskId: string
-  agentId: string
-  provider: string
-  harnessInstanceId: string | null
-  segments: ParallelismLaneSegment[]
-}
-
-export interface ParallelismDayRow {
-  /** `YYYY-MM-DD` in the query's chosen offset. */
-  day: string
-  /** Sum of run time that calendar day, in hours (agent-hours — this is the numerator, not wall time). */
-  runHours: number
-  /** Wall-clock hours that day with ≥1 agent running. */
-  wallHours: number
-}
-
-export interface ParallelismSummary {
-  periodStartMs: number
-  periodEndMs: number
-  /** False when there is no interval overlapping the period at all — the UI should show "no data", not 0 or NaN. */
-  hasData: boolean
-  /** Sum of every (clipped) interval's duration, in ms. The multiplier's numerator. */
-  totalRunMs: number
-  /** Union of all (clipped) intervals, in ms — wall-clock time with ≥1 agent running. The multiplier's denominator. */
-  wallMs: number
-  /**
-   * `totalRunMs / wallMs`. Null when `hasData` is false (never NaN). Exactly
-   * `1` — not approximately — when only one agent ever ran, with no gaps of
-   * zero-agent time inside its own span: dividing a sum by the identical
-   * value it was computed from is exact in IEEE754, so no epsilon handling
-   * is needed here.
-   */
-  multiplier: number | null
-  /** Null when `hasData` is false. */
-  peak: ParallelismPeak | null
-  /** Lanes for the peak day, empty when `hasData` is false. */
-  peakDayLanes: ParallelismLane[]
-  /** One row per calendar day in `[periodStartMs, periodEndMs)`, even when a day has no activity (keeps chart alignment). */
-  perDay: ParallelismDayRow[]
 }
 
 const MS_PER_HOUR = 60 * 60 * 1000
@@ -143,6 +101,19 @@ function clipIntervals(raw: RawAgentRunInterval[], periodStartMs: number, period
       start,
       end: clippedEnd
     })
+  }
+  return out
+}
+
+/** Clips app-focus intervals to the period — same rule as `clipIntervals`, without the agent-run identity fields it doesn't have. */
+function clipFocusIntervals(raw: RawAppFocusInterval[], periodStartMs: number, periodEndMs: number): Array<{ start: number; end: number }> {
+  const out: Array<{ start: number; end: number }> = []
+  for (const r of raw) {
+    const end = r.endedAtMs ?? periodEndMs
+    const start = Math.max(r.startedAtMs, periodStartMs)
+    const clippedEnd = Math.min(end, periodEndMs)
+    if (clippedEnd <= start) continue
+    out.push({ start, end: clippedEnd })
   }
   return out
 }
@@ -262,15 +233,27 @@ function buildPerDay(intervals: ClippedInterval[], periodStartMs: number, period
  * Computes the full parallelism summary for `[periodStartMs, periodEndMs)`.
  * `utcOffsetMinutes` (minutes east of UTC) controls calendar-day bucketing
  * for `perDay` and the peak day's lanes; defaults to UTC.
+ *
+ * `rawFocusIntervals` (`app_focus_intervals` rows) supplies the multiplier's
+ * denominator — the user's own screen time in the app. It is independent of
+ * `rawIntervals` (agent-run intervals, which still drive everything else:
+ * totalRunMs, peak, peakDayLanes, perDay).
  */
 export function computeParallelismSummary(
   rawIntervals: RawAgentRunInterval[],
+  rawFocusIntervals: RawAppFocusInterval[],
   periodStartMs: number,
   periodEndMs: number,
   utcOffsetMinutes = 0
 ): ParallelismSummary {
   const clipped = clipIntervals(rawIntervals, periodStartMs, periodEndMs)
   const perDay = buildPerDay(clipped, periodStartMs, periodEndMs, utcOffsetMinutes)
+
+  // Union (not sum) of focus intervals — overlapping rows (e.g. a heartbeat
+  // touch racing a close, or more than one window) must not double-count
+  // screen time. `sweep`'s wallMs is exactly this union.
+  const clippedFocus = clipFocusIntervals(rawFocusIntervals, periodStartMs, periodEndMs)
+  const { wallMs: screenTimeMs } = sweep(clippedFocus)
 
   if (clipped.length === 0) {
     return {
@@ -279,6 +262,7 @@ export function computeParallelismSummary(
       hasData: false,
       totalRunMs: 0,
       wallMs: 0,
+      screenTimeMs,
       multiplier: null,
       peak: null,
       peakDayLanes: [],
@@ -287,8 +271,11 @@ export function computeParallelismSummary(
   }
 
   const { totalRunMs, wallMs, peak: rawPeak } = sweep(clipped)
-  // wallMs > 0 whenever clipped.length > 0 (every clipped interval has positive duration).
-  const multiplier = wallMs > 0 ? totalRunMs / wallMs : null
+  // Null (not Infinity/NaN) when there's no screen time to divide by — e.g.
+  // all the agent work happened before focus tracking existed, or entirely
+  // unattended. This is deliberately NOT clamped or special-cased for a
+  // single agent: the real ratio of run time to screen time is the point.
+  const multiplier = screenTimeMs > 0 ? totalRunMs / screenTimeMs : null
 
   let peak: ParallelismPeak | null = null
   let peakDayLanes: ParallelismLane[] = []
@@ -306,15 +293,13 @@ export function computeParallelismSummary(
     hasData: true,
     totalRunMs,
     wallMs,
+    screenTimeMs,
     multiplier,
     peak,
     peakDayLanes,
     perDay
   }
 }
-
-/** Supported "my multiplier" card periods. */
-export type ParallelismPeriodDays = 7 | 30 | 90 | 182
 
 /**
  * Resolves a period choice (7/30/90/182 days) to explicit `[start, end)`
@@ -324,22 +309,4 @@ export type ParallelismPeriodDays = 7 | 30 | 90 | 182
  */
 export function periodBoundsForDays(days: ParallelismPeriodDays, endMs: number): { periodStartMs: number; periodEndMs: number } {
   return { periodStartMs: endMs - days * MS_PER_DAY, periodEndMs: endMs }
-}
-
-/**
- * The full "my multiplier" card payload for one period: the parallelism
- * summary plus the two figures that come from elsewhere in the codebase
- * (tasks shipped, token/cost totals) rather than from `agent_run_intervals`.
- * Composed by AgentManager.getUsageParallelismSummary — this module itself
- * stays DB-agnostic.
- */
-export interface UsageParallelismResponse {
-  periodDays: ParallelismPeriodDays
-  periodStartMs: number
-  periodEndMs: number
-  parallelism: ParallelismSummary
-  /** Tasks that reached `completed` within the period — see `DatabaseManager.getTasksShippedCount`. */
-  tasksShipped: number
-  /** Earliest `agent_run_intervals` row on record (live or backfilled), or null if there are none yet. Phase 2's "counting from <date>" hint. */
-  countingFromMs: number | null
 }

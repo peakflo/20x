@@ -1395,7 +1395,23 @@ export class AgentManager extends EventEmitter {
       endedAtMs: iv.endedAtMs
     }))
 
-    const parallelism = computeParallelismSummary(rawIntervals, periodStartMs, periodEndMs, utcOffsetMinutes)
+    const rawFocusIntervals = this.db.getAppFocusIntervalsOverlapping(periodStartMs, periodEndMs).map((iv) => ({
+      startedAtMs: iv.startedAtMs,
+      endedAtMs: iv.endedAtMs
+    }))
+
+    const parallelism = computeParallelismSummary(rawIntervals, rawFocusIntervals, periodStartMs, periodEndMs, utcOffsetMinutes)
+
+    // The multiplier needs BOTH series — agent-run intervals and app-focus
+    // intervals — so "counting from" is the LATER of their two earliest
+    // starts (the earlier series' head is still "no data for the ratio"
+    // until the later one begins too), not just the earliest agent interval
+    // like phase 1 had it.
+    const earliestAgent = this.db.getEarliestAgentRunIntervalStart()
+    const earliestFocus = this.db.getEarliestAppFocusIntervalStart()
+    const countingFromMs = earliestAgent !== null && earliestFocus !== null
+      ? Math.max(earliestAgent, earliestFocus)
+      : null
 
     return {
       periodDays: query.days,
@@ -1403,7 +1419,7 @@ export class AgentManager extends EventEmitter {
       periodEndMs,
       parallelism,
       tasksShipped: this.db.getTasksShippedCount(periodStartMs, periodEndMs),
-      countingFromMs: this.db.getEarliestAgentRunIntervalStart()
+      countingFromMs
     }
   }
 

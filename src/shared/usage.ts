@@ -419,12 +419,133 @@ export function usageLimitLevel(usedPercent: number): UsageLimitLevel {
   return 'normal'
 }
 
-export type UsagePeriod = '24h' | '7d' | '30d'
+export type UsagePeriod = '24h' | '7d' | '30d' | '90d' | '182d'
 
 export const USAGE_PERIOD_MS: Record<UsagePeriod, number> = {
   '24h': 24 * 60 * 60 * 1000,
   '7d': 7 * 24 * 60 * 60 * 1000,
-  '30d': 30 * 24 * 60 * 60 * 1000
+  '30d': 30 * 24 * 60 * 60 * 1000,
+  '90d': 90 * 24 * 60 * 60 * 1000,
+  '182d': 182 * 24 * 60 * 60 * 1000
+}
+
+/** The four "my multiplier" card periods — matches `usagePeriodLabel` and the backend's `ParallelismPeriodDays`. */
+export type UsageParallelismPeriod = 7 | 30 | 90 | 182
+
+/** Maps a parallelism period (days) to the matching `UsagePeriod` key, for sharing one summary fetch across the token chart and the hero card. */
+export function usagePeriodForParallelismDays(days: UsageParallelismPeriod): UsagePeriod {
+  return days === 182 ? '182d' : (`${days}d` as UsagePeriod)
+}
+
+// ── "My multiplier" (parallelism) wire types ─────────────────
+//
+// Canonical home for the types src/main/usage/usage-parallelism.ts computes
+// and AgentManager.getUsageParallelismSummary returns over IPC/REST — defined
+// here (not in src/main) so the renderer, mobile, and preload bridge can all
+// reference them without reaching into src/main. The computation itself
+// (computeParallelismSummary, periodBoundsForDays) stays in src/main, which
+// re-exports these types for its own internal use and backward compatibility.
+
+/** One `agent_run_intervals` row, as read from the database (possibly still open). */
+export interface RawAgentRunInterval {
+  sessionId: string
+  taskId: string
+  agentId: string
+  provider: string
+  harnessInstanceId: string | null
+  startedAtMs: number
+  /** Null means the session is still working as of the query — treated as running through `periodEndMs`. */
+  endedAtMs: number | null
+}
+
+export interface ParallelismPeak {
+  /** Max number of sessions running at the same instant. */
+  count: number
+  /** First timestamp (ms) at which that max was reached. */
+  atMs: number
+  /** Calendar day `atMs` falls on, as `YYYY-MM-DD` in the query's chosen offset. */
+  day: string
+}
+
+/** One run segment on the peak day's lane chart, normalized to 0..1 across that day's active window. */
+export interface ParallelismLaneSegment {
+  startFrac: number
+  endFrac: number
+}
+
+/** All of one session's segments on the peak day. */
+export interface ParallelismLane {
+  sessionId: string
+  taskId: string
+  agentId: string
+  provider: string
+  harnessInstanceId: string | null
+  segments: ParallelismLaneSegment[]
+}
+
+export interface ParallelismDayRow {
+  /** `YYYY-MM-DD` in the query's chosen offset. */
+  day: string
+  /** Sum of run time that calendar day, in hours (agent-hours — this is the numerator, not wall time). */
+  runHours: number
+  /** Wall-clock hours that day with ≥1 agent running. */
+  wallHours: number
+}
+
+/** One `app_focus_intervals` row — a span the app window was focused/visible. */
+export interface RawAppFocusInterval {
+  startedAtMs: number
+  /** Null means still focused as of the query — treated as running through `periodEndMs`. */
+  endedAtMs: number | null
+}
+
+export interface ParallelismSummary {
+  periodStartMs: number
+  periodEndMs: number
+  /** False when there is no agent-run interval overlapping the period at all — the UI should show "no data", not 0 or NaN. Gates `totalRunMs`/`wallMs`/`peak`/`peakDayLanes`. */
+  hasData: boolean
+  /** Sum of every (clipped) agent-run interval's duration, in ms. The multiplier's numerator. */
+  totalRunMs: number
+  /** Union of all (clipped) agent-run intervals, in ms — wall-clock time with ≥1 agent running. Informational only (e.g. "days with any agent activity") — NOT the multiplier's denominator; see `screenTimeMs`. */
+  wallMs: number
+  /** Union of all (clipped) app-focus intervals, in ms — how long the user actually had the app on screen in the period. The multiplier's denominator. */
+  screenTimeMs: number
+  /**
+   * `totalRunMs / screenTimeMs` — how much agent work got done per hour the
+   * user spent in the app. Null (never NaN/Infinity) when there's no agent
+   * data (`hasData` false) or `screenTimeMs` is 0 (nothing to divide by —
+   * e.g. all the agent work happened while the app was never focused, or
+   * focus tracking only just started). A session where the user watched one
+   * agent the whole time naturally comes out to ≈1 from the real ratio —
+   * there is no special-cased "single agent ⇒ exactly 1" rule now that the
+   * denominator is screen time rather than agent wall-clock time.
+   */
+  multiplier: number | null
+  /** Null when `hasData` is false. Computed from the agent-run sweep — unaffected by the screen-time change. */
+  peak: ParallelismPeak | null
+  /** Lanes for the peak day, empty when `hasData` is false. Unaffected by the screen-time change. */
+  peakDayLanes: ParallelismLane[]
+  /** One row per calendar day in `[periodStartMs, periodEndMs)`, even when a day has no activity (keeps chart alignment). Unaffected by the screen-time change. */
+  perDay: ParallelismDayRow[]
+}
+
+/** Supported "my multiplier" card periods. */
+export type ParallelismPeriodDays = 7 | 30 | 90 | 182
+
+/**
+ * The full "my multiplier" card payload for one period: the parallelism
+ * summary plus the two figures that come from elsewhere in the codebase
+ * (tasks shipped, token/cost totals) rather than from `agent_run_intervals`.
+ */
+export interface UsageParallelismResponse {
+  periodDays: ParallelismPeriodDays
+  periodStartMs: number
+  periodEndMs: number
+  parallelism: ParallelismSummary
+  /** Tasks that reached `completed` within the period. */
+  tasksShipped: number
+  /** Earliest `agent_run_intervals` row on record (live or backfilled), or null if there are none yet. Used for a "counting from <date>" hint when backfill coverage is thin. */
+  countingFromMs: number | null
 }
 
 export function usageSummaryQueryForPeriod(period: UsagePeriod, nowMs = Date.now()): UsageSummaryQuery {
