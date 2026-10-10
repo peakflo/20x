@@ -23,6 +23,7 @@ import { mergeUsageLimits } from '../../shared/usage'
 import { defaultHarnessInstanceId } from '../../shared/harness-instances'
 import type { AdapterUsageLimitsEvent, AdapterUsageReport } from '../adapters/coding-agent-adapter'
 import type { UsageStore } from './usage-store'
+import type { RateResolver } from './usage-pricing'
 
 /** Automatic refreshes (e.g. opening the Usage view) re-probe at most this often. */
 export const AUTO_LIMITS_REFRESH_INTERVAL_MS = 5 * 60 * 1000
@@ -56,7 +57,9 @@ export class UsageTracker extends EventEmitter {
   constructor(
     private readonly store: UsageStore,
     private readonly now: () => number = Date.now,
-    private readonly labelFor: InstanceLabelResolver = DEFAULT_LABEL_RESOLVER
+    private readonly labelFor: InstanceLabelResolver = DEFAULT_LABEL_RESOLVER,
+    /** Built fresh on every call so a rate-table refresh or a custom-price edit applies to the very next read. */
+    private readonly getRateResolver?: () => RateResolver
   ) {
     super()
     for (const snapshot of store.getProviderUsageLimits()) {
@@ -142,7 +145,7 @@ export class UsageTracker extends EventEmitter {
   }
 
   getSummary(query: UsageSummaryQuery = {}): UsageSummary {
-    return this.store.getUsageSummary(query)
+    return this.getRateResolver ? this.store.getUsageSummary(query, this.getRateResolver()) : this.store.getUsageSummary(query)
   }
 
   /**

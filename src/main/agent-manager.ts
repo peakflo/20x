@@ -5,7 +5,7 @@ import { spawn } from 'child_process'
 import { join } from 'path'
 import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSync } from 'fs'
 import { mkdir, writeFile } from 'fs/promises'
-import { Notification, powerSaveBlocker } from 'electron'
+import { app, Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord } from './database'
 import { TaskStatus, SessionStatus } from '../shared/constants'
@@ -29,6 +29,9 @@ import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, wr
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
 import { UsageTracker, type UsageLimitsProbeTarget } from './usage/usage-tracker'
+import { RateTableService } from './usage/usage-pricing-service'
+import { createRateResolver } from './usage/usage-pricing'
+import { listCustomModelPrices, setCustomModelPrice, resetCustomModelPrice } from './usage/usage-custom-prices'
 import { agentInstanceId, harnessInstanceDisplayName, harnessTypeLabel, harnessTypeOf, defaultHarnessInstanceId, isDefaultHarnessInstanceId, isHarnessType, type HarnessInstanceView, type HarnessType } from '../shared/harness-instances'
 import { instanceHomeError, instanceHomeFor, linkSharedHistory, normalizeHomePath, realHomeFor } from './harness-instances'
 import { CURSOR_KEYCHAIN_ACCESS_SETTING, probeCursorUsageLimits } from './usage/cursor-limits'
@@ -43,7 +46,9 @@ import {
 import { isUsageProvider } from '../shared/usage'
 import {
   USAGE_LIMITS_UPDATED_CHANNEL,
+  USAGE_MODEL_PRICES_UPDATED_CHANNEL,
   USAGE_RECORDED_CHANNEL,
+  type CustomModelPrice,
   type ProviderUsageLimits,
   type UsageLimitsRefreshResult,
   type UsageProvider,
@@ -351,6 +356,8 @@ export class AgentManager extends EventEmitter {
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
   /** Subscription usage tracker; created lazily (undefined = not yet, null = unavailable). */
   private usageTracker: UsageTracker | null | undefined = undefined
+  /** Public rate table (fetch + disk cache + TTL); created lazily. */
+  private usagePricingService: RateTableService | undefined = undefined
   /** Whether each stored harness instance shares session history with the default home. Set on create, update and startup. */
   private instanceSharing = new Map<string, boolean>()
   /** Continues tasks after a usage-limit reset; created lazily (null = unavailable). */
@@ -986,10 +993,25 @@ export class AgentManager extends EventEmitter {
 
   // ── Subscription usage tracking ──────────────────────────
 
+  /** Public rate table (fetch + 24h TTL + disk cache + bundled fallback) used to estimate cost for harnesses that don't report one. */
+  private getUsagePricingService(): RateTableService {
+    if (!this.usagePricingService) {
+      this.usagePricingService = new RateTableService({
+        cacheFilePath: join(app.getPath('userData'), 'usage', 'model-prices-cache.json')
+      })
+    }
+    return this.usagePricingService
+  }
+
   private getUsageTracker(): UsageTracker | null {
     if (this.usageTracker !== undefined) return this.usageTracker
     try {
-      const tracker = new UsageTracker(this.db.usage, Date.now, (instanceId, provider) => this.harnessInstanceLabel(instanceId, provider))
+      const tracker = new UsageTracker(
+        this.db.usage,
+        Date.now,
+        (instanceId, provider) => this.harnessInstanceLabel(instanceId, provider),
+        () => createRateResolver(listCustomModelPrices(this.db), this.getUsagePricingService().getTable())
+      )
       tracker.on('recorded', (records) => {
         this.sendToRenderer(USAGE_RECORDED_CHANNEL, records)
         for (const record of records) {
@@ -1238,7 +1260,32 @@ export class AgentManager extends EventEmitter {
   }
 
   getUsageSummary(query: UsageSummaryQuery = {}): UsageSummary | null {
+    // Opportunistic, non-blocking: prices with whatever table is already loaded (live fetch, disk cache, or the
+    // bundled fallback) and kicks off a background refresh if the 24h TTL has lapsed — never awaited here.
+    void this.getUsagePricingService().ensureFresh().catch(() => undefined)
     return this.getUsageTracker()?.getSummary(query) ?? null
+  }
+
+  /** Re-fetches the public rate table. `force` ignores the 24h TTL but never the 60s floor. */
+  async refreshUsageRates(options: { force?: boolean } = {}): Promise<{ refreshed: boolean; fetchedAt: number }> {
+    const result = await this.getUsagePricingService().refresh(options)
+    return { refreshed: result.refreshed, fetchedAt: this.getUsagePricingService().getFetchedAt() }
+  }
+
+  listUsageModelPrices(): CustomModelPrice[] {
+    return listCustomModelPrices(this.db)
+  }
+
+  setUsageModelPrice(price: CustomModelPrice): CustomModelPrice[] {
+    const prices = setCustomModelPrice(this.db, price)
+    this.sendToRenderer(USAGE_MODEL_PRICES_UPDATED_CHANNEL, prices)
+    return prices
+  }
+
+  resetUsageModelPrice(model: string): CustomModelPrice[] {
+    const prices = resetCustomModelPrice(this.db, model)
+    this.sendToRenderer(USAGE_MODEL_PRICES_UPDATED_CHANNEL, prices)
+    return prices
   }
 
   /**

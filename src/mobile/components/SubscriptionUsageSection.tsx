@@ -10,6 +10,7 @@ import {
   formatTokenCount,
   formatUsd,
   totalTokens,
+  usageCostHint,
   usageLimitLevel,
   usageSummaryQueryForPeriod,
   type ProviderUsageLimits,
@@ -136,7 +137,7 @@ export function SubscriptionUsageSection() {
             <span className="text-xs text-muted-foreground tabular-nums">est. {formatUsd(totals.costUsd)}</span>
           </div>
           <p className="text-[10px] text-muted-foreground/70 mt-1">
-            Cost is an API-equivalent estimate reported by the provider, not your subscription bill.
+            {usageCostHint(totals) ?? 'API-equivalent estimate — not your subscription bill.'}
           </p>
         </div>
       )}

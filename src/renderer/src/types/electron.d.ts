@@ -547,8 +547,13 @@ interface ElectronAPI {
     setCursorKeychainAccess: (enabled: boolean) => Promise<import('@shared/usage').UsageLimitsRefreshResult>
     getLimitRecovery: (taskId: string) => Promise<import('@shared/usage-limit-recovery').UsageLimitRecovery | null>
     setLimitRecoveryAutoResume: (taskId: string, autoResume: boolean) => Promise<import('@shared/usage-limit-recovery').UsageLimitRecovery | null>
+    refreshRates: (options?: { force?: boolean }) => Promise<{ refreshed: boolean; fetchedAt: number }>
+    listModelPrices: () => Promise<import('@shared/usage').CustomModelPrice[]>
+    setModelPrice: (price: import('@shared/usage').CustomModelPrice) => Promise<import('@shared/usage').CustomModelPrice[]>
+    resetModelPrice: (model: string) => Promise<import('@shared/usage').CustomModelPrice[]>
   }
   onUsageLimitRecoveryUpdated: (callback: (recovery: import('@shared/usage-limit-recovery').UsageLimitRecovery) => void) => () => void
+  onUsageModelPricesUpdated: (callback: (prices: import('@shared/usage').CustomModelPrice[]) => void) => () => void
   onUsageLimitsUpdated: (callback: (limits: import('@shared/usage').ProviderUsageLimits) => void) => () => void
   onUsageRecorded: (callback: (records: import('@shared/usage').TokenUsageRecord[]) => void) => () => void
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void

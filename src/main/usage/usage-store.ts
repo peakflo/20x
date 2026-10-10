@@ -19,14 +19,28 @@ import type {
   ProviderUsageLimits,
   TokenUsageRecord,
   UsageAggregate,
+  UsageDayRow,
+  UsageModelRow,
   UsageProvider,
   UsageSummary,
-  UsageSummaryQuery
+  UsageSummaryQuery,
+  UsageTaskRow
 } from '../../shared/usage'
 import { isUsageProvider } from '../../shared/usage'
 import { defaultHarnessInstanceId } from '../../shared/harness-instances'
 import type { UsageBucket, UsageTotals } from './usage-normalize'
 import { computeUsageDelta, isEmptyUsage } from './usage-normalize'
+import {
+  accumulatePricedGroup,
+  finalizePricingAccumulator,
+  newPricingAccumulator,
+  priceModelGroup,
+  type ModelUsageGroup,
+  type RateResolver
+} from './usage-pricing'
+
+/** Used when a caller does not pass a resolver (e.g. old call sites, tests that only care about reported cost). */
+const NO_RATE_RESOLVER: RateResolver = () => null
 
 export const USAGE_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS token_usage_events (
@@ -134,39 +148,78 @@ interface UsageEventRow {
   created_at: number
 }
 
-interface AggregateRow {
-  input_tokens: number | null
-  cache_read_tokens: number | null
-  cache_write_tokens: number | null
-  output_tokens: number | null
-  reasoning_tokens: number | null
-  cost_usd: number | null
-  records: number
-  unpriced_records: number | null
-}
+/**
+ * A row's provider-reported cost is only trustworthy when it is non-null and
+ * not a reported `0` alongside non-zero tokens — Pi and OpenCode report `0`
+ * for subscription logins, which means "not reported", not free (see
+ * `priceModelGroup` in `usage-pricing.ts`).
+ */
+const TRUSTWORTHY_REPORTED_SQL =
+  '(cost_usd IS NOT NULL AND NOT (cost_usd = 0 AND (input_tokens + cache_read_tokens + cache_write_tokens + output_tokens) > 0))'
 
-const AGGREGATE_COLUMNS = `
+/**
+ * Per-(provider, model) token + cost totals, split into the "trustworthy
+ * reported" bucket and the "needs pricing" bucket. Grouping and summing all
+ * happen here in SQL; `usage-pricing.ts` prices each resulting group (at most
+ * a few dozen rows), never per raw event row.
+ */
+const GROUP_PRICING_COLUMNS = `
   COALESCE(SUM(input_tokens), 0) AS input_tokens,
   COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
   COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
   COALESCE(SUM(output_tokens), 0) AS output_tokens,
   COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
-  SUM(cost_usd) AS cost_usd,
   COUNT(*) AS records,
-  COALESCE(SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END), 0) AS unpriced_records
+  COALESCE(SUM(CASE WHEN ${TRUSTWORTHY_REPORTED_SQL} THEN cost_usd ELSE 0 END), 0) AS reported_cost_usd,
+  COALESCE(SUM(CASE WHEN ${TRUSTWORTHY_REPORTED_SQL} THEN 1 ELSE 0 END), 0) AS reported_records,
+  COALESCE(SUM(CASE WHEN NOT (${TRUSTWORTHY_REPORTED_SQL}) THEN input_tokens ELSE 0 END), 0) AS unpriced_input_tokens,
+  COALESCE(SUM(CASE WHEN NOT (${TRUSTWORTHY_REPORTED_SQL}) THEN cache_read_tokens ELSE 0 END), 0) AS unpriced_cache_read_tokens,
+  COALESCE(SUM(CASE WHEN NOT (${TRUSTWORTHY_REPORTED_SQL}) THEN cache_write_tokens ELSE 0 END), 0) AS unpriced_cache_write_tokens,
+  COALESCE(SUM(CASE WHEN NOT (${TRUSTWORTHY_REPORTED_SQL}) THEN output_tokens ELSE 0 END), 0) AS unpriced_output_tokens,
+  COALESCE(SUM(CASE WHEN NOT (${TRUSTWORTHY_REPORTED_SQL}) THEN 1 ELSE 0 END), 0) AS unpriced_records_raw
 `
 
-function toAggregate(row: AggregateRow | undefined): UsageAggregate {
+interface ModelGroupSqlRow {
+  provider: string
+  model: string
+  input_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  output_tokens: number
+  reasoning_tokens: number
+  records: number
+  reported_cost_usd: number
+  reported_records: number
+  unpriced_input_tokens: number
+  unpriced_cache_read_tokens: number
+  unpriced_cache_write_tokens: number
+  unpriced_output_tokens: number
+  unpriced_records_raw: number
+}
+
+function toModelUsageGroup(row: ModelGroupSqlRow): ModelUsageGroup {
   return {
-    inputTokens: row?.input_tokens ?? 0,
-    cacheReadTokens: row?.cache_read_tokens ?? 0,
-    cacheWriteTokens: row?.cache_write_tokens ?? 0,
-    outputTokens: row?.output_tokens ?? 0,
-    reasoningTokens: row?.reasoning_tokens ?? 0,
-    costUsd: row?.cost_usd ?? null,
-    records: row?.records ?? 0,
-    unpricedRecords: row?.unpriced_records ?? 0
+    provider: row.provider as UsageProvider,
+    model: row.model,
+    inputTokens: row.input_tokens,
+    cacheReadTokens: row.cache_read_tokens,
+    cacheWriteTokens: row.cache_write_tokens,
+    outputTokens: row.output_tokens,
+    reasoningTokens: row.reasoning_tokens,
+    records: row.records,
+    reportedCostUsd: row.reported_cost_usd,
+    reportedRecords: row.reported_records,
+    unpricedInputTokens: row.unpriced_input_tokens,
+    unpricedCacheReadTokens: row.unpriced_cache_read_tokens,
+    unpricedCacheWriteTokens: row.unpriced_cache_write_tokens,
+    unpricedOutputTokens: row.unpriced_output_tokens,
+    unpricedRecordsRaw: row.unpriced_records_raw
   }
+}
+
+/** Total tokens processed by a group — used to rank `byModel` the same way the old single-dimension query did. */
+function groupTotalTokens(group: ModelUsageGroup): number {
+  return group.inputTokens + group.cacheReadTokens + group.cacheWriteTokens + group.outputTokens
 }
 
 function toRecord(row: UsageEventRow): TokenUsageRecord {
@@ -396,7 +449,13 @@ export class UsageStore {
     return (rows as UsageEventRow[]).map(toRecord)
   }
 
-  getUsageSummary(query: UsageSummaryQuery = {}): UsageSummary {
+  /**
+   * Pricing (public rate table + custom prices) is resolved per (provider,
+   * model) group, not per raw row — `resolveRate` defaults to "nothing is
+   * priced" so callers that only care about reported cost (and existing
+   * tests) see the old behaviour unchanged.
+   */
+  getUsageSummary(query: UsageSummaryQuery = {}, resolveRate: RateResolver = NO_RATE_RESOLVER): UsageSummary {
     const untilMs = query.untilMs ?? Date.now() + 1
     const sinceMs = query.sinceMs ?? untilMs - DEFAULT_SUMMARY_WINDOW_MS
     const offsetMinutes = Number.isFinite(query.utcOffsetMinutes)
@@ -413,44 +472,107 @@ export class UsageStore {
     const where = buildWhere()
     const params = { since: sinceMs, until: untilMs, taskId: query.taskId ?? null, offset: offsetSeconds }
 
-    const totals = toAggregate(
-      this.db.prepare(`SELECT ${AGGREGATE_COLUMNS} FROM token_usage_events ${where}`).get(params) as AggregateRow
-    )
-
-    const byProvider = (this.db.prepare(
-      `SELECT provider, ${AGGREGATE_COLUMNS} FROM token_usage_events ${where} GROUP BY provider ORDER BY provider`
-    ).all(params) as Array<AggregateRow & { provider: string }>)
+    // One SQL-aggregated group per (provider, model) — pricing below runs
+    // over these groups (at most a few dozen), never over raw rows.
+    const modelGroups = (this.db.prepare(
+      `SELECT provider, model, ${GROUP_PRICING_COLUMNS} FROM token_usage_events ${where} GROUP BY provider, model`
+    ).all(params) as ModelGroupSqlRow[])
       .filter((row) => isUsageProvider(row.provider))
-      .map((row) => ({ provider: row.provider as UsageProvider, ...toAggregate(row) }))
+      .map(toModelUsageGroup)
+    const pricedModelGroups = modelGroups.map((group) => ({ group, priced: priceModelGroup(group, resolveRate) }))
 
-    const byModel = (this.db.prepare(
-      `SELECT provider, model, ${AGGREGATE_COLUMNS} FROM token_usage_events ${where}
-       GROUP BY provider, model
-       ORDER BY (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(cache_read_tokens), 0) + COALESCE(SUM(cache_write_tokens), 0) + COALESCE(SUM(output_tokens), 0)) DESC`
-    ).all(params) as Array<AggregateRow & { provider: string; model: string }>)
-      .filter((row) => isUsageProvider(row.provider))
-      .map((row) => ({ provider: row.provider as UsageProvider, model: row.model, ...toAggregate(row) }))
+    const totalsAcc = newPricingAccumulator()
+    for (const { group, priced } of pricedModelGroups) accumulatePricedGroup(totalsAcc, group, priced)
+    const totals: UsageAggregate = finalizePricingAccumulator(totalsAcc)
 
-    const byDay = (this.db.prepare(
-      `SELECT date(created_at / 1000 + @offset, 'unixepoch') AS day, ${AGGREGATE_COLUMNS}
+    const byProviderAcc = new Map<UsageProvider, ReturnType<typeof newPricingAccumulator>>()
+    for (const { group, priced } of pricedModelGroups) {
+      const acc = byProviderAcc.get(group.provider) ?? newPricingAccumulator()
+      accumulatePricedGroup(acc, group, priced)
+      byProviderAcc.set(group.provider, acc)
+    }
+    const byProvider = Array.from(byProviderAcc.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([provider, acc]) => ({ provider, ...finalizePricingAccumulator(acc) }))
+
+    const byModel: UsageModelRow[] = pricedModelGroups
+      .sort((a, b) => groupTotalTokens(b.group) - groupTotalTokens(a.group))
+      .map(({ group, priced }) => ({
+        provider: group.provider,
+        model: group.model,
+        inputTokens: group.inputTokens,
+        cacheReadTokens: group.cacheReadTokens,
+        cacheWriteTokens: group.cacheWriteTokens,
+        outputTokens: group.outputTokens,
+        reasoningTokens: group.reasoningTokens,
+        records: group.records,
+        unpricedRecords: priced.unpricedRecords,
+        costUsd: priced.costUsd,
+        reportedCostUsd: priced.reportedCostUsd,
+        estimatedCostUsd: priced.estimatedCostUsd,
+        cacheSavingsUsd: priced.cacheSavingsUsd,
+        costSource: priced.costSource
+      }))
+
+    const dayGroupRows = (this.db.prepare(
+      `SELECT date(created_at / 1000 + @offset, 'unixepoch') AS day, provider, model, ${GROUP_PRICING_COLUMNS}
        FROM token_usage_events ${where}
-       GROUP BY day ORDER BY day`
-    ).all(params) as Array<AggregateRow & { day: string }>)
-      .map((row) => ({ day: row.day, ...toAggregate(row) }))
+       GROUP BY day, provider, model
+       ORDER BY day`
+    ).all(params) as Array<ModelGroupSqlRow & { day: string }>).filter((row) => isUsageProvider(row.provider))
+    const byDayAcc = new Map<string, ReturnType<typeof newPricingAccumulator>>()
+    const dayOrder: string[] = []
+    for (const row of dayGroupRows) {
+      const group = toModelUsageGroup(row)
+      const priced = priceModelGroup(group, resolveRate)
+      if (!byDayAcc.has(row.day)) {
+        byDayAcc.set(row.day, newPricingAccumulator())
+        dayOrder.push(row.day)
+      }
+      accumulatePricedGroup(byDayAcc.get(row.day)!, group, priced)
+    }
+    const byDay: UsageDayRow[] = dayOrder.map((day) => ({ day, ...finalizePricingAccumulator(byDayAcc.get(day)!) }))
 
     const hasTasksTable = !!this.db.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"
     ).get()
     const taskWhere = buildWhere('e', ['e.task_id IS NOT NULL'])
-    const topTasks = (this.db.prepare(
-      `SELECT e.task_id AS task_id, ${hasTasksTable ? 't.title' : 'NULL'} AS title, ${AGGREGATE_COLUMNS}
+    const taskOrderRows = this.db.prepare(
+      `SELECT e.task_id AS task_id, ${hasTasksTable ? 't.title' : 'NULL'} AS title,
+         (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(cache_read_tokens), 0) + COALESCE(SUM(cache_write_tokens), 0) + COALESCE(SUM(output_tokens), 0)) AS total_tokens
        FROM token_usage_events e ${hasTasksTable ? 'LEFT JOIN tasks t ON t.id = e.task_id' : ''}
        ${taskWhere}
        GROUP BY e.task_id
-       ORDER BY (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(cache_read_tokens), 0) + COALESCE(SUM(cache_write_tokens), 0) + COALESCE(SUM(output_tokens), 0)) DESC
+       ORDER BY total_tokens DESC
        LIMIT ${TOP_TASKS_LIMIT}`
-    ).all(params) as Array<AggregateRow & { task_id: string; title: string | null }>)
-      .map((row) => ({ taskId: row.task_id, title: row.title ?? null, ...toAggregate(row) }))
+    ).all(params) as Array<{ task_id: string; title: string | null }>
+
+    let topTasks: UsageTaskRow[] = []
+    if (taskOrderRows.length > 0) {
+      const taskIds = taskOrderRows.map((row) => row.task_id)
+      const placeholders = taskIds.map(() => '?').join(',')
+      const taskGroupRows = (this.db.prepare(
+        `SELECT task_id, provider, model, ${GROUP_PRICING_COLUMNS}
+         FROM token_usage_events
+         WHERE task_id IN (${placeholders}) AND created_at >= ? AND created_at < ?
+         GROUP BY task_id, provider, model`
+      ).all(...taskIds, sinceMs, untilMs) as Array<ModelGroupSqlRow & { task_id: string }>)
+        .filter((row) => isUsageProvider(row.provider))
+
+      const byTaskAcc = new Map<string, ReturnType<typeof newPricingAccumulator>>()
+      for (const row of taskGroupRows) {
+        const group = toModelUsageGroup(row)
+        const priced = priceModelGroup(group, resolveRate)
+        const acc = byTaskAcc.get(row.task_id) ?? newPricingAccumulator()
+        accumulatePricedGroup(acc, group, priced)
+        byTaskAcc.set(row.task_id, acc)
+      }
+      topTasks = taskOrderRows.map((row) => ({
+        taskId: row.task_id,
+        title: row.title ?? null,
+        ...finalizePricingAccumulator(byTaskAcc.get(row.task_id) ?? newPricingAccumulator())
+      }))
+    }
 
     return { sinceMs, untilMs, totals, byProvider, byModel, byDay, topTasks }
   }

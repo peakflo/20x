@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ProviderUsageLimits, UsagePeriod, UsageSummary } from '@shared/usage'
 import { usageSummaryQueryForPeriod } from '@shared/usage'
-import { onUsageRecorded, usageApi } from '@/lib/ipc-client'
+import { onUsageModelPricesUpdated, onUsageRecorded, usageApi } from '@/lib/ipc-client'
 import { useUsageStore } from '@/stores/usage-store'
 
 /** Coalesce bursts of `usage:recorded` events (one per model per turn) into one reload. */
@@ -17,6 +17,8 @@ export interface SubscriptionUsageState {
   refreshLimits: () => Promise<void>
   /** Runs a provider action offered on a limits card. */
   runLimitsAction: (actionId: string) => Promise<void>
+  /** Re-fetches the usage summary (e.g. after the rate table or a custom price changed). */
+  reloadSummary: () => Promise<void>
 }
 
 /**
@@ -58,13 +60,17 @@ export function useSubscriptionUsage(period: UsagePeriod): SubscriptionUsageStat
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
-    const off = onUsageRecorded(() => {
+    const scheduleReload = (): void => {
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => { void loadSummary() }, SUMMARY_RELOAD_DEBOUNCE_MS)
-    })
+    }
+    const offRecorded = onUsageRecorded(scheduleReload)
+    // A custom price changing (anywhere — e.g. the Model prices dialog) re-prices retroactively.
+    const offPrices = onUsageModelPricesUpdated(scheduleReload)
     return () => {
       if (timer) clearTimeout(timer)
-      off()
+      offRecorded()
+      offPrices()
     }
   }, [loadSummary])
 
@@ -75,6 +81,7 @@ export function useSubscriptionUsage(period: UsagePeriod): SubscriptionUsageStat
     refreshing,
     error: limitsError ?? summaryError,
     refreshLimits: () => refresh(true),
-    runLimitsAction: runAction
+    runLimitsAction: runAction,
+    reloadSummary: loadSummary
   }
 }
