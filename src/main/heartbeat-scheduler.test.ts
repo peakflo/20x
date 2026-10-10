@@ -1,4 +1,34 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// Stub `gh` so pre-flight tests never touch the network. The scheduler calls
+// promisify(execFile), so the stub exposes the promisify custom symbol.
+const ghStub = vi.hoisted(() => {
+  const calls: string[][] = []
+  let respond: (argv: string[]) => string = () => '0'
+  return {
+    calls,
+    reset: (responder?: (argv: string[]) => string) => {
+      calls.length = 0
+      respond = responder ?? (() => '0')
+    },
+    invoke: (argv: string[]) => {
+      calls.push(argv)
+      return respond(argv)
+    },
+  }
+})
+
+vi.mock('child_process', () => {
+  const execFile = () => {
+    throw new Error('callback-style execFile is not used by HeartbeatScheduler')
+  }
+  Object.defineProperty(execFile, Symbol.for('nodejs.util.promisify.custom'), {
+    value: (_command: string, argv: string[]) =>
+      Promise.resolve({ stdout: ghStub.invoke(argv), stderr: '' }),
+  })
+  return { execFile }
+})
+
 import { HeartbeatScheduler } from './heartbeat-scheduler'
 import { HeartbeatStatus, HEARTBEAT_OK_TOKEN, HEARTBEAT_INFO_TOKEN, HEARTBEAT_DEFAULTS, TaskStatus } from '../shared/constants'
 import type { DatabaseManager, TaskRecord } from './database'
@@ -223,6 +253,163 @@ describe('HeartbeatScheduler', () => {
       expect(requiresLlmCurrentStateChecks('Check whether the PR has conflicts')).toBe(false)
       expect(requiresLlmCurrentStateChecks('Check for new PR comments and reviews')).toBe(false)
       expect(requiresLlmCurrentStateChecks('Verify CI pipeline passed')).toBe(false)
+    })
+  })
+
+  // ── preflightCoversAllChecks ─────────────────────────────
+
+  describe('preflightCoversAllChecks', () => {
+    const coversAllChecks = (content: string) => {
+      const scheduler = new HeartbeatScheduler({} as DatabaseManager, {} as AgentManager)
+      return (scheduler as unknown as {
+        preflightCoversAllChecks: (heartbeatContent: string) => boolean
+      }).preflightCoversAllChecks(content)
+    }
+
+    it('returns true when every check references a GitHub URL', () => {
+      const content = [
+        '# Heartbeat Checks',
+        '- [ ] Check if PR https://github.com/acme/app/pull/42 has new review comments',
+        '- [ ] Verify CI passed on https://github.com/acme/app/pull/42',
+      ].join('\n')
+      expect(coversAllChecks(content)).toBe(true)
+    })
+
+    it('returns false when a check has no GitHub URL', () => {
+      const content = [
+        '# Heartbeat Checks',
+        '- [ ] Check if PR https://github.com/acme/app/pull/42 has new review comments',
+        '- [ ] Monitor if any new transactions appeared in the profiler',
+      ].join('\n')
+      expect(coversAllChecks(content)).toBe(false)
+    })
+
+    it('returns false for free-text-only instructions', () => {
+      const content = '## Periodic checks\nMonitor if any new transactions appeared in the profiler'
+      expect(coversAllChecks(content)).toBe(false)
+    })
+
+    it('ignores informational sections the agent wrote for context', () => {
+      const content = [
+        '# Heartbeat Checks',
+        '- [ ] Check https://github.com/acme/app/pull/42 for new comments',
+        '',
+        '## Current Status',
+        '- 2026-07-28: Production validation confirmed the query performs a COLLSCAN.',
+        '',
+        '## Latest Finding',
+        '- Query Stats recorded 17 executions returning zero documents.',
+      ].join('\n')
+      expect(coversAllChecks(content)).toBe(true)
+    })
+
+    it('still requires an LLM when a non-GitHub check follows an informational section', () => {
+      const content = [
+        '## Current Status',
+        '- 2026-07-28: Opened https://github.com/acme/app/pull/42.',
+        '',
+        '## Periodic checks',
+        'Monitor if any new transactions appeared in the profiler',
+      ].join('\n')
+      expect(coversAllChecks(content)).toBe(false)
+    })
+
+    it('ignores headings, horizontal rules, blockquotes and code fences', () => {
+      const content = [
+        '# Heartbeat Checks',
+        '---',
+        '> Reminder: read-only checks only',
+        '```bash',
+        'gh pr view 42',
+        '```',
+        '- [ ] Check https://github.com/acme/app/pull/42 for new comments',
+      ].join('\n')
+      expect(coversAllChecks(content)).toBe(true)
+    })
+
+    it('returns false when the file has no check lines at all', () => {
+      expect(coversAllChecks('# Heartbeat Checks\n\n## Current Status')).toBe(false)
+    })
+  })
+
+  // ── runPreflightChecks ───────────────────────────────────
+
+  describe('runPreflightChecks', () => {
+    const runPreflight = (scheduler: HeartbeatScheduler, content: string, task: TaskRecord) =>
+      (scheduler as unknown as {
+        runPreflightChecks: (heartbeatContent: string, task: TaskRecord) => Promise<string>
+      }).runPreflightChecks(content, task)
+
+    /** A PR with nothing new: no failed checks, no comments/reviews, no conflicts. */
+    const quietPr = (argv: string[]): string => {
+      const jq = argv[argv.indexOf('--jq') + 1]
+      if (jq === '.head.sha') return 'abc1234'
+      if (jq.startsWith('{ mergeable')) {
+        return JSON.stringify({ mergeable: true, mergeable_state: 'clean', head_sha: 'abc1234' })
+      }
+      return '0'
+    }
+
+    beforeEach(() => ghStub.reset(quietPr))
+    afterEach(() => ghStub.reset())
+
+    it('does not skip the LLM when the heartbeat mixes PR links with free-text checks', async () => {
+      // Regression: a quiet PR used to short-circuit the whole file to
+      // 'no_changes', so the free-text instruction was never actually checked.
+      const content = [
+        '## Periodic checks',
+        'Monitor if any new transactions appeared in the profiler',
+        '',
+        '## Heartbeat Checks',
+        '- [ ] Check https://github.com/acme/app/pull/42 for new review comments',
+      ].join('\n')
+
+      const result = await runPreflight(scheduler, content, makeTask())
+
+      expect(result).toBe('inconclusive')
+      expect(ghStub.calls).toHaveLength(0) // bails out before spending gh calls
+    })
+
+    it('returns inconclusive without any gh calls for free-text-only heartbeats', async () => {
+      const result = await runPreflight(
+        scheduler,
+        '## Periodic checks\nMonitor if any new transactions appeared in the profiler',
+        makeTask()
+      )
+
+      expect(result).toBe('inconclusive')
+      expect(ghStub.calls).toHaveLength(0)
+    })
+
+    it('still skips the LLM when a GitHub-only heartbeat has nothing new', async () => {
+      const content = [
+        '# Heartbeat Checks',
+        '- [ ] Check https://github.com/acme/app/pull/42 for new review comments',
+        '',
+        '## Current Status',
+        '- 2026-07-28: PR opened, all checks green.',
+      ].join('\n')
+
+      const result = await runPreflight(scheduler, content, makeTask())
+
+      expect(result).toBe('no_changes')
+      expect(ghStub.calls.length).toBeGreaterThan(0)
+    })
+
+    it('detects a failed CI run on a GitHub-only heartbeat', async () => {
+      ghStub.reset((argv) => {
+        const jq = argv[argv.indexOf('--jq') + 1]
+        if (jq === '.head.sha') return 'abc1234'
+        return argv[1].endsWith('/check-runs') ? '1' : '0'
+      })
+
+      const result = await runPreflight(
+        scheduler,
+        '# Heartbeat Checks\n- [ ] Verify CI on https://github.com/acme/app/pull/42',
+        makeTask()
+      )
+
+      expect(result).toBe('changes_detected')
     })
   })
 
