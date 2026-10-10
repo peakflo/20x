@@ -2434,6 +2434,27 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
   }
 
+  /**
+   * Removes the task's artifact registry and files (`.20x/artifacts.json`,
+   * `artifacts/<id>/...`), including inline HTML renders — but only those two
+   * subpaths, never the whole workspace directory. A git worktree checkout
+   * can live alongside them at `workspaces/<taskId>/<repoName>` (see
+   * `worktree-manager.ts`), and removing that needs `git worktree remove`
+   * (`WorktreeManager.cleanupTaskWorkspace`), not a raw directory delete, or
+   * the main repository is left with stale `.git/worktrees` metadata. Task
+   * deletion does not reliably run that worktree cleanup first (the
+   * interactive delete flow does, but only when repos + an org setting are
+   * present; a plugin-driven delete does not run it at all), so this stays
+   * scoped to what it safely owns.
+   */
+  deleteTaskWorkspace(taskId: string): void {
+    const dir = join(app.getPath('userData'), 'workspaces', taskId)
+    for (const name of ['.20x', 'artifacts']) {
+      const target = join(dir, name)
+      if (existsSync(target)) rmSync(target, { recursive: true, force: true })
+    }
+  }
+
   getTasks(): TaskRecord[] {
     if (!this.ensureDbOpen()) return []
 
@@ -3232,6 +3253,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
   deleteTask(id: string): boolean {
     this.deleteTaskAttachments(id)
+    this.deleteTaskWorkspace(id)
     this.deleteTranscriptParts(id)
     const result = this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
     return result.changes > 0

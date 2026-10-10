@@ -80,6 +80,15 @@
   --input: #dcdcdd;
   --ring: #1e96eb;
 
+  /* Categorical chart series for inline HTML renders (html_render), chosen to
+     read well against --background in this mode. --chart-1 mirrors --primary. */
+  --chart-1: #1e96eb;
+  --chart-2: #10cb86;
+  --chart-3: #f59e0b;
+  --chart-4: #a855f7;
+  --chart-5: #ec4899;
+  --chart-6: #06b6d4;
+
   --sidebar: #f4f4f5;
   --sidebar-foreground: #2c2c2e;
   --sidebar-border: #e3e2e4;
@@ -133,6 +142,15 @@
   --border: #2d2d2d;
   --input: #333333;
   --ring: #1e96eb;
+
+  /* Brighter/more saturated than the light series so each colour still reads
+     clearly against the darker --background. */
+  --chart-1: #4db8ff;
+  --chart-2: #34e2a6;
+  --chart-3: #fbbf24;
+  --chart-4: #c084fc;
+  --chart-5: #fb7185;
+  --chart-6: #22d3ee;
 
   --sidebar: #1a1a1a;
   --sidebar-foreground: #d0d0d0;

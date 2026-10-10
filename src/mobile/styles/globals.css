@@ -54,6 +54,15 @@
   --input: #dcdcdd;
   --ring: #1e96eb;
   color-scheme: light;
+
+  /* Categorical chart series for inline HTML renders (html_render) — shared
+     with the desktop palette, see renderer/src/styles/globals.css. */
+  --chart-1: #1e96eb;
+  --chart-2: #10cb86;
+  --chart-3: #f59e0b;
+  --chart-4: #a855f7;
+  --chart-5: #ec4899;
+  --chart-6: #06b6d4;
 }
 
 /* Dark theme (true-gray neutrals #141414 / #1e1e1e) */
@@ -76,6 +85,13 @@
   --input: #333333;
   --ring: #1e96eb;
   color-scheme: dark;
+
+  --chart-1: #4db8ff;
+  --chart-2: #34e2a6;
+  --chart-3: #fbbf24;
+  --chart-4: #c084fc;
+  --chart-5: #fb7185;
+  --chart-6: #22d3ee;
 }
 
 /* Mode-aware accent palette (see desktop globals for rationale) */

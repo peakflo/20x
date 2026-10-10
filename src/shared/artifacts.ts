@@ -73,6 +73,8 @@ export interface ArtifactFileEntry {
   workpieceKey?: string
   /** All owned files, addressed relative to the task workspace. */
   files?: string[]
+  inline?: boolean
+  heightHint?: number
 }
 
 /** Metadata returned by the explicit artifact/workpiece tools. Files are
@@ -87,6 +89,12 @@ export interface RegisteredArtifact {
   entryFile?: string
   createdAt: number
   updatedAt: number
+  /** Set by `html_render`: shown inline in the chat transcript above the
+   * agent's reply, instead of the small open-in-panel card. */
+  inline?: boolean
+  /** Agent-requested height hint (px) from `html_render`, used to reserve the
+   * inline box before the frame reports its real content height. */
+  heightHint?: number
 }
 
 export interface ArtifactContent {
@@ -118,6 +126,8 @@ export interface ArtifactApi {
   mcpCall?: (input: import('./artifact-mcp').ArtifactMcpCall) => Promise<unknown>
   /** Desktop only. Absent when the viewer runs outside Electron. */
   copyFile?: (taskId: string, relativePath: string) => Promise<ArtifactCopyFileResult>
+  /** Desktop only: "Save as…" through a native save dialog. Absent on mobile. */
+  saveAs?: (taskId: string, relativePath: string, suggestedName: string) => Promise<boolean>
 }
 
 export interface Artifact {
@@ -132,6 +142,11 @@ export interface Artifact {
   files?: string[]
   updatedAt: number
   reloadTrigger: number
+  /** Set by `html_render`: rendered inline in the chat transcript above the
+   * agent's reply, instead of the small open-in-panel card. */
+  inline?: boolean
+  /** Agent-requested height hint (px) from `html_render`. */
+  heightHint?: number
 }
 
 export interface ArtifactUIState {

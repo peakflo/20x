@@ -112,11 +112,13 @@ const ARTIFACT_WORKSPACE_INSTRUCTIONS = `
 
 [Workspace Deliverables]
 Repository files are code and appear in the task's Changes view; do not treat ordinary source files as artifacts.
-For every standalone user-facing deliverable, first call \`create_artifact\` on the task-management MCP server. Then use \`write_artifact_file\`, \`read_artifact_file\`, and \`edit_artifact_file\` with the returned artifact_id. Multiple supporting files belong to that one artifact; mark its preview entry file with \`preview: true\`. Do not create artifact files with generic filesystem Write/Edit tools. Screenshots and pull requests are detected automatically.`
+For every standalone user-facing deliverable, first call \`create_artifact\` on the task-management MCP server. Then use \`write_artifact_file\`, \`read_artifact_file\`, and \`edit_artifact_file\` with the returned artifact_id. Multiple supporting files belong to that one artifact; mark its preview entry file with \`preview: true\`. Do not create artifact files with generic filesystem Write/Edit tools. Screenshots and pull requests are detected automatically.
+When a chart, table, diagram, image collage, or mockup would say more than prose, build a self-contained HTML page, check it with \`html_preview\`, then publish it with \`html_render\` before your final reply. The user sees it above your reply, so don't announce or restate it.`
 
 /** Short reminder for follow-up / resume system prompts — full rules live in the initial user message. */
 const ARTIFACT_WORKSPACE_REMINDER =
-  '\nStandalone deliverables: if task-management is available, use create_artifact / write_artifact_file (not ordinary Write/Edit).'
+  '\nStandalone deliverables: if task-management is available, use create_artifact / write_artifact_file (not ordinary Write/Edit). '
+  + 'For charts/tables/diagrams, prefer html_preview then html_render over describing them in prose.'
 
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
