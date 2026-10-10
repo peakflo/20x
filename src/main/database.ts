@@ -2882,10 +2882,25 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return rows.map(deserializeAgentRunInterval)
   }
 
-  /** Earliest interval start on record — phase 2 uses this for a "counting from <date>" hint when backfill coverage is thin. */
+  /** Earliest interval start on record (including backfilled rows). */
   getEarliestAgentRunIntervalStart(): number | null {
     if (!this.ensureDbOpen()) return null
     const row = this.db.prepare(`SELECT MIN(started_at_ms) AS m FROM agent_run_intervals`).get() as { m: number | null }
+    return row.m ?? null
+  }
+
+  /**
+   * Earliest LIVE (non-backfilled) interval start — the "counting from
+   * <date>" hint the usage card shows now actually means "since 20x started
+   * watching live", not "since the best-effort historical derivation
+   * reaches back to". A still-open row has `end_reason IS NULL`, which is
+   * live by definition (backfill always inserts pre-closed rows).
+   */
+  getEarliestLiveAgentRunIntervalStart(): number | null {
+    if (!this.ensureDbOpen()) return null
+    const row = this.db.prepare(
+      `SELECT MIN(started_at_ms) AS m FROM agent_run_intervals WHERE end_reason IS NULL OR end_reason != 'backfilled'`
+    ).get() as { m: number | null }
     return row.m ?? null
   }
 

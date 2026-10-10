@@ -111,6 +111,12 @@ describe('formatMultiplier', () => {
     expect(formatMultiplier(10)).toBe('10')
     expect(formatMultiplier(137.2)).toBe('137')
   })
+
+  it('caps absurd multipliers at ">1000×" instead of a wall of digits', () => {
+    expect(formatMultiplier(1000)).toBe('>1000×')
+    expect(formatMultiplier(48_231)).toBe('>1000×')
+    expect(formatMultiplier(999.4)).toBe('999') // just under the cap, still a rounded integer
+  })
 })
 
 describe('usagePeriodForParallelismDays', () => {

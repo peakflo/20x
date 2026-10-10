@@ -22,7 +22,7 @@ const summary: UsageCardSummary = {
   peakDay: { atMs: Date.UTC(2026, 0, 15), peak: 5 },
   tasksShipped: 12,
   tokens: 45_000_000,
-  lanes: [{ segments: [{ startFrac: 0, endFrac: 1 }] }]
+  calendar: [{ day: '2026-01-15', hours: 4 }]
 }
 
 beforeEach(() => {

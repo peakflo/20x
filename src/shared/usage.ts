@@ -420,8 +420,19 @@ export function formatUsd(value: number | null | undefined): string {
  * the Usage page and the number drawn into the shared image can never drift
  * apart.
  */
+/**
+ * Formats the raw multiplier. Below 10, one decimal ("3.4"); from 10 up, a
+ * rounded integer ("15"). At 1000 and above the exact figure stops being
+ * meaningful (and would otherwise read as an absurd wall of digits for an
+ * agent that ran unattended for a very long time relative to a short screen
+ * session) — this returns the literal capped string `">1000×"` instead,
+ * `×` included, unlike every other branch which returns the bare number and
+ * leaves the `×` to the caller (`drawCard`/the Records panel both check for
+ * this and skip adding their own `×` on top of it).
+ */
 export function formatMultiplier(raw: number): string {
   if (!Number.isFinite(raw)) return '—'
+  if (raw >= 1000) return '>1000×'
   if (raw >= 10) return String(Math.round(raw))
   return raw.toFixed(1)
 }

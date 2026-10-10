@@ -86,11 +86,13 @@ export function UsageHeroSection() {
   }
 
   if (!summary) {
+    const headline =
+      built?.emptyReason === 'no-screen-time-data' ? 'Still learning your screen time'
+      : built?.emptyReason === 'not-enough-evidence-yet' ? 'Still gathering evidence'
+      : 'Run a few agents at once and your multiplier shows up here'
     return (
       <div className="rounded-2xl bg-gradient-to-br from-[#1e96eb] to-[#1787d9] text-white flex flex-col items-center justify-center text-center gap-1.5 px-6 py-10">
-        <p className="text-base font-semibold">
-          {built?.emptyReason === 'no-screen-time-data' ? 'Still learning your screen time' : 'Run a few agents at once and your multiplier shows up here'}
-        </p>
+        <p className="text-base font-semibold">{headline}</p>
         <p className="text-xs text-white/80">
           Your multiplier tracks how much agent work gets done per hour you spend in the app.
         </p>

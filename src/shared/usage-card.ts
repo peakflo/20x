@@ -2,14 +2,20 @@
  * The "my multiplier" share card — one canvas-drawing module shared by the
  * desktop hero card, the Share dialog's export, and the mobile hero.
  *
- * This is a faithful, line-for-line port of the approved mock
+ * This started as a faithful, line-for-line port of the approved mock
  * (usage-page-mock-shareable-20x-card/index.html — `drawLogo`, `drawTimes`,
  * `fitText`, `drawCard`, `renderToCanvas`, `THEMES`, `SHAPES`, `ROUND`/`SANS`),
- * with exactly one kind of change: every mock data field that came from the
- * mock's seeded random generator is replaced by a field on `UsageCardSummary`
- * fed by the real `ParallelismSummary` (src/main/usage/usage-parallelism.ts).
- * The mock's `laneRuns(day)` synthetic generator is dropped entirely — the
- * real `peakDayLanes` the query engine already computes is used as-is.
+ * with every mock data field that came from the mock's seeded random
+ * generator replaced by a field on `UsageCardSummary` fed by the real
+ * `ParallelismSummary` (src/main/usage/usage-parallelism.ts).
+ *
+ * One deliberate departure from the mock, from direct user review of the
+ * live page: the mock's "peak day as lanes" block (one row per agent
+ * session, bars per run, on the single busiest day) tested as confusing —
+ * a real user couldn't tell what it was showing. It's replaced with a
+ * GitHub-style activity calendar: one cell per calendar day in the period,
+ * colour intensity by that day's agent hours. See `buildCalendarGrid` /
+ * the "calendar heatmap" section of `drawCard`.
  *
  * ── Privacy, enforced by construction ───────────────────────
  * `UsageCardSummary` and `UsageCardOptions` are the ONLY way to get data into
@@ -24,21 +30,16 @@ import { formatMultiplier, type UsageParallelismResponse } from './usage'
 
 // ── Data contract ────────────────────────────────────────────
 
-export interface UsageCardPeakDaySegment {
-  /** Fraction (0..1) of the peak day's active window where this run starts. */
-  startFrac: number
-  /** Fraction (0..1) of the peak day's active window where this run ends. */
-  endFrac: number
-}
-
 /**
- * One agent session's run segments on the peak day, already clipped to that
- * day and normalized to the day's active window. No session, task, or agent
- * identity travels with it — the card has no use for it and must never carry
- * it into a shared image.
+ * One calendar day's live agent-hours, for the GitHub-style activity
+ * calendar. `day` is a `YYYY-MM-DD` local-calendar-day key (see
+ * `ParallelismDayRow.day` in shared/usage.ts) — no session, task, or agent
+ * identity travels with it, just a date and an hour figure.
  */
-export interface UsageCardLane {
-  segments: UsageCardPeakDaySegment[]
+export interface UsageCardCalendarDay {
+  day: string
+  /** Live (non-backfilled) agent run-hours that calendar day. */
+  hours: number
 }
 
 export interface UsageCardPeakDay {
@@ -74,8 +75,8 @@ export interface UsageCardSummary {
   tasksShipped: number
   /** Total tokens processed in the period — a count, never a cost. */
   tokens: number
-  /** Every session's run segments on the peak day (the "multiplier, drawn" lanes block). */
-  lanes: UsageCardLane[]
+  /** One entry per calendar day in the period, live agent-hours only — drawn as a GitHub-style activity calendar. */
+  calendar: UsageCardCalendarDay[]
 }
 
 export type UsageCardShape = 'wide' | 'square' | 'tall'
@@ -214,14 +215,66 @@ export function fitText(ctx: UsageCardContext2D, text: string, maxWidth: number,
   return s + 1
 }
 
+// ── Activity calendar (GitHub-style contribution grid) ──────
+
+/** One placed cell in the calendar grid: `col` = week index (0 = earliest week), `row` = weekday (0 = Sunday .. 6 = Saturday). */
+interface UsageCardCalendarCell {
+  col: number
+  row: number
+  hours: number
+}
+
+/**
+ * Lays `calendar` (one entry per calendar day, in chronological order) out
+ * into a GitHub-style grid: columns are weeks, rows are the 7 weekdays
+ * (Sunday on top), filled top-to-bottom within a column then left-to-right
+ * across columns — exactly how github.com's own contribution graph reads.
+ * The first day's weekday determines how far down its column it lands, so
+ * every later day's cell is anchored to its true weekday, not just "the
+ * Nth day since the period started".
+ *
+ * `day` is parsed as a UTC midnight timestamp purely to recover its
+ * weekday — these are already resolved local-calendar-day keys (see
+ * `ParallelismDayRow.day`), so this is just date arithmetic, not a
+ * timezone conversion.
+ */
+function buildCalendarGrid(calendar: UsageCardCalendarDay[]): { cols: number; cells: UsageCardCalendarCell[] } {
+  if (calendar.length === 0) return { cols: 0, cells: [] }
+  const firstWeekday = new Date(`${calendar[0].day}T00:00:00Z`).getUTCDay() // 0 = Sun .. 6 = Sat
+  const cells: UsageCardCalendarCell[] = calendar.map((d, i) => {
+    const offset = i + firstWeekday
+    return { col: Math.floor(offset / 7), row: offset % 7, hours: d.hours }
+  })
+  const cols = Math.max(...cells.map((c) => c.col)) + 1
+  return { cols, cells }
+}
+
+/**
+ * GitHub's own 5-level bucketing (0 = none, 1..4 = increasing activity),
+ * scaled relative to the busiest day in the period rather than to a fixed
+ * hour count — so a quiet week and a packed one each use the full range.
+ * A 0-hour day is always level 0, drawn in the theme's `faint` token so it
+ * reads as "clearly empty" rather than "the lightest shade of present".
+ */
+function calendarLevel(hours: number, maxHours: number): 0 | 1 | 2 | 3 | 4 {
+  if (hours <= 0 || maxHours <= 0) return 0
+  const frac = hours / maxHours
+  if (frac > 0.75) return 4
+  if (frac > 0.5) return 3
+  if (frac > 0.25) return 2
+  return 1
+}
+
+const USAGE_CARD_CALENDAR_LEVEL_OPACITY = [0, 0.28, 0.48, 0.7, 0.94] as const
+
 // ── The card ──────────────────────────────────────────────────
 
 /**
  * Draws the full card: header (logo + wordmark + "<name>, <period>"), the
  * giant multiplier, the "N hours of agent work in M hours" sentence, the 4
- * stats (layout differs by shape), the peak-day lanes with its caption, and
- * the footer. One function for the on-screen hero and the exported image —
- * call it via `renderToCanvas`.
+ * stats (layout differs by shape), the activity calendar with its caption,
+ * and the footer. One function for the on-screen hero and the exported
+ * image — call it via `renderToCanvas`.
  */
 export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary: UsageCardSummary, opts: UsageCardOptions): void {
   const t = USAGE_CARD_THEMES[opts.theme] ?? USAGE_CARD_THEMES.azure
@@ -252,19 +305,32 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
   const who = (opts.name || '').trim()
   ctx.fillText((who ? who + ', ' : '') + summary.periodLabel.toLowerCase(), W - pad, pad + logoH / 2 + 1)
 
-  // The multiplier
+  // The multiplier. formatMultiplier returns the bare number ("15", "3.4")
+  // for everything under 1000x, with the "×" drawn separately below as its
+  // own round-capped glyph (drawTimes) — except the capped ">1000×" string,
+  // which already has its own "×" baked in (so an absurd multiplier reads as
+  // "this is a cap", not as a round number). That case skips drawTimes
+  // entirely and shrinks to fit instead of assuming a single-number width.
   const mult = formatMultiplier(summary.multiplier)
+  const isCapped = mult.endsWith('×')
   const numSize = wide ? 228 : (H > W ? 400 : 310)
   const numTop = wide ? pad + logoH + 26 : pad + logoH + (H > W ? 56 : 30)
   ctx.textAlign = 'left'
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = t.ink
-  ctx.font = `800 ${numSize}px ${USAGE_CARD_ROUND_FONT}`
   const baseline = numTop + numSize * 0.78
-  ctx.fillText(mult, pad - numSize * 0.03, baseline)
-  const numW = ctx.measureText(mult).width
-  const xSize = numSize * 0.36
-  drawTimes(ctx, pad + numW + numSize * 0.06, baseline - xSize - numSize * 0.03, xSize, t.ink)
+  if (isCapped) {
+    const maxNumeralWidth = (wide ? 760 : W) - pad * 2 - (wide ? 40 : 0)
+    const fitSize = fitText(ctx, mult, maxNumeralWidth, numSize, 800, USAGE_CARD_ROUND_FONT)
+    ctx.font = `800 ${fitSize}px ${USAGE_CARD_ROUND_FONT}`
+    ctx.fillText(mult, pad - fitSize * 0.03, numTop + fitSize * 0.78)
+  } else {
+    ctx.font = `800 ${numSize}px ${USAGE_CARD_ROUND_FONT}`
+    ctx.fillText(mult, pad - numSize * 0.03, baseline)
+    const numW = ctx.measureText(mult).width
+    const xSize = numSize * 0.36
+    drawTimes(ctx, pad + numW + numSize * 0.06, baseline - xSize - numSize * 0.03, xSize, t.ink)
+  }
 
   // The sentence under it
   const leftW = wide ? 640 : W - pad * 2
@@ -317,27 +383,35 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
     })
   }
 
-  // The peak day as lanes: one row per agent, one bar per run. This is the multiplier, drawn.
-  const lanes = summary.lanes
+  // The activity calendar: a GitHub-style contribution grid, one cell per
+  // calendar day, colour intensity by that day's live agent-hours relative
+  // to the period's busiest day. Replaces the mock's "peak day as lanes"
+  // block in the same footprint — see the module docstring for why.
   const availW = wide ? 600 : W - pad * 2
-  const rows = lanes.length
-  const lanesH = wide ? 158 : (H > W ? 262 : 236)
-  const gap = wide ? 2.5 : 4
-  const rowH = rows > 0 ? (lanesH - gap * (rows - 1)) / rows : 0
-  const gy = H - pad - lanesH - (wide ? 0 : 44)
+  const { cols, cells } = buildCalendarGrid(summary.calendar)
+  const maxHours = cells.reduce((m, c) => Math.max(m, c.hours), 0)
+  let cellSize = wide ? 13 : 15
+  let gap = wide ? 3 : 4
+  if (cols > 0) {
+    const naturalW = cols * cellSize + (cols - 1) * gap
+    if (naturalW > availW) {
+      const shrink = availW / naturalW
+      cellSize *= shrink
+      gap *= shrink
+    }
+  }
+  const gridH = 7 * cellSize + 6 * gap
+  const gy = H - pad - gridH - (wide ? 0 : 44)
   const [r0, g0, b0] = t.cell
-  lanes.forEach((lane, i) => {
-    const y = gy + i * (rowH + gap)
-    ctx.fillStyle = `rgba(${r0},${g0},${b0},0.12)`
+  const radius = Math.max(1.5, cellSize * 0.22)
+  cells.forEach(({ col, row, hours }) => {
+    const x = pad + col * (cellSize + gap)
+    const y = gy + row * (cellSize + gap)
+    const level = calendarLevel(hours, maxHours)
+    ctx.fillStyle = level === 0 ? t.faint : `rgba(${r0},${g0},${b0},${USAGE_CARD_CALENDAR_LEVEL_OPACITY[level]})`
     ctx.beginPath()
-    ctx.roundRect(pad, y, availW, rowH, rowH / 2)
+    ctx.roundRect(x, y, cellSize, cellSize, radius)
     ctx.fill()
-    lane.segments.forEach(({ startFrac, endFrac }) => {
-      ctx.fillStyle = `rgba(${r0},${g0},${b0},${opts.theme === 'azure' ? 0.95 : 0.9})`
-      ctx.beginPath()
-      ctx.roundRect(pad + startFrac * availW, y, Math.max(rowH, (endFrac - startFrac) * availW), rowH, rowH / 2)
-      ctx.fill()
-    })
   })
   ctx.fillStyle = t.soft
   ctx.textBaseline = 'alphabetic'
@@ -378,7 +452,17 @@ export function renderToCanvas(canvas: HTMLCanvasElement, shape: UsageCardShape,
 export type UsageCardEmptyReason =
   /** No agent-run interval in the period at all. */
   | 'no-agent-data'
-  /** Agent-run data exists, but there's no screen-time data to divide by yet (e.g. focus tracking only just started, or every agent run happened while the app was never focused). */
+  /**
+   * There's some live (non-backfilled) agent-run time recorded, but not yet
+   * an hour of it — not enough evidence to show a real multiplier. This is
+   * expected for every real user in roughly the first hour after this
+   * feature ships (or after a fresh install): the ratio only reflects
+   * live-observed data, never a backfilled estimate, so there's a brief
+   * honest "still gathering evidence" window before the real number can
+   * appear.
+   */
+  | 'not-enough-evidence-yet'
+  /** Enough live agent-run time exists, but there's no screen-time data to divide by yet (e.g. focus tracking only just started, or every agent run happened while the app was never focused). */
   | 'no-screen-time-data'
 
 export interface UsageCardBuildResult {
@@ -388,17 +472,35 @@ export interface UsageCardBuildResult {
 }
 
 /**
+ * Minimum live (non-backfilled) total agent run time, in ms, before the
+ * card will show a real multiplier. Below this, a ratio is technically
+ * computable but not a meaningful one — a few minutes of live agent work
+ * against a few minutes of screen time can produce a wild number either
+ * way. `totalRunMs` already excludes backfilled rows (see
+ * `AgentManager.getUsageParallelismSummary`), so this is strictly "live
+ * evidence", never padded by best-effort history.
+ */
+const MIN_EVIDENCE_RUN_MS = 60 * 60 * 1000 // 1 hour
+
+/**
  * Maps the backend's `UsageParallelismResponse` (+ the token count, which
  * comes from the existing token-usage summary, not this response) into the
  * narrow `UsageCardSummary` the card is allowed to draw. Returns a null
- * `summary` when the multiplier isn't computable — `drawCard` always needs a
- * real number for the headline, so "no data yet" is handled by the caller
- * (an empty-state UI) instead of being drawn.
+ * `summary` when the multiplier isn't computable, or isn't backed by enough
+ * live evidence yet — `drawCard` always needs a real, meaningful number for
+ * the headline, so every "not yet" case is handled by the caller (an
+ * empty-state UI) instead of being drawn.
  */
 export function buildUsageCardSummary(response: UsageParallelismResponse, tokens: number, periodLabel: string): UsageCardBuildResult {
   const p = response.parallelism
+  if (!p.hasData) {
+    return { summary: null, emptyReason: 'no-agent-data' }
+  }
+  if (p.totalRunMs < MIN_EVIDENCE_RUN_MS) {
+    return { summary: null, emptyReason: 'not-enough-evidence-yet' }
+  }
   if (p.multiplier === null || !p.peak) {
-    return { summary: null, emptyReason: p.hasData ? 'no-screen-time-data' : 'no-agent-data' }
+    return { summary: null, emptyReason: 'no-screen-time-data' }
   }
   return {
     summary: {
@@ -409,7 +511,7 @@ export function buildUsageCardSummary(response: UsageParallelismResponse, tokens
       peakDay: { atMs: p.peak.atMs, peak: p.peak.count },
       tasksShipped: response.tasksShipped,
       tokens,
-      lanes: p.peakDayLanes.map((lane) => ({ segments: lane.segments }))
+      calendar: p.perDay.map((d) => ({ day: d.day, hours: d.runHours }))
     },
     emptyReason: null
   }

@@ -1385,15 +1385,25 @@ export class AgentManager extends EventEmitter {
     const { periodStartMs, periodEndMs } = periodBoundsForDays(query.days, nowMs)
     const utcOffsetMinutes = query.utcOffsetMinutes ?? -new Date(nowMs).getTimezoneOffset()
 
-    const rawIntervals = this.db.getAgentRunIntervalsOverlapping(periodStartMs, periodEndMs).map((iv) => ({
-      sessionId: iv.sessionId,
-      taskId: iv.taskId,
-      agentId: iv.agentId,
-      provider: iv.provider,
-      harnessInstanceId: iv.harnessInstanceId,
-      startedAtMs: iv.startedAtMs,
-      endedAtMs: iv.endedAtMs
-    }))
+    // Live-recorded rows only — the hero card/share image must never count a
+    // best-effort backfilled span (derived from transcript_parts/
+    // token_usage_events, not actually observed by the status-transition
+    // writer) toward the multiplier, agent hours, or the calendar. Nothing
+    // else currently reads agent_run_intervals, so this filter is scoped
+    // here rather than in the DB layer — a future consumer that genuinely
+    // wants backfilled history included should query unfiltered directly
+    // instead of relying on this method.
+    const rawIntervals = this.db.getAgentRunIntervalsOverlapping(periodStartMs, periodEndMs)
+      .filter((iv) => iv.endReason !== 'backfilled')
+      .map((iv) => ({
+        sessionId: iv.sessionId,
+        taskId: iv.taskId,
+        agentId: iv.agentId,
+        provider: iv.provider,
+        harnessInstanceId: iv.harnessInstanceId,
+        startedAtMs: iv.startedAtMs,
+        endedAtMs: iv.endedAtMs
+      }))
 
     const rawFocusIntervals = this.db.getAppFocusIntervalsOverlapping(periodStartMs, periodEndMs).map((iv) => ({
       startedAtMs: iv.startedAtMs,
@@ -1405,9 +1415,10 @@ export class AgentManager extends EventEmitter {
     // The multiplier needs BOTH series — agent-run intervals and app-focus
     // intervals — so "counting from" is the LATER of their two earliest
     // starts (the earlier series' head is still "no data for the ratio"
-    // until the later one begins too), not just the earliest agent interval
-    // like phase 1 had it.
-    const earliestAgent = this.db.getEarliestAgentRunIntervalStart()
+    // until the later one begins too). The agent side only counts LIVE
+    // rows, matching the filter above — backfilled history doesn't move
+    // this date forward.
+    const earliestAgent = this.db.getEarliestLiveAgentRunIntervalStart()
     const earliestFocus = this.db.getEarliestAppFocusIntervalStart()
     const countingFromMs = earliestAgent !== null && earliestFocus !== null
       ? Math.max(earliestAgent, earliestFocus)

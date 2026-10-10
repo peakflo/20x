@@ -74,9 +74,12 @@ function makeSummary(overrides: Partial<UsageCardSummary> = {}): UsageCardSummar
     peakDay: { atMs: Date.UTC(2026, 0, 15, 12, 0, 0), peak: 5 },
     tasksShipped: 12,
     tokens: 45_000_000,
-    lanes: [
-      { segments: [{ startFrac: 0, endFrac: 0.4 }, { startFrac: 0.5, endFrac: 0.9 }] },
-      { segments: [{ startFrac: 0.1, endFrac: 1 }] }
+    calendar: [
+      { day: '2026-01-01', hours: 0 },
+      { day: '2026-01-02', hours: 2 },
+      { day: '2026-01-03', hours: 6 },
+      { day: '2026-01-04', hours: 4 },
+      { day: '2026-01-05', hours: 8 }
     ],
     ...overrides
   }
@@ -123,22 +126,31 @@ describe('drawCard', () => {
     expect(texts).toContain('github.com/peakflo/20x')
   })
 
-  it('draws one lane row per lane plus one bar per run segment (via roundRect calls)', () => {
+  it('draws one rounded cell per calendar day (via roundRect calls)', () => {
     const ctx = makeMockContext()
     const [W, H] = USAGE_CARD_SHAPES.wide
     const summary = makeSummary()
     drawCard(ctx, W, H, summary, makeOptions())
-    // One roundRect per lane background track + one per run segment, plus
-    // the logo's rounded screen outline (1 call).
-    const totalSegments = summary.lanes.reduce((n, lane) => n + lane.segments.length, 0)
-    const expectedRoundRects = 1 /* logo */ + summary.lanes.length /* track per lane */ + totalSegments
+    // One roundRect per calendar-day cell, plus the logo's rounded screen outline (1 call).
+    const expectedRoundRects = 1 /* logo */ + summary.calendar.length
     expect(ctx.calls.roundRect).toHaveLength(expectedRoundRects)
   })
 
-  it('handles zero lanes (no peak-day activity in a degenerate summary) without throwing', () => {
+  it('handles an empty calendar (no per-day activity in a degenerate summary) without throwing', () => {
     const ctx = makeMockContext()
     const [W, H] = USAGE_CARD_SHAPES.wide
-    expect(() => drawCard(ctx, W, H, makeSummary({ lanes: [] }), makeOptions())).not.toThrow()
+    expect(() => drawCard(ctx, W, H, makeSummary({ calendar: [] }), makeOptions())).not.toThrow()
+  })
+
+  it('scales a wide calendar (6-month period) down to fit the card width without throwing', () => {
+    const ctx = makeMockContext()
+    const [W, H] = USAGE_CARD_SHAPES.wide
+    const calendar = Array.from({ length: 182 }, (_, i) => ({
+      day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10),
+      hours: i % 7
+    }))
+    drawCard(ctx, W, H, makeSummary({ calendar }), makeOptions())
+    expect(ctx.calls.roundRect).toHaveLength(1 /* logo */ + calendar.length)
   })
 
   it('uses the theme ink color for the multiplier and the chosen theme background', () => {
@@ -249,19 +261,19 @@ type AssertNoForbiddenFields<T> = Extract<keyof T, ForbiddenCardField> extends n
 const _summaryIsClean: AssertNoForbiddenFields<UsageCardSummary> = true
 const _optionsAreClean: AssertNoForbiddenFields<UsageCardOptions> = true
 const _peakDayIsClean: AssertNoForbiddenFields<UsageCardSummary['peakDay']> = true
-const _laneIsClean: AssertNoForbiddenFields<UsageCardSummary['lanes'][number]> = true
+const _calendarDayIsClean: AssertNoForbiddenFields<UsageCardSummary['calendar'][number]> = true
 
 describe('privacy: no cost/task-title/repo/model field is reachable from the card types', () => {
   it('the compile-time assertions above held (this test just gives them a home in the runner output)', () => {
     expect(_summaryIsClean).toBe(true)
     expect(_optionsAreClean).toBe(true)
     expect(_peakDayIsClean).toBe(true)
-    expect(_laneIsClean).toBe(true)
+    expect(_calendarDayIsClean).toBe(true)
   })
 
   it('drawCard works correctly using an object with exactly the allowed keys — nothing more is needed', () => {
     const summary = makeSummary()
-    const allowedKeys = ['periodLabel', 'multiplier', 'hours', 'wall', 'peakDay', 'tasksShipped', 'tokens', 'lanes'].sort()
+    const allowedKeys = ['periodLabel', 'multiplier', 'hours', 'wall', 'peakDay', 'tasksShipped', 'tokens', 'calendar'].sort()
     expect(Object.keys(summary).sort()).toEqual(allowedKeys)
 
     const options = makeOptions()
@@ -292,7 +304,10 @@ function makeParallelismResponse(overrides: Partial<UsageParallelismResponse['pa
       multiplier: 3,
       peak: { count: 4, atMs: 500, day: '2026-01-01' },
       peakDayLanes: [{ sessionId: 's1', taskId: 't1', agentId: 'a1', provider: 'claude-code', harnessInstanceId: null, segments: [{ startFrac: 0, endFrac: 1 }] }],
-      perDay: [],
+      perDay: [
+        { day: '2026-01-01', runHours: 2, wallHours: 1 },
+        { day: '2026-01-02', runHours: 4, wallHours: 1 }
+      ],
       ...overrides
     }
   }
@@ -309,7 +324,10 @@ describe('buildUsageCardSummary', () => {
     expect(summary!.tasksShipped).toBe(7)
     expect(summary!.tokens).toBe(10_000_000)
     expect(summary!.peakDay).toEqual({ atMs: 500, peak: 4 })
-    expect(summary!.lanes).toEqual([{ segments: [{ startFrac: 0, endFrac: 1 }] }])
+    expect(summary!.calendar).toEqual([
+      { day: '2026-01-01', hours: 2 },
+      { day: '2026-01-02', hours: 4 }
+    ])
   })
 
   it('returns no-agent-data when there is no agent-run data at all', () => {
@@ -319,7 +337,14 @@ describe('buildUsageCardSummary', () => {
     expect(emptyReason).toBe('no-agent-data')
   })
 
-  it('returns no-screen-time-data when agent data exists but the multiplier cannot be computed', () => {
+  it('returns not-enough-evidence-yet when there is live agent data but under an hour of it', () => {
+    const response = makeParallelismResponse({ hasData: true, totalRunMs: 30 * 60 * 1000 })
+    const { summary, emptyReason } = buildUsageCardSummary(response, 0, 'Last 30 days')
+    expect(summary).toBeNull()
+    expect(emptyReason).toBe('not-enough-evidence-yet')
+  })
+
+  it('returns no-screen-time-data when enough agent data exists but the multiplier cannot be computed', () => {
     const response = makeParallelismResponse({ hasData: true, multiplier: null, screenTimeMs: 0 })
     const { summary, emptyReason } = buildUsageCardSummary(response, 0, 'Last 30 days')
     expect(summary).toBeNull()

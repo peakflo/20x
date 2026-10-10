@@ -44,7 +44,7 @@ describe('UsageHeroCard', () => {
   it('shows a distinct "still learning your screen time" message when agent data exists but screen time does not', async () => {
     render(
       <UsageHeroCard
-        data={response({ hasData: true, totalRunMs: 5000, peak: { count: 2, atMs: 10, day: '2026-01-01' } })}
+        data={response({ hasData: true, totalRunMs: 2 * 60 * 60 * 1000, peak: { count: 2, atMs: 10, day: '2026-01-01' } })}
         loading={false}
         tokens={0}
         periodLabel="Last 30 days"
@@ -53,6 +53,20 @@ describe('UsageHeroCard', () => {
       />
     )
     expect(await screen.findByText(/Still learning your screen time/)).toBeInTheDocument()
+  })
+
+  it('shows the "still gathering evidence" message when there is live agent data but under an hour of it', async () => {
+    render(
+      <UsageHeroCard
+        data={response({ hasData: true, totalRunMs: 5000 })}
+        loading={false}
+        tokens={0}
+        periodLabel="Last 30 days"
+        name=""
+        onOpenShare={() => {}}
+      />
+    )
+    expect(await screen.findByText(/Still gathering evidence/)).toBeInTheDocument()
   })
 
   it('mentions the counting-from date in the plain "no data" empty state when known', async () => {

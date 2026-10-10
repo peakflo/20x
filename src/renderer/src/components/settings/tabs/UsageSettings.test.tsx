@@ -293,18 +293,11 @@ describe('UsageSettings', () => {
     expect(screen.queryByText('NaN×')).not.toBeInTheDocument()
   })
 
-  it('shows the "Only you see this" note on Top tasks and Models — never in the shared image', async () => {
+  it('opens the Share dialog from the Share button — the only one on the page, the hero card has no floating duplicate', async () => {
     render(<UsageSettings />)
     await screen.findByText('claude-opus-4-7')
-    const notes = screen.getAllByText('Only you see this. It is never in the shared image.')
-    expect(notes.length).toBeGreaterThanOrEqual(2)
-  })
-
-  it('opens the Share dialog from the top-right Share button', async () => {
-    render(<UsageSettings />)
-    await screen.findByText('claude-opus-4-7')
-    // The hero card also has its own "Share" button overlay — pick the top-right one.
     const shareButtons = await screen.findAllByRole('button', { name: 'Share' })
+    expect(shareButtons).toHaveLength(1)
     fireEvent.click(shareButtons[0])
     expect(await screen.findByText(/The image is made on your computer/)).toBeInTheDocument()
   })

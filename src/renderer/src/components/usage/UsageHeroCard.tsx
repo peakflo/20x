@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react'
-import { Share2 } from 'lucide-react'
 import {
   buildUsageCardSummary,
   renderToCanvas,
@@ -52,26 +51,29 @@ export function UsageHeroCard({ data, loading, tokens, periodLabel, name, onOpen
   }
 
   if (!summary) {
+    const headline =
+      built?.emptyReason === 'no-screen-time-data' ? 'Still learning your screen time'
+      : built?.emptyReason === 'not-enough-evidence-yet' ? 'Still gathering evidence'
+      : 'Run a few agents at once and your multiplier shows up here'
+    const detail =
+      built?.emptyReason === 'no-screen-time-data'
+        ? "We can see agent work in this period, but not yet how much time you spent with 20x open — the multiplier needs both. It'll appear once there's enough of each."
+      : built?.emptyReason === 'not-enough-evidence-yet'
+        ? 'Check back after a bit more agent work — the multiplier only shows once there is enough live run time to be a meaningful number, not a best-effort estimate.'
+      : data?.countingFromMs
+        ? `Counting from ${new Date(data.countingFromMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`
+        : 'Your multiplier tracks how much agent work gets done per hour you spend in the app.'
     return (
       <div className="relative rounded-[22px] overflow-hidden bg-gradient-to-br from-[#1e96eb] to-[#1787d9] text-white flex flex-col items-center justify-center text-center gap-2 px-8" style={{ aspectRatio: '1200 / 630' }}>
-        <p className="text-xl font-semibold">
-          {built?.emptyReason === 'no-screen-time-data'
-            ? 'Still learning your screen time'
-            : 'Run a few agents at once and your multiplier shows up here'}
-        </p>
-        <p className="text-sm text-white/80 max-w-md">
-          {built?.emptyReason === 'no-screen-time-data'
-            ? "We can see agent work in this period, but not yet how much time you spent with 20x open — the multiplier needs both. It'll appear once there's enough of each."
-            : data?.countingFromMs
-              ? `Counting from ${new Date(data.countingFromMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`
-              : 'Your multiplier tracks how much agent work gets done per hour you spend in the app.'}
-        </p>
+        <p className="text-xl font-semibold">{headline}</p>
+        <p className="text-sm text-white/80 max-w-md">{detail}</p>
       </div>
     )
   }
 
   return (
     <div className="relative rounded-[22px] overflow-hidden shadow-[0_24px_60px_-24px_rgba(30,150,235,.55)]">
+      {/* The whole card opens Share on click — the page already has one Share button (top-right); a second one floating on the card itself was a duplicate. */}
       <canvas
         ref={canvasRef}
         role="img"
@@ -79,14 +81,6 @@ export function UsageHeroCard({ data, loading, tokens, periodLabel, name, onOpen
         onClick={onOpenShare}
         className="block w-full h-auto cursor-pointer"
       />
-      <button
-        type="button"
-        onClick={onOpenShare}
-        className="absolute right-[18px] bottom-4 inline-flex items-center gap-1.5 rounded-full border border-white/35 bg-white/15 px-3 py-1.5 text-xs font-medium text-white backdrop-blur-sm hover:bg-white/25 transition-colors"
-      >
-        <Share2 className="h-3.5 w-3.5" />
-        Share
-      </button>
     </div>
   )
 }

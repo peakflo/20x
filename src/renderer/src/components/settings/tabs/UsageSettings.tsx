@@ -79,10 +79,6 @@ function ModelCostCell({ row, onSetPrice }: { row: UsageModelRow; onSetPrice: (m
   )
 }
 
-function PrivateNote() {
-  return <span className="text-[11.5px] text-muted-foreground">Only you see this. It is never in the shared image.</span>
-}
-
 function AutoResumeSetting() {
   const [enabled, setEnabled] = useState(true)
   const [loaded, setLoaded] = useState(false)
@@ -155,7 +151,9 @@ export function UsageSettings() {
 
   const records: Array<[string, string]> = []
   if (cardSummary) {
-    records.push(['Agents in parallel, on average', `${formatMultiplier(cardSummary.multiplier)}×`])
+    const multiplierText = formatMultiplier(cardSummary.multiplier)
+    // formatMultiplier already includes the "×" for the capped ">1000×" case — every other branch returns the bare number.
+    records.push(['Agents in parallel, on average', multiplierText.endsWith('×') ? multiplierText : `${multiplierText}×`])
     records.push(['Most agents at once', `${cardSummary.peakDay.peak} on ${new Date(cardSummary.peakDay.atMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`])
     records.push(['Agent work done', `${Math.round(cardSummary.hours).toLocaleString('en-US')} hours in ${Math.round(cardSummary.wall).toLocaleString('en-US')}`])
   }
@@ -295,10 +293,7 @@ export function UsageSettings() {
       <div className="grid gap-3 sm:grid-cols-2">
         {summary && summary.topTasks.length > 0 && (
           <SettingsSection title="Top tasks" description="">
-            <div className="flex items-center justify-between -mt-2 mb-1">
-              <p className="text-xs text-muted-foreground">Where the tokens and the cost went</p>
-              <PrivateNote />
-            </div>
+            <p className="text-xs text-muted-foreground -mt-2 mb-1">Where the tokens and the cost went</p>
             <div className="rounded-lg border border-border bg-card overflow-hidden">
               <table className="w-full text-xs">
                 <tbody>
@@ -331,10 +326,7 @@ export function UsageSettings() {
 
       {summary && summary.byModel.length > 0 && (
         <SettingsSection title="Models" description="">
-          <div className="flex items-center justify-between -mt-2 mb-1">
-            <p className="text-xs text-muted-foreground">Cost is the provider's figure where it reports one, otherwise estimated from public API rates</p>
-            <PrivateNote />
-          </div>
+          <p className="text-xs text-muted-foreground -mt-2 mb-1">Cost is the provider's figure where it reports one, otherwise estimated from public API rates</p>
           <div className="rounded-lg border border-border bg-card overflow-hidden">
             <table className="w-full text-xs">
               <thead className="bg-muted/50 text-muted-foreground">

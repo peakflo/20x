@@ -307,6 +307,11 @@ describe('formatMultiplier', () => {
     expect(formatMultiplier(14.6)).toBe('15')
     expect(formatMultiplier(137)).toBe('137')
   })
+
+  it('caps at ">1000×" instead of an absurd wall of digits', () => {
+    expect(formatMultiplier(1000)).toBe('>1000×')
+    expect(formatMultiplier(12_345)).toBe('>1000×')
+  })
 })
 
 describe('periodBoundsForDays', () => {
