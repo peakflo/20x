@@ -9,7 +9,7 @@ import { callArtifactMcp } from './artifact-mcp'
 import type { ArtifactMcpCall } from '../shared/artifact-mcp'
 import WebSocket from 'ws'
 import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
-import { getPendingPin } from './mobile-api-server'
+import { getPendingPin, broadcastToMobileClients } from './mobile-api-server'
 import { sendMobilePush } from './mobile-push'
 import { setTaskApiUiState } from './task-api-server'
 import { panelBrowserBroker } from './panel-browser-broker'
@@ -1931,6 +1931,48 @@ export function registerIpcHandlers(
   ipcMain.handle('agent-installer:get-install-command', async (_, { agentName }: { agentName: string }) => {
     const { getInstallCommand } = await import('./agent-installer/install.js')
     return getInstallCommand(agentName)
+  })
+
+  // ── Harness Maintenance IPC handlers ──────────────────────
+  // Version checks and user-triggered updates for installed harness CLIs.
+  // Broadcasts go to this request's own window (the one and only desktop
+  // window in practice) and to mobile — both stay in sync with one write.
+
+  ipcMain.handle('harness-maintenance:get', async () => {
+    const { getHarnessStatuses } = await import('./harness-maintenance/maintenance-service')
+    return getHarnessStatuses(db, { hasActiveSession: (h) => agentManager.hasActiveSessionForCodingAgent(h) })
+  })
+
+  ipcMain.handle('harness-maintenance:refresh', async (event, { fresh }: { fresh?: boolean } = {}) => {
+    const { refreshHarnessStatuses } = await import('./harness-maintenance/maintenance-service')
+    const { HARNESS_MAINTENANCE_UPDATED_CHANNEL } = await import('../shared/harness-maintenance')
+    const statuses = await refreshHarnessStatuses(db, { fresh, hasActiveSession: (h) => agentManager.hasActiveSessionForCodingAgent(h) })
+    event.sender.send(HARNESS_MAINTENANCE_UPDATED_CHANNEL, statuses)
+    broadcastToMobileClients(HARNESS_MAINTENANCE_UPDATED_CHANNEL, statuses)
+    return statuses
+  })
+
+  ipcMain.handle('harness-maintenance:update', async (event, { harness }: { harness: import('../shared/harness-maintenance').HarnessKey }) => {
+    const { runHarnessUpdate } = await import('./harness-maintenance/maintenance-service')
+    const { HARNESS_MAINTENANCE_PROGRESS_CHANNEL, HARNESS_MAINTENANCE_UPDATED_CHANNEL } = await import('../shared/harness-maintenance')
+    const result = await runHarnessUpdate(db, harness, (chunk) => {
+      event.sender.send(HARNESS_MAINTENANCE_PROGRESS_CHANNEL, { harness, chunk })
+    }, { hasActiveSession: (h) => agentManager.hasActiveSessionForCodingAgent(h) })
+    event.sender.send(HARNESS_MAINTENANCE_UPDATED_CHANNEL, [result.newStatus])
+    broadcastToMobileClients(HARNESS_MAINTENANCE_UPDATED_CHANNEL, [result.newStatus])
+    return result
+  })
+
+  ipcMain.handle('harness-maintenance:update-all', async (event) => {
+    const { runUpdateAll } = await import('./harness-maintenance/maintenance-service')
+    const { HARNESS_MAINTENANCE_PROGRESS_CHANNEL, HARNESS_MAINTENANCE_UPDATED_CHANNEL } = await import('../shared/harness-maintenance')
+    const result = await runUpdateAll(db, (harness, chunk) => {
+      event.sender.send(HARNESS_MAINTENANCE_PROGRESS_CHANNEL, { harness, chunk })
+    }, { hasActiveSession: (h) => agentManager.hasActiveSessionForCodingAgent(h) })
+    const newStatuses = result.results.map((r) => r.newStatus)
+    event.sender.send(HARNESS_MAINTENANCE_UPDATED_CHANNEL, newStatuses)
+    broadcastToMobileClients(HARNESS_MAINTENANCE_UPDATED_CHANNEL, newStatuses)
+    return result
   })
 
   // ── Terminal (PTY) handlers ─────────────────────────────────

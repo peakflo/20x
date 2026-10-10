@@ -13,6 +13,12 @@ import type {
   UpdateAcpAgentInstanceDTO
 } from '@shared/acp-registry'
 import type {
+  HarnessKey,
+  HarnessMaintenanceStatus,
+  HarnessUpdateAllResult,
+  HarnessUpdateResult
+} from '@shared/harness-maintenance'
+import type {
   MicrophonePermission,
   VoiceActionOutcome,
   VoiceModelState,
@@ -175,6 +181,32 @@ export const acpInstanceApi = {
 
   validateLocalCommand: (executable: string): Promise<LocalCommandValidationResult> => {
     return window.electronAPI.acpInstances.validateLocalCommand(executable)
+  }
+}
+
+export const harnessMaintenanceApi = {
+  get: (): Promise<HarnessMaintenanceStatus[]> => {
+    return window.electronAPI.harnessMaintenance.get()
+  },
+
+  refresh: (fresh?: boolean): Promise<HarnessMaintenanceStatus[]> => {
+    return window.electronAPI.harnessMaintenance.refresh(fresh)
+  },
+
+  update: (harness: HarnessKey): Promise<HarnessUpdateResult> => {
+    return window.electronAPI.harnessMaintenance.update(harness)
+  },
+
+  updateAll: (): Promise<HarnessUpdateAllResult> => {
+    return window.electronAPI.harnessMaintenance.updateAll()
+  },
+
+  onUpdated: (callback: (statuses: HarnessMaintenanceStatus[]) => void): (() => void) => {
+    return window.electronAPI.harnessMaintenance.onUpdated(callback)
+  },
+
+  onProgress: (callback: (data: { harness: HarnessKey; chunk: string }) => void): (() => void) => {
+    return window.electronAPI.harnessMaintenance.onProgress(callback)
   }
 }
 

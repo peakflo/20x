@@ -15,6 +15,14 @@ import {
   type UsageSummaryQuery
 } from '../shared/usage'
 import { USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL, type UsageLimitRecovery } from '../shared/usage-limit-recovery'
+import {
+  HARNESS_MAINTENANCE_PROGRESS_CHANNEL,
+  HARNESS_MAINTENANCE_UPDATED_CHANNEL,
+  type HarnessKey,
+  type HarnessMaintenanceStatus,
+  type HarnessUpdateAllResult,
+  type HarnessUpdateResult
+} from '../shared/harness-maintenance'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -596,6 +604,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_: unknown, data: { agentName: string; stage: string; output: string; percent: number }): void => callback(data)
       ipcRenderer.on('agent-installer:progress', handler)
       return () => ipcRenderer.removeListener('agent-installer:progress', handler)
+    }
+  },
+  harnessMaintenance: {
+    get: (): Promise<HarnessMaintenanceStatus[]> => ipcRenderer.invoke('harness-maintenance:get'),
+    refresh: (fresh?: boolean): Promise<HarnessMaintenanceStatus[]> => ipcRenderer.invoke('harness-maintenance:refresh', { fresh }),
+    update: (harness: HarnessKey): Promise<HarnessUpdateResult> => ipcRenderer.invoke('harness-maintenance:update', { harness }),
+    updateAll: (): Promise<HarnessUpdateAllResult> => ipcRenderer.invoke('harness-maintenance:update-all'),
+    onUpdated: (callback: (statuses: HarnessMaintenanceStatus[]) => void): (() => void) => {
+      const handler = (_: unknown, data: HarnessMaintenanceStatus[]): void => callback(data)
+      ipcRenderer.on(HARNESS_MAINTENANCE_UPDATED_CHANNEL, handler)
+      return () => ipcRenderer.removeListener(HARNESS_MAINTENANCE_UPDATED_CHANNEL, handler)
+    },
+    onProgress: (callback: (data: { harness: HarnessKey; chunk: string }) => void): (() => void) => {
+      const handler = (_: unknown, data: { harness: HarnessKey; chunk: string }): void => callback(data)
+      ipcRenderer.on(HARNESS_MAINTENANCE_PROGRESS_CHANNEL, handler)
+      return () => ipcRenderer.removeListener(HARNESS_MAINTENANCE_PROGRESS_CHANNEL, handler)
     }
   },
   webUtils: {

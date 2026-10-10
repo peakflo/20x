@@ -64,7 +64,7 @@ function InstanceCard({ instance, onChanged }: { instance: AcpAgentInstanceView;
 }
 
 /**
- * Settings → Agents: configured ACP (Agent Client Protocol) agents, each a
+ * Settings → Harnesses: configured ACP (Agent Client Protocol) agents, each a
  * registry install or a local command. Each instance is its own harness
  * dropdown entry in the agent form (see `acpInstanceDropdownOptions`).
  */

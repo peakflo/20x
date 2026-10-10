@@ -5,7 +5,7 @@ import type { AcpAgentInstanceView } from '@shared/acp-registry'
 /**
  * Read-only list of configured ACP (Agent Client Protocol) agents, for the
  * mobile Settings page. Adding, editing, and signing in to an ACP agent is
- * desktop only (Settings → Agents) — this view just shows what is already
+ * desktop only (Settings → Harnesses) — this view just shows what is already
  * configured, so a task's harness choice makes sense on mobile too.
  */
 export function AcpAgentsSection() {
@@ -40,7 +40,7 @@ export function AcpAgentsSection() {
         ))}
       </div>
       <p className="text-[11px] text-muted-foreground mt-2">
-        Add or sign in to an ACP agent from the desktop app (Settings → Agents).
+        Add or sign in to an ACP agent from the desktop app (Settings → Harnesses).
       </p>
     </div>
   )

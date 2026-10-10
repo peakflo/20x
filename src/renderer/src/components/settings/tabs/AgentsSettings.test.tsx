@@ -26,6 +26,10 @@ vi.mock('@/lib/ipc-client', () => ({
     testConnection: (...args: unknown[]) => testConnection(...args),
     getProviders: vi.fn()
   },
+  // AgentsSettings reads useAcpInstanceStore (loaded via acpInstanceApi.list)
+  // only to show an ACP agent's instance display name in its own row — the
+  // Accounts/Harnesses/ACP-agents management sections live on the separate
+  // Settings → Harnesses tab (HarnessesTab.tsx), not on this page.
   acpInstanceApi: {
     list: (...args: unknown[]) => acpList(...args),
     create: vi.fn(),
@@ -33,15 +37,6 @@ vi.mock('@/lib/ipc-client', () => ({
     delete: vi.fn(),
     install: vi.fn(),
     validateLocalCommand: vi.fn()
-  },
-  acpRegistryApi: {
-    search: vi.fn().mockResolvedValue([])
-  },
-  // This page also renders HarnessInstancesSection, which loads this on mount.
-  harnessInstanceApi: {
-    list: vi.fn().mockResolvedValue([]),
-    create: vi.fn(),
-    delete: vi.fn()
   }
 }))
 
@@ -108,12 +103,7 @@ describe('AgentsSettings — ACP agents', () => {
     render(<AgentsSettings />)
     await waitFor(() => expect(acpList).toHaveBeenCalled())
 
-    // "Grok Build" legitimately appears twice: once in this agent's own row
-    // (the fix) and once more in the separate "ACP agents" instances
-    // section this page also renders — asserting it appears at all (rather
-    // than exactly once) keeps this test from coupling to that section's
-    // unrelated markup.
-    await waitFor(() => expect(screen.getAllByText('Grok Build').length).toBeGreaterThan(0))
+    await waitFor(() => expect(screen.getByText('Grok Build')).toBeTruthy())
     expect(screen.queryByText('http://localhost:4096')).toBeNull()
   })
 })

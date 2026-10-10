@@ -508,6 +508,12 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
     return agentRef!.getUsageLimits()
   }
 
+  // GET /api/harness-maintenance — version-check status per harness CLI (read-only on mobile)
+  if (pathname === '/api/harness-maintenance') {
+    const { getHarnessStatuses } = await import('./harness-maintenance/maintenance-service')
+    return getHarnessStatuses(db, { hasActiveSession: (h) => agentRef?.hasActiveSessionForCodingAgent(h) ?? false })
+  }
+
   // GET /api/usage/summary?sinceMs=&untilMs=&utcOffsetMinutes=&taskId=
   if (pathname === '/api/usage/summary') {
     return agentRef!.getUsageSummary(sanitizeUsageSummaryQuery(Object.fromEntries(url.searchParams)))
@@ -905,6 +911,48 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
   // POST /api/usage/limits/refresh — re-read plan limits ({ force?: boolean })
   if (pathname === '/api/usage/limits/refresh') {
     return agent.refreshUsageLimits({ force: (params as { force?: unknown }).force === true })
+  }
+
+  // POST /api/harness-maintenance/refresh — re-check every harness ({ fresh?: boolean })
+  if (pathname === '/api/harness-maintenance/refresh') {
+    const { refreshHarnessStatuses } = await import('./harness-maintenance/maintenance-service')
+    const { HARNESS_MAINTENANCE_UPDATED_CHANNEL } = await import('../shared/harness-maintenance')
+    const statuses = await refreshHarnessStatuses(db, {
+      fresh: (params as { fresh?: unknown }).fresh === true,
+      hasActiveSession: (h) => agent.hasActiveSessionForCodingAgent(h)
+    })
+    broadcastToMobileClients(HARNESS_MAINTENANCE_UPDATED_CHANNEL, statuses)
+    if (notifyDesktop) notifyDesktop(HARNESS_MAINTENANCE_UPDATED_CHANNEL, statuses)
+    return statuses
+  }
+
+  // POST /api/harness-maintenance/update — user-triggered update of one harness ({ harness })
+  if (pathname === '/api/harness-maintenance/update') {
+    const { runHarnessUpdate } = await import('./harness-maintenance/maintenance-service')
+    const { HARNESS_MAINTENANCE_PROGRESS_CHANNEL, HARNESS_MAINTENANCE_UPDATED_CHANNEL } = await import('../shared/harness-maintenance')
+    const harness = (params as { harness?: string }).harness as import('../shared/harness-maintenance').HarnessKey
+    if (!harness) throw Object.assign(new Error('harness is required'), { status: 400 })
+    const result = await runHarnessUpdate(db, harness, (chunk) => {
+      broadcastToMobileClients(HARNESS_MAINTENANCE_PROGRESS_CHANNEL, { harness, chunk })
+      if (notifyDesktop) notifyDesktop(HARNESS_MAINTENANCE_PROGRESS_CHANNEL, { harness, chunk })
+    }, { hasActiveSession: (h) => agent.hasActiveSessionForCodingAgent(h) })
+    broadcastToMobileClients(HARNESS_MAINTENANCE_UPDATED_CHANNEL, [result.newStatus])
+    if (notifyDesktop) notifyDesktop(HARNESS_MAINTENANCE_UPDATED_CHANNEL, [result.newStatus])
+    return result
+  }
+
+  // POST /api/harness-maintenance/update-all — update every harness with canUpdate
+  if (pathname === '/api/harness-maintenance/update-all') {
+    const { runUpdateAll } = await import('./harness-maintenance/maintenance-service')
+    const { HARNESS_MAINTENANCE_PROGRESS_CHANNEL, HARNESS_MAINTENANCE_UPDATED_CHANNEL } = await import('../shared/harness-maintenance')
+    const result = await runUpdateAll(db, (harness, chunk) => {
+      broadcastToMobileClients(HARNESS_MAINTENANCE_PROGRESS_CHANNEL, { harness, chunk })
+      if (notifyDesktop) notifyDesktop(HARNESS_MAINTENANCE_PROGRESS_CHANNEL, { harness, chunk })
+    }, { hasActiveSession: (h) => agent.hasActiveSessionForCodingAgent(h) })
+    const newStatuses = result.results.map((r) => r.newStatus)
+    broadcastToMobileClients(HARNESS_MAINTENANCE_UPDATED_CHANNEL, newStatuses)
+    if (notifyDesktop) notifyDesktop(HARNESS_MAINTENANCE_UPDATED_CHANNEL, newStatuses)
+    return result
   }
 
   // POST /api/sessions/start

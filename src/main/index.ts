@@ -110,6 +110,29 @@ function sendVoiceEventToRenderer(channel: string, data: unknown): void {
 }
 
 /**
+ * One harness version-check pass, broadcast to desktop and mobile, then the
+ * passive 6h recheck loop. Gated by the "Check for harness updates" setting
+ * (default on) inside `refreshHarnessStatuses`/`startPeriodicHarnessChecks`
+ * themselves — a disabled setting makes this a no-op with no network calls.
+ */
+async function startHarnessMaintenanceChecks(database: DatabaseManager): Promise<void> {
+  try {
+    const { refreshHarnessStatuses, startPeriodicHarnessChecks } = await import('./harness-maintenance/maintenance-service')
+    const { HARNESS_MAINTENANCE_UPDATED_CHANNEL } = await import('../shared/harness-maintenance')
+    const broadcast = (statuses: unknown): void => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(HARNESS_MAINTENANCE_UPDATED_CHANNEL, statuses)
+      broadcastToMobileClients(HARNESS_MAINTENANCE_UPDATED_CHANNEL, statuses)
+    }
+    const hasActiveSession = (harness: string): boolean => agentManager?.hasActiveSessionForCodingAgent(harness) ?? false
+    const statuses = await refreshHarnessStatuses(database, { hasActiveSession })
+    broadcast(statuses)
+    startPeriodicHarnessChecks(database, broadcast)
+  } catch (err) {
+    console.warn('[Main] Harness maintenance check failed:', err)
+  }
+}
+
+/**
  * Reads an agent answer aloud as it is written (design §5.7).
  *
  * The answer arrives a few words at a time. Waiting for the agent to stop
@@ -360,6 +383,13 @@ function createWindow(): void {
     // Start workspace cleanup scheduler
     if (workspaceCleanupScheduler && mainWindow) {
       workspaceCleanupScheduler.start(mainWindow)
+    }
+
+    // Harness version checks: one pass now (after the existing agent detect),
+    // then at most every 6h while the app runs. User-triggered updates are
+    // wired separately through IPC — this only ever reads/broadcasts status.
+    if (db) {
+      void startHarnessMaintenanceChecks(db)
     }
 
     // Periodic overdue check — nudges renderer every 60s

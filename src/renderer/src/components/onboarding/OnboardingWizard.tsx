@@ -138,7 +138,7 @@ function getAgentToolKey(type: CodingAgentType): DetectKey {
     case CodingAgentType.PI:
       return DetectKey.PI
     case CodingAgentType.ACP:
-      // ACP agents are configured in Settings → Agents (registry/local command),
+      // ACP agents are configured in Settings → Harnesses (registry/local command),
       // never offered in the first-run onboarding list, so this is unreachable.
       throw new Error('ACP agents are not part of onboarding tool detection')
   }

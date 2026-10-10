@@ -1,4 +1,4 @@
-import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, Puzzle, Cable, Mic, Gauge, X } from 'lucide-react'
+import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, Puzzle, Cable, Mic, Gauge, Terminal, X } from 'lucide-react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { useUIStore } from '@/stores/ui-store'
 import { SettingsTab } from '@/types'
@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { GeneralSettings } from './tabs/GeneralSettings'
 import { AgentsSettings } from './tabs/AgentsSettings'
+import { HarnessesTab } from './tabs/HarnessesTab'
 import { ToolsMcpSettings } from './tabs/ToolsMcpSettings'
 import { SecretsSettings } from './tabs/SecretsSettings'
 import { VoiceSettings } from './tabs/VoiceSettings'
@@ -27,7 +28,8 @@ const ICON_MAP = {
   Building2,
   Puzzle,
   Gauge,
-  Wrench
+  Wrench,
+  Terminal
 } as const
 
 export function SettingsWorkspace() {
@@ -36,6 +38,7 @@ export function SettingsWorkspace() {
   const tabs = [
     { value: SettingsTab.GENERAL, label: 'General', iconName: 'Settings' },
     { value: SettingsTab.AGENTS, label: 'Agents', iconName: 'Users' },
+    { value: SettingsTab.HARNESSES, label: 'Harnesses', iconName: 'Terminal' },
     { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', iconName: 'Server' },
     { value: SettingsTab.SECRETS, label: 'Secrets', iconName: 'KeyRound' },
     { value: SettingsTab.VOICE, label: 'Voice', iconName: 'Mic' },
@@ -101,6 +104,10 @@ export function SettingsWorkspace() {
 
             <Tabs.Content value={SettingsTab.AGENTS} className="focus-visible:outline-none space-y-6">
               <AgentsSettings />
+            </Tabs.Content>
+
+            <Tabs.Content value={SettingsTab.HARNESSES} className="focus-visible:outline-none space-y-6">
+              <HarnessesTab />
             </Tabs.Content>
 
             <Tabs.Content value={SettingsTab.TOOLS_MCP} className="focus-visible:outline-none space-y-6">

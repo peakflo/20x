@@ -3,6 +3,7 @@
 export enum SettingsTab {
   GENERAL = 'general',
   AGENTS = 'agents',
+  HARNESSES = 'harnesses',
   TOOLS_MCP = 'tools-mcp',
   SECRETS = 'secrets',
   VOICE = 'voice',
@@ -17,6 +18,7 @@ export enum SettingsTab {
 export const SETTINGS_TABS: { value: SettingsTab; label: string; icon: string }[] = [
   { value: SettingsTab.GENERAL, label: 'General', icon: 'Settings' },
   { value: SettingsTab.AGENTS, label: 'Agents', icon: 'Users' },
+  { value: SettingsTab.HARNESSES, label: 'Harnesses', icon: 'Terminal' },
   { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', icon: 'Server' },
   { value: SettingsTab.SECRETS, label: 'Secrets', icon: 'KeyRound' },
   { value: SettingsTab.VOICE, label: 'Voice', icon: 'Mic' },

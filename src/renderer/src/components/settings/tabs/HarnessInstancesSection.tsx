@@ -139,7 +139,7 @@ function InstanceRow({
 }
 
 /**
- * Settings → Agents: subscription logins ("Codex · Work", "Claude Code · Personal").
+ * Settings → Harnesses: subscription logins ("Codex · Work", "Claude Code · Personal").
  * Each login has its own home folder. 20x never runs the sign-in itself; it shows
  * the command to run in a terminal.
  */

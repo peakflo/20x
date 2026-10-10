@@ -14,6 +14,7 @@ import { useMcpStore } from '@/stores/mcp-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
+import { HarnessVersionWarning } from './HarnessVersionWarning'
 import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
 import { HARNESS_INSTANCE_PREFIX, harnessDropdownOptions } from '@shared/harness-instances'
 import { ACP_INSTANCE_PREFIX, acpInstanceDropdownOptions, parseAcpInstanceDropdownValue } from '@shared/harness-instances'
@@ -144,7 +145,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       fetchModels()
     } else if (codingAgent === CodingAgentType.ACP) {
       // Models are whatever the selected instance's config declares as
-      // custom models (see Settings → Agents → ACP agents). Live model
+      // custom models (see Settings → Harnesses → ACP agents). Live model
       // discovery from the running agent's own config options happens once
       // a session exists, not here in the form.
       const instance = acpInstances.find((i) => i.id === acpInstanceId)
@@ -409,9 +410,10 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </select>
         {codingAgent === CodingAgentType.ACP && acpInstances.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            No ACP agents configured yet. Add one in Settings → Agents.
+            No ACP agents configured yet. Add one in Settings → Harnesses.
           </p>
         )}
+        {codingAgent && <HarnessVersionWarning codingAgent={codingAgent} />}
       </div>
 
       {/* Every other harness runs locally (CLI spawn or in-process SDK/ACP

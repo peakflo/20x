@@ -5450,6 +5450,20 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
   }
 
   /**
+   * True if any live session (not idle/error) belongs to an agent configured
+   * for the given harness. Used by harness maintenance to warn that running
+   * tasks keep the old binary until restarted — it never kills a session.
+   */
+  hasActiveSessionForCodingAgent(codingAgent: string): boolean {
+    for (const session of this.sessions.values()) {
+      if (session.status === 'idle' || session.status === 'error') continue
+      const agent = this.db.getAgent(session.agentId)
+      if (agent?.config?.coding_agent === codingAgent) return true
+    }
+    return false
+  }
+
+  /**
    * Tests an MCP server by speaking the MCP protocol directly
    * (JSON-RPC over stdio for local, HTTP POST for remote).
    */

@@ -11,6 +11,7 @@
 - [REST API](#rest-api)
   - [Tasks](#tasks)
   - [Agents](#agents)
+  - [Harness Maintenance](#harness-maintenance)
   - [Agent Sessions](#agent-sessions)
 - [WebSocket API](#websocket-api)
   - [Connection](#connection)
@@ -244,6 +245,120 @@ Get a single agent by ID.
 **Response:** `200 OK` — Single `Agent` object
 
 **Error:** `404` — `{ "error": "Agent not found" }`
+
+---
+
+### Harness Maintenance
+
+Version checks and user-triggered updates for installed harness CLIs (Claude Code, Codex, OpenCode, Pi). Cursor is included read-only — it either shows "Updates with 20x" or is manual-only, depending on which Cursor integration is live. Updates run on the desktop host the phone is paired to; the mobile client never runs anything itself.
+
+#### `GET /api/harness-maintenance`
+
+List the current maintenance status of every harness.
+
+**Response:** `200 OK`
+
+```json
+[
+  {
+    "harness": "codex",
+    "installed": true,
+    "binaryPath": "/Users/dev/.local/bin/codex",
+    "version": "0.18.0",
+    "latestVersion": "0.20.0",
+    "status": "behind_latest",
+    "installer": "native",
+    "canUpdate": true,
+    "updateCommand": "codex update",
+    "checkedAt": "2026-03-01T12:00:00.000Z",
+    "hasActiveSession": false
+  }
+]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `harness` | `string` | `claude-code`, `codex`, `opencode`, `pi`, or `cursor` |
+| `installed` | `boolean` | Whether the CLI was found |
+| `binaryPath` | `string \| null` | Resolved (symlink-followed) path to the binary |
+| `version` | `string \| null` | Installed version, parsed from `--version` |
+| `latestVersion` | `string \| null` | Latest published version, or `null` if checks are off/offline/failed |
+| `status` | `string` | `up_to_date`, `behind_latest`, `below_recommended`, `unsupported`, `not_installed`, or `unknown` |
+| `installer` | `string` | How the binary got there — `native`, `npm-global`, `pnpm-global`, `yarn-global`, `bun-global`, `homebrew-formula`, `homebrew-cask`, `manual`, or `bundled` (Cursor, updates with 20x) |
+| `canUpdate` | `boolean` | Whether `update` can run one-click, vs. a manual command |
+| `updateCommand` | `string \| null` | Human-readable update command, for display/copy |
+| `checkedAt` | `string` | ISO 8601 timestamp of this result |
+| `error` | `string?` | Set when the latest-version lookup itself failed |
+| `hasActiveSession` | `boolean?` | A session of this harness is running — it keeps the old binary until restarted |
+
+---
+
+#### `POST /api/harness-maintenance/refresh`
+
+Re-checks every harness.
+
+**Request Body:**
+
+```json
+{ "fresh": true }
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `fresh` | `boolean` | No | Bypasses the npm/Homebrew latest-version cache |
+
+**Response:** `200 OK` — array of `HarnessMaintenanceStatus` (same shape as the GET above)
+
+---
+
+#### `POST /api/harness-maintenance/update`
+
+Updates one harness. Always triggered by an explicit tap — never automatic.
+
+**Request Body:**
+
+```json
+{ "harness": "codex" }
+```
+
+**Response:** `200 OK`
+
+```json
+{
+  "harness": "codex",
+  "run": {
+    "harness": "codex",
+    "status": "succeeded",
+    "message": "Updated.",
+    "startedAt": "2026-03-01T12:00:00.000Z",
+    "finishedAt": "2026-03-01T12:00:05.000Z"
+  },
+  "newStatus": { "...": "HarnessMaintenanceStatus, re-checked after the update" }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `run.status` | `string` | `queued`, `running`, `succeeded`, `failed`, or `unchanged` |
+| `run.message` | `string?` | Human-readable result, e.g. "Restart running tasks to use the new version." |
+| `run.output` | `string?` | Captured stdout/stderr, present on failure |
+
+**Error:** `400` — `harness` is required. A harness with no one-click update (manual-only) returns a `failed` run with a message, not an HTTP error.
+
+---
+
+#### `POST /api/harness-maintenance/update-all`
+
+Updates every harness with `canUpdate`, sequentially per installer lock. Manual-only harnesses are skipped.
+
+**Response:** `200 OK`
+
+```json
+{
+  "results": [{ "harness": "codex", "run": { "...": "..." }, "newStatus": { "...": "..." } }],
+  "skipped": ["cursor"]
+}
+```
 
 ---
 
@@ -784,6 +899,34 @@ A session was found to be expired or incompatible on the server side.
 | `taskId`  | `string` | Affected task |
 | `agentId` | `string` | Affected agent |
 | `error`   | `string` | Human-readable error message |
+
+---
+
+#### `harness-maintenance:updated`
+
+One or more harnesses' status changed — after a passive check, a manual "Check now", or an update finishing. Desktop and mobile both receive this.
+
+```json
+{
+  "type": "harness-maintenance:updated",
+  "payload": [{ "...": "HarnessMaintenanceStatus, see GET /api/harness-maintenance" }]
+}
+```
+
+`payload` is always an array, even for a single harness.
+
+---
+
+#### `harness-maintenance:progress`
+
+Live output while an update runs.
+
+```json
+{
+  "type": "harness-maintenance:progress",
+  "payload": { "harness": "codex", "chunk": "Running codex update\n" }
+}
+```
 
 ---
 

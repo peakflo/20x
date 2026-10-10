@@ -23,7 +23,7 @@ interface AddAccountDialogProps {
 }
 
 /**
- * Modal form for Settings → Agents → Accounts' "Add account" button. Replaces
+ * Modal form for Settings → Harnesses → Accounts' "Add account" button. Replaces
  * the always-visible inline form: the fields only exist while this is open.
  */
 export function AddAccountDialog({ open, onOpenChange, onCreated }: AddAccountDialogProps) {
