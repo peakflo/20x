@@ -614,4 +614,48 @@ export class UsageStore {
     this.db.prepare('DELETE FROM token_usage_session_totals WHERE updated_at < ?').run(nowMs - SESSION_TOTALS_RETENTION_MS)
     this.db.prepare('DELETE FROM token_usage_events WHERE created_at < ?').run(nowMs - USAGE_EVENTS_RETENTION_MS)
   }
+
+  /**
+   * Latest usage event timestamp for a session after `afterMs`. Used by
+   * agent-run-intervals.ts crash recovery as the preferred "last known
+   * activity" signal (token_usage_events has a real `session_id` column,
+   * unlike transcript_parts) before falling back to transcript activity.
+   */
+  getLatestEventAtForSession(sessionId: string, afterMs: number): number | null {
+    const row = this.db.prepare(`
+      SELECT MAX(created_at) AS m FROM token_usage_events WHERE session_id = ? AND created_at > ?
+    `).get(sessionId, afterMs) as { m: number | null }
+    return row.m ?? null
+  }
+
+  /**
+   * Every usage event with a session id, oldest first — the backfill job's
+   * primary source for deriving approximate historical run intervals (it has
+   * real per-session granularity, unlike transcript_parts which is scoped to
+   * task_id only). One row per (session_id, provider, model, turn); the
+   * caller groups by session_id and merges consecutive activity.
+   */
+  getUsageEventActivityForBackfill(): Array<{
+    sessionId: string
+    taskId: string | null
+    agentId: string | null
+    provider: string
+    instanceId: string | null
+    createdAt: number
+  }> {
+    const rows = this.db.prepare(`
+      SELECT session_id, task_id, agent_id, provider, instance_id, created_at
+      FROM token_usage_events
+      WHERE session_id IS NOT NULL
+      ORDER BY session_id ASC, created_at ASC
+    `).all() as Array<{ session_id: string; task_id: string | null; agent_id: string | null; provider: string; instance_id: string | null; created_at: number }>
+    return rows.map((row) => ({
+      sessionId: row.session_id,
+      taskId: row.task_id,
+      agentId: row.agent_id,
+      provider: row.provider,
+      instanceId: row.instance_id,
+      createdAt: row.created_at
+    }))
+  }
 }

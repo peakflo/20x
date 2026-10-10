@@ -136,6 +136,18 @@ function createMockDb(agentConfig: Record<string, unknown> = {}) {
     deleteSetting: vi.fn(),
     getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
     updateTask: vi.fn(),
+    // agent_run_intervals ("my multiplier") — not under test here, stubbed so
+    // the status-transition/session-destroy hooks in agent-manager.ts (which
+    // call these unconditionally, not just best-effort) don't throw.
+    getOpenAgentRunIntervals: vi.fn(() => []),
+    getOpenAgentRunIntervalForSession: vi.fn(() => undefined),
+    openAgentRunInterval: vi.fn(),
+    closeOpenAgentRunInterval: vi.fn(() => null),
+    renameOpenAgentRunIntervalSession: vi.fn(),
+    getAgentRunIntervalsOverlapping: vi.fn(() => []),
+    getEarliestAgentRunIntervalStart: vi.fn(() => null),
+    getTasksShippedCount: vi.fn(() => 0),
+    getLatestTranscriptActivityAfter: vi.fn(() => null),
   } as unknown as ConstructorParameters<typeof AgentManager>[0]
 }
 

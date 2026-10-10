@@ -433,6 +433,38 @@ export interface TranscriptPartRecord {
   rev: number
 }
 
+/** Raw `agent_run_intervals` row, snake_case as stored. */
+interface AgentRunIntervalRow {
+  id: string
+  task_id: string
+  agent_id: string
+  session_id: string
+  provider: string
+  harness_instance_id: string | null
+  started_at_ms: number
+  ended_at_ms: number | null
+  end_reason: string | null
+}
+
+/**
+ * One "an agent session was actively working" span. See
+ * src/main/usage/agent-run-intervals.ts (writer) and
+ * src/main/usage/usage-parallelism.ts (reader).
+ */
+export interface AgentRunIntervalRecord {
+  id: string
+  taskId: string
+  agentId: string
+  sessionId: string
+  provider: string
+  harnessInstanceId: string | null
+  startedAtMs: number
+  /** Null while the session is still working. */
+  endedAtMs: number | null
+  /** `'idle' | 'waiting_approval' | 'error' | 'stopped' | 'crash_recovered' | 'backfilled'` — free-form, not an enum: new reasons can be added without a migration. */
+  endReason: string | null
+}
+
 export interface TaskRecord {
   server_pending_edits?: Record<string, unknown>
   server_managed?: boolean
@@ -714,6 +746,20 @@ function deserializeAcpAgentInstance(row: AcpAgentInstanceRow): AcpAgentInstance
     auth_method_id: row.auth_method_id,
     custom_models: JSON.parse(row.custom_models || '[]') as string[],
     created_at: row.created_at
+  }
+}
+
+function deserializeAgentRunInterval(row: AgentRunIntervalRow): AgentRunIntervalRecord {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    agentId: row.agent_id,
+    sessionId: row.session_id,
+    provider: row.provider,
+    harnessInstanceId: row.harness_instance_id,
+    startedAtMs: row.started_at_ms,
+    endedAtMs: row.ended_at_ms,
+    endReason: row.end_reason
   }
 }
 
@@ -1469,6 +1515,33 @@ export class DatabaseManager {
       -- NOT here. On a DB created before rev existed, CREATE TABLE IF NOT EXISTS
       -- is a no-op (no rev column), so building a rev index here would fail with
       -- no-such-column before the ALTER TABLE migration runs.
+
+      -- One row per "an agent session was actively working" span. Opened the
+      -- instant a session's status becomes 'working', closed the instant it
+      -- leaves 'working' (idle/waiting_approval/error) or the session is torn
+      -- down. Powers the usage "parallelism" query engine (usage-parallelism.ts)
+      -- — multiplier, peak concurrency, per-day run hours. See
+      -- src/main/usage/agent-run-intervals.ts for the writer and
+      -- src/main/usage/usage-parallelism.ts for the reader. New table, so no
+      -- SCHEMA_VERSION bump is needed (CREATE TABLE IF NOT EXISTS runs on every
+      -- startup, including for existing installs).
+      CREATE TABLE IF NOT EXISTS agent_run_intervals (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        harness_instance_id TEXT,
+        started_at_ms INTEGER NOT NULL,
+        ended_at_ms INTEGER,
+        end_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_started ON agent_run_intervals(started_at_ms);
+      CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_ended ON agent_run_intervals(ended_at_ms);
+      -- Looked up by session_id on every status transition (to find the
+      -- currently-open interval for that session) and by open-ness on crash
+      -- recovery (startup sweep for ended_at_ms IS NULL rows).
+      CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_session_open ON agent_run_intervals(session_id, ended_at_ms);
     `)
   }
 
@@ -2613,6 +2686,205 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   deleteTranscriptParts(taskId: string): void {
     if (!this.ensureDbOpen()) return
     this.db.prepare('DELETE FROM transcript_parts WHERE task_id = ?').run(taskId)
+  }
+
+  // ── agent_run_intervals ──────────────────────────────────────
+  // See src/main/usage/agent-run-intervals.ts (writer: live recording, crash
+  // recovery, backfill) and src/main/usage/usage-parallelism.ts (reader: the
+  // parallelism query engine). These methods are the only place that touches
+  // the table's SQL, per this file's "all schema + queries live in
+  // database.ts" convention (docs/database-migrations.md).
+
+  /**
+   * Opens a new run interval for a session, unless one is already open for
+   * it (idempotent — a duplicate "became working" signal is a no-op, not a
+   * second row).
+   */
+  openAgentRunInterval(input: {
+    taskId: string
+    agentId: string
+    sessionId: string
+    provider: string
+    harnessInstanceId: string | null
+    startedAtMs: number
+  }): AgentRunIntervalRecord {
+    if (!this.ensureDbOpen()) throw new Error('Database not open')
+    const existing = this.getOpenAgentRunIntervalForSession(input.sessionId)
+    if (existing) return existing
+
+    const id = createId()
+    this.db.prepare(`
+      INSERT INTO agent_run_intervals (id, task_id, agent_id, session_id, provider, harness_instance_id, started_at_ms, ended_at_ms, end_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+    `).run(id, input.taskId, input.agentId, input.sessionId, input.provider, input.harnessInstanceId ?? null, input.startedAtMs)
+
+    return {
+      id,
+      taskId: input.taskId,
+      agentId: input.agentId,
+      sessionId: input.sessionId,
+      provider: input.provider,
+      harnessInstanceId: input.harnessInstanceId ?? null,
+      startedAtMs: input.startedAtMs,
+      endedAtMs: null,
+      endReason: null
+    }
+  }
+
+  /**
+   * Inserts an already-closed interval directly — used by crash recovery
+   * (closing at last-known-activity time) and by the backfill job (deriving
+   * historical intervals from transcript/usage timestamps).
+   */
+  insertClosedAgentRunInterval(input: {
+    taskId: string
+    agentId: string
+    sessionId: string
+    provider: string
+    harnessInstanceId: string | null
+    startedAtMs: number
+    endedAtMs: number
+    endReason: string
+  }): AgentRunIntervalRecord {
+    if (!this.ensureDbOpen()) throw new Error('Database not open')
+    const id = createId()
+    this.db.prepare(`
+      INSERT INTO agent_run_intervals (id, task_id, agent_id, session_id, provider, harness_instance_id, started_at_ms, ended_at_ms, end_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, input.taskId, input.agentId, input.sessionId, input.provider, input.harnessInstanceId ?? null, input.startedAtMs, input.endedAtMs, input.endReason)
+
+    return {
+      id,
+      taskId: input.taskId,
+      agentId: input.agentId,
+      sessionId: input.sessionId,
+      provider: input.provider,
+      harnessInstanceId: input.harnessInstanceId ?? null,
+      startedAtMs: input.startedAtMs,
+      endedAtMs: input.endedAtMs,
+      endReason: input.endReason
+    }
+  }
+
+  /** The currently-open interval for a session, if any (there should be at most one). */
+  getOpenAgentRunIntervalForSession(sessionId: string): AgentRunIntervalRecord | undefined {
+    if (!this.ensureDbOpen()) return undefined
+    const row = this.db.prepare(`
+      SELECT * FROM agent_run_intervals WHERE session_id = ? AND ended_at_ms IS NULL
+      ORDER BY started_at_ms DESC LIMIT 1
+    `).get(sessionId) as AgentRunIntervalRow | undefined
+    return row ? deserializeAgentRunInterval(row) : undefined
+  }
+
+  /**
+   * Closes the open interval for a session, if any. Idempotent: a session
+   * with no open interval (already closed, or never opened — e.g. an
+   * excluded session) is a no-op and returns null. Safe to call defensively
+   * from every session-destroy path, not just the status-broadcast hook.
+   */
+  closeOpenAgentRunInterval(sessionId: string, endedAtMs: number, endReason: string): AgentRunIntervalRecord | null {
+    if (!this.ensureDbOpen()) return null
+    const existing = this.getOpenAgentRunIntervalForSession(sessionId)
+    if (!existing) return null
+    // Never produce a negative-duration or zero-duration-by-mistake row from
+    // a clock hiccup — clamp the close time to at least the start time.
+    const resolvedEndedAtMs = Math.max(endedAtMs, existing.startedAtMs)
+    this.db.prepare(`
+      UPDATE agent_run_intervals SET ended_at_ms = ?, end_reason = ? WHERE id = ?
+    `).run(resolvedEndedAtMs, endReason, existing.id)
+    return { ...existing, endedAtMs: resolvedEndedAtMs, endReason }
+  }
+
+  /**
+   * Re-keys the open interval for a session whose in-memory id changed (the
+   * adapter revealed its "real" session id after the temp id was used to
+   * open the interval). No-op if nothing is open under the old id.
+   */
+  renameOpenAgentRunIntervalSession(oldSessionId: string, newSessionId: string): void {
+    if (!this.ensureDbOpen()) return
+    this.db.prepare(`
+      UPDATE agent_run_intervals SET session_id = ? WHERE session_id = ? AND ended_at_ms IS NULL
+    `).run(newSessionId, oldSessionId)
+  }
+
+  /** Every interval left open (`ended_at_ms IS NULL`) — crash-recovery candidates on startup. */
+  getOpenAgentRunIntervals(): AgentRunIntervalRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const rows = this.db.prepare(`SELECT * FROM agent_run_intervals WHERE ended_at_ms IS NULL`).all() as AgentRunIntervalRow[]
+    return rows.map(deserializeAgentRunInterval)
+  }
+
+  /**
+   * Intervals that could overlap `[startMs, endMs)` — a still-open interval
+   * (`ended_at_ms IS NULL`) always qualifies, since it may still be running.
+   * Callers (usage-parallelism.ts) are responsible for clipping to the exact
+   * bounds; this is a cheap overlap pre-filter, not the final clip.
+   */
+  getAgentRunIntervalsOverlapping(startMs: number, endMs: number): AgentRunIntervalRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const rows = this.db.prepare(`
+      SELECT * FROM agent_run_intervals
+      WHERE started_at_ms < ? AND (ended_at_ms IS NULL OR ended_at_ms > ?)
+      ORDER BY started_at_ms ASC
+    `).all(endMs, startMs) as AgentRunIntervalRow[]
+    return rows.map(deserializeAgentRunInterval)
+  }
+
+  /** Earliest interval start on record — phase 2 uses this for a "counting from <date>" hint when backfill coverage is thin. */
+  getEarliestAgentRunIntervalStart(): number | null {
+    if (!this.ensureDbOpen()) return null
+    const row = this.db.prepare(`SELECT MIN(started_at_ms) AS m FROM agent_run_intervals`).get() as { m: number | null }
+    return row.m ?? null
+  }
+
+  /** Whether a session already has any interval row (open or closed) — the backfill job's per-session guard. */
+  hasAnyAgentRunIntervalForSession(sessionId: string): boolean {
+    if (!this.ensureDbOpen()) return false
+    const row = this.db.prepare('SELECT 1 FROM agent_run_intervals WHERE session_id = ? LIMIT 1').get(sessionId)
+    return !!row
+  }
+
+  /** Distinct session ids that already have at least one interval row — used by the backfill job to skip sessions it (or live recording) already covered. */
+  getSessionIdsWithAgentRunIntervals(): Set<string> {
+    if (!this.ensureDbOpen()) return new Set()
+    const rows = this.db.prepare('SELECT DISTINCT session_id FROM agent_run_intervals').all() as Array<{ session_id: string }>
+    return new Set(rows.map((r) => r.session_id))
+  }
+
+  /**
+   * Latest transcript activity for a task after `afterMs` — used by crash
+   * recovery as a fallback "last known activity" timestamp when no
+   * token_usage_events row exists for the session. transcript_parts has no
+   * session_id column, so this is scoped by task_id only; that is a safe
+   * approximation for crash recovery because the row being recovered is the
+   * task's one open interval at the moment the app died.
+   */
+  getLatestTranscriptActivityAfter(taskId: string, afterMs: number): number | null {
+    if (!this.ensureDbOpen()) return null
+    const row = this.db.prepare(`
+      SELECT MAX(created_at) AS m FROM transcript_parts WHERE task_id = ? AND created_at > ?
+    `).get(taskId, afterMs) as { m: number | null }
+    return row.m ?? null
+  }
+
+  /**
+   * "Tasks shipped" in `[startMs, endMs)`: top-level, non-recurring-template
+   * tasks that reached `completed`, using `updated_at` as the completion
+   * timestamp — the same convention `getCompletedTaskStats` already uses
+   * (there is no dedicated `completed_at` column).
+   */
+  getTasksShippedCount(startMs: number, endMs: number): number {
+    if (!this.ensureDbOpen()) return 0
+    const startIso = new Date(startMs).toISOString()
+    const endIso = new Date(endMs).toISOString()
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS n FROM tasks
+      WHERE status = ?
+        AND parent_task_id IS NULL
+        AND NOT (is_recurring = 1 AND recurrence_parent_id IS NULL)
+        AND updated_at >= ? AND updated_at < ?
+    `).get(TaskStatus.Completed, startIso, endIso) as { n: number }
+    return row.n
   }
 
   /**
