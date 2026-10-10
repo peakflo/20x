@@ -82,7 +82,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
     agent?.config.auth_method ?? 'subscription'
   )
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>(
-    agent?.config.permission_mode ?? 'ask'
+    agent?.config.permission_mode ?? 'allow'
   )
   const [sandboxMode, setSandboxMode] = useState<AgentSandboxMode>(
     agent?.config.sandbox_mode ?? 'danger-full-access'

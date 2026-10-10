@@ -284,6 +284,14 @@ export class EnterpriseSyncManager {
           config.system_prompt = agent.systemPrompt
         }
 
+        // The sync replaces the whole config. The tenant payload usually does
+        // not carry permission_mode, so without this the local mode ("allow"
+        // by default, or an explicit 'ask' the user chose) would be wiped on
+        // every sync.
+        if (config.permission_mode === undefined) {
+          config.permission_mode = existing?.config.permission_mode ?? 'allow'
+        }
+
         if (existing) {
           this.db.updateAgent(existing.id, {
             name: enterpriseName,

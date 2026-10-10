@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EnterpriseSyncManager } from './enterprise-sync'
 import type { SkillRecord } from './database'
-import type { WorkfloSkill, WorkfloOrgNode } from './workflo-api-client'
+import type { WorkfloSkill, WorkfloOrgNode, WorkfloAgent } from './workflo-api-client'
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -980,5 +980,119 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
         })
       )
     })
+  })
+})
+
+// ── Agent sync keeps permission_mode ─────────────────────────────────────
+
+describe('EnterpriseSyncManager — agent sync keeps permission_mode', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let mockDb: any
+  let mockApiClient: Record<string, ReturnType<typeof vi.fn>>
+  let syncManager: EnterpriseSyncManager
+
+  function makeServerAgent(overrides: Partial<WorkfloAgent> = {}): WorkfloAgent {
+    return {
+      id: 'agent-1',
+      name: 'Tenant Agent',
+      mcpServerIds: [],
+      skillIds: [],
+      config: {},
+      ...overrides
+    }
+  }
+
+  beforeEach(() => {
+    mockDb = {
+      db: {
+        pragma: vi.fn().mockReturnValue([{ name: 'enterprise_skill_id' }, { name: 'uses_at_last_sync' }]),
+        exec: vi.fn()
+      },
+      getSkills: vi.fn().mockReturnValue([]),
+      getSkill: vi.fn(),
+      getSkillByName: vi.fn().mockReturnValue(undefined),
+      getSkillByEnterpriseId: vi.fn().mockReturnValue(undefined),
+      getDeletedEnterpriseSkills: vi.fn().mockReturnValue([]),
+      createSkill: vi.fn(),
+      updateSkill: vi.fn(),
+      deleteSkill: vi.fn(),
+      hardDeleteSkill: vi.fn().mockReturnValue(true),
+      getAgents: vi.fn().mockReturnValue([]),
+      createAgent: vi.fn(),
+      updateAgent: vi.fn(),
+      getMcpServers: vi.fn().mockReturnValue([]),
+      createMcpServer: vi.fn(),
+      updateMcpServer: vi.fn(),
+      getTaskSources: vi.fn().mockReturnValue([]),
+      createTaskSource: vi.fn()
+    }
+
+    mockApiClient = {
+      listOrgNodes: vi.fn().mockResolvedValue([makeOrgNode({ agents: [makeServerAgent()] })]),
+      getOrgNode: vi.fn().mockResolvedValue({ node: makeOrgNode(), mcpServers: [], taskSources: [] }),
+      listSkills: vi.fn().mockResolvedValue([]),
+      batchSyncSkills: vi.fn().mockResolvedValue({ created: 0, updated: 0, skills: [] }),
+      createSkill: vi.fn(),
+      updateSkill: vi.fn(),
+      deleteSkill: vi.fn(),
+      updateOrgNode: vi.fn(),
+      cleanupDuplicateSkills: vi.fn().mockResolvedValue({ deleted: 0, kept: 0 }),
+      getDomain: vi.fn().mockReturnValue('api.peakflo.ai')
+    }
+
+    syncManager = new EnterpriseSyncManager(mockDb as never, mockApiClient as never)
+  })
+
+  it('creates a synced agent with permission_mode allow when the tenant config has none', async () => {
+    await syncManager.syncAll('user-1')
+
+    expect(mockDb.createAgent).toHaveBeenCalledTimes(1)
+    const created = mockDb.createAgent.mock.calls[0][0]
+    expect(created.name).toBe('[Workflo] Tenant Agent')
+    expect(created.config.permission_mode).toBe('allow')
+  })
+
+  it('keeps an existing local permission_mode that the tenant config does not carry', async () => {
+    mockDb.getAgents.mockReturnValue([
+      {
+        id: 'local-1',
+        name: '[Workflo] Tenant Agent',
+        server_url: 'http://localhost:4096',
+        config: { permission_mode: 'ask', enterprise_agent_id: 'agent-1' },
+        is_default: false,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z'
+      }
+    ])
+
+    await syncManager.syncAll('user-1')
+
+    // Existing agent → wholesale config replace must not drop the local 'ask'.
+    expect(mockDb.updateAgent).toHaveBeenCalledTimes(1)
+    const [, updated] = mockDb.updateAgent.mock.calls[0]
+    expect(updated.config.permission_mode).toBe('ask')
+    expect(mockDb.createAgent).not.toHaveBeenCalled()
+  })
+
+  it('lets a permission_mode carried by the tenant config win over the local one', async () => {
+    mockApiClient.listOrgNodes.mockResolvedValue([
+      makeOrgNode({ agents: [makeServerAgent({ config: { permission_mode: 'ask' } })] })
+    ])
+    mockDb.getAgents.mockReturnValue([
+      {
+        id: 'local-1',
+        name: '[Workflo] Tenant Agent',
+        server_url: 'http://localhost:4096',
+        config: { permission_mode: 'allow', enterprise_agent_id: 'agent-1' },
+        is_default: false,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z'
+      }
+    ])
+
+    await syncManager.syncAll('user-1')
+
+    const [, updated] = mockDb.updateAgent.mock.calls[0]
+    expect(updated.config.permission_mode).toBe('ask')
   })
 })

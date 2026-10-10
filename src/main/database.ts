@@ -724,6 +724,17 @@ function legacyInstanceLabel(homePath: string): string {
   return name
 }
 
+/**
+ * Every agent is "always allow" (auto-approve) by default: the seeded Default
+ * Agent, agents created through the editor, and agents created
+ * programmatically (enterprise sync, plugin imports). An explicit
+ * permission_mode — including an explicit 'ask' — always wins.
+ */
+export function applyDefaultPermissionMode(config: AgentConfigRecord): AgentConfigRecord {
+  if (config.permission_mode !== undefined) return config
+  return { ...config, permission_mode: 'allow' }
+}
+
 function deserializeAgent(row: AgentRow): AgentRecord {
   return {
     ...row,
@@ -1149,8 +1160,11 @@ export class DatabaseManager {
 
     // These must run on EVERY startup (not just during migrations)
     // because they start runtime services (task API server) and
-    // ensure default records exist (MCP server, orchestrator skill).
+    // ensure default records exist (default agent, MCP server,
+    // orchestrator skill).
     this.ensureTranscriptRevColumn()
+    this.seedDefaultAgent()
+    this.migrateAgentPermissionDefaults()
     this.initializeTasksFts()
     this.initializeTaskManagementMcpServer()
     this.initializeOrchestratorSkill()
@@ -1940,18 +1954,64 @@ export class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_skills_enterprise_id ON skills(enterprise_skill_id);
     `)
 
-    // Seed default agent if none exist
-    const agentCount = this.db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number }
-    if (agentCount.count === 0) {
-      const now = new Date().toISOString()
-      this.db.prepare(`
-        INSERT INTO agents (id, name, server_url, config, is_default, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 1, ?, ?)
-      `).run(createId(), 'Default Agent', 'http://localhost:4096', '{}', now, now)
-    }
-
     // Migration v4: FTS5 full-text search index for similar task search
     this.initializeTasksFts()
+  }
+
+  /**
+   * Ensures the Default Agent exists, seeded with `permission_mode: 'allow'`
+   * ("Allow automatically") — the app-wide default; the user can still change
+   * it in the agent editor.
+   *
+   * Runs on EVERY startup (not behind the schema-version gate): a fresh
+   * install gets the Default Agent on first launch, and an install whose
+   * agents were all removed gets it back — always with always-allow
+   * permissions. A no-op once any agent exists.
+   */
+  private seedDefaultAgent(): void {
+    const agentCount = this.db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number }
+    if (agentCount.count > 0) return
+
+    const now = new Date().toISOString()
+    this.db.prepare(`
+      INSERT INTO agents (id, name, server_url, config, is_default, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, ?, ?)
+    `).run(
+      createId(),
+      'Default Agent',
+      'http://localhost:4096',
+      JSON.stringify(applyDefaultPermissionMode({})),
+      now,
+      now
+    )
+  }
+
+  /**
+   * Backfills `permission_mode: 'allow'` on agents whose config does not carry
+   * the key. The app default changed from 'ask' to 'allow', and agents created
+   * before that change — including the previously seeded Default Agent — have
+   * no key at all.
+   *
+   * Only ABSENCE is backfilled. The data cannot tell "never changed" from "the
+   * user picked ask", so an explicit permission_mode ('ask' included) is always
+   * left alone. Idempotent: once every config carries the key the pass is a
+   * no-op, so it runs on every startup. JSON-safe: rows whose config is not a
+   * JSON object are skipped untouched.
+   */
+  private migrateAgentPermissionDefaults(): void {
+    const rows = this.db.prepare('SELECT id, config FROM agents').all() as Array<{ id: string; config: string | null }>
+    for (const row of rows) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(row.config || '{}')
+      } catch {
+        continue
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+      if ('permission_mode' in parsed) continue
+      ;(parsed as Record<string, unknown>).permission_mode = 'allow'
+      this.db.prepare('UPDATE agents SET config = ? WHERE id = ?').run(JSON.stringify(parsed), row.id)
+    }
   }
 
   /**
@@ -2907,6 +2967,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   createAgent(data: CreateAgentData): AgentRecord | undefined {
     const id = createId()
     const now = new Date().toISOString()
+    const config = applyDefaultPermissionMode(data.config ?? {})
 
     this.db.prepare(`
       INSERT INTO agents (id, name, server_url, config, is_default, created_at, updated_at)
@@ -2915,7 +2976,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       id,
       data.name,
       data.server_url ?? 'http://localhost:4096',
-      JSON.stringify(data.config ?? {}),
+      JSON.stringify(config),
       data.is_default ? 1 : 0,
       now,
       now
