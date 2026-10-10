@@ -19,7 +19,7 @@
  *     node.taskSources[]        → auto-create matching local task_sources entries
  */
 import type { DatabaseManager, SkillRecord } from './database'
-import type { WorkfloApiClient, WorkfloOrgNode, WorkfloMcpServer, WorkfloSkill, WorkfloAgent } from './workflo-api-client'
+import type { WorkfloApiClient, WorkfloOrgNode, WorkfloMcpServer, WorkfloSkill, WorkfloAgent, BatchSyncSkillsResult } from './workflo-api-client'
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -382,6 +382,7 @@ export class EnterpriseSyncManager {
         lastUsed?: string | null
         updatedAt?: string
         tags?: string[]
+        usesDelta?: number
       }
     }> = []
 
@@ -432,6 +433,11 @@ export class EnterpriseSyncManager {
           uses: typeof skill.uses === 'number' && skill.uses >= 0
             ? Math.floor(skill.uses)
             : undefined,
+          // What this machine accrued since its own last sync. The server ADDS
+          // this, so two machines each using a skill sum correctly. Sending the
+          // absolute count instead loses the smaller side, because the server
+          // can only take the max of two absolute numbers.
+          usesDelta: this.usesSinceLastSync(skill),
           lastUsed: this.normalizeDateTime(skill.last_used),
           tags: Array.isArray(skill.tags) ? skill.tags : undefined
         }
@@ -447,6 +453,21 @@ export class EnterpriseSyncManager {
     let totalCreated = 0
     let totalUpdated = 0
     let batchFailed = false
+
+    // Server ids and names the server refused. Their usage delta was NOT
+    // applied, so the local usage baseline must not advance for them, or the
+    // usage they represent is lost for good.
+    const conflictedIds = new Set<string>()
+    const conflictedNames = new Set<string>()
+    const noteConflicts = (r: { conflicts?: Array<{ id?: string; name: string; reason: string }> }): void => {
+      for (const c of r.conflicts ?? []) {
+        if (c.id) conflictedIds.add(c.id)
+        conflictedNames.add(c.name)
+        console.log(
+          `[EnterpriseSyncManager] Server refused "${c.name}": ${c.reason}`
+        )
+      }
+    }
 
     if (skillsToSync.length > 0) {
       const chunks = this.chunkArray(
@@ -464,6 +485,7 @@ export class EnterpriseSyncManager {
           totalUpdated += batchResult.updated
           // Last chunk's response has the full tenant skill set
           allServerSkills = batchResult.skills
+          noteConflicts(batchResult)
           console.log(
             `[EnterpriseSyncManager] Batch chunk ${i + 1}/${chunks.length}: created=${batchResult.created}, updated=${batchResult.updated}, total_skills=${batchResult.skills.length}`
           )
@@ -479,6 +501,7 @@ export class EnterpriseSyncManager {
               totalCreated += singleResult.created
               totalUpdated += singleResult.updated
               allServerSkills = singleResult.skills
+              noteConflicts(singleResult)
             } catch (singleErr) {
               batchFailed = true
               const singleMsg = singleErr instanceof Error ? singleErr.message : String(singleErr)
@@ -533,9 +556,16 @@ export class EnterpriseSyncManager {
         // timestamp is the conflict token for the next sync.
         const localSkill = localSkills.find((s) => s.id === localId)
         if (localSkill) {
+          const refused =
+            conflictedIds.has(serverSkill.id) ||
+            conflictedNames.has(payload.name)
+
           this.db.updateSkill(localId, {
             enterprise_skill_id: serverSkill.id,
-            uses_at_last_sync: localSkill.uses
+            // Only move the usage baseline when the server actually accepted
+            // the item. Advancing it after a refusal would discard the usage
+            // this machine reported but the server never added.
+            ...(refused ? {} : { uses_at_last_sync: localSkill.uses })
           })
         }
         pushedSkillIds.push(serverSkill.id)
@@ -554,15 +584,18 @@ export class EnterpriseSyncManager {
    */
   private async batchSyncWithRetry(
     skills: Array<{
+      id?: string
       name: string
       description: string
       content: string
       confidence?: number
       uses?: number
+      usesDelta?: number
       lastUsed?: string | null
+      updatedAt?: string
       tags?: string[]
     }>
-  ): Promise<{ created: number; updated: number; skills: WorkfloSkill[] }> {
+  ): Promise<BatchSyncSkillsResult> {
     let lastError: Error | null = null
 
     for (let attempt = 0; attempt < EnterpriseSyncManager.BATCH_SYNC_MAX_RETRIES; attempt++) {
@@ -773,6 +806,22 @@ export class EnterpriseSyncManager {
   private isBuiltInSkill(skill: SkillRecord): boolean {
     const builtInNames = ['Mastermind', 'mastermind']
     return builtInNames.includes(skill.name)
+  }
+
+  /**
+   * Usage this machine has accrued since its last successful sync.
+   *
+   * `uses_at_last_sync` is the count at the moment the server last confirmed a
+   * push. Anything above that has not been reported yet. Clamped at zero — a
+   * negative would mean the local counter went backwards (a restore from an
+   * older copy), and re-reporting nothing is safer than subtracting.
+   */
+  private usesSinceLastSync(skill: SkillRecord): number | undefined {
+    const current = typeof skill.uses === 'number' ? skill.uses : 0
+    const baseline =
+      typeof skill.uses_at_last_sync === 'number' ? skill.uses_at_last_sync : 0
+    const delta = Math.floor(current - baseline)
+    return delta > 0 ? delta : undefined
   }
 
   /**
