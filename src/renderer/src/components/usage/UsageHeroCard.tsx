@@ -7,7 +7,7 @@ import {
   type UsageCardSummary
 } from '@shared/usage-card'
 import type { UsageParallelismResponse } from '@shared/usage'
-import { waitForFonts } from '@/lib/wait-for-fonts'
+import { waitForFonts } from '@shared/wait-for-fonts'
 
 interface UsageHeroCardProps {
   data: UsageParallelismResponse | null

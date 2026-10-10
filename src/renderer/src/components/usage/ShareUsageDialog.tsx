@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/compone
 import { VisuallyHidden } from '@/components/ui/VisuallyHidden'
 import { cn } from '@/lib/utils'
 import { usageApi } from '@/lib/ipc-client'
-import { waitForFonts } from '@/lib/wait-for-fonts'
+import { waitForFonts } from '@shared/wait-for-fonts'
 import {
   renderToCanvas,
   type UsageCardShape,
