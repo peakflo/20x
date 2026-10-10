@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildUsageChartSeries,
   effectiveUsedPercent,
+  formatMultiplier,
   formatResetIn,
   formatTokenCount,
   formatUsd,
   mergeUsageLimits,
   totalTokens,
   usageLimitLevel,
+  usagePeriodForParallelismDays,
   type ProviderUsageLimits
 } from './usage'
 
@@ -99,5 +102,49 @@ describe('usage helpers', () => {
 
   it('counts reasoning inside output when totalling tokens', () => {
     expect(totalTokens({ inputTokens: 1, cacheReadTokens: 2, cacheWriteTokens: 3, outputTokens: 4, reasoningTokens: 4 })).toBe(10)
+  })
+})
+
+describe('formatMultiplier', () => {
+  it('shows one decimal below 10 and a rounded integer at 10+', () => {
+    expect(formatMultiplier(3.44)).toBe('3.4')
+    expect(formatMultiplier(10)).toBe('10')
+    expect(formatMultiplier(137.2)).toBe('137')
+  })
+})
+
+describe('usagePeriodForParallelismDays', () => {
+  it('maps every supported period to its UsagePeriod key', () => {
+    expect(usagePeriodForParallelismDays(7)).toBe('7d')
+    expect(usagePeriodForParallelismDays(30)).toBe('30d')
+    expect(usagePeriodForParallelismDays(90)).toBe('90d')
+    expect(usagePeriodForParallelismDays(182)).toBe('182d')
+  })
+})
+
+describe('buildUsageChartSeries', () => {
+  it('assigns the first 4 providers (by the fixed USAGE_PROVIDERS order) real colours', () => {
+    const series = buildUsageChartSeries(['cursor', 'claude-code', 'codex'], 'dark')
+    expect(series.map((s) => s.key)).toEqual(['claude-code', 'codex', 'cursor'])
+    expect(series.every((s) => s.color.startsWith('#'))).toBe(true)
+  })
+
+  it('folds a 5th+ provider into one "Other" series instead of growing the palette', () => {
+    const series = buildUsageChartSeries(['claude-code', 'codex', 'opencode', 'cursor', 'pi', 'acp'], 'dark')
+    expect(series).toHaveLength(5)
+    const other = series.find((s) => s.key === 'other')!
+    expect(other.providers).toEqual(['pi', 'acp'])
+    expect(other.label).toBe('Other')
+  })
+
+  it('uses the light-theme palette when asked, and never colours text with a series colour', () => {
+    const dark = buildUsageChartSeries(['claude-code'], 'dark')
+    const light = buildUsageChartSeries(['claude-code'], 'light')
+    expect(dark[0].color).not.toBe(light[0].color)
+  })
+
+  it('omits providers with no data entirely, in any input order', () => {
+    const series = buildUsageChartSeries(['acp', 'claude-code'], 'dark')
+    expect(series.map((s) => s.key)).toEqual(['claude-code', 'acp'])
   })
 })

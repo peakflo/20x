@@ -521,6 +521,12 @@ export class UsageStore {
        ORDER BY day`
     ).all(params) as Array<ModelGroupSqlRow & { day: string }>).filter((row) => isUsageProvider(row.provider))
     const byDayAcc = new Map<string, ReturnType<typeof newPricingAccumulator>>()
+    // Token totals only (no pricing) per (day, provider) — the stacked
+    // tokens-per-day chart's bar segments. Built from the same already-
+    // grouped `dayGroupRows` as `byDay` itself, so this needs no second SQL
+    // query; only token counts are needed here (not cost), since the chart's
+    // tooltip shows cost once for the day's total, not per provider.
+    const byDayProviderTokens = new Map<string, Map<UsageProvider, number>>()
     const dayOrder: string[] = []
     for (const row of dayGroupRows) {
       const group = toModelUsageGroup(row)
@@ -530,8 +536,18 @@ export class UsageStore {
         dayOrder.push(row.day)
       }
       accumulatePricedGroup(byDayAcc.get(row.day)!, group, priced)
+
+      const providerTokens = byDayProviderTokens.get(row.day) ?? new Map<UsageProvider, number>()
+      providerTokens.set(group.provider, (providerTokens.get(group.provider) ?? 0) + groupTotalTokens(group))
+      byDayProviderTokens.set(row.day, providerTokens)
     }
-    const byDay: UsageDayRow[] = dayOrder.map((day) => ({ day, ...finalizePricingAccumulator(byDayAcc.get(day)!) }))
+    const byDay: UsageDayRow[] = dayOrder.map((day) => ({
+      day,
+      ...finalizePricingAccumulator(byDayAcc.get(day)!),
+      byProvider: Array.from(byDayProviderTokens.get(day) ?? [])
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([provider, tokens]) => ({ provider, tokens }))
+    }))
 
     const hasTasksTable = !!this.db.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"

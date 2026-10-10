@@ -28,6 +28,55 @@ export const USAGE_PROVIDER_LABELS: Record<UsageProvider, string> = {
   acp: 'ACP agent'
 }
 
+// ── Chart colours ─────────────────────────────────────────────
+//
+// Fixed order (not picked by volume) so a provider's colour never changes
+// day to day as usage shifts — `USAGE_PROVIDERS` is already the app's one
+// canonical provider ordering (used for `USAGE_PROVIDER_LABELS` etc.), so
+// chart series reuse it rather than inventing a second ordering. Only the
+// first 4 providers that actually have data in the period get a real
+// colour; a 5th+ (ACP agents can add arbitrary providers) folds into one
+// neutral "Other" series instead of growing the palette indefinitely.
+export const USAGE_CHART_COLORS_DARK: readonly string[] = ['#3987e5', '#d95926', '#199e70', '#c98500']
+export const USAGE_CHART_COLORS_LIGHT: readonly string[] = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100']
+export const USAGE_CHART_OTHER_COLOR_DARK = '#8e8d91'
+export const USAGE_CHART_OTHER_COLOR_LIGHT = '#6b7280'
+
+export interface UsageChartSeries {
+  /** The provider id for a dedicated series, or the literal `'other'` for the folded bucket. */
+  key: UsageProvider | 'other'
+  label: string
+  color: string
+  /** Providers folded into this series — one, unless `key === 'other'`. */
+  providers: UsageProvider[]
+}
+
+/**
+ * Assigns each provider that actually appears in `presentProviders` a chart
+ * series: the first 4 (by `USAGE_PROVIDERS` order) get a real colour, any
+ * rest fold into one "Other" series. Order of the returned array is the
+ * stacking/legend order.
+ */
+export function buildUsageChartSeries(presentProviders: readonly UsageProvider[], theme: 'dark' | 'light'): UsageChartSeries[] {
+  const colors = theme === 'dark' ? USAGE_CHART_COLORS_DARK : USAGE_CHART_COLORS_LIGHT
+  const otherColor = theme === 'dark' ? USAGE_CHART_OTHER_COLOR_DARK : USAGE_CHART_OTHER_COLOR_LIGHT
+  const present = new Set(presentProviders)
+  const ordered = USAGE_PROVIDERS.filter((p) => present.has(p))
+  const main = ordered.slice(0, 4)
+  const rest = ordered.slice(4)
+
+  const series: UsageChartSeries[] = main.map((provider, i) => ({
+    key: provider,
+    label: USAGE_PROVIDER_LABELS[provider],
+    color: colors[i],
+    providers: [provider]
+  }))
+  if (rest.length > 0) {
+    series.push({ key: 'other', label: 'Other', color: otherColor, providers: rest })
+  }
+  return series
+}
+
 export function isUsageProvider(value: unknown): value is UsageProvider {
   return typeof value === 'string' && (USAGE_PROVIDERS as readonly string[]).includes(value)
 }
@@ -316,6 +365,8 @@ export interface UsageModelRow extends UsageAggregate {
 export interface UsageDayRow extends UsageAggregate {
   /** Local calendar day, `YYYY-MM-DD`. */
   day: string
+  /** Token totals for that day, split by provider — the stacked tokens-per-day chart's bar segments. Token counts only (no cost): the chart shows cost once for the day's total, not per provider. Sorted by provider id. */
+  byProvider: Array<{ provider: UsageProvider; tokens: number }>
 }
 
 export interface UsageTaskRow extends UsageAggregate {

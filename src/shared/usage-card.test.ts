@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
+  buildUsageCardSummary,
   drawCard,
   drawLogo,
   drawTimes,
@@ -15,6 +16,7 @@ import {
   type UsageCardShape,
   type UsageCardTheme
 } from './usage-card'
+import type { UsageParallelismResponse } from './usage'
 
 // ── A lightweight mock Canvas 2D context ─────────────────────
 // This repo has no canvas-rendering test convention (no node-canvas
@@ -268,5 +270,59 @@ describe('privacy: no cost/task-title/repo/model field is reachable from the car
     const ctx = makeMockContext()
     const [W, H] = USAGE_CARD_SHAPES.wide
     expect(() => drawCard(ctx, W, H, summary, options)).not.toThrow()
+  })
+})
+
+// ── buildUsageCardSummary ────────────────────────────────────
+
+function makeParallelismResponse(overrides: Partial<UsageParallelismResponse['parallelism']> = {}): UsageParallelismResponse {
+  return {
+    periodDays: 30,
+    periodStartMs: 0,
+    periodEndMs: 1,
+    tasksShipped: 7,
+    countingFromMs: null,
+    parallelism: {
+      periodStartMs: 0,
+      periodEndMs: 1,
+      hasData: true,
+      totalRunMs: 6 * 60 * 60 * 1000,
+      wallMs: 5 * 60 * 60 * 1000,
+      screenTimeMs: 2 * 60 * 60 * 1000,
+      multiplier: 3,
+      peak: { count: 4, atMs: 500, day: '2026-01-01' },
+      peakDayLanes: [{ sessionId: 's1', taskId: 't1', agentId: 'a1', provider: 'claude-code', harnessInstanceId: null, segments: [{ startFrac: 0, endFrac: 1 }] }],
+      perDay: [],
+      ...overrides
+    }
+  }
+}
+
+describe('buildUsageCardSummary', () => {
+  it('maps a real response into the card summary', () => {
+    const { summary, emptyReason } = buildUsageCardSummary(makeParallelismResponse(), 10_000_000, 'Last 30 days')
+    expect(emptyReason).toBeNull()
+    expect(summary).not.toBeNull()
+    expect(summary!.multiplier).toBe(3)
+    expect(summary!.hours).toBe(6)
+    expect(summary!.wall).toBe(2)
+    expect(summary!.tasksShipped).toBe(7)
+    expect(summary!.tokens).toBe(10_000_000)
+    expect(summary!.peakDay).toEqual({ atMs: 500, peak: 4 })
+    expect(summary!.lanes).toEqual([{ segments: [{ startFrac: 0, endFrac: 1 }] }])
+  })
+
+  it('returns no-agent-data when there is no agent-run data at all', () => {
+    const response = makeParallelismResponse({ hasData: false, totalRunMs: 0, wallMs: 0, multiplier: null, peak: null, peakDayLanes: [] })
+    const { summary, emptyReason } = buildUsageCardSummary(response, 0, 'Last 30 days')
+    expect(summary).toBeNull()
+    expect(emptyReason).toBe('no-agent-data')
+  })
+
+  it('returns no-screen-time-data when agent data exists but the multiplier cannot be computed', () => {
+    const response = makeParallelismResponse({ hasData: true, multiplier: null, screenTimeMs: 0 })
+    const { summary, emptyReason } = buildUsageCardSummary(response, 0, 'Last 30 days')
+    expect(summary).toBeNull()
+    expect(emptyReason).toBe('no-screen-time-data')
   })
 })

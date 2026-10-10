@@ -20,7 +20,7 @@
  * check that enforces this.
  */
 
-import { formatMultiplier } from './usage'
+import { formatMultiplier, type UsageParallelismResponse } from './usage'
 
 // ── Data contract ────────────────────────────────────────────
 
@@ -366,4 +366,51 @@ export function renderToCanvas(canvas: HTMLCanvasElement, shape: UsageCardShape,
   if (!ctx) return
   ctx.setTransform(scale, 0, 0, scale, 0, 0)
   drawCard(ctx, W, H, summary, opts)
+}
+
+// ── Wiring the backend response into the card's narrow type ─────
+//
+// Pure and shared by the desktop hero/Share dialog and the mobile hero, so
+// both read the "ratio not computable yet" case the same way instead of
+// each inventing its own notion of "empty".
+
+/** Why `buildUsageCardSummary` returned null — lets callers phrase the empty state precisely instead of a single generic "no data" message. */
+export type UsageCardEmptyReason =
+  /** No agent-run interval in the period at all. */
+  | 'no-agent-data'
+  /** Agent-run data exists, but there's no screen-time data to divide by yet (e.g. focus tracking only just started, or every agent run happened while the app was never focused). */
+  | 'no-screen-time-data'
+
+export interface UsageCardBuildResult {
+  summary: UsageCardSummary | null
+  /** Set whenever `summary` is null. */
+  emptyReason: UsageCardEmptyReason | null
+}
+
+/**
+ * Maps the backend's `UsageParallelismResponse` (+ the token count, which
+ * comes from the existing token-usage summary, not this response) into the
+ * narrow `UsageCardSummary` the card is allowed to draw. Returns a null
+ * `summary` when the multiplier isn't computable — `drawCard` always needs a
+ * real number for the headline, so "no data yet" is handled by the caller
+ * (an empty-state UI) instead of being drawn.
+ */
+export function buildUsageCardSummary(response: UsageParallelismResponse, tokens: number, periodLabel: string): UsageCardBuildResult {
+  const p = response.parallelism
+  if (p.multiplier === null || !p.peak) {
+    return { summary: null, emptyReason: p.hasData ? 'no-screen-time-data' : 'no-agent-data' }
+  }
+  return {
+    summary: {
+      periodLabel,
+      multiplier: p.multiplier,
+      hours: p.totalRunMs / (60 * 60 * 1000),
+      wall: p.screenTimeMs / (60 * 60 * 1000),
+      peakDay: { atMs: p.peak.atMs, peak: p.peak.count },
+      tasksShipped: response.tasksShipped,
+      tokens,
+      lanes: p.peakDayLanes.map((lane) => ({ segments: lane.segments }))
+    },
+    emptyReason: null
+  }
 }
