@@ -257,7 +257,9 @@ describe('Agent CRUD', () => {
     const agent = db.createAgent(makeAgent({ name: 'My Agent' }))
     expect(agent).toBeDefined()
     expect(agent!.name).toBe('My Agent')
-    expect(agent!.config).toEqual({})
+    // New agents default to always-allow permissions; see the
+    // 'agent permission_mode' describe below for the full matrix.
+    expect(agent!.config).toEqual({ permission_mode: 'allow' })
     expect(agent!.is_default).toBe(false)
   })
 
@@ -283,6 +285,145 @@ describe('Agent CRUD', () => {
     const agent = db.createAgent(makeAgent())!
     expect(db.deleteAgent(agent.id)).toBe(true)
     expect(db.getAgent(agent.id)).toBeUndefined()
+  })
+})
+
+describe('agent permission_mode — always allow by default', () => {
+  /**
+   * Injects an in-memory DB and builds the real schema, so private seed/
+   * migration methods can run against exact rows.
+   */
+  function makeRawManager(withMigrations = false): { manager: DatabaseManager; rawDb: InstanceType<typeof RawDatabase> } {
+    const rawDb = new RawDatabase(':memory:')
+    rawDb.pragma('journal_mode = WAL')
+    rawDb.pragma('foreign_keys = ON')
+    const manager = new RealDatabaseManager()
+    ;(manager as unknown as { db: unknown }).db = rawDb
+    ;(manager as unknown as { createTables(): void }).createTables()
+    if (withMigrations) {
+      // The seed runs inside runMigrations — the fresh-install path
+      // (initialize() calls createTables() then runMigrations() when the
+      // stored schema version is behind).
+      ;(manager as unknown as { runMigrations(): void }).runMigrations()
+    }
+    return { manager, rawDb }
+  }
+
+  function insertRawAgent(
+    rawDb: InstanceType<typeof RawDatabase>,
+    id: string,
+    config: string,
+    isDefault = 0
+  ): void {
+    rawDb
+      .prepare(
+        'INSERT INTO agents (id, name, server_url, config, is_default, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(id, id, 'http://localhost:4096', config, isDefault, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+  }
+
+  function rawConfigById(
+    rawDb: InstanceType<typeof RawDatabase>
+  ): Map<string, { config: string; updated_at: string }> {
+    const rows = rawDb.prepare('SELECT id, config, updated_at FROM agents').all() as Array<{
+      id: string
+      config: string
+      updated_at: string
+    }>
+    return new Map(rows.map((r) => [r.id, { config: r.config, updated_at: r.updated_at }]))
+  }
+
+  it('seeds the Default Agent with permission_mode allow on a fresh install', () => {
+    const { manager, rawDb } = makeRawManager(true)
+    try {
+      const agents = manager.getAgents()
+      expect(agents).toHaveLength(1)
+      expect(agents[0].name).toBe('Default Agent')
+      expect(agents[0].is_default).toBe(true)
+      expect(agents[0].config.permission_mode).toBe('allow')
+    } finally {
+      rawDb.close()
+    }
+  })
+
+  it('createAgent fills a missing permission_mode with allow; explicit values win', () => {
+    const defaulted = db.createAgent(makeAgent({ name: 'No Mode', config: {} }))
+    expect(defaulted!.config.permission_mode).toBe('allow')
+
+    const explicitAsk = db.createAgent(makeAgent({ name: 'Ask', config: { permission_mode: 'ask' } }))
+    expect(explicitAsk!.config.permission_mode).toBe('ask')
+
+    const explicitAllow = db.createAgent(makeAgent({ name: 'Allow', config: { permission_mode: 'allow', model: 'm1' } }))
+    expect(explicitAllow!.config.permission_mode).toBe('allow')
+    expect(explicitAllow!.config.model).toBe('m1')
+  })
+
+  it('backfill sets allow only where permission_mode is absent (explicit ask/allow untouched)', () => {
+    const { manager, rawDb } = makeRawManager()
+    try {
+      insertRawAgent(rawDb, 'default-no-key', '{}', 1)
+      insertRawAgent(rawDb, 'no-key-with-other-fields', '{"model":"gpt-4","skill_ids":["s1"]}')
+      insertRawAgent(rawDb, 'explicit-ask', '{"permission_mode":"ask"}')
+      insertRawAgent(rawDb, 'explicit-allow', '{"permission_mode":"allow"}')
+
+      ;(manager as unknown as { migrateAgentPermissionDefaults(): void }).migrateAgentPermissionDefaults()
+
+      const rows = rawConfigById(rawDb)
+      expect(JSON.parse(rows.get('default-no-key')!.config)).toEqual({ permission_mode: 'allow' })
+      expect(JSON.parse(rows.get('no-key-with-other-fields')!.config)).toEqual({
+        model: 'gpt-4',
+        skill_ids: ['s1'],
+        permission_mode: 'allow'
+      })
+      // "never changed" cannot be told apart from "user chose ask" — the key
+      // being present means the row is left byte-identical.
+      expect(rows.get('explicit-ask')!.config).toBe('{"permission_mode":"ask"}')
+      expect(rows.get('explicit-allow')!.config).toBe('{"permission_mode":"allow"}')
+    } finally {
+      rawDb.close()
+    }
+  })
+
+  it('backfill is JSON-safe: invalid or non-object configs are skipped untouched', () => {
+    const { manager, rawDb } = makeRawManager()
+    try {
+      insertRawAgent(rawDb, 'invalid-json', 'not-json{')
+      insertRawAgent(rawDb, 'array-config', '[]')
+      insertRawAgent(rawDb, 'string-config', '"hello"')
+      insertRawAgent(rawDb, 'null-config', 'null')
+
+      expect(() =>
+        (manager as unknown as { migrateAgentPermissionDefaults(): void }).migrateAgentPermissionDefaults()
+      ).not.toThrow()
+
+      const rows = rawConfigById(rawDb)
+      expect(rows.get('invalid-json')!.config).toBe('not-json{')
+      expect(rows.get('array-config')!.config).toBe('[]')
+      expect(rows.get('string-config')!.config).toBe('"hello"')
+      expect(rows.get('null-config')!.config).toBe('null')
+    } finally {
+      rawDb.close()
+    }
+  })
+
+  it('backfill is idempotent — a second pass rewrites nothing', () => {
+    const { manager, rawDb } = makeRawManager()
+    try {
+      insertRawAgent(rawDb, 'default-no-key', '{}', 1)
+      insertRawAgent(rawDb, 'explicit-ask', '{"permission_mode":"ask"}')
+      insertRawAgent(rawDb, 'invalid-json', 'not-json{')
+
+      const migrate = () => (manager as unknown as { migrateAgentPermissionDefaults(): void }).migrateAgentPermissionDefaults()
+      migrate()
+      const afterFirst = rawConfigById(rawDb)
+      migrate()
+
+      const afterSecond = rawConfigById(rawDb)
+      expect([...afterSecond.entries()]).toEqual([...afterFirst.entries()])
+      expect(JSON.parse(afterSecond.get('default-no-key')!.config)).toEqual({ permission_mode: 'allow' })
+    } finally {
+      rawDb.close()
+    }
   })
 })
 
