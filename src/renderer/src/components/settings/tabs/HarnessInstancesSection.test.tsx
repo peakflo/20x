@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { HarnessInstanceView } from '@shared/harness-instances'
 
@@ -45,6 +45,15 @@ beforeEach(() => {
   remove.mockReset().mockResolvedValue(true)
 })
 
+afterEach(() => cleanup())
+
+async function openAddAccountDialog(): Promise<HTMLElement> {
+  render(<HarnessInstancesSection />)
+  await screen.findByTestId('harness-instance-hi_work')
+  fireEvent.click(screen.getByRole('button', { name: 'Add account' }))
+  return screen.findByRole('dialog')
+}
+
 describe('HarnessInstancesSection', () => {
   it('lists each account with its sign-in commands for POSIX and PowerShell', async () => {
     render(<HarnessInstancesSection />)
@@ -65,19 +74,6 @@ describe('HarnessInstancesSection', () => {
     expect(within(separate).getByText('CLAUDE_CONFIG_DIR="/accounts/claude-personal" claude /login')).toBeTruthy()
   })
 
-  it('adds an account and reloads the list', async () => {
-    render(<HarnessInstancesSection />)
-    await screen.findByTestId('harness-instance-hi_work')
-
-    fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'codex' } })
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Side project' } })
-    fireEvent.change(screen.getByLabelText('Home folder'), { target: { value: '~/.codex-side' } })
-    fireEvent.click(screen.getByRole('button', { name: /add account/i }))
-
-    await waitFor(() => expect(create).toHaveBeenCalledWith({ harness_type: 'codex', label: 'Side project', home_path: '~/.codex-side' }))
-    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
-  })
-
   it('renames an account', async () => {
     render(<HarnessInstancesSection />)
     await screen.findByTestId('harness-instance-hi_work')
@@ -96,5 +92,114 @@ describe('HarnessInstancesSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Remove Codex · Work' }))
 
     await waitFor(() => expect(remove).toHaveBeenCalledWith('hi_work'))
+  })
+
+  it('does not render the add-account form until the button is clicked', async () => {
+    render(<HarnessInstancesSection />)
+    await screen.findByTestId('harness-instance-hi_work')
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Harness')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Home folder')).not.toBeInTheDocument()
+  })
+
+  it('opens the add-account modal from the header button, focused on Name', async () => {
+    const dialog = await openAddAccountDialog()
+
+    expect(within(dialog).getByRole('heading', { name: 'Add account' })).toBeInTheDocument()
+    expect(
+      within(dialog).getByText('Add another Claude Code or Codex subscription login. Agents pick it in their harness dropdown.')
+    ).toBeInTheDocument()
+    await waitFor(() => expect(within(dialog).getByLabelText('Name')).toHaveFocus())
+  })
+
+  it('suggests a home folder from the harness and name until edited by hand', async () => {
+    const dialog = await openAddAccountDialog()
+
+    const home = within(dialog).getByLabelText('Home folder') as HTMLInputElement
+    expect(home.value).toBe('~/.codex')
+
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Side Project!' } })
+    expect(home.value).toBe('~/.codex-side-project')
+
+    fireEvent.change(within(dialog).getByLabelText('Harness'), { target: { value: 'claude-code' } })
+    expect(home.value).toBe('~/.claude-side-project')
+
+    fireEvent.change(home, { target: { value: '~/custom-path' } })
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Side Project 2' } })
+    expect(home.value).toBe('~/custom-path')
+  })
+
+  it('disables Add account while the name or home folder is empty', async () => {
+    const dialog = await openAddAccountDialog()
+    const submit = within(dialog).getByRole('button', { name: 'Add account' })
+
+    expect(submit).toBeDisabled()
+
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Side project' } })
+    expect(submit).not.toBeDisabled()
+
+    fireEvent.change(within(dialog).getByLabelText('Home folder'), { target: { value: '' } })
+    expect(submit).toBeDisabled()
+  })
+
+  it('creates an account, closes the modal, refreshes the list and highlights the new row', async () => {
+    const created: HarnessInstanceView = {
+      ...work,
+      id: 'hi_new',
+      label: 'Side project',
+      home_path: '~/.codex-side-project'
+    }
+    list.mockReset()
+    list.mockResolvedValueOnce([work, blocked])
+    list.mockResolvedValueOnce([work, blocked, created])
+    create.mockReset().mockResolvedValue(created)
+
+    const dialog = await openAddAccountDialog()
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Side project' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add account' }))
+
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({
+        harness_type: 'codex',
+        label: 'Side project',
+        home_path: '~/.codex-side-project'
+      })
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+
+    const row = await screen.findByTestId('harness-instance-hi_new')
+    expect(row).toHaveAttribute('data-highlighted', 'true')
+  })
+
+  it('shows a server-side error inline and keeps the modal open', async () => {
+    create.mockReset().mockRejectedValue(new Error('home_path already in use'))
+
+    const dialog = await openAddAccountDialog()
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Side project' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add account' }))
+
+    await waitFor(() => expect(within(dialog).getByText('home_path already in use')).toBeInTheDocument())
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('closes without creating when Cancel is clicked', async () => {
+    const dialog = await openAddAccountDialog()
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Side project' } })
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('closes without creating on Escape', async () => {
+    const dialog = await openAddAccountDialog()
+
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(create).not.toHaveBeenCalled()
   })
 })

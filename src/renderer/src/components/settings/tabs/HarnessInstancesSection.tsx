@@ -1,23 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Copy, Pencil, Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
-import { Label } from '@/components/ui/Label'
 import { SettingsSection } from '../SettingsSection'
+import { AddAccountDialog } from './AddAccountDialog'
 import { harnessInstanceApi } from '@/lib/ipc-client'
 import { useHarnessInstanceStore } from '@/stores/harness-instance-store'
 import {
   harnessInstanceDisplayName,
   harnessTypeLabel,
   signInCommand,
-  type HarnessInstanceView,
-  type HarnessType
+  type HarnessInstanceView
 } from '@shared/harness-instances'
-
-const HARNESS_OPTIONS: Array<{ value: HarnessType; label: string }> = [
-  { value: 'claude-code', label: 'Claude Code' },
-  { value: 'codex', label: 'Codex' }
-]
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -44,11 +38,26 @@ function SignInCommand({ shell, command }: { shell: string; command: string }) {
   )
 }
 
-function InstanceRow({ instance, onChanged }: { instance: HarnessInstanceView; onChanged: () => void }) {
+function InstanceRow({
+  instance,
+  onChanged,
+  highlighted
+}: {
+  instance: HarnessInstanceView
+  onChanged: () => void
+  highlighted?: boolean
+}) {
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState(instance.label)
   const [error, setError] = useState<string | null>(null)
   const name = harnessInstanceDisplayName(instance.harness_type, instance.label)
+  const rowRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (highlighted) {
+      rowRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    }
+  }, [highlighted])
 
   const save = async (): Promise<void> => {
     setError(null)
@@ -72,7 +81,14 @@ function InstanceRow({ instance, onChanged }: { instance: HarnessInstanceView; o
   }
 
   return (
-    <div className="rounded-lg border border-border bg-card px-4 py-3 space-y-2" data-testid={`harness-instance-${instance.id}`}>
+    <div
+      ref={rowRef}
+      className={`rounded-lg border px-4 py-3 space-y-2 transition-colors ${
+        highlighted ? 'border-primary ring-2 ring-primary/40 bg-primary/5' : 'border-border bg-card'
+      }`}
+      data-testid={`harness-instance-${instance.id}`}
+      {...(highlighted ? { 'data-highlighted': 'true' } : {})}
+    >
       <div className="flex items-center gap-2 min-w-0">
         {editing ? (
           <>
@@ -130,27 +146,21 @@ function InstanceRow({ instance, onChanged }: { instance: HarnessInstanceView; o
 export function HarnessInstancesSection() {
   const instances = useHarnessInstanceStore((s) => s.instances)
   const load = useHarnessInstanceStore((s) => s.load)
-  const [harness, setHarness] = useState<HarnessType>('codex')
-  const [label, setLabel] = useState('')
-  const [homePath, setHomePath] = useState('')
-  const [adding, setAdding] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [highlightId, setHighlightId] = useState<string | null>(null)
 
   useEffect(() => { void load() }, [load])
 
-  const add = async (): Promise<void> => {
-    setError(null)
-    setAdding(true)
-    try {
-      await harnessInstanceApi.create({ harness_type: harness, label, home_path: homePath })
-      setLabel('')
-      setHomePath('')
-      await load()
-    } catch (err) {
-      setError(errorMessage(err))
-    } finally {
-      setAdding(false)
-    }
+  // Clear the highlight after a bit so it reads as a one-time "just added" cue.
+  useEffect(() => {
+    if (!highlightId) return
+    const timeout = setTimeout(() => setHighlightId(null), 2500)
+    return () => clearTimeout(timeout)
+  }, [highlightId])
+
+  const handleCreated = (created: HarnessInstanceView): void => {
+    void load()
+    setHighlightId(created.id)
   }
 
   return (
@@ -158,6 +168,12 @@ export function HarnessInstancesSection() {
       title="Accounts"
       description="Subscription logins of Claude Code and Codex. An agent picks one of these in its harness dropdown. Sign in once per account with the command shown."
     >
+      <div className="flex items-center justify-end">
+        <Button size="sm" onClick={() => setDialogOpen(true)}>
+          <Plus className="h-3.5 w-3.5" />
+          Add account
+        </Button>
+      </div>
       <div className="space-y-3">
         {instances.length === 0 && (
           <p className="text-xs text-muted-foreground">
@@ -165,48 +181,16 @@ export function HarnessInstancesSection() {
           </p>
         )}
         {instances.map((instance) => (
-          <InstanceRow key={instance.id} instance={instance} onChanged={() => void load()} />
+          <InstanceRow
+            key={instance.id}
+            instance={instance}
+            onChanged={() => void load()}
+            highlighted={instance.id === highlightId}
+          />
         ))}
-
-        <div className="rounded-lg border border-dashed border-border p-4 space-y-3">
-          <p className="text-xs font-medium">Add an account</p>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="harness-instance-harness">Harness</Label>
-              <select
-                id="harness-instance-harness"
-                value={harness}
-                onChange={(e) => setHarness(e.target.value as HarnessType)}
-                className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
-              >
-                {HARNESS_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="harness-instance-label">Name</Label>
-              <Input id="harness-instance-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Work" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="harness-instance-home">Home folder</Label>
-              <Input
-                id="harness-instance-home"
-                value={homePath}
-                onChange={(e) => setHomePath(e.target.value)}
-                placeholder={harness === 'codex' ? '~/.codex-work' : '~/.claude-work'}
-              />
-            </div>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            {error ? <p className="text-xs text-destructive">{error}</p> : <span />}
-            <Button size="sm" onClick={() => void add()} disabled={adding || !label.trim() || !homePath.trim()}>
-              <Plus className="h-3.5 w-3.5" />
-              Add account
-            </Button>
-          </div>
-        </div>
       </div>
+
+      <AddAccountDialog open={dialogOpen} onOpenChange={setDialogOpen} onCreated={handleCreated} />
     </SettingsSection>
   )
 }
