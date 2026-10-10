@@ -27,8 +27,8 @@ import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, wr
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
 import { UsageTracker, type UsageLimitsProbeTarget } from './usage/usage-tracker'
-import { agentInstanceId, harnessInstanceDisplayName, harnessTypeLabel, harnessTypeOf, defaultHarnessInstanceId, isDefaultHarnessInstanceId, isHarnessType, type HarnessInstanceView, type HarnessType } from '../shared/harness-instances'
-import { instanceHomeError, instanceHomeFor, linkSharedHistory, normalizeHomePath, realHomeFor } from './harness-instances'
+import { agentInstanceId, harnessInstanceDisplayName, harnessTypeLabel, harnessTypeOf, defaultHarnessInstanceId, isDefaultHarnessInstanceId, isHarnessType, type DetectedHarnessCandidate, type HarnessInstanceView, type HarnessType } from '../shared/harness-instances'
+import { detectHarnessInstanceCandidates, instanceHomeError, instanceHomeFor, linkSharedHistory, normalizeHomePath, realHomeFor } from './harness-instances'
 import { CURSOR_KEYCHAIN_ACCESS_SETTING } from './usage/cursor-limits'
 import { UsageLimitRecoveryScheduler, UsageLimitRecoveryStore } from './usage/usage-limit-recovery'
 import {
@@ -1083,6 +1083,19 @@ export class AgentManager extends EventEmitter {
 
   listHarnessInstances(): HarnessInstanceView[] {
     return this.db.listHarnessInstances().map((instance) => this.toInstanceView(instance))
+  }
+
+  /**
+   * Folders next to the user's home directory that already hold a login for
+   * this harness (checked by its credential file) and are not yet a stored
+   * instance. Surfaced in the "Add account" dialog so a login made outside
+   * 20x (e.g. `CODEX_HOME=~/.codex_work codex login` in a terminal) can be
+   * picked instead of retyping its path.
+   */
+  detectHarnessInstanceCandidates(harness: string): DetectedHarnessCandidate[] {
+    if (!isHarnessType(harness)) return []
+    const existingHomePaths = this.db.listHarnessInstances().map((instance) => instance.home_path)
+    return detectHarnessInstanceCandidates(harness, { existingHomePaths })
   }
 
   createHarnessInstance(data: CreateHarnessInstanceData): HarnessInstanceView {

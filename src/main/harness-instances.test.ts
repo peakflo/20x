@@ -3,6 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSy
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
+  detectHarnessInstanceCandidates,
   directoryLinkType,
   instanceHomeError,
   instanceHomeFor,
@@ -251,5 +252,76 @@ describe('instanceHomeError', () => {
   it('applies the same rules to Claude Code', () => {
     expect(check('/home/u/.claude', 'claude-code')).toMatch(/default home/)
     expect(check('/home/u/.claude-work', 'claude-code')).toBeNull()
+  })
+})
+
+describe('detecting already-signed-in accounts', () => {
+  it('finds a Codex sibling folder with its own auth.json', () => {
+    mkdirSync(join(root, '.codex'), { recursive: true })
+    mkdirSync(join(root, '.codex_work'), { recursive: true })
+    writeFileSync(join(root, '.codex_work', 'auth.json'), '{}')
+
+    const found = detectHarnessInstanceCandidates('codex', { home: root })
+
+    expect(found).toEqual([{ home_path: join(root, '.codex_work'), suggested_label: 'Work' }])
+  })
+
+  it('finds a Claude Code sibling folder with its own .credentials.json', () => {
+    mkdirSync(join(root, '.claude'), { recursive: true })
+    mkdirSync(join(root, '.claude-personal'), { recursive: true })
+    writeFileSync(join(root, '.claude-personal', '.credentials.json'), '{}')
+
+    const found = detectHarnessInstanceCandidates('claude-code', { home: root })
+
+    expect(found).toEqual([{ home_path: join(root, '.claude-personal'), suggested_label: 'Personal' }])
+  })
+
+  it('ignores a folder with no credential file', () => {
+    mkdirSync(join(root, '.codex_empty'), { recursive: true })
+
+    expect(detectHarnessInstanceCandidates('codex', { home: root })).toEqual([])
+  })
+
+  it('does not offer the current default home of the harness', () => {
+    mkdirSync(join(root, '.codex'), { recursive: true })
+    writeFileSync(join(root, '.codex', 'auth.json'), '{}')
+
+    expect(detectHarnessInstanceCandidates('codex', { home: root })).toEqual([])
+  })
+
+  it('does not re-offer a folder that is already a stored instance', () => {
+    mkdirSync(join(root, '.codex_work'), { recursive: true })
+    writeFileSync(join(root, '.codex_work', 'auth.json'), '{}')
+
+    const found = detectHarnessInstanceCandidates('codex', {
+      home: root,
+      existingHomePaths: [join(root, '.codex_work')]
+    })
+
+    expect(found).toEqual([])
+  })
+
+  it('skips a folder that is a symlink (already-linked shared history, not a separate login)', () => {
+    mkdirSync(join(root, '.codex'), { recursive: true })
+    const target = join(root, 'shadow-target')
+    mkdirSync(target, { recursive: true })
+    writeFileSync(join(target, 'auth.json'), '{}')
+    symlinkSync(target, join(root, '.codex_linked'), directoryLinkType(process.platform))
+
+    expect(detectHarnessInstanceCandidates('codex', { home: root })).toEqual([])
+  })
+
+  it('honours an inherited CODEX_HOME when deciding which folder is the default', () => {
+    mkdirSync(join(root, '.codex'), { recursive: true })
+    writeFileSync(join(root, '.codex', 'auth.json'), '{}')
+
+    // With CODEX_HOME pointing elsewhere, the on-disk ".codex" is no longer the
+    // default home, so a login sitting there becomes a real candidate.
+    const found = detectHarnessInstanceCandidates('codex', {
+      home: root,
+      env: { CODEX_HOME: join(root, 'elsewhere') }
+    })
+
+    expect(found).toEqual([{ home_path: join(root, '.codex'), suggested_label: 'Detected' }])
   })
 })

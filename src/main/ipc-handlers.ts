@@ -498,6 +498,10 @@ export function registerIpcHandlers(
     return agentManager.deleteHarnessInstance(id)
   })
 
+  ipcMain.handle('harnessInstance:detectCandidates', (_, harness: string) => {
+    return agentManager.detectHarnessInstanceCandidates(harness)
+  })
+
   // Agent Session handlers
   ipcMain.handle('agentSession:start', async (_, agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => {
     agentManager.noteUserTaskActivity(taskId)

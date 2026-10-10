@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
 import { harnessInstanceApi } from '@/lib/ipc-client'
-import { suggestHarnessInstanceHome, type HarnessInstanceView, type HarnessType } from '@shared/harness-instances'
+import { suggestHarnessInstanceHome, type DetectedHarnessCandidate, type HarnessInstanceView, type HarnessType } from '@shared/harness-instances'
 
 const HARNESS_OPTIONS: Array<{ value: HarnessType; label: string }> = [
   { value: 'claude-code', label: 'Claude Code' },
@@ -33,6 +33,7 @@ export function AddAccountDialog({ open, onOpenChange, onCreated }: AddAccountDi
   const [homeEdited, setHomeEdited] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [candidates, setCandidates] = useState<DetectedHarnessCandidate[]>([])
 
   // Reset to a clean slate every time the dialog opens, including after a
   // prior successful add (so the form is ready for the next one).
@@ -44,6 +45,7 @@ export function AddAccountDialog({ open, onOpenChange, onCreated }: AddAccountDi
       setHomeEdited(false)
       setSaving(false)
       setError(null)
+      setCandidates([])
     }
   }, [open])
 
@@ -54,6 +56,25 @@ export function AddAccountDialog({ open, onOpenChange, onCreated }: AddAccountDi
       setHomePath(suggestHarnessInstanceHome(harness, name))
     }
   }, [harness, name, homeEdited])
+
+  // Offer folders that already have a login for the chosen harness (e.g. a
+  // `CODEX_HOME=~/.codex_work codex login` run outside 20x), so the user can
+  // pick one instead of retyping its path.
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    harnessInstanceApi
+      .detectCandidates(harness)
+      .then((found) => { if (!cancelled) setCandidates(found) })
+      .catch(() => { if (!cancelled) setCandidates([]) })
+    return () => { cancelled = true }
+  }, [open, harness])
+
+  const pickCandidate = (candidate: DetectedHarnessCandidate): void => {
+    setName(candidate.suggested_label)
+    setHomePath(candidate.home_path)
+    setHomeEdited(true)
+  }
 
   const canSubmit = name.trim() !== '' && homePath.trim() !== '' && !saving
 
@@ -101,6 +122,28 @@ export function AddAccountDialog({ open, onOpenChange, onCreated }: AddAccountDi
                 ))}
               </select>
             </div>
+            {candidates.length > 0 && (
+              <div className="space-y-1.5">
+                <Label>Detected on this machine</Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {candidates.map((candidate) => (
+                    <button
+                      key={candidate.home_path}
+                      type="button"
+                      onClick={() => pickCandidate(candidate)}
+                      className="rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs hover:bg-muted cursor-pointer transition-colors"
+                      title={candidate.home_path}
+                    >
+                      {candidate.suggested_label}
+                      <span className="text-muted-foreground"> · {candidate.home_path}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Already signed in outside 20x. Pick one to fill in its name and folder.
+                </p>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="add-account-name">Name</Label>
               <Input
