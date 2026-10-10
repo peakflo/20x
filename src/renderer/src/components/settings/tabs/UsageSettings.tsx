@@ -163,7 +163,7 @@ export function UsageSettings() {
       // formatMultiplier already includes the "×" for the capped ">1000×" case — every other branch returns the bare number.
       records.push(['Agents in parallel, on average', multiplierText.endsWith('×') ? multiplierText : `${multiplierText}×`])
     }
-    if (cardSummary.hours !== null && cardSummary.wall !== null) {
+    if (cardSummary.wall !== null) {
       records.push(['Agent work done', `${Math.round(cardSummary.hours).toLocaleString('en-US')} hours in ${Math.round(cardSummary.wall).toLocaleString('en-US')}`])
     }
   }

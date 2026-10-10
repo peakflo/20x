@@ -113,9 +113,16 @@ export interface UsageCardSummary {
    * `UsageCardEmptyReason`).
    */
   multiplier: number | null
-  /** Live total agent run time in the period, in hours — the multiplier's numerator. Null exactly when `multiplier` is null. */
-  hours: number | null
-  /** The user's own screen time in the app in the period, in hours — how long 20x was actually on screen. The multiplier's denominator ("N hours of agent work in M hours"). Null exactly when `multiplier` is null. */
+  /**
+   * Live total agent run time in the period, in hours. Unlike `multiplier`/
+   * `wall`, this is NOT gated behind the ratio's evidence threshold — it's
+   * a plain sum (the multiplier's numerator on its own, same bucket as
+   * `tasksShipped`/`tokens`), always real whenever there's any agent-run
+   * data. Only the full "N hours of agent work in M hours" SENTENCE (which
+   * needs `wall` too) and the multiplier digit go into the pending state.
+   */
+  hours: number
+  /** The user's own screen time in the app in the period, in hours — how long 20x was actually on screen. The multiplier's denominator ("N hours of agent work in M hours"). Null when the ratio isn't ready (exactly when `multiplier` is null) — this is what actually gates the sentence, not `hours`. */
   wall: number | null
   /**
    * Peak concurrency + which day, computed from ALL agent-run data (live
@@ -208,7 +215,7 @@ function fmtTokens(value: number): string {
 
 /** The card's own `aria-label`/alt text — ports the mock's `renderHero` aria-label line. */
 export function usageCardAriaLabel(summary: UsageCardSummary): string {
-  const ratio = summary.multiplier !== null && summary.hours !== null && summary.wall !== null
+  const ratio = summary.multiplier !== null && summary.wall !== null
     ? `${Math.round(summary.multiplier)} agents in parallel on average. ${fmtInt(summary.hours)} hours of agent work in ${fmtInt(summary.wall)} hours. `
     : 'Multiplier still gathering evidence. '
   return `${summary.periodLabel}: ${ratio}`
@@ -269,14 +276,30 @@ export function drawTimes(ctx: UsageCardContext2D, x: number, y: number, size: n
  * punctuation glyph in every weight on every platform, and a missing glyph
  * renders as a "tofu" box instead of a dash. A hand-drawn stroke has no
  * such dependency.
+ *
+ * `y` is the NUMERAL BASELINE (same meaning as `ctx.fillText(mult, x,
+ * baseline)` at the real-number call site) — the stroke's bottom edge sits
+ * at `y`, matching where a real digit's visual mass sits relative to its
+ * own baseline.
+ *
+ * `thickness` is an explicit, separate parameter from `width` (not a fixed
+ * fraction of it) specifically so the call site can make this chunky
+ * enough to occupy a comparable vertical footprint to the real numeral it
+ * replaces — a thin stroke sized like an underline still reads as "a small
+ * disconnected mark floating in a mostly-empty number-sized box", even
+ * once its bottom edge is correctly baseline-anchored (an earlier version
+ * learned this the hard way: baseline-anchoring alone fixed the gap to the
+ * sentence below but left most of the numeral's usual height empty above
+ * it, which still read as broken).
  */
-export function drawDash(ctx: UsageCardContext2D, x: number, y: number, width: number, color: string): void {
+export function drawDash(ctx: UsageCardContext2D, x: number, y: number, width: number, thickness: number, color: string): void {
   ctx.save()
   ctx.strokeStyle = color
-  ctx.lineWidth = width * 0.2
+  ctx.lineWidth = thickness
   ctx.lineCap = 'round'
+  const cy = y - thickness / 2
   ctx.beginPath()
-  ctx.moveTo(x, y); ctx.lineTo(x + width, y)
+  ctx.moveTo(x, cy); ctx.lineTo(x + width, cy)
   ctx.stroke()
   ctx.restore()
 }
@@ -419,9 +442,11 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
   if (summary.multiplier === null) {
     // Ratio not ready yet (not enough live evidence, or no screen-time
     // data) — a bespoke dash, not a font glyph (see drawDash), where the
-    // number would otherwise go. The rest of the card (calendar/peak/
-    // tasks/tokens) still draws normally around it.
-    drawDash(ctx, pad, baseline - numSize * 0.33, numSize * 0.62, t.ink)
+    // number would otherwise go, sized and baseline-anchored like the real
+    // numeral it replaces so the sentence/caption/calendar below sit at
+    // their normal distances either way. The rest of the card (calendar/
+    // peak/tasks/tokens) still draws normally around it.
+    drawDash(ctx, pad, baseline, numSize * 0.9, numSize * 0.5, t.ink)
   } else {
     const mult = formatMultiplier(summary.multiplier)
     const isCapped = mult.endsWith('×')
@@ -439,9 +464,10 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
     }
   }
 
-  // The sentence under it — a placeholder when the ratio isn't ready yet.
+  // The sentence under it — needs BOTH hours and wall, so `wall === null`
+  // alone (not `hours`, which is always real) is what gates the placeholder.
   const leftW = wide ? 640 : W - pad * 2
-  const line1 = summary.hours !== null && summary.wall !== null
+  const line1 = summary.wall !== null
     ? `${fmtInt(summary.hours)} hours of agent work in ${fmtInt(summary.wall)} hours`
     : 'Still learning your screen time'
   const s1 = fitText(ctx, line1, leftW, wide ? 30 : 40, 600, USAGE_CARD_SANS_FONT)
@@ -450,17 +476,12 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
   const sentenceY = baseline + (wide ? 50 : 72)
   ctx.fillText(line1, pad, sentenceY)
 
-  // Stats — "agent hours" mirrors the sentence's own placeholder (same
-  // underlying `hours` field) so the card never shows a real-looking "0"
-  // right next to "Still learning your screen time". Uses a plain ASCII
-  // hyphen, not an em dash — this string goes through the generic stats
-  // loop's `fillText` below, not a bespoke stroke like `drawDash`, and a
-  // hyphen is virtually guaranteed to be in every font's basic Latin
-  // block (unlike an em dash, which some system "rounded" display faces
-  // omit — see `drawDash`'s docstring for where that bit us).
+  // Stats — "agent hours" is always a real number (see UsageCardSummary.hours's
+  // doc comment): it's a plain sum, not gated behind the ratio like the
+  // sentence above it is.
   const stats: Array<[string, string]> = [
     [String(summary.peakDay.peak), 'agents at peak'],
-    [summary.hours !== null ? fmtInt(summary.hours) : '-', 'agent hours'],
+    [fmtInt(summary.hours), 'agent hours'],
     [fmtInt(summary.tasksShipped), 'tasks shipped'],
     [fmtTokens(summary.tokens), 'tokens']
   ]
@@ -659,6 +680,31 @@ const MIN_EVIDENCE_RUN_MS = 60 * 60 * 1000 // 1 hour
  * aggregate, not a ratio, and is always populated whenever there's any
  * underlying data, live or backfilled.
  */
+/**
+ * `perDay` should always have exactly one entry per calendar day in the
+ * period (see usage-parallelism.ts's `buildPerDay` — its day-enumeration
+ * loop is period-bounds-driven, not data-driven, so it stays dense even
+ * when every day is empty). This is a defensive backstop in case it's ever
+ * shorter than the period actually is: the column layout's day COUNT must
+ * never silently shrink to however many days happen to have data (that's
+ * exactly the bug this guards against — a GitHub-style calendar with 1
+ * column instead of 7 reads as broken, not "quiet period"). Extends
+ * backward from the first known day, in the same day-key format `perDay`
+ * already uses, using plain UTC-midnight date arithmetic — consistent with
+ * how `buildCalendarGrid` already treats these keys (see its own comment:
+ * resolved local-calendar-day keys are safe to parse as UTC midnight for
+ * pure date arithmetic, since that's not a timezone conversion).
+ */
+function ensureDenseDayScaffold(perDay: Array<{ day: string }>, expectedDays: number): Array<{ day: string }> {
+  if (perDay.length >= expectedDays || perDay.length === 0) return perDay
+  const missing = expectedDays - perDay.length
+  const anchorMs = Date.parse(`${perDay[0].day}T00:00:00Z`)
+  const prefix = Array.from({ length: missing }, (_, i) => ({
+    day: new Date(anchorMs - (missing - i) * 86_400_000).toISOString().slice(0, 10)
+  }))
+  return [...prefix, ...perDay]
+}
+
 export function buildUsageCardSummary(response: UsageParallelismResponse, byDay: UsageDayRow[], tokens: number, periodLabel: string): UsageCardBuildResult {
   const p = response.parallelism
   if (!p.hasData || !p.peak) {
@@ -675,16 +721,18 @@ export function buildUsageCardSummary(response: UsageParallelismResponse, byDay:
   // still sourcing every value from the same place the tokens-per-day
   // chart does.
   const tokensByDay = new Map(byDay.map((d) => [d.day, totalTokens(d)]))
+  const dayScaffold = ensureDenseDayScaffold(p.perDay, response.periodDays)
   return {
     summary: {
       periodLabel,
       multiplier: ratioReady ? p.multiplier : null,
-      hours: ratioReady ? p.totalRunMs / (60 * 60 * 1000) : null,
+      // Always real — a plain sum, not gated behind ratioReady. See the field's own doc comment.
+      hours: p.totalRunMs / (60 * 60 * 1000),
       wall: ratioReady ? p.screenTimeMs / (60 * 60 * 1000) : null,
       peakDay: { atMs: p.peak.atMs, peak: p.peak.count },
       tasksShipped: response.tasksShipped,
       tokens,
-      calendar: p.perDay.map((d) => ({ day: d.day, tokens: tokensByDay.get(d.day) ?? 0 }))
+      calendar: dayScaffold.map((d) => ({ day: d.day, tokens: tokensByDay.get(d.day) ?? 0 }))
     },
     emptyReason: null
   }
