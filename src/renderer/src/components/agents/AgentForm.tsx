@@ -367,41 +367,6 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         />
       </div>
 
-      {/* Only show Server URL for OpenCode */}
-      {codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.CODEX && codingAgent !== CodingAgentType.CURSOR && codingAgent !== CodingAgentType.ACP && (
-        <div className="space-y-1.5">
-          <Label htmlFor="agent-url">Server URL</Label>
-          <Input
-            id="agent-url"
-            value={serverUrl}
-            onChange={(e) => setServerUrl(e.target.value)}
-            placeholder="http://localhost:4096"
-          />
-        </div>
-      )}
-
-      {/* Show info for CLI-based agents */}
-      {codingAgent === CodingAgentType.CLAUDE_CODE && (
-        <p className="text-sm text-muted-foreground">
-          Claude Code runs locally via CLI and doesn't require a server URL
-        </p>
-      )}
-      {codingAgent === CodingAgentType.CODEX && (
-        <p className="text-sm text-muted-foreground">
-          Codex runs locally via CLI and doesn't require a server URL
-        </p>
-      )}
-      {codingAgent === CodingAgentType.CURSOR && (
-        <p className="text-sm text-muted-foreground">
-          Cursor runs locally via CLI and doesn't require a server URL
-        </p>
-      )}
-      {codingAgent === CodingAgentType.ACP && (
-        <p className="text-sm text-muted-foreground">
-          Runs the selected ACP (Agent Client Protocol) agent locally and doesn't require a server URL
-        </p>
-      )}
-
       <div className="space-y-1.5">
         <Label htmlFor="coding-agent">Coding Agent</Label>
         <select
@@ -448,6 +413,23 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           </p>
         )}
       </div>
+
+      {/* Every other harness runs locally (CLI spawn or in-process SDK/ACP
+          client) — only OpenCode talks to a real HTTP server the user
+          configures. serverUrl still defaults to OpenCode's placeholder
+          even when hidden, so this field is the only thing gating whether
+          that default is ever actually used. */}
+      {(codingAgent === CodingAgentType.OPENCODE || codingAgent === '') && (
+        <div className="space-y-1.5">
+          <Label htmlFor="agent-url">Server URL</Label>
+          <Input
+            id="agent-url"
+            value={serverUrl}
+            onChange={(e) => setServerUrl(e.target.value)}
+            placeholder="http://localhost:4096"
+          />
+        </div>
+      )}
 
       {(codingAgent === CodingAgentType.OPENCODE || codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX || codingAgent === CodingAgentType.CURSOR || codingAgent === CodingAgentType.PI) && (
         <>
