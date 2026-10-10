@@ -45,6 +45,7 @@ const summary: UsageSummary = {
   byProvider: [],
   byModel: [],
   byDay: [],
+  byDayHour: [],
   topTasks: []
 }
 

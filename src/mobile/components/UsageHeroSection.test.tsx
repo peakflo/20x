@@ -33,7 +33,16 @@ const aggregate = {
   cacheSavingsUsd: null
 }
 
-const summary: UsageSummary = { sinceMs: 0, untilMs: 1, totals: aggregate, byProvider: [], byModel: [], byDay: [], topTasks: [] }
+const summary: UsageSummary = {
+  sinceMs: 0,
+  untilMs: 1,
+  totals: aggregate,
+  byProvider: [],
+  byModel: [],
+  byDay: [],
+  byDayHour: [],
+  topTasks: []
+}
 
 function response(overrides: Partial<UsageParallelismResponse['parallelism']> = {}): UsageParallelismResponse {
   return {

@@ -98,6 +98,7 @@ const summary: UsageSummary = {
     { day: '2026-10-04', ...aggregate, byProvider: [{ provider: 'claude-code', tokens: 10_000 }] },
     { day: '2026-10-05', ...aggregate, byProvider: [{ provider: 'claude-code', tokens: 20_000 }] }
   ],
+  byDayHour: ['2026-10-04', '2026-10-05'].flatMap((day) => [3, 4, 5].map((bucket) => ({ day, bucket, tokens: 5_000 }))),
   topTasks: [{ taskId: 't1', title: 'Fix login flow', ...aggregate }]
 }
 
@@ -112,6 +113,7 @@ const parallelismResponse: UsageParallelismResponse = {
     periodEndMs: 1,
     hasData: true,
     totalRunMs: 6 * 60 * 60 * 1000,
+    totalRunMsAll: 8 * 60 * 60 * 1000,
     wallMs: 5 * 60 * 60 * 1000,
     screenTimeMs: 2 * 60 * 60 * 1000,
     multiplier: 3,
@@ -292,6 +294,7 @@ describe('UsageSettings', () => {
         periodEndMs: 1,
         hasData: false,
         totalRunMs: 0,
+        totalRunMsAll: 0,
         wallMs: 0,
         screenTimeMs: 0,
         multiplier: null,

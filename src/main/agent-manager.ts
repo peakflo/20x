@@ -1428,6 +1428,9 @@ export class AgentManager extends EventEmitter {
       // only pre-release backfilled history and no live time yet).
       hasData: fullSummary.hasData,
       totalRunMs: liveSummary.totalRunMs,
+      // Full (live + backfilled) total — the "agent hours" stat tile's own number, distinct
+      // from the live-only totalRunMs above that feeds the ratio/sentence.
+      totalRunMsAll: fullSummary.totalRunMs,
       wallMs: liveSummary.wallMs,
       screenTimeMs: liveSummary.screenTimeMs,
       multiplier: liveSummary.multiplier,

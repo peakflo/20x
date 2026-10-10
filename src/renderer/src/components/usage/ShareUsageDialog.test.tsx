@@ -19,11 +19,13 @@ const summary: UsageCardSummary = {
   periodDays: 30,
   multiplier: 3.4,
   hours: 120,
+  liveHours: 120,
   wall: 35,
   peakDay: { atMs: Date.UTC(2026, 0, 15), peak: 5 },
   tasksShipped: 12,
   tokens: 45_000_000,
-  calendar: [{ day: '2026-01-15', tokens: 4_000 }]
+  dailyCalendar: [{ day: '2026-01-15', tokens: 4_000 }],
+  hourlyCells: Array.from({ length: 8 }, (_, bucket) => ({ day: '2026-01-15', bucket, tokens: bucket === 4 ? 4_000 : 0 }))
 }
 
 beforeEach(() => {

@@ -9,7 +9,7 @@ import {
   usagePeriodLabel,
   type UsageCardSummary
 } from '@shared/usage-card'
-import { USAGE_RECORDED_CHANNEL, totalTokens, type UsageDayRow, type UsageParallelismResponse } from '@shared/usage'
+import { USAGE_RECORDED_CHANNEL, totalTokens, type UsageDayHourRow, type UsageDayRow, type UsageParallelismResponse } from '@shared/usage'
 import { waitForFonts } from '@shared/wait-for-fonts'
 
 /** Fixed period for the mobile hero — matches the approved mock's own default. No period switcher on mobile; this view is read-only. */
@@ -20,6 +20,7 @@ export function UsageHeroSection() {
   const [data, setData] = useState<UsageParallelismResponse | null>(null)
   const [tokens, setTokens] = useState(0)
   const [byDay, setByDay] = useState<UsageDayRow[]>([])
+  const [byDayHour, setByDayHour] = useState<UsageDayHourRow[]>([])
   const [loading, setLoading] = useState(true)
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -32,8 +33,9 @@ export function UsageHeroSection() {
       .then(([parallelism, summary]) => {
         setData(parallelism)
         setTokens(summary ? totalTokens(summary.totals) : 0)
-        // Same per-day token summary the desktop chart reads — feeds the calendar's per-day value.
+        // Same per-day/per-day-hour token summary the desktop chart reads — feeds the activity grid.
         setByDay(summary?.byDay ?? [])
+        setByDayHour(summary?.byDayHour ?? [])
       })
       .catch(() => undefined)
       .finally(() => setLoading(false))
@@ -46,7 +48,7 @@ export function UsageHeroSection() {
   }, [load])
 
   const periodLabel = usagePeriodLabel(PERIOD_DAYS)
-  const built = data ? buildUsageCardSummary(data, byDay, tokens, periodLabel) : null
+  const built = data ? buildUsageCardSummary(data, byDay, byDayHour, tokens, periodLabel) : null
   const summary: UsageCardSummary | null = built?.summary ?? null
 
   useEffect(() => {
@@ -89,7 +91,7 @@ export function UsageHeroSection() {
   }
 
   // `summary` is only null when there's no agent-run data at all (live or
-  // backfilled) — once there's any, the card always draws (calendar, peak
+  // backfilled) — once there's any, the card always draws (activity grid, peak
   // day, tasks, tokens all real); a not-yet-ready multiplier shows its own
   // in-card placeholder instead of hiding the whole card. See
   // buildUsageCardSummary / the module docstring in usage-card.ts.

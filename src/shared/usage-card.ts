@@ -12,43 +12,54 @@
  * One deliberate departure from the mock, from direct user review of the
  * live page: the mock's "peak day as lanes" block (one row per agent
  * session, bars per run, on the single busiest day) tested as confusing —
- * a real user couldn't tell what it was showing. It's replaced with a
- * GitHub-style activity calendar: one cell per calendar day in the period,
- * colour intensity by that day's token volume. See `buildCalendarGrid` /
- * the "calendar" section of `drawCard`.
+ * a real user couldn't tell what it was showing. It has gone through
+ * several replacements since. A GitHub-style day-per-cell CALENDAR, then a
+ * single row of 24 hour-of-day buckets, both misread the actual request —
+ * a real user's own reference screenshot clarified it's a **day × hour-of-
+ * day GRID**: one column per calendar day, 8 rows (3-hour buckets:
+ * 00:00, 03:00, ... 21:00), both axes meaningful at once, columns grouped
+ * under month labels with day-of-month ticks, cells coloured GitHub-
+ * intensity-style. See the "day×hour activity grid" section of `drawCard`
+ * and `UsageCardDayHourCell`.
  *
- * The calendar's per-day value is each day's total TOKEN count — the exact
- * same `summary.byDay` the Token usage tab's own tokens-per-day chart
- * reads, via `totalTokens()` (shared/usage.ts), not a second data source.
- * It used to read the agent-run-intervals pipeline's per-day run hours
- * instead; that pipeline's backfill is newer and less proven, and a real
- * user's calendar came out almost empty while the token chart right below
- * it (fed by the long-running token_usage_events pipeline) showed rich
- * historical data for the same days. Using the same source the chart
- * already trusts sidesteps that gap entirely. The day-by-day SCAFFOLD
- * (which calendar dates exist, in order) still comes from
- * `ParallelismSummary.perDay` — that part is just date bookkeeping, dense
- * by construction, and unaffected by which pipeline is "proven"; only the
- * per-day VALUE looked up for each date switched source. See
- * `buildUsageCardSummary`.
+ * That grid only reads cleanly at a moderate number of columns — the
+ * user's own reference spanned ~27 days and still looked fine, but 90 or
+ * 182 columns × 8 rows would be illegibly dense. So there are actually TWO
+ * layouts sharing one footprint, chosen purely by the nominal period length
+ * (`summary.periodDays`, 7/30/90/182 — see `USAGE_CARD_DAY_HOUR_GRID_MAX_DAYS`):
+ * at 7 or 30 days, the day×hour grid; at 90 or 182, a simpler one-cell-per-
+ * day GitHub weeks×weekdays grid (the very first design this card had,
+ * revived here as the long-period fallback — see `buildCalendarGrid`).
+ * Both read the same underlying per-day token scaffold (`dailyCalendar`);
+ * the day×hour grid additionally needs `hourlyCells`, a genuinely more
+ * granular data source with no day-grid equivalent.
  *
- * At 7 days or fewer the weeks×weekdays grid reads as 1-2 sparse columns,
- * so short periods switch to a different layout in the same footprint: one
- * column per day, each an isotype-style stack of unit blocks sized to that
- * day's share of the period's busiest day — see the "short period: one
- * column per day" branch in `drawCard`.
+ * Every cell's value (in both layouts) is a TOKEN count — the same token
+ * pipeline (`token_usage_events`) the Token usage tab's own tokens-per-day
+ * chart reads, via `byDay`/`byDayHour` (see usage-store.ts). `byDayHour`
+ * buckets by (local calendar day, local hour-of-day / 3) — `byDay` alone
+ * has no intra-day resolution, so this is a genuinely separate query, not
+ * derived from the daily totals. See `buildUsageCardSummary`.
  *
  * ── Ratio vs. aggregate, two different gates ─────────────────
- * The multiplier (the big number + "N hours of agent work in M hours")
- * draws from LIVE (non-backfilled) data only, and only once there's at
- * least an hour of it — a ratio from a few minutes of noisy data is worse
- * than no ratio. Everything else on the card — the activity calendar, peak
- * day/concurrency, tasks shipped, tokens — is a plain aggregate, not a
- * ratio, and draws from ALL data (live + backfilled) with no minimum. So
- * `drawCard` always draws the full card (real calendar, real peak day, real
- * stats) whenever there's any agent-run data at all; only the multiplier
- * digit and its sentence fall back to a placeholder when the ratio isn't
- * ready. See `UsageCardSummary.multiplier` and `buildUsageCardSummary`.
+ * The multiplier (the big number) and the "N hours of agent work in M
+ * hours" SENTENCE draw from LIVE (non-backfilled) data only, and only once
+ * there's at least an hour of it — a ratio from a few minutes of noisy data
+ * is worse than no ratio. Everything else on the card — the activity grid,
+ * peak day/concurrency, tasks shipped, tokens, and the "agent hours" STAT
+ * TILE itself — is a plain aggregate, not a ratio, and draws from ALL data
+ * (live + backfilled) with no minimum, same as `tasksShipped` and `tokens`.
+ * This is why `UsageCardSummary` carries two separate hours fields: `hours`
+ * (always the full total, for the stat tile) and `liveHours` (live-only,
+ * null exactly when the ratio isn't ready, for the sentence). They're
+ * deliberately allowed to show different numbers — they answer different
+ * questions ("how much agent work have I ever done" vs. "what's feeding the
+ * live ratio right now") — see `UsageCardSummary.hours` and `.liveHours`.
+ * So `drawCard` always draws the full card (real activity grid, real peak
+ * day, real stats including a real "agent hours" tile) whenever there's any
+ * agent-run data at all; only the multiplier digit and its sentence fall
+ * back to a placeholder when the ratio isn't ready. See
+ * `UsageCardSummary.multiplier` and `buildUsageCardSummary`.
  *
  * ── Privacy, enforced by construction ───────────────────────
  * `UsageCardSummary` and `UsageCardOptions` are the ONLY way to get data into
@@ -59,26 +70,41 @@
  * check that enforces this.
  */
 
-import { formatMultiplier, totalTokens, type ParallelismPeriodDays, type UsageDayRow, type UsageParallelismResponse } from './usage'
+import { formatMultiplier, totalTokens, type ParallelismPeriodDays, type UsageDayHourRow, type UsageDayRow, type UsageParallelismResponse } from './usage'
 
 // ── Data contract ────────────────────────────────────────────
 
 /**
- * One calendar day's total token volume, for the activity calendar. `day`
- * is a `YYYY-MM-DD` local-calendar-day key (see `ParallelismDayRow.day` in
- * shared/usage.ts, which supplies the dense date scaffold — see the module
- * docstring) — no session, task, or agent identity travels with it, just a
- * date and a token count.
+ * One calendar day's total token volume — the activity grid's day AXIS
+ * (both layouts share this). `day` is a `YYYY-MM-DD` local-calendar-day key
+ * (see `ParallelismDayRow.day` in shared/usage.ts, which supplies the dense
+ * date scaffold — see the module docstring) — no session, task, or agent
+ * identity travels with it, just a date and a token count.
  *
  * Sourced from the same `summary.byDay` (+ `totalTokens()`) the tokens-per-
- * day chart reads, so the calendar and the chart always agree on which
- * days were busy. Includes the full period's token history — token
- * accounting has no "live vs. backfilled" distinction the way agent-run
- * intervals do, so unlike the multiplier/hours/wall trio below there is no
- * live-only filtering question here.
+ * day chart reads, so the grid and the chart always agree on which days
+ * were busy. Includes the full period's token history — token accounting
+ * has no "live vs. backfilled" distinction the way agent-run intervals do,
+ * so unlike the multiplier/hours/wall trio below there is no live-only
+ * filtering question here.
  */
 export interface UsageCardCalendarDay {
   day: string
+  tokens: number
+}
+
+/**
+ * One (day, 3-hour-of-day bucket) cell's token total — the day×hour grid's
+ * finer data source, with no equivalent in `UsageCardCalendarDay` (a day
+ * total alone can't tell you WHEN during that day the activity happened).
+ * `bucket` is 0-7 (0 = 00:00-03:00 local .. 7 = 21:00-24:00 local) — see
+ * `UsageDayHourRow` in shared/usage.ts, which this is built from 1:1 (dense:
+ * one entry per (day in `dailyCalendar`) × (bucket 0-7), zero-filled, so
+ * `drawCard` never needs to handle a missing cell).
+ */
+export interface UsageCardDayHourCell {
+  day: string
+  bucket: number
   tokens: number
 }
 
@@ -114,14 +140,27 @@ export interface UsageCardSummary {
    */
   multiplier: number | null
   /**
-   * Live total agent run time in the period, in hours. Unlike `multiplier`/
-   * `wall`, this is NOT gated behind the ratio's evidence threshold — it's
-   * a plain sum (the multiplier's numerator on its own, same bucket as
-   * `tasksShipped`/`tokens`), always real whenever there's any agent-run
-   * data. Only the full "N hours of agent work in M hours" SENTENCE (which
-   * needs `wall` too) and the multiplier digit go into the pending state.
+   * Total agent run time EVER recorded in the period, in hours — LIVE +
+   * backfilled, the full honest total. This is the "agent hours" STAT TILE
+   * number, and is NEVER gated: it's a plain sum, same bucket as
+   * `tasksShipped`/`tokens`, always real whenever there's any agent-run
+   * data at all. Deliberately separate from `liveHours` below — showing
+   * "0" here next to real `tasksShipped`/`tokens` totals looked broken, not
+   * conservative, to a real user. It is fine and expected for this number
+   * to differ from `liveHours`: they answer different questions ("how much
+   * agent work have I ever done" vs. "what's feeding the live ratio right
+   * now").
    */
   hours: number
+  /**
+   * Live (non-backfilled) total agent run time in the period, in hours —
+   * the multiplier's own numerator, described by the "N hours of agent
+   * work in M hours" SENTENCE (and the aria-label's equivalent text), never
+   * the stat tile. Null exactly when the ratio isn't ready (same gate as
+   * `multiplier`/`wall`) — not enough live evidence yet, or no screen-time
+   * data to divide by.
+   */
+  liveHours: number | null
   /** The user's own screen time in the app in the period, in hours — how long 20x was actually on screen. The multiplier's denominator ("N hours of agent work in M hours"). Null when the ratio isn't ready (exactly when `multiplier` is null) — this is what actually gates the sentence, not `hours`. */
   wall: number | null
   /**
@@ -135,22 +174,32 @@ export interface UsageCardSummary {
   tasksShipped: number
   /** Total tokens processed in the period — a count, never a cost. */
   tokens: number
-  /** One entry per calendar day in the period, each day's total token volume — drawn as the activity calendar. See `UsageCardCalendarDay`. */
-  calendar: UsageCardCalendarDay[]
+  /** One entry per calendar day in the period, each day's total token volume — the activity grid's day axis, in both layouts. See `UsageCardCalendarDay`. */
+  dailyCalendar: UsageCardCalendarDay[]
+  /**
+   * Dense: one entry per (day in `dailyCalendar`) × (bucket 0-7). Only
+   * meaningful/used at `periodDays <= USAGE_CARD_DAY_HOUR_GRID_MAX_DAYS`
+   * (the day×hour grid layout) — built unconditionally anyway since it's
+   * cheap even at the longest period (182 days × 8 = 1,456 entries) and
+   * keeps `buildUsageCardSummary` simple. See `UsageCardDayHourCell`.
+   */
+  hourlyCells: UsageCardDayHourCell[]
   /**
    * The nominal period length (7/30/90/182 — the period tab the user
-   * picked), used ONLY to decide which calendar layout to draw (the
-   * short-period column/unit-block layout at 7 days, the weeks grid
-   * otherwise — see `drawCard`). Deliberately NOT derived from
-   * `calendar.length`: the backend's day-scaffold can legitimately come
-   * back with one extra boundary day (e.g. 8 entries for a nominal 7-day
-   * period, when the period's start/end don't land exactly on a local-day
-   * boundary) without that meaning the period itself is actually longer.
-   * Keying the layout choice off that incidental array length instead of
-   * the real period caused a genuine bug: an 8-entry calendar for a 7-day
-   * period fell through to the grid layout, where 8 days split awkwardly
-   * across 2 week-columns and could read as "only one column" depending on
-   * which weekday the period happened to start on.
+   * picked), used ONLY to decide which activity-grid layout to draw (the
+   * day×hour grid at 7/30 days, the coarser one-cell-per-day weeks grid at
+   * 90/182 — see `drawCard` and `USAGE_CARD_DAY_HOUR_GRID_MAX_DAYS`).
+   * Deliberately NOT derived from `dailyCalendar.length`: the backend's
+   * day-scaffold can legitimately come back with one extra boundary day
+   * (e.g. 8 entries for a nominal 7-day period, when the period's
+   * start/end don't land exactly on a local-day boundary) without that
+   * meaning the period itself is actually longer. Keying the LAYOUT CHOICE
+   * off that incidental array length instead of the real period caused a
+   * genuine bug in an earlier version of this card's day-grid (an 8-entry
+   * calendar for a nominal 7-day period reading as "only one column").
+   * `dailyCalendar.length` itself is still the right thing to use for
+   * sizing (how many columns to actually draw) — only the layout decision
+   * needs the stable `periodDays` instead.
    */
   periodDays: ParallelismPeriodDays
 }
@@ -231,8 +280,10 @@ function fmtTokens(value: number): string {
 
 /** The card's own `aria-label`/alt text — ports the mock's `renderHero` aria-label line. */
 export function usageCardAriaLabel(summary: UsageCardSummary): string {
-  const ratio = summary.multiplier !== null && summary.wall !== null
-    ? `${Math.round(summary.multiplier)} agents in parallel on average. ${fmtInt(summary.hours)} hours of agent work in ${fmtInt(summary.wall)} hours. `
+  // Describes the RATIO's own inputs, same as the on-card sentence — uses
+  // `liveHours`, not the always-full `hours` stat. Both go null together.
+  const ratio = summary.multiplier !== null && summary.wall !== null && summary.liveHours !== null
+    ? `${Math.round(summary.multiplier)} agents in parallel on average. ${fmtInt(summary.liveHours)} hours of agent work in ${fmtInt(summary.wall)} hours. `
     : 'Multiplier still gathering evidence. '
   return `${summary.periodLabel}: ${ratio}`
     + `Peak ${summary.peakDay.peak} agents at once, ${summary.tasksShipped} tasks shipped, ${fmtTokens(summary.tokens)} tokens.`
@@ -331,13 +382,15 @@ export function fitText(ctx: UsageCardContext2D, text: string, maxWidth: number,
   return s + 1
 }
 
-// ── Activity calendar — two layouts sharing one data source ──
+// ── Activity grid — two layouts sharing one colour scale ─────
 //
-// `summary.calendar` (per-day token totals) feeds BOTH layouts below. Which
-// one draws is purely a function of how many days are in the period — see
-// `drawCard`'s "activity calendar" section for the switch.
+// `summary.dailyCalendar` (per-day token totals) supplies the day axis for
+// BOTH layouts; `summary.hourlyCells` additionally feeds the day×hour grid.
+// Which layout draws is purely a function of the nominal period length —
+// see `drawCard`'s "activity grid" section for the switch, and
+// `USAGE_CARD_DAY_HOUR_GRID_MAX_DAYS`.
 
-/** One placed cell in the long-period grid: `col` = week index (0 = earliest week), `row` = weekday (0 = Sunday .. 6 = Saturday). */
+/** One placed cell in the long-period weeks grid: `col` = week index (0 = earliest week), `row` = weekday (0 = Sunday .. 6 = Saturday). */
 interface UsageCardCalendarCell {
   col: number
   row: number
@@ -351,8 +404,9 @@ interface UsageCardCalendarCell {
  * across columns — exactly how github.com's own contribution graph reads.
  * The first day's weekday determines how far down its column it lands, so
  * every later day's cell is anchored to its true weekday, not just "the
- * Nth day since the period started". Used for longer periods (30+ days) —
- * see `USAGE_CARD_CALENDAR_COLUMN_LAYOUT_MAX_DAYS`.
+ * Nth day since the period started". Used for longer periods (90/182 days,
+ * where a day×hour grid would be too dense to read) — see
+ * `USAGE_CARD_DAY_HOUR_GRID_MAX_DAYS`.
  *
  * `day` is parsed as a UTC midnight timestamp purely to recover its
  * weekday — these are already resolved local-calendar-day keys (see
@@ -372,12 +426,12 @@ function buildCalendarGrid(calendar: UsageCardCalendarDay[]): { cols: number; ce
 
 /**
  * GitHub's own 5-level bucketing (0 = none, 1..4 = increasing activity),
- * scaled relative to the busiest day in the period rather than to a fixed
- * token count — so a quiet week and a packed one each use the full range.
- * A 0-token day is always level 0, drawn in the theme's `faint` token so it
- * reads as "clearly empty" rather than "the lightest shade of present".
- * Grid layout only — the short-period column layout encodes level as block
- * COUNT instead (see `drawCard`), not opacity.
+ * scaled relative to the busiest cell in whatever's being drawn (a day, in
+ * the long-period grid; a (day, hour-bucket) cell, in the day×hour grid)
+ * rather than to a fixed token count — so a quiet period and a packed one
+ * each use the full range. A 0-token cell is always level 0, drawn in the
+ * theme's `faint` token so it reads as "clearly empty" rather than "the
+ * lightest shade of present". Shared by both activity-grid layouts.
  */
 function calendarLevel(tokens: number, maxTokens: number): 0 | 1 | 2 | 3 | 4 {
   if (tokens <= 0 || maxTokens <= 0) return 0
@@ -392,28 +446,30 @@ const USAGE_CARD_CALENDAR_LEVEL_OPACITY = [0, 0.28, 0.48, 0.7, 0.94] as const
 
 /**
  * At or below this nominal period length (`summary.periodDays` — the
- * 7/30/90/182 period tab, NOT `summary.calendar.length`), the calendar
- * switches from the weeks×weekdays grid to one column per day. Compared
- * against `periodDays` deliberately: the day-scaffold's actual array
- * length can be one longer than the nominal period (a boundary effect,
- * not a longer period — see `UsageCardSummary.periodDays`'s doc comment),
- * and keying this decision off the array length instead caused a real bug
- * where a 7-day period with an 8-entry scaffold fell through to the grid.
+ * 7/30/90/182 period tab, NOT `summary.dailyCalendar.length`), the activity
+ * grid draws as day×hour-of-day (one column per day, 8 rows of 3-hour
+ * buckets); above it, as the coarser one-cell-per-day weeks×weekdays grid.
+ * The day×hour grid needs real column width to stay legible — a user's own
+ * reference screenshot spanned ~27 days and still read fine, so 30 is
+ * where the period tabs naturally land just past that; 90/182 columns ×
+ * 8 rows would be illegibly dense, hence the fallback.
+ *
+ * Compared against `periodDays` (not `dailyCalendar.length`) deliberately:
+ * the backend's day-scaffold can legitimately come back with one extra
+ * boundary day (e.g. 8 entries for a nominal 7-day period, when the
+ * period's start/end don't land exactly on a local-day boundary) without
+ * that meaning the period itself is actually longer — keying the LAYOUT
+ * CHOICE off that incidental array length instead of the real period
+ * caused a real bug in an earlier version of this card.
  */
-const USAGE_CARD_CALENDAR_COLUMN_LAYOUT_MAX_DAYS = 7
-/**
- * Tallest a single day's unit-block stack can get in the column layout —
- * the busiest day in the period, scaled to this. Lower for `wide`: that
- * shape has the calendar sitting directly under the headline sentence with
- * no stats block above it to push it down first (square/tall both have
- * the 4-stat block in between, leaving far more vertical room), so a tall
- * stack there collides with the sentence. 7 blocks at `wide`'s block
- * height reproduces the exact footprint the old 7-row weeks grid always
- * used — a size already proven to fit.
- */
-function usageCardCalendarMaxBlocks(wide: boolean): number {
-  return wide ? 7 : 12
+const USAGE_CARD_DAY_HOUR_GRID_MAX_DAYS = 30
+
+/** 0 → "00:00", 3 → "03:00", ... 21 → "21:00" — the day×hour grid's row labels. */
+function fmtBucketLabel(bucket: number): string {
+  return `${String(bucket * 3).padStart(2, '0')}:00`
 }
+
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 // ── The card ──────────────────────────────────────────────────
 
@@ -490,11 +546,14 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
     }
   }
 
-  // The sentence under it — needs BOTH hours and wall, so `wall === null`
-  // alone (not `hours`, which is always real) is what gates the placeholder.
+  // The sentence under it describes the RATIO's own inputs, so it uses
+  // `liveHours` (live-only), never the always-full `hours` stat-tile value
+  // below — `wall`/`liveHours` go null together (the same evidence gate),
+  // so checking either alone is equivalent; `wall` is kept as the check to
+  // match the placeholder text's own focus ("screen time").
   const leftW = wide ? 640 : W - pad * 2
-  const line1 = summary.wall !== null
-    ? `${fmtInt(summary.hours)} hours of agent work in ${fmtInt(summary.wall)} hours`
+  const line1 = summary.wall !== null && summary.liveHours !== null
+    ? `${fmtInt(summary.liveHours)} hours of agent work in ${fmtInt(summary.wall)} hours`
     : 'Still learning your screen time'
   const s1 = fitText(ctx, line1, leftW, wide ? 30 : 40, 600, USAGE_CARD_SANS_FONT)
   ctx.fillStyle = t.ink
@@ -502,9 +561,11 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
   const sentenceY = baseline + (wide ? 50 : 72)
   ctx.fillText(line1, pad, sentenceY)
 
-  // Stats — "agent hours" is always a real number (see UsageCardSummary.hours's
-  // doc comment): it's a plain sum, not gated behind the ratio like the
-  // sentence above it is.
+  // Stats — "agent hours" is always a real, full (live + backfilled) number
+  // (see UsageCardSummary.hours's doc comment): it's a plain sum, not gated
+  // behind the ratio like the sentence above it (which uses `liveHours`
+  // instead). It is expected and fine for this number to differ from
+  // whatever live-only figure the sentence shows.
   const stats: Array<[string, string]> = [
     [String(summary.peakDay.peak), 'agents at peak'],
     [fmtInt(summary.hours), 'agent hours'],
@@ -546,55 +607,97 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
     })
   }
 
-  // The activity calendar — one of two layouts, same data (summary.calendar,
-  // each day's token total), same footprint. Replaces the mock's "peak day
-  // as lanes" block — see the module docstring for the full history.
+  // The activity grid — one of two layouts, same colour scale, same
+  // footprint. Replaces the mock's "peak day as lanes" block — see the
+  // module docstring for the full history.
   const availW = wide ? 600 : W - pad * 2
   const [r0, g0, b0] = t.cell
   let gy: number
-  if (summary.calendar.length > 0 && summary.periodDays <= USAGE_CARD_CALENDAR_COLUMN_LAYOUT_MAX_DAYS) {
-    // Short period: a weeks×weekdays grid would be 1-2 sparse columns, so
-    // instead draw one column per day, each an isotype-style stack of unit
-    // blocks — the day's share of the period's busiest day, in block COUNT
-    // (not opacity, unlike the grid below: a stack of identical solid
-    // blocks is the clearer "quantity" signal when there are only a
-    // handful of columns to fill the same width). A day with no tokens
-    // still gets one faint "slot" block at the baseline — same "clearly
-    // empty, not absent" language the grid uses for its own 0-level cells
-    // — so every column reads as present even when quiet.
-    const dayCount = summary.calendar.length
-    const blockH = wide ? 13 : 15
-    const blockGapY = wide ? 3 : 4
-    const colGap = wide ? 10 : 14
-    const maxBlocks = usageCardCalendarMaxBlocks(wide)
-    const colW = (availW - (dayCount - 1) * colGap) / dayCount
-    const stackH = maxBlocks * blockH + (maxBlocks - 1) * blockGapY
-    gy = H - pad - stackH - (wide ? 0 : 44)
-    const radius = Math.max(1.5, blockH * 0.22)
-    const maxTokens = summary.calendar.reduce((m, d) => Math.max(m, d.tokens), 0)
-    const floorY = gy + stackH - blockH
-    summary.calendar.forEach((d, i) => {
-      const x = pad + i * (colW + colGap)
-      const blocks = maxTokens > 0 && d.tokens > 0 ? Math.max(1, Math.round((d.tokens / maxTokens) * maxBlocks)) : 0
-      if (blocks === 0) {
-        ctx.fillStyle = t.faint
-        ctx.beginPath()
-        ctx.roundRect(x, floorY, colW, blockH, radius)
-        ctx.fill()
-        return
+  if (summary.dailyCalendar.length > 0 && summary.periodDays <= USAGE_CARD_DAY_HOUR_GRID_MAX_DAYS) {
+    // Short/medium period: a day×hour-of-day grid — one column per day, 8
+    // rows (3-hour buckets, 00:00..21:00), both axes meaningful at once.
+    // Columns are grouped under month labels, with a day-of-month tick
+    // roughly every 7 days, matching a real user's own reference
+    // screenshot of this exact shape. Hour-bucket labels run down the left.
+    const rows = 8
+    const days = summary.dailyCalendar
+    const dayCount = days.length
+    const hourLabelW = wide ? 50 : 60
+    const cellsW = availW - hourLabelW
+    const cellGapX = wide ? 2 : 3
+    const rawCellW = (cellsW - (dayCount - 1) * cellGapX) / dayCount
+    const cellW = Math.min(rawCellW, wide ? 60 : 80)
+    const cellH = wide ? 18 : 24
+    const rowGapY = wide ? 2 : 3
+    const cellsH = rows * cellH + (rows - 1) * rowGapY
+    const monthRowH = wide ? 14 : 16
+    const dayTickRowH = wide ? 14 : 18
+    const headerGap = wide ? 4 : 6
+    const headerH = monthRowH + dayTickRowH + headerGap
+    gy = H - pad - headerH - cellsH - (wide ? 0 : 44)
+    const gridLeft = pad + hourLabelW
+    const cellsTop = gy + headerH
+    const radius = Math.max(1.5, Math.min(cellW, cellH) * 0.25)
+
+    // Dense lookup: `hourlyCells` already has one entry per (day, bucket)
+    // — see UsageCardDayHourCell's doc comment — so this is never missing
+    // a key for any (day, bucket) this loop asks for.
+    const cellByDayBucket = new Map(summary.hourlyCells.map((c) => [`${c.day}|${c.bucket}`, c.tokens]))
+    const maxTokens = summary.hourlyCells.reduce((m, c) => Math.max(m, c.tokens), 0)
+
+    // Month label (drawn once per month, at that month's first visible
+    // column) + a day-of-month tick every 7 columns, both above the cells.
+    ctx.textBaseline = 'alphabetic'
+    ctx.textAlign = 'left'
+    let lastMonth = -1
+    days.forEach((d, i) => {
+      const x = gridLeft + i * (cellW + cellGapX)
+      const dateMs = Date.parse(`${d.day}T00:00:00Z`)
+      const month = new Date(dateMs).getUTCMonth()
+      if (month !== lastMonth) {
+        ctx.fillStyle = t.soft
+        ctx.font = `600 ${wide ? 12 : 14}px ${USAGE_CARD_SANS_FONT}`
+        ctx.fillText(MONTH_ABBR[month], x, gy + monthRowH - 2)
+        lastMonth = month
       }
-      ctx.fillStyle = `rgba(${r0},${g0},${b0},${opts.theme === 'azure' ? 0.95 : 0.9})`
-      for (let b = 0; b < blocks; b++) {
-        const y = floorY - b * (blockH + blockGapY)
+      if (i % 7 === 0) {
+        ctx.fillStyle = t.soft
+        ctx.font = `500 ${wide ? 11 : 13}px ${USAGE_CARD_SANS_FONT}`
+        ctx.fillText(String(new Date(dateMs).getUTCDate()), x, gy + monthRowH + dayTickRowH - 2)
+      }
+    })
+
+    // Hour-bucket labels, left of the grid, one per row, vertically
+    // centred on that row.
+    for (let b = 0; b < rows; b++) {
+      const rowCenterY = cellsTop + b * (cellH + rowGapY) + cellH / 2
+      ctx.fillStyle = t.soft
+      ctx.font = `500 ${wide ? 10 : 12}px ${USAGE_CARD_SANS_FONT}`
+      ctx.textBaseline = 'middle'
+      ctx.fillText(fmtBucketLabel(b), pad, rowCenterY)
+    }
+    ctx.textBaseline = 'alphabetic'
+
+    // The cells themselves — colour intensity by that (day, bucket)'s token
+    // volume relative to the busiest cell anywhere in the grid.
+    days.forEach((d, i) => {
+      const x = gridLeft + i * (cellW + cellGapX)
+      for (let b = 0; b < rows; b++) {
+        const y = cellsTop + b * (cellH + rowGapY)
+        const tokens = cellByDayBucket.get(`${d.day}|${b}`) ?? 0
+        const level = calendarLevel(tokens, maxTokens)
+        ctx.fillStyle = level === 0 ? t.faint : `rgba(${r0},${g0},${b0},${USAGE_CARD_CALENDAR_LEVEL_OPACITY[level]})`
         ctx.beginPath()
-        ctx.roundRect(x, y, colW, blockH, radius)
+        ctx.roundRect(x, y, cellW, cellH, radius)
         ctx.fill()
       }
     })
   } else {
-    // Longer period: the GitHub-style contribution grid, colour intensity
-    // by that day's token volume relative to the period's busiest day.
-    const { cols, cells } = buildCalendarGrid(summary.calendar)
+    // Longer period: the GitHub-style one-cell-per-day contribution grid,
+    // colour intensity by that day's token volume relative to the period's
+    // busiest day. A day×hour grid would be too many columns to read
+    // cleanly at this length — see USAGE_CARD_DAY_HOUR_GRID_MAX_DAYS.
+    const { cols, cells } = buildCalendarGrid(summary.dailyCalendar)
     const maxTokens = cells.reduce((m, c) => Math.max(m, c.tokens), 0)
     let cellSize = wide ? 13 : 15
     let gap = wide ? 3 : 4
@@ -658,11 +761,11 @@ export function renderToCanvas(canvas: HTMLCanvasElement, shape: UsageCardShape,
  * Why `buildUsageCardSummary` returned a null `summary` — there is now only
  * one such reason. Everything that used to be a separate "not ready yet"
  * empty state (not enough live evidence, no screen-time data) is instead a
- * null `multiplier`/`hours`/`wall` on an otherwise fully-populated
- * `UsageCardSummary` — the card still draws (calendar, peak day, tasks,
- * tokens all real), just with a placeholder where the ratio goes. A true
- * empty state — no canvas at all — is reserved for when there's nothing
- * whatsoever to draw.
+ * null `multiplier`/`liveHours`/`wall` on an otherwise fully-populated
+ * `UsageCardSummary` — the card still draws (activity grid, peak day,
+ * tasks, tokens, and a real `hours` stat all real), just with a
+ * placeholder where the ratio goes. A true empty state — no canvas at all
+ * — is reserved for when there's nothing whatsoever to draw.
  */
 export type UsageCardEmptyReason =
   /** No agent-run interval in the period at all (live or backfilled) — there is nothing to draw. */
@@ -687,31 +790,32 @@ const MIN_EVIDENCE_RUN_MS = 60 * 60 * 1000 // 1 hour
 
 /**
  * Maps the backend's `UsageParallelismResponse` + the token-usage summary's
- * `byDay` (same array `TokensPerDayChart` renders — see the module
- * docstring for why the calendar reads this instead of the parallelism
- * response's own `perDay`) into the narrow `UsageCardSummary` the card is
- * allowed to draw.
+ * `byDay`/`byDayHour` (same `byDay` array `TokensPerDayChart` renders — see
+ * the module docstring for why the activity grid reads these instead of
+ * the parallelism response's own `perDay` for VALUES) into the narrow
+ * `UsageCardSummary` the card is allowed to draw.
  *
  * Returns a null `summary` only when there's no agent-run data at all (live
  * or backfilled) — `hasData`/`peak` come from the backend's full (not
  * live-only-filtered) sweep, so a user with only pre-release backfilled
  * history still gets a real card, not the text-only empty state.
  *
- * Otherwise always returns a summary. `multiplier`/`hours`/`wall` are null
- * within it when the ratio isn't ready — not enough live evidence yet
+ * Otherwise always returns a summary. `multiplier`/`liveHours`/`wall` are
+ * null within it when the ratio isn't ready — not enough live evidence yet
  * (`totalRunMs < MIN_EVIDENCE_RUN_MS`), or no screen-time data to divide by
  * (`multiplier === null` from the backend, e.g. focus tracking only just
  * started) — `drawCard` renders a placeholder for just that region. Every
- * other field (`calendar`, `peakDay`, `tasksShipped`, `tokens`) is a plain
- * aggregate, not a ratio, and is always populated whenever there's any
- * underlying data, live or backfilled.
+ * other field (`hours`, `dailyCalendar`, `hourlyCells`, `peakDay`,
+ * `tasksShipped`, `tokens`) is a plain aggregate, not a ratio, and is
+ * always populated whenever there's any underlying data, live or
+ * backfilled.
  */
 /**
  * `perDay` should always have exactly one entry per calendar day in the
  * period (see usage-parallelism.ts's `buildPerDay` — its day-enumeration
  * loop is period-bounds-driven, not data-driven, so it stays dense even
  * when every day is empty). This is a defensive backstop in case it's ever
- * shorter than the period actually is: the column layout's day COUNT must
+ * shorter than the period actually is: the activity grid's day COUNT must
  * never silently shrink to however many days happen to have data (that's
  * exactly the bug this guards against — a GitHub-style calendar with 1
  * column instead of 7 reads as broken, not "quiet period"). Extends
@@ -731,7 +835,17 @@ function ensureDenseDayScaffold(perDay: Array<{ day: string }>, expectedDays: nu
   return [...prefix, ...perDay]
 }
 
-export function buildUsageCardSummary(response: UsageParallelismResponse, byDay: UsageDayRow[], tokens: number, periodLabel: string): UsageCardBuildResult {
+const MS_PER_HOUR = 60 * 60 * 1000
+/** Number of 3-hour buckets in a day — the day×hour grid's row count. */
+const HOUR_BUCKETS_PER_DAY = 8
+
+export function buildUsageCardSummary(
+  response: UsageParallelismResponse,
+  byDay: UsageDayRow[],
+  byDayHour: UsageDayHourRow[],
+  tokens: number,
+  periodLabel: string
+): UsageCardBuildResult {
   const p = response.parallelism
   if (!p.hasData || !p.peak) {
     return { summary: null, emptyReason: 'no-agent-data' }
@@ -739,26 +853,36 @@ export function buildUsageCardSummary(response: UsageParallelismResponse, byDay:
   const ratioReady = p.totalRunMs >= MIN_EVIDENCE_RUN_MS && p.multiplier !== null
   // `perDay` supplies the dense, correctly-bucketed date SCAFFOLD (it
   // always has one entry per calendar day in the period, by construction —
-  // see usage-parallelism.ts's buildPerDay); `byDay` is sparse (only days
-  // with at least one recorded token_usage_events row appear in it at
-  // all), so it supplies VALUES looked up per date, defaulting to 0 for a
-  // day with no token activity. This keeps the calendar's weekday-grid
-  // math correct (it depends on a dense, gap-free day sequence) while
-  // still sourcing every value from the same place the tokens-per-day
-  // chart does.
+  // see usage-parallelism.ts's buildPerDay); `byDay`/`byDayHour` are sparse
+  // (only days/cells with at least one recorded token_usage_events row
+  // appear at all), so they supply VALUES looked up per date (and per
+  // date+bucket), defaulting to 0 where there's no token activity. This
+  // keeps both activity-grid layouts' math correct (they depend on a
+  // dense, gap-free day sequence) while still sourcing every value from
+  // the same place the tokens-per-day chart does.
   const tokensByDay = new Map(byDay.map((d) => [d.day, totalTokens(d)]))
+  const tokensByDayBucket = new Map(byDayHour.map((r) => [`${r.day}|${r.bucket}`, r.tokens]))
   const dayScaffold = ensureDenseDayScaffold(p.perDay, response.periodDays)
+  const hourlyCells: UsageCardDayHourCell[] = dayScaffold.flatMap((d) =>
+    Array.from({ length: HOUR_BUCKETS_PER_DAY }, (_, bucket) => ({
+      day: d.day,
+      bucket,
+      tokens: tokensByDayBucket.get(`${d.day}|${bucket}`) ?? 0
+    }))
+  )
   return {
     summary: {
       periodLabel,
       multiplier: ratioReady ? p.multiplier : null,
-      // Always real — a plain sum, not gated behind ratioReady. See the field's own doc comment.
-      hours: p.totalRunMs / (60 * 60 * 1000),
-      wall: ratioReady ? p.screenTimeMs / (60 * 60 * 1000) : null,
+      // Always the full (live + backfilled) total — a plain sum, never gated. See the field's own doc comment.
+      hours: p.totalRunMsAll / MS_PER_HOUR,
+      liveHours: ratioReady ? p.totalRunMs / MS_PER_HOUR : null,
+      wall: ratioReady ? p.screenTimeMs / MS_PER_HOUR : null,
       peakDay: { atMs: p.peak.atMs, peak: p.peak.count },
       tasksShipped: response.tasksShipped,
       tokens,
-      calendar: dayScaffold.map((d) => ({ day: d.day, tokens: tokensByDay.get(d.day) ?? 0 })),
+      dailyCalendar: dayScaffold.map((d) => ({ day: d.day, tokens: tokensByDay.get(d.day) ?? 0 })),
+      hourlyCells,
       periodDays: response.periodDays
     },
     emptyReason: null

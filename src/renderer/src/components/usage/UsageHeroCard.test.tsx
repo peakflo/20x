@@ -15,6 +15,7 @@ function response(overrides: Partial<UsageParallelismResponse['parallelism']>): 
       periodEndMs: 1,
       hasData: false,
       totalRunMs: 0,
+      totalRunMsAll: 0,
       wallMs: 0,
       screenTimeMs: 0,
       multiplier: null,
@@ -32,12 +33,12 @@ beforeEach(() => {
 
 describe('UsageHeroCard', () => {
   it('shows a loading skeleton while the first fetch is in flight', () => {
-    render(<UsageHeroCard data={null} byDay={[]} loading tokens={0} periodLabel="Last 30 days" name="" onOpenShare={() => {}} />)
+    render(<UsageHeroCard data={null} byDay={[]} byDayHour={[]} loading tokens={0} periodLabel="Last 30 days" name="" onOpenShare={() => {}} />)
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
 
   it('shows the "run a few agents" empty state when there is no agent-run data at all', async () => {
-    render(<UsageHeroCard data={response({})} byDay={[]} loading={false} tokens={0} periodLabel="Last 30 days" name="" onOpenShare={() => {}} />)
+    render(<UsageHeroCard data={response({})} byDay={[]} byDayHour={[]} loading={false} tokens={0} periodLabel="Last 30 days" name="" onOpenShare={() => {}} />)
     expect(await screen.findByText(/Run a few agents at once/)).toBeInTheDocument()
   })
 
@@ -45,7 +46,7 @@ describe('UsageHeroCard', () => {
     render(
       <UsageHeroCard
         data={response({ hasData: true, totalRunMs: 2 * 60 * 60 * 1000, peak: { count: 2, atMs: 10, day: '2026-01-01' } })}
-        byDay={[]}
+        byDay={[]} byDayHour={[]}
         loading={false}
         tokens={0}
         periodLabel="Last 30 days"
@@ -63,7 +64,7 @@ describe('UsageHeroCard', () => {
     render(
       <UsageHeroCard
         data={response({ hasData: true, totalRunMs: 5000, screenTimeMs: 2 * 60 * 60 * 1000, multiplier: 0.0007, peak: { count: 2, atMs: 10, day: '2026-01-01' } })}
-        byDay={[]}
+        byDay={[]} byDayHour={[]}
         loading={false}
         tokens={0}
         periodLabel="Last 30 days"
@@ -79,7 +80,7 @@ describe('UsageHeroCard', () => {
   it('mentions the counting-from date in the plain "no data" empty state when known', async () => {
     const data = response({})
     data.countingFromMs = Date.UTC(2026, 0, 1)
-    render(<UsageHeroCard data={data} byDay={[]} loading={false} tokens={0} periodLabel="Last 30 days" name="" onOpenShare={() => {}} />)
+    render(<UsageHeroCard data={data} byDay={[]} byDayHour={[]} loading={false} tokens={0} periodLabel="Last 30 days" name="" onOpenShare={() => {}} />)
     expect(await screen.findByText(/Counting from/)).toBeInTheDocument()
   })
 
@@ -92,14 +93,14 @@ describe('UsageHeroCard', () => {
       multiplier: 3,
       peak: { count: 4, atMs: Date.now(), day: '2026-01-01' }
     })
-    render(<UsageHeroCard data={data} byDay={[]} loading={false} tokens={1_000_000} periodLabel="Last 30 days" name="Dmitry" onOpenShare={onOpenShare} />)
+    render(<UsageHeroCard data={data} byDay={[]} byDayHour={[]} loading={false} tokens={1_000_000} periodLabel="Last 30 days" name="Dmitry" onOpenShare={onOpenShare} />)
     const canvas = await screen.findByRole('img')
     expect(canvas.getAttribute('aria-label')).toContain('3 agents in parallel on average')
     canvas.click()
     expect(onOpenShare).toHaveBeenCalled()
   })
 
-  it('draws the calendar from byDay token totals, matching what the tokens-per-day chart shows, not from perDay runHours', async () => {
+  it('draws the activity grid from byDay/byDayHour token totals, matching what the tokens-per-day chart shows, not from perDay runHours', async () => {
     const data = response({
       hasData: true,
       totalRunMs: 6 * 60 * 60 * 1000,
@@ -112,6 +113,7 @@ describe('UsageHeroCard', () => {
       <UsageHeroCard
         data={data}
         byDay={[{ day: '2026-01-01', inputTokens: 500, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0, reasoningTokens: 0, costUsd: null, reportedCostUsd: null, estimatedCostUsd: null, cacheSavingsUsd: null, records: 1, unpricedRecords: 0, byProvider: [] }]}
+        byDayHour={[{ day: '2026-01-01', bucket: 4, tokens: 500 }]}
         loading={false}
         tokens={1_000_000}
         periodLabel="Last 30 days"
@@ -119,9 +121,9 @@ describe('UsageHeroCard', () => {
         onOpenShare={() => {}}
       />
     )
-    // The aria-label doesn't expose the calendar directly, but the component should render without throwing
-    // and the real assertion (the calendar's drawn values) is covered at the usage-card.ts unit level — this
-    // test exists to prove the prop actually reaches buildUsageCardSummary end to end.
+    // The aria-label doesn't expose the activity grid directly, but the component should render without
+    // throwing, and the real assertion (the grid's drawn values) is covered at the usage-card.ts unit level
+    // — this test exists to prove the props actually reach buildUsageCardSummary end to end.
     const canvas = await screen.findByRole('img')
     expect(canvas).toBeInTheDocument()
   })

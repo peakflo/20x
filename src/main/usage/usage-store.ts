@@ -19,6 +19,7 @@ import type {
   ProviderUsageLimits,
   TokenUsageRecord,
   UsageAggregate,
+  UsageDayHourRow,
   UsageDayRow,
   UsageModelRow,
   UsageProvider,
@@ -549,6 +550,28 @@ export class UsageStore {
         .map(([provider, tokens]) => ({ provider, tokens }))
     }))
 
+    // Per (calendar day, 3-hour-of-day bucket), local time — the usage
+    // card's day×hour-of-day activity grid: one column per day, 8 rows
+    // (00:00, 03:00, ... 21:00). `byDay` has no intra-day resolution at
+    // all, so this needs its own query rather than being derivable from
+    // it. Token totals only, no cost or per-provider split — the grid only
+    // needs one number per cell. `bucket` is local hour-of-day (the same
+    // offset-shifted `strftime('%H', ...)` the retired hour-only version of
+    // this query used) integer-divided by 3, giving 0-7. Sparse — only
+    // (day, bucket) pairs with at least one matching row appear at all; the
+    // usage card densifies this against its own day scaffold and 0-7
+    // bucket range, filling every missing cell with 0 (see
+    // `buildUsageCardSummary` / `UsageDayHourRow`).
+    const dayHourRows = this.db.prepare(
+      `SELECT date(created_at / 1000 + @offset, 'unixepoch') AS day,
+         CAST(strftime('%H', created_at / 1000 + @offset, 'unixepoch') AS INTEGER) / 3 AS bucket,
+         COALESCE(SUM(input_tokens + cache_read_tokens + cache_write_tokens + output_tokens), 0) AS tokens
+       FROM token_usage_events ${where}
+       GROUP BY day, bucket
+       ORDER BY day, bucket`
+    ).all(params) as UsageDayHourRow[]
+    const byDayHour: UsageDayHourRow[] = dayHourRows
+
     const hasTasksTable = !!this.db.prepare(
       "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tasks'"
     ).get()
@@ -590,7 +613,7 @@ export class UsageStore {
       }))
     }
 
-    return { sinceMs, untilMs, totals, byProvider, byModel, byDay, topTasks }
+    return { sinceMs, untilMs, totals, byProvider, byModel, byDay, byDayHour, topTasks }
   }
 
   getProviderUsageLimits(): ProviderUsageLimits[] {

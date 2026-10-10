@@ -5,13 +5,15 @@ import {
   usageCardAriaLabel,
   type UsageCardSummary
 } from '@shared/usage-card'
-import type { UsageDayRow, UsageParallelismResponse } from '@shared/usage'
+import type { UsageDayHourRow, UsageDayRow, UsageParallelismResponse } from '@shared/usage'
 import { waitForFonts } from '@shared/wait-for-fonts'
 
 interface UsageHeroCardProps {
   data: UsageParallelismResponse | null
-  /** Same per-day token summary the tokens-per-day chart reads — feeds the calendar's per-day value, so the two always agree on which days were busy. */
+  /** Same per-day token summary the tokens-per-day chart reads — feeds the activity grid's day axis, so the two always agree on which days were busy. */
   byDay: UsageDayRow[]
+  /** Per (day, 3-hour-of-day bucket) token totals — feeds the activity grid's finer day×hour cells. See `UsageDayHourRow`. */
+  byDayHour: UsageDayHourRow[]
   loading: boolean
   /** Total tokens for the same period — from the existing token-usage summary fetch, not a second parallelism-specific one. */
   tokens: number
@@ -26,10 +28,10 @@ interface UsageHeroCardProps {
  * same as the mock's `renderHero`. Clicking it opens the Share dialog, same
  * as the Share button.
  */
-export function UsageHeroCard({ data, byDay, loading, tokens, periodLabel, name, onOpenShare }: UsageHeroCardProps) {
+export function UsageHeroCard({ data, byDay, byDayHour, loading, tokens, periodLabel, name, onOpenShare }: UsageHeroCardProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
-  const built = data ? buildUsageCardSummary(data, byDay, tokens, periodLabel) : null
+  const built = data ? buildUsageCardSummary(data, byDay, byDayHour, tokens, periodLabel) : null
   const summary: UsageCardSummary | null = built?.summary ?? null
 
   useEffect(() => {
@@ -53,7 +55,7 @@ export function UsageHeroCard({ data, byDay, loading, tokens, periodLabel, name,
   }
 
   // `summary` is only null when there's no agent-run data at all (live or
-  // backfilled) — once there's any, the card always draws (calendar, peak
+  // backfilled) — once there's any, the card always draws (activity grid, peak
   // day, tasks, tokens all real); a not-yet-ready multiplier shows its own
   // in-card placeholder instead of hiding the whole card. See
   // buildUsageCardSummary / the module docstring in usage-card.ts.

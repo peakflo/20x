@@ -403,6 +403,25 @@ export interface UsageDayRow extends UsageAggregate {
   byProvider: Array<{ provider: UsageProvider; tokens: number }>
 }
 
+/**
+ * Total token volume for one (calendar day, 3-hour-of-day bucket) cell,
+ * local time. Feeds the "my multiplier" card's day×hour-of-day activity
+ * grid — one column per day, 8 rows (`bucket` 0-7, each spanning 3 local
+ * hours: 0 = 00:00-03:00 .. 7 = 21:00-24:00) — which `UsageDayRow` alone
+ * can't supply since it has no intra-day resolution at all. Token count
+ * only, no cost — same reasoning as `UsageDayRow.byProvider`. Sparse: only
+ * (day, bucket) pairs with at least one matching event appear; the usage
+ * card densifies this against its own day scaffold, filling every missing
+ * cell with 0.
+ */
+export interface UsageDayHourRow {
+  /** `YYYY-MM-DD`, local calendar day — same key format as `UsageDayRow.day`. */
+  day: string
+  /** 0-7. Local hour-of-day integer-divided by 3 (0 = 00:00-03:00 .. 7 = 21:00-24:00). */
+  bucket: number
+  tokens: number
+}
+
 export interface UsageTaskRow extends UsageAggregate {
   taskId: string
   title: string | null
@@ -415,6 +434,8 @@ export interface UsageSummary {
   byProvider: Array<UsageAggregate & { provider: UsageProvider }>
   byModel: UsageModelRow[]
   byDay: UsageDayRow[]
+  /** Sparse — one entry per (day, bucket) that actually has activity. Feeds the usage card's day×hour-of-day activity grid. See `UsageDayHourRow`. */
+  byDayHour: UsageDayHourRow[]
   topTasks: UsageTaskRow[]
 }
 
@@ -600,8 +621,10 @@ export interface ParallelismSummary {
   periodEndMs: number
   /** False when there is no agent-run interval overlapping the period at all — the UI should show "no data", not 0 or NaN. Gates `totalRunMs`/`wallMs`/`peak`/`peakDayLanes`. */
   hasData: boolean
-  /** Sum of every (clipped) agent-run interval's duration, in ms. The multiplier's numerator. */
+  /** Sum of every (clipped) LIVE (non-backfilled) agent-run interval's duration, in ms. The multiplier's numerator — see `totalRunMsAll` for the full (live + backfilled) total shown as its own standalone stat. */
   totalRunMs: number
+  /** Sum of every (clipped) agent-run interval's duration, in ms — LIVE + backfilled. Not gated by the live-evidence threshold the ratio uses: this is a plain running total ("how much agent work have I ever done"), same bucket as `tasksShipped`/token counts, always real whenever `hasData` is true. */
+  totalRunMsAll: number
   /** Union of all (clipped) agent-run intervals, in ms — wall-clock time with ≥1 agent running. Informational only (e.g. "days with any agent activity") — NOT the multiplier's denominator; see `screenTimeMs`. */
   wallMs: number
   /** Union of all (clipped) app-focus intervals, in ms — how long the user actually had the app on screen in the period. The multiplier's denominator. */

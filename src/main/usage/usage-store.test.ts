@@ -215,6 +215,26 @@ describe('UsageStore.getUsageSummary', () => {
     const shifted = store.getUsageSummary({ sinceMs: NOW - 7 * DAY, untilMs: NOW + 1, utcOffsetMinutes: 13 * 60 })
     expect(shifted.byDay.map((d) => d.day)).toEqual(['2026-10-05', '2026-10-06'])
   })
+
+  it('aggregates byDayHour per (day, 3-hour bucket) — the day×hour-of-day grid cells', () => {
+    const summary = store.getUsageSummary({ sinceMs: NOW - 7 * DAY, untilMs: NOW + 1, utcOffsetMinutes: 0 })
+    // Both events sit at 12:00 local → bucket 4 (12:00-15:00) — but on two DIFFERENT
+    // days, so unlike a pure hour-of-day aggregate these stay as two separate sparse
+    // cells, not summed together into one.
+    expect(summary.byDayHour).toEqual([
+      { day: '2026-10-04', bucket: 4, tokens: 1200 },
+      { day: '2026-10-05', bucket: 4, tokens: 75 }
+    ])
+  })
+
+  it('shifts byDayHour day and bucket by the requested UTC offset, same local-time logic as byDay', () => {
+    // 12:00 UTC + a 13-hour offset wraps to 01:00 local time the next day → bucket 0.
+    const shifted = store.getUsageSummary({ sinceMs: NOW - 7 * DAY, untilMs: NOW + 1, utcOffsetMinutes: 13 * 60 })
+    expect(shifted.byDayHour).toEqual([
+      { day: '2026-10-05', bucket: 0, tokens: 1200 },
+      { day: '2026-10-06', bucket: 0, tokens: 75 }
+    ])
+  })
 })
 
 describe('UsageStore.getUsageSummary — pricing', () => {

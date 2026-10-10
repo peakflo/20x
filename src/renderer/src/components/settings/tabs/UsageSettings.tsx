@@ -146,11 +146,11 @@ export function UsageSettings() {
   const periodTokens = totals ? totalTokens(totals) : 0
   const periodLabel = usagePeriodLabel(periodDays)
 
-  // The calendar's per-day value comes from the SAME summary.byDay the
-  // tokens-per-day chart below reads (see usage-card.ts's module docstring)
-  // — [] when the token summary hasn't loaded yet is fine, it just means
-  // every calendar cell starts at 0 until it does.
-  const cardBuild = parallelism.data ? buildUsageCardSummary(parallelism.data, summary?.byDay ?? [], periodTokens, periodLabel) : null
+  // The activity grid's per-day/per-day-hour values come from the SAME
+  // summary.byDay/byDayHour the tokens-per-day chart below reads (see
+  // usage-card.ts's module docstring) — [] when the token summary hasn't
+  // loaded yet is fine, it just means every grid cell starts at 0 until it does.
+  const cardBuild = parallelism.data ? buildUsageCardSummary(parallelism.data, summary?.byDay ?? [], summary?.byDayHour ?? [], periodTokens, periodLabel) : null
   const cardSummary: UsageCardSummary | null = cardBuild?.summary ?? null
 
   const records: Array<[string, string]> = []
@@ -163,8 +163,11 @@ export function UsageSettings() {
       // formatMultiplier already includes the "×" for the capped ">1000×" case — every other branch returns the bare number.
       records.push(['Agents in parallel, on average', multiplierText.endsWith('×') ? multiplierText : `${multiplierText}×`])
     }
-    if (cardSummary.wall !== null) {
-      records.push(['Agent work done', `${Math.round(cardSummary.hours).toLocaleString('en-US')} hours in ${Math.round(cardSummary.wall).toLocaleString('en-US')}`])
+    // Describes the RATIO's own inputs, so this uses `liveHours` (live-only), not the
+    // always-full `hours` stat tile shown on the card itself — same reasoning as the
+    // card's own sentence. `wall`/`liveHours` go null together.
+    if (cardSummary.wall !== null && cardSummary.liveHours !== null) {
+      records.push(['Agent work done', `${Math.round(cardSummary.liveHours).toLocaleString('en-US')} hours in ${Math.round(cardSummary.wall).toLocaleString('en-US')}`])
     }
   }
   if (summary && summary.byDay.length > 0) {
@@ -204,6 +207,7 @@ export function UsageSettings() {
         <UsageHeroCard
           data={parallelism.data}
           byDay={summary?.byDay ?? []}
+          byDayHour={summary?.byDayHour ?? []}
           loading={parallelism.loading}
           tokens={periodTokens}
           periodLabel={periodLabel}
