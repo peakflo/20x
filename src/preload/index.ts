@@ -114,6 +114,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     validateLocalCommand: (executable: string): Promise<unknown> =>
       ipcRenderer.invoke('acpInstance:validateLocalCommand', executable)
   },
+  cursor: {
+    authStatus: (): Promise<unknown> => ipcRenderer.invoke('cursor:authStatus'),
+    startBrowserLogin: (): Promise<unknown> => ipcRenderer.invoke('cursor:startBrowserLogin'),
+    cancelBrowserLogin: (): Promise<void> => ipcRenderer.invoke('cursor:cancelBrowserLogin'),
+    logout: (): Promise<void> => ipcRenderer.invoke('cursor:logout'),
+    onLoginComplete: (callback: (event: unknown) => void): (() => void) => {
+      const handler = (_: unknown, data: unknown): void => callback(data)
+      ipcRenderer.on('cursor:loginComplete', handler)
+      return () => ipcRenderer.removeListener('cursor:loginComplete', handler)
+    }
+  },
   mcpServers: {
     getAll: (): Promise<unknown[]> => ipcRenderer.invoke('mcp:getAll'),
     get: (id: string): Promise<unknown> => ipcRenderer.invoke('mcp:get', id),
