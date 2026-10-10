@@ -7,6 +7,7 @@ import { TaskStatus } from '@/types'
 import { isSnoozed } from '@/lib/utils'
 import { AiUsageRing } from './AiUsageRing'
 import { UsageLimitsIndicator } from './UsageLimitsIndicator'
+import { HarnessUpdateIndicator } from './HarnessUpdateIndicator'
 
 /**
  * Slim always-visible strip at the bottom of the shell: live agent + task
@@ -58,6 +59,7 @@ export function StatusBar() {
         <AiUsageRing />
         <UsageLimitsIndicator />
       </span>
+      <HarnessUpdateIndicator />
       {version && <span className="opacity-70">v{version}</span>}
     </div>
   )

@@ -11,6 +11,12 @@ import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { PushPreferences } from '@shared/push-notifications'
 import type { HarnessInstanceView } from '@shared/harness-instances'
 import type { AcpAgentInstanceView } from '@shared/acp-registry'
+import type {
+  HarnessKey,
+  HarnessMaintenanceStatus,
+  HarnessUpdateAllResult,
+  HarnessUpdateResult
+} from '@shared/harness-maintenance'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -113,6 +119,12 @@ export const api = {
   },
   acpInstances: {
     list: () => get<AcpAgentInstanceView[]>('/api/acp-instances')
+  },
+  harnessMaintenance: {
+    get: () => get<HarnessMaintenanceStatus[]>('/api/harness-maintenance'),
+    refresh: (fresh = false) => post<HarnessMaintenanceStatus[]>('/api/harness-maintenance/refresh', { fresh }),
+    update: (harness: HarnessKey) => post<HarnessUpdateResult>('/api/harness-maintenance/update', { harness }),
+    updateAll: () => post<HarnessUpdateAllResult>('/api/harness-maintenance/update-all')
   },
   usage: {
     limits: () => get<ProviderUsageLimits[]>('/api/usage/limits'),

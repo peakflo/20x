@@ -48,6 +48,12 @@ import type {
 } from '@shared/acp-registry'
 import type { ArtifactApi } from '@shared/artifacts'
 import type {
+  HarnessKey,
+  HarnessMaintenanceStatus,
+  HarnessUpdateAllResult,
+  HarnessUpdateResult
+} from '@shared/harness-maintenance'
+import type {
   VoiceActionOutcome,
   VoiceModelState,
   VoiceRuntimeProgressEvent,
@@ -518,6 +524,14 @@ interface ElectronAPI {
     install: (agentName: string) => Promise<{ success: boolean; error: string | null; newStatus: Record<string, { installed: boolean; version: string | null }> }>
     getCommand: (agentName: string) => Promise<string>
     onProgress: (callback: (data: { agentName: string; stage: string; output: string; percent: number }) => void) => () => void
+  }
+  harnessMaintenance: {
+    get: () => Promise<HarnessMaintenanceStatus[]>
+    refresh: (fresh?: boolean) => Promise<HarnessMaintenanceStatus[]>
+    update: (harness: HarnessKey) => Promise<HarnessUpdateResult>
+    updateAll: () => Promise<HarnessUpdateAllResult>
+    onUpdated: (callback: (statuses: HarnessMaintenanceStatus[]) => void) => () => void
+    onProgress: (callback: (data: { harness: HarnessKey; chunk: string }) => void) => () => void
   }
   webUtils: {
     getPathForFile: (file: File) => string

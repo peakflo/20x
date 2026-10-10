@@ -225,6 +225,14 @@ const mockElectronAPI = {
     getCommand: vi.fn().mockResolvedValue(''),
     onProgress: vi.fn((_cb: (data: unknown) => void) => vi.fn())
   },
+  harnessMaintenance: {
+    get: vi.fn().mockResolvedValue([]),
+    refresh: vi.fn().mockResolvedValue([]),
+    update: vi.fn(),
+    updateAll: vi.fn(),
+    onUpdated: vi.fn((_cb: (data: unknown) => void) => vi.fn()),
+    onProgress: vi.fn((_cb: (data: unknown) => void) => vi.fn())
+  },
   app: {
     getVersion: vi.fn().mockResolvedValue('0.0.1')
   },

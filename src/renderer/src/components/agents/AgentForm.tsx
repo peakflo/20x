@@ -14,6 +14,7 @@ import { useMcpStore } from '@/stores/mcp-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
+import { HarnessVersionWarning } from './HarnessVersionWarning'
 import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
 import { HARNESS_INSTANCE_PREFIX, harnessDropdownOptions } from '@shared/harness-instances'
 import { ACP_INSTANCE_PREFIX, acpInstanceDropdownOptions, parseAcpInstanceDropdownValue } from '@shared/harness-instances'
@@ -412,6 +413,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
             No ACP agents configured yet. Add one in Settings → Agents.
           </p>
         )}
+        {codingAgent && <HarnessVersionWarning codingAgent={codingAgent} />}
       </div>
 
       {/* Every other harness runs locally (CLI spawn or in-process SDK/ACP

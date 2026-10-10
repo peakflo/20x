@@ -3,6 +3,7 @@ import { api } from '../api/client'
 import type { Route } from '../App'
 import { SubscriptionUsageSection } from '../components/SubscriptionUsageSection'
 import { AcpAgentsSection } from '../components/AcpAgentsSection'
+import { HarnessMaintenanceSection } from '../components/HarnessMaintenanceSection'
 import { PushSettings } from '../components/PushSettings'
 
 interface TaskSource {
@@ -109,6 +110,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
 
         <SubscriptionUsageSection />
         <AcpAgentsSection />
+        <HarnessMaintenanceSection />
         <PushSettings />
 
         <div className="rounded-md border border-border/30 p-3">
