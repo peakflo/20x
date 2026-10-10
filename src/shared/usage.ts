@@ -437,6 +437,21 @@ export interface UsageSummary {
   /** Sparse — one entry per (day, bucket) that actually has activity. Feeds the usage card's day×hour-of-day activity grid. See `UsageDayHourRow`. */
   byDayHour: UsageDayHourRow[]
   topTasks: UsageTaskRow[]
+  /**
+   * Earliest `created_at` across ALL `token_usage_events` rows EVER
+   * recorded — not scoped to this query's `sinceMs`/`untilMs` — or `null`
+   * if there's no token data at all yet. Lets a caller tell "no activity
+   * this period" apart from "the requested period starts before token
+   * tracking itself even began", so `byDay`/`byDayHour`/the tokens-per-day
+   * chart and the activity grid can say so plainly instead of silently
+   * rendering a mostly-empty chart/grid that looks broken rather than
+   * honest about a real data-coverage boundary. Mirrors
+   * `UsageParallelismResponse.countingFromMs`'s own pattern, for this
+   * separate pipeline — token-level usage tracking is a newer addition
+   * than agent-run-interval tracking, so this is typically a much more
+   * recent date.
+   */
+  countingFromMs: number | null
 }
 
 // ── Event channels (IPC + mobile WebSocket) ─────────────────

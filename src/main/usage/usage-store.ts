@@ -613,7 +613,13 @@ export class UsageStore {
       }))
     }
 
-    return { sinceMs, untilMs, totals, byProvider, byModel, byDay, byDayHour, topTasks }
+    // Global earliest token event — deliberately NOT scoped to sinceMs/untilMs (this is "when
+    // did token tracking itself begin", not "earliest event in this query's window"). See the
+    // field's own doc comment on UsageSummary for why callers need this distinction.
+    const earliestEventRow = this.db.prepare(`SELECT MIN(created_at) AS m FROM token_usage_events`).get() as { m: number | null }
+    const countingFromMs = earliestEventRow.m ?? null
+
+    return { sinceMs, untilMs, totals, byProvider, byModel, byDay, byDayHour, topTasks, countingFromMs }
   }
 
   getProviderUsageLimits(): ProviderUsageLimits[] {

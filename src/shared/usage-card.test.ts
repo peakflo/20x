@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   buildUsageCardSummary,
   calendarLevel,
+  calendarLevelThresholds,
   drawCard,
   drawDash,
   drawLogo,
@@ -749,26 +750,53 @@ describe('buildUsageCardSummary', () => {
   })
 })
 
-describe('calendarLevel', () => {
-  it('buckets a 0-token cell at level 0 and increasing fractions of maxTokens at levels 1-4', () => {
-    expect(calendarLevel(0, 100)).toBe(0)
-    expect(calendarLevel(10, 100)).toBe(1)
-    expect(calendarLevel(30, 100)).toBe(2)
-    expect(calendarLevel(60, 100)).toBe(3)
-    expect(calendarLevel(90, 100)).toBe(4)
+describe('calendarLevelThresholds / calendarLevel', () => {
+  it('buckets a 0-token cell at level 0 and the quartiles of the nonzero distribution at levels 1-4', () => {
+    // Nonzero values [10,30,60,90,100] (sorted) → 25th/50th/75th-percentile VALUES are 30/60/90
+    // — exact bucket boundaries from the real distribution, not fractions of the single max.
+    const thresholds = calendarLevelThresholds([0, 10, 30, 60, 90, 100])
+    expect(thresholds).toEqual([30, 60, 90])
+    expect(calendarLevel(0, thresholds)).toBe(0)
+    expect(calendarLevel(10, thresholds)).toBe(1) // below the 25th-percentile threshold
+    expect(calendarLevel(30, thresholds)).toBe(2) // at the 25th-percentile threshold
+    expect(calendarLevel(60, thresholds)).toBe(3) // at the 50th-percentile threshold
+    expect(calendarLevel(90, thresholds)).toBe(4) // at the 75th-percentile threshold
+    expect(calendarLevel(100, thresholds)).toBe(4) // above it too — still the top bucket
   })
 
-  it('treats a non-finite tokens or maxTokens as level 0, not an uncaught NaN comparison that falls through to level 1', () => {
-    // This is the exact chain that produced round 10's "flat wash, no visible variation" bug:
-    // a single NaN cell contaminates maxTokens (Math.max with a NaN argument is always NaN),
-    // which makes `frac` NaN for every OTHER cell too — `NaN > 0.75` etc. are all false, so
-    // every real cell silently fell through to the same `return 1`, not level 0.
-    expect(calendarLevel(NaN, 100)).toBe(0)
-    expect(calendarLevel(50, NaN)).toBe(0)
-    expect(calendarLevel(NaN, NaN)).toBe(0)
-    expect(calendarLevel(Infinity, 100)).toBe(0)
-    expect(calendarLevel(50, Infinity)).toBe(0)
-    // A real, non-contaminated cell next to the guard still buckets normally.
-    expect(calendarLevel(90, 100)).toBe(4)
+  it('treats a non-finite tokens value as level 0, not an uncaught NaN comparison that falls through to a wrong level', () => {
+    const thresholds = calendarLevelThresholds([10, 30, 60, 90, 100])
+    expect(calendarLevel(NaN, thresholds)).toBe(0)
+    expect(calendarLevel(Infinity, thresholds)).toBe(0)
+    // A real, non-contaminated cell next to the guard still buckets normally — unlike the old
+    // fraction-of-max scheme, one NaN cell can no longer contaminate every other cell's level,
+    // since thresholds are computed once from the finite, filtered subset (see
+    // `calendarLevelThresholds`'s own `Number.isFinite` filter).
+    expect(calendarLevel(90, thresholds)).toBe(4)
+  })
+
+  it('an empty or all-zero input produces thresholds of [0,0,0], under which every cell is level 0', () => {
+    expect(calendarLevelThresholds([])).toEqual([0, 0, 0])
+    expect(calendarLevelThresholds([0, 0, 0])).toEqual([0, 0, 0])
+    expect(calendarLevel(0, calendarLevelThresholds([]))).toBe(0)
+  })
+
+  // Round 11: a real user's real 30-day day×hour grid showed as a flat, near-uniform wash
+  // (only 2-3 cells visibly brighter) even though the SAME period's tokens-per-day chart (fed
+  // by the separately-correct `byDay` query) showed clear, large day-to-day variation. The
+  // `byDayHour` query's SUMS were verified correct (matched `byDay`'s totals exactly, per day) —
+  // the bug was downstream, in how `calendarLevel` turned those correct numbers into colour: a
+  // single bursty 3-hour bucket absorbing a large share of a busy day's traffic became the "100%"
+  // reference every other (even substantial) cell was measured against, so nearly everything
+  // bucketed into the dimmest nonzero level. This reproduces that real shape synthetically (many
+  // small-to-medium values plus one large outlier) and asserts the fix actually spreads them
+  // across the levels, not just that it draws something.
+  it('a skewed distribution (many modest values + one large outlier) spreads across all 4 levels, not just the bottom one', () => {
+    const skewed = [1_000_000, 2_000_000, 3_000_000, 5_000_000, 8_000_000, 20_000_000, 50_000_000, 1_500_000_000]
+    const thresholds = calendarLevelThresholds(skewed)
+    const levels = skewed.map((v) => calendarLevel(v, thresholds))
+    expect(new Set(levels).size).toBeGreaterThan(1) // not every value landing in the same bucket
+    expect(levels.filter((l) => l === 1).length).toBeLessThan(skewed.length) // not everything dumped in the bottom level
+    expect(levels[levels.length - 1]).toBe(4) // the real outlier is still the brightest
   })
 })

@@ -425,35 +425,56 @@ function buildCalendarGrid(calendar: UsageCardCalendarDay[]): { cols: number; ce
 }
 
 /**
- * GitHub's own 5-level bucketing (0 = none, 1..4 = increasing activity),
- * scaled relative to the busiest cell in whatever's being drawn (a day, in
- * the long-period grid; a (day, hour-bucket) cell, in the day×hour grid)
- * rather than to a fixed token count — so a quiet period and a packed one
- * each use the full range. A 0-token cell is always level 0, drawn in the
- * theme's `faint` token so it reads as "clearly empty" rather than "the
- * lightest shade of present". Shared by both activity-grid layouts.
+ * GitHub's own 5-level bucketing (0 = none, 1..4 = increasing activity) —
+ * but by QUANTILE RANK among every nonzero value being drawn together (see
+ * `calendarLevelThresholds`), not a fixed fraction of the single busiest
+ * cell. A 0-token cell is always level 0, drawn in the theme's `faint`
+ * token so it reads as "clearly empty" rather than "the lightest shade of
+ * present". Shared by both activity-grid layouts.
+ *
+ * This used to compare each cell against a plain fraction of the single
+ * busiest cell (`frac = tokens / maxTokens`) — simple, but it broke down
+ * exactly on the day×hour grid's real data: a single bursty 3-hour bucket
+ * can absorb a huge share of even a genuinely busy DAY's traffic, so using
+ * that one bucket as the 100% reference made every OTHER bucket — even
+ * substantial ones — fall into the bottom nonzero level, reading as a flat,
+ * uniform wash with only the single outlier cell standing out. Verified
+ * against a real user's real 30-day data: 41 of 47 real nonzero cells
+ * landed in the bottom level under the old fraction-of-max scheme (87%),
+ * vs. an even 11/12/12/12 spread across all four levels under quantile
+ * bucketing — see the round-11 PR note. GitHub's own contribution graph
+ * buckets by percentile rank of the nonzero distribution for exactly this
+ * reason; this ports that approach instead of reinventing one.
  *
  * Guards against non-finite input (`NaN`/`Infinity`, or a value that was
  * actually `undefined` at runtime despite its `number` type — e.g. a stale
  * main-process build serving a response shape an already-rebuilt renderer
  * no longer expects, across the IPC/REST boundary these types cross) by
- * always returning level 0 rather than propagating the non-finite value
- * into `frac`. Without this, a single `NaN` cell contaminates `maxTokens`
- * (`Math.max` with a `NaN` argument always returns `NaN`), which then makes
- * `frac` `NaN` for every OTHER cell too — `NaN > 0.75` etc. are all false,
- * so every real cell silently falls through to the same level-1 return,
- * reading as a flat, uniform wash instead of the intended GitHub-style
- * gradient. See `finiteOrZero`, used where these values are first read, for
- * the other half of this guard.
+ * always returning level 0. See `finiteOrZero`, used where these values
+ * are first read, for the other half of this guard.
  */
-export function calendarLevel(tokens: number, maxTokens: number): 0 | 1 | 2 | 3 | 4 {
-  if (!Number.isFinite(tokens) || !Number.isFinite(maxTokens)) return 0
-  if (tokens <= 0 || maxTokens <= 0) return 0
-  const frac = tokens / maxTokens
-  if (frac > 0.75) return 4
-  if (frac > 0.5) return 3
-  if (frac > 0.25) return 2
+export function calendarLevel(tokens: number, thresholds: readonly [number, number, number]): 0 | 1 | 2 | 3 | 4 {
+  if (!Number.isFinite(tokens) || tokens <= 0) return 0
+  if (tokens >= thresholds[2]) return 4
+  if (tokens >= thresholds[1]) return 3
+  if (tokens >= thresholds[0]) return 2
   return 1
+}
+
+/**
+ * The 25th/50th/75th-percentile VALUES of the nonzero entries in `values`
+ * — the boundaries `calendarLevel` buckets every cell against. Computed
+ * once per grid draw from every cell being drawn together (all of
+ * `hourlyCells`, or all of the weeks-grid's day totals), not per cell in
+ * isolation. An empty/all-zero `values` returns `[0, 0, 0]`, under which
+ * `calendarLevel` always returns 0 (nothing to show) rather than dividing
+ * by zero or otherwise misbehaving.
+ */
+export function calendarLevelThresholds(values: number[]): readonly [number, number, number] {
+  const nonZero = values.filter((v) => Number.isFinite(v) && v > 0).sort((a, b) => a - b)
+  if (nonZero.length === 0) return [0, 0, 0]
+  const at = (q: number): number => nonZero[Math.min(nonZero.length - 1, Math.floor(q * nonZero.length))]
+  return [at(0.25), at(0.5), at(0.75)]
 }
 
 const USAGE_CARD_CALENDAR_LEVEL_OPACITY = [0, 0.28, 0.48, 0.7, 0.94] as const
@@ -674,7 +695,7 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
     // — see UsageCardDayHourCell's doc comment — so this is never missing
     // a key for any (day, bucket) this loop asks for.
     const cellByDayBucket = new Map(summary.hourlyCells.map((c) => [`${c.day}|${c.bucket}`, c.tokens]))
-    const maxTokens = summary.hourlyCells.reduce((m, c) => Math.max(m, c.tokens), 0)
+    const levelThresholds = calendarLevelThresholds(summary.hourlyCells.map((c) => c.tokens))
 
     // Month label (drawn once per month, at that month's first visible
     // column) + a day-of-month tick every 7 columns, both above the cells.
@@ -709,14 +730,14 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
     }
     ctx.textBaseline = 'alphabetic'
 
-    // The cells themselves — colour intensity by that (day, bucket)'s token
-    // volume relative to the busiest cell anywhere in the grid.
+    // The cells themselves — colour intensity by that (day, bucket)'s
+    // quantile rank among every cell in the grid (see calendarLevel).
     days.forEach((d, i) => {
       const x = gridLeft + i * (cellW + cellGapX)
       for (let b = 0; b < rows; b++) {
         const y = cellsTop + b * (cellH + rowGapY)
         const tokens = cellByDayBucket.get(`${d.day}|${b}`) ?? 0
-        const level = calendarLevel(tokens, maxTokens)
+        const level = calendarLevel(tokens, levelThresholds)
         ctx.fillStyle = level === 0 ? t.faint : `rgba(${r0},${g0},${b0},${USAGE_CARD_CALENDAR_LEVEL_OPACITY[level]})`
         ctx.beginPath()
         ctx.roundRect(x, y, cellW, cellH, radius)
@@ -729,7 +750,7 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
     // busiest day. A day×hour grid would be too many columns to read
     // cleanly at this length — see USAGE_CARD_DAY_HOUR_GRID_MAX_DAYS.
     const { cols, cells } = buildCalendarGrid(summary.dailyCalendar)
-    const maxTokens = cells.reduce((m, c) => Math.max(m, c.tokens), 0)
+    const levelThresholds = calendarLevelThresholds(cells.map((c) => c.tokens))
     let cellSize = wide ? 13 : 15
     let gap = wide ? 3 : 4
     if (cols > 0) {
@@ -747,7 +768,7 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
     cells.forEach(({ col, row, tokens }) => {
       const x = pad + col * (cellSize + gap)
       const y = gy + row * (cellSize + gap)
-      const level = calendarLevel(tokens, maxTokens)
+      const level = calendarLevel(tokens, levelThresholds)
       ctx.fillStyle = level === 0 ? t.faint : `rgba(${r0},${g0},${b0},${USAGE_CARD_CALENDAR_LEVEL_OPACITY[level]})`
       ctx.beginPath()
       ctx.roundRect(x, y, cellSize, cellSize, radius)

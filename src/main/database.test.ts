@@ -110,6 +110,42 @@ describe('Task CRUD', () => {
   })
 })
 
+describe('getTasksShippedCount', () => {
+  const windowStart = Date.now() - 60_000
+  const windowEnd = Date.now() + 60_000
+
+  it('counts a completed top-level task that was updated in the window', () => {
+    db.createTask(makeTask({ title: 'Top-level', status: 'completed' }))
+    expect(db.getTasksShippedCount(windowStart, windowEnd)).toBe(1)
+  })
+
+  it('counts a completed SUBTASK too — not just its top-level parent', () => {
+    const parent = db.createTask(makeTask({ title: 'Parent', status: 'not_started' }))!
+    db.createTask(makeTask({ title: 'Subtask', status: 'completed', parent_task_id: parent.id }))
+    // The parent itself never completed — only the subtask did — and it still counts.
+    expect(db.getTasksShippedCount(windowStart, windowEnd)).toBe(1)
+  })
+
+  it('counts a completed top-level task AND a completed subtask of a DIFFERENT task together, not deduplicated', () => {
+    db.createTask(makeTask({ title: 'Top-level, completed', status: 'completed' }))
+    const parent = db.createTask(makeTask({ title: 'Parent', status: 'not_started' }))!
+    db.createTask(makeTask({ title: 'Subtask, completed', status: 'completed', parent_task_id: parent.id }))
+    expect(db.getTasksShippedCount(windowStart, windowEnd)).toBe(2)
+  })
+
+  it('does not count a subtask that has not reached completed', () => {
+    const parent = db.createTask(makeTask({ title: 'Parent', status: 'completed' }))!
+    db.createTask(makeTask({ title: 'Subtask, in progress', status: 'in_progress', parent_task_id: parent.id }))
+    // Only the parent counts — the subtask is still open.
+    expect(db.getTasksShippedCount(windowStart, windowEnd)).toBe(1)
+  })
+
+  it('does not count a completed task outside the window', () => {
+    db.createTask(makeTask({ title: 'Completed long ago', status: 'completed' }))
+    expect(db.getTasksShippedCount(Date.now() + 3_600_000, Date.now() + 7_200_000)).toBe(0)
+  })
+})
+
 describe('JSON deserialization', () => {
   it('deserializes labels as string[]', () => {
     const task = db.createTask(makeTask({ labels: ['bug', 'urgent'] }))!

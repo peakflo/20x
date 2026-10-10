@@ -99,7 +99,10 @@ const summary: UsageSummary = {
     { day: '2026-10-05', ...aggregate, byProvider: [{ provider: 'claude-code', tokens: 20_000 }] }
   ],
   byDayHour: ['2026-10-04', '2026-10-05'].flatMap((day) => [3, 4, 5].map((bucket) => ({ day, bucket, tokens: 5_000 }))),
-  topTasks: [{ taskId: 't1', title: 'Fix login flow', ...aggregate }]
+  topTasks: [{ taskId: 't1', title: 'Fix login flow', ...aggregate }],
+  // null by default — most tests want the normal, nothing-to-explain page; the dedicated
+  // "counting from" tests below override this to exercise the note itself.
+  countingFromMs: null
 }
 
 const parallelismResponse: UsageParallelismResponse = {
@@ -166,6 +169,27 @@ describe('UsageSettings', () => {
     expect(screen.getByText('claude-opus-4-7')).toBeInTheDocument()
     expect(screen.getByText('Fix login flow')).toBeInTheDocument()
     expect(screen.getByText(/not your subscription bill/)).toBeInTheDocument()
+  })
+
+  it('does not show a "counting from" note when token tracking already covers the whole selected period', async () => {
+    render(<UsageSettings />)
+    await screen.findByText('claude-opus-4-7')
+    expect(screen.queryByText(/Counting from/)).not.toBeInTheDocument()
+  })
+
+  it('shows an honest "counting from <date>" note when token tracking starts after the period\'s own start — not a silently mostly-empty chart/grid', async () => {
+    getSummary.mockResolvedValue({ ...summary, sinceMs: Date.UTC(2026, 8, 10), countingFromMs: Date.UTC(2026, 9, 4) })
+    render(<UsageSettings />)
+    const note = await screen.findByText(/Counting from Oct 4, 2026/)
+    expect(note.textContent).toContain('token usage tracking')
+    expect(note.textContent).toContain('activity grid')
+  })
+
+  it('does not show the note when countingFromMs is before (or exactly at) the period start — real coverage, nothing to explain', async () => {
+    getSummary.mockResolvedValue({ ...summary, sinceMs: Date.UTC(2026, 9, 1), countingFromMs: Date.UTC(2026, 8, 1) })
+    render(<UsageSettings />)
+    await screen.findByText('claude-opus-4-7')
+    expect(screen.queryByText(/Counting from/)).not.toBeInTheDocument()
   })
 
   it('renders Top tasks and Models subtitles through SettingsSection\'s description prop, not a manual negative-margin <p>', async () => {

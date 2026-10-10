@@ -178,6 +178,16 @@ export function UsageSettings() {
     }
   }
 
+  // Token-level tracking (token_usage_events — the tokens-per-day chart and the activity grid's
+  // byDayHour source) is a newer pipeline than agent-run-interval tracking, so its own history
+  // can start well after the selected period does. Rather than let a mostly-empty chart/grid
+  // read as broken, say so plainly whenever the requested period reaches further back than real
+  // token data exists — mirrors the hero card's own "Counting from <date>" pattern for the
+  // multiplier's countingFromMs, just for this separate pipeline's own boundary.
+  const tokenCountingFromLabel = summary && summary.countingFromMs !== null && summary.countingFromMs > summary.sinceMs
+    ? new Date(summary.countingFromMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : null
+
   return (
     <>
       <SettingsSection title="Usage" description="">
@@ -300,6 +310,12 @@ export function UsageSettings() {
               <div className="rounded-lg border border-border bg-card p-4">
                 <TokensPerDayChart days={summary.byDay} colorScheme={resolvedTheme} />
               </div>
+            )}
+
+            {tokenCountingFromLabel && (
+              <p className="text-[11px] text-muted-foreground px-0.5">
+                Counting from {tokenCountingFromLabel} — token usage tracking (and the activity grid in the card above) doesn't go back further than this, even though the selected period does.
+              </p>
             )}
           </>
         )}

@@ -2935,10 +2935,16 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   }
 
   /**
-   * "Tasks shipped" in `[startMs, endMs)`: top-level, non-recurring-template
-   * tasks that reached `completed`, using `updated_at` as the completion
-   * timestamp — the same convention `getCompletedTaskStats` already uses
-   * (there is no dedicated `completed_at` column).
+   * "Tasks shipped" in `[startMs, endMs)`: non-recurring-template tasks that
+   * reached `completed`, using `updated_at` as the completion timestamp —
+   * the same convention `getCompletedTaskStats` already uses (there is no
+   * dedicated `completed_at` column). Counts BOTH top-level tasks and
+   * subtasks (`parent_task_id IS NOT NULL`) that independently reached
+   * `completed` in the window — earlier versions of this query reused
+   * `getCompletedTaskStats`'s top-level-only filter, which under-reported
+   * for anyone who ships real work through subtasks. A subtask completing
+   * doesn't imply its parent completed too (and vice versa), so each is its
+   * own count, not deduplicated against the other.
    */
   getTasksShippedCount(startMs: number, endMs: number): number {
     if (!this.ensureDbOpen()) return 0
@@ -2947,7 +2953,6 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const row = this.db.prepare(`
       SELECT COUNT(*) AS n FROM tasks
       WHERE status = ?
-        AND parent_task_id IS NULL
         AND NOT (is_recurring = 1 AND recurrence_parent_id IS NULL)
         AND updated_at >= ? AND updated_at < ?
     `).get(TaskStatus.Completed, startIso, endIso) as { n: number }

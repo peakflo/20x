@@ -235,6 +235,22 @@ describe('UsageStore.getUsageSummary', () => {
       { day: '2026-10-06', bucket: 0, tokens: 75 }
     ])
   })
+
+  it('countingFromMs is the GLOBAL earliest token event ever recorded, not scoped to the query window — the "old" row from 30 days ago, even when querying a narrower 7-day window', () => {
+    const summary = store.getUsageSummary({ sinceMs: NOW - 7 * DAY, untilMs: NOW + 1, utcOffsetMinutes: 0 })
+    // The "old" fixture row (observedAt: NOW - 30 * DAY) falls outside this 7-day query window
+    // entirely — it contributes nothing to totals/byDay/byDayHour above — but countingFromMs
+    // must still reflect it, since it answers "when did token tracking begin", not "what's in
+    // this window".
+    expect(summary.countingFromMs).toBe(NOW - 30 * DAY)
+  })
+})
+
+describe('UsageStore.getUsageSummary — countingFromMs with no data', () => {
+  it('is null when there is no token_usage_events row at all', () => {
+    const summary = store.getUsageSummary({ sinceMs: NOW - 7 * DAY, untilMs: NOW + 1, utcOffsetMinutes: 0 })
+    expect(summary.countingFromMs).toBeNull()
+  })
 })
 
 describe('UsageStore.getUsageSummary — pricing', () => {

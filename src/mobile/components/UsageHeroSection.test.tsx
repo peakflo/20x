@@ -41,7 +41,8 @@ const summary: UsageSummary = {
   byModel: [],
   byDay: [],
   byDayHour: [],
-  topTasks: []
+  topTasks: [],
+  countingFromMs: null
 }
 
 function response(overrides: Partial<UsageParallelismResponse['parallelism']> = {}): UsageParallelismResponse {

@@ -46,7 +46,8 @@ const summary: UsageSummary = {
   byModel: [],
   byDay: [],
   byDayHour: [],
-  topTasks: []
+  topTasks: [],
+  countingFromMs: null
 }
 
 beforeEach(() => {
