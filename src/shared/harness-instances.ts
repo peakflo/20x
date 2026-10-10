@@ -28,6 +28,12 @@ export interface HarnessInstanceView extends HarnessInstance {
   shares_history: boolean
 }
 
+/** A folder found on disk that already has a login for a harness but is not yet a stored instance. */
+export interface DetectedHarnessCandidate {
+  home_path: string
+  suggested_label: string
+}
+
 export function isHarnessType(value: unknown): value is HarnessType {
   return value === 'claude-code' || value === 'codex'
 }

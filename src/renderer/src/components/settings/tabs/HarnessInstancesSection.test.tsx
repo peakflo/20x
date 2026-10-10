@@ -6,13 +6,15 @@ const list = vi.fn()
 const create = vi.fn()
 const update = vi.fn()
 const remove = vi.fn()
+const detectCandidates = vi.fn()
 
 vi.mock('@/lib/ipc-client', () => ({
   harnessInstanceApi: {
     list: (...args: unknown[]) => list(...args),
     create: (...args: unknown[]) => create(...args),
     update: (...args: unknown[]) => update(...args),
-    delete: (...args: unknown[]) => remove(...args)
+    delete: (...args: unknown[]) => remove(...args),
+    detectCandidates: (...args: unknown[]) => detectCandidates(...args)
   }
 }))
 
@@ -43,6 +45,7 @@ beforeEach(() => {
   create.mockReset().mockResolvedValue({ ...work, id: 'hi_new' })
   update.mockReset().mockResolvedValue({ ...work, label: 'Team' })
   remove.mockReset().mockResolvedValue(true)
+  detectCandidates.mockReset().mockResolvedValue([])
 })
 
 afterEach(() => cleanup())
@@ -201,5 +204,39 @@ describe('HarnessInstancesSection', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(create).not.toHaveBeenCalled()
+  })
+
+  it('offers folders already signed in outside 20x, and fills the form when one is picked', async () => {
+    detectCandidates.mockResolvedValue([{ home_path: '/Users/demo/.codex_work', suggested_label: 'Work' }])
+
+    const dialog = await openAddAccountDialog()
+
+    await waitFor(() => expect(detectCandidates).toHaveBeenCalledWith('codex'))
+    const candidate = await within(dialog).findByRole('button', { name: /Work.*\.codex_work/ })
+    fireEvent.click(candidate)
+
+    expect((within(dialog).getByLabelText('Name') as HTMLInputElement).value).toBe('Work')
+    expect((within(dialog).getByLabelText('Home folder') as HTMLInputElement).value).toBe('/Users/demo/.codex_work')
+
+    // Picking a candidate counts as a hand-edit: further name changes do not overwrite the chosen folder.
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Something else' } })
+    expect((within(dialog).getByLabelText('Home folder') as HTMLInputElement).value).toBe('/Users/demo/.codex_work')
+  })
+
+  it('re-checks for detected folders when the harness changes', async () => {
+    detectCandidates.mockResolvedValue([])
+    const dialog = await openAddAccountDialog()
+    await waitFor(() => expect(detectCandidates).toHaveBeenCalledWith('codex'))
+
+    fireEvent.change(within(dialog).getByLabelText('Harness'), { target: { value: 'claude-code' } })
+
+    await waitFor(() => expect(detectCandidates).toHaveBeenCalledWith('claude-code'))
+  })
+
+  it('shows nothing extra when no account is already signed in', async () => {
+    const dialog = await openAddAccountDialog()
+    await waitFor(() => expect(detectCandidates).toHaveBeenCalledWith('codex'))
+
+    expect(within(dialog).queryByText('Detected on this machine')).not.toBeInTheDocument()
   })
 })
