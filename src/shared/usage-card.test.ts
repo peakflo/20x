@@ -79,6 +79,7 @@ const DEFAULT_CALENDAR_PATTERN = [
 function makeSummary(overrides: Partial<UsageCardSummary> = {}): UsageCardSummary {
   return {
     periodLabel: 'Last 30 days',
+    periodDays: 30,
     multiplier: 3.4,
     hours: 120,
     wall: 35,
@@ -233,7 +234,7 @@ describe('drawCard', () => {
     const [W, H] = USAGE_CARD_SHAPES.wide
     const tokensByDay = [0, 100, 50, 0, 200, 10, 150]
     const calendar = tokensByDay.map((tokens, i) => ({ day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10), tokens }))
-    drawCard(ctx, W, H, makeSummary({ calendar }), makeOptions())
+    drawCard(ctx, W, H, makeSummary({ calendar, periodDays: 7 }), makeOptions())
     // Same block-count formula as drawCard's column layout: a 0-token day draws
     // one faint "empty slot" (not a block); a nonzero day draws at least 1 block,
     // scaled up to usageCardCalendarMaxBlocks(wide) against the period's max — 7
@@ -257,7 +258,7 @@ describe('drawCard', () => {
       day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10),
       tokens: i === 6 ? 9_300_000_000 : 0
     }))
-    const summary = makeSummary({ calendar, multiplier: null, hours: 0.13, wall: null, peakDay: { atMs: Date.UTC(2026, 0, 7), peak: 5 } })
+    const summary = makeSummary({ calendar, periodDays: 7, multiplier: null, hours: 0.13, wall: null, peakDay: { atMs: Date.UTC(2026, 0, 7), peak: 5 } })
     drawCard(ctx, W, H, summary, makeOptions())
     const texts = ctx.calls.fillText.map((args) => args[0])
 
@@ -273,14 +274,35 @@ describe('drawCard', () => {
     expect(ctx.calls.roundRect).toHaveLength(1 /* logo */ + 6 /* faint slots */ + maxBlocks /* today, maxed out */)
   })
 
-  it('still uses the weeks×weekdays grid (not columns) once there are more than 7 days', () => {
+  it('still uses the weeks×weekdays grid (not columns) once the PERIOD itself is longer than 7 days', () => {
     const ctx = makeMockContext()
     const [W, H] = USAGE_CARD_SHAPES.wide
     const calendar = Array.from({ length: 8 }, (_, i) => ({ day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10), tokens: i }))
-    drawCard(ctx, W, H, makeSummary({ calendar }), makeOptions())
+    drawCard(ctx, W, H, makeSummary({ calendar, periodDays: 30 }), makeOptions())
     // Grid layout draws exactly one roundRect per day; the column layout would draw a
     // variable number of stacked blocks per day instead — this count pins it to the grid.
     expect(ctx.calls.roundRect).toHaveLength(1 /* logo */ + calendar.length)
+  })
+
+  it('real bug, found in the real app: a NOMINAL 7-day period whose day-scaffold came back with 8 entries (a boundary effect, not a longer period) must still use the column layout, not the grid', () => {
+    const ctx = makeMockContext()
+    const [W, H] = USAGE_CARD_SHAPES.wide
+    // This is exactly what the real backend returned for a live 7-day query (confirmed by
+    // running the real computeParallelismSummary/periodBoundsForDays against the real
+    // database): periodDays is 7, but perDay (hence calendar) has 8 entries because the
+    // period's start/end didn't land exactly on a local-day boundary. The OLD code decided
+    // short-vs-long layout from calendar.length, so an 8-entry calendar for a nominal 7-day
+    // period silently fell through to the grid — where, depending on which weekday the
+    // period happened to start on, 8 days can split as 1 cell in one week-column and 7 in
+    // the next, reading as "only one column" at a glance. The fix keys this decision off
+    // `periodDays` (the stable, user-facing period length) instead.
+    const calendar = Array.from({ length: 8 }, (_, i) => ({ day: new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10), tokens: i === 0 ? 0 : 1_000 * i }))
+    const summary = makeSummary({ calendar, periodDays: 7 })
+    drawCard(ctx, W, H, summary, makeOptions())
+    // Column layout draws a variable number of stacked blocks (or one faint slot) per day —
+    // never exactly 1 roundRect per day the way the grid does — so asserting the count is
+    // NOT "1 per day" positively confirms the column layout rendered, not the grid.
+    expect(ctx.calls.roundRect).not.toHaveLength(1 /* logo */ + calendar.length)
   })
 
   it('uses the theme ink color for the multiplier and the chosen theme background', () => {
@@ -411,7 +433,7 @@ describe('privacy: no cost/task-title/repo/model field is reachable from the car
 
   it('drawCard works correctly using an object with exactly the allowed keys — nothing more is needed', () => {
     const summary = makeSummary()
-    const allowedKeys = ['periodLabel', 'multiplier', 'hours', 'wall', 'peakDay', 'tasksShipped', 'tokens', 'calendar'].sort()
+    const allowedKeys = ['periodLabel', 'periodDays', 'multiplier', 'hours', 'wall', 'peakDay', 'tasksShipped', 'tokens', 'calendar'].sort()
     expect(Object.keys(summary).sort()).toEqual(allowedKeys)
 
     const options = makeOptions()
@@ -510,6 +532,19 @@ describe('buildUsageCardSummary', () => {
     // even though days 1-2 happen to share the same day keys in this fixture. One entry per
     // scaffold day (7), not just the 2 days that happen to have byDay rows.
     expect(summary!.calendar).toEqual(SPARSE_CALENDAR)
+    expect(summary!.periodDays).toBe(7) // the response's own periodDays, not derived from calendar.length
+  })
+
+  it('periodDays comes from response.periodDays, independent of how many entries perDay actually has — reproduces the real bug where a nominal 7-day period\'s scaffold had 8 entries', () => {
+    const response = makeParallelismResponse({
+      perDay: [
+        ...SEVEN_DAY_PER_DAY,
+        { day: '2026-01-08', runHours: 0, wallHours: 0 } // the real backend's boundary-overflow 8th day
+      ]
+    })
+    const { summary } = buildUsageCardSummary(response, THIN_BY_DAY, 10_000_000, 'Last 30 days')
+    expect(summary!.calendar).toHaveLength(8)
+    expect(summary!.periodDays).toBe(7) // still 7 — the nominal period, not the 8-entry scaffold's length
   })
 
   it('defaults a day to 0 tokens when it appears in the parallelism response\'s dense per-day scaffold but is absent from byDay (no token_usage_events rows that day)', () => {

@@ -16,6 +16,7 @@ import { ShareUsageDialog } from './ShareUsageDialog'
 
 const summary: UsageCardSummary = {
   periodLabel: 'Last 30 days',
+  periodDays: 30,
   multiplier: 3.4,
   hours: 120,
   wall: 35,

@@ -59,7 +59,7 @@
  * check that enforces this.
  */
 
-import { formatMultiplier, totalTokens, type UsageDayRow, type UsageParallelismResponse } from './usage'
+import { formatMultiplier, totalTokens, type ParallelismPeriodDays, type UsageDayRow, type UsageParallelismResponse } from './usage'
 
 // ── Data contract ────────────────────────────────────────────
 
@@ -137,6 +137,22 @@ export interface UsageCardSummary {
   tokens: number
   /** One entry per calendar day in the period, each day's total token volume — drawn as the activity calendar. See `UsageCardCalendarDay`. */
   calendar: UsageCardCalendarDay[]
+  /**
+   * The nominal period length (7/30/90/182 — the period tab the user
+   * picked), used ONLY to decide which calendar layout to draw (the
+   * short-period column/unit-block layout at 7 days, the weeks grid
+   * otherwise — see `drawCard`). Deliberately NOT derived from
+   * `calendar.length`: the backend's day-scaffold can legitimately come
+   * back with one extra boundary day (e.g. 8 entries for a nominal 7-day
+   * period, when the period's start/end don't land exactly on a local-day
+   * boundary) without that meaning the period itself is actually longer.
+   * Keying the layout choice off that incidental array length instead of
+   * the real period caused a genuine bug: an 8-entry calendar for a 7-day
+   * period fell through to the grid layout, where 8 days split awkwardly
+   * across 2 week-columns and could read as "only one column" depending on
+   * which weekday the period happened to start on.
+   */
+  periodDays: ParallelismPeriodDays
 }
 
 export type UsageCardShape = 'wide' | 'square' | 'tall'
@@ -374,7 +390,16 @@ function calendarLevel(tokens: number, maxTokens: number): 0 | 1 | 2 | 3 | 4 {
 
 const USAGE_CARD_CALENDAR_LEVEL_OPACITY = [0, 0.28, 0.48, 0.7, 0.94] as const
 
-/** At or below this many days, the calendar switches from the weeks×weekdays grid to one column per day — the grid reads as 1-2 sparse columns otherwise. */
+/**
+ * At or below this nominal period length (`summary.periodDays` — the
+ * 7/30/90/182 period tab, NOT `summary.calendar.length`), the calendar
+ * switches from the weeks×weekdays grid to one column per day. Compared
+ * against `periodDays` deliberately: the day-scaffold's actual array
+ * length can be one longer than the nominal period (a boundary effect,
+ * not a longer period — see `UsageCardSummary.periodDays`'s doc comment),
+ * and keying this decision off the array length instead caused a real bug
+ * where a 7-day period with an 8-entry scaffold fell through to the grid.
+ */
 const USAGE_CARD_CALENDAR_COLUMN_LAYOUT_MAX_DAYS = 7
 /**
  * Tallest a single day's unit-block stack can get in the column layout —
@@ -527,7 +552,7 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
   const availW = wide ? 600 : W - pad * 2
   const [r0, g0, b0] = t.cell
   let gy: number
-  if (summary.calendar.length > 0 && summary.calendar.length <= USAGE_CARD_CALENDAR_COLUMN_LAYOUT_MAX_DAYS) {
+  if (summary.calendar.length > 0 && summary.periodDays <= USAGE_CARD_CALENDAR_COLUMN_LAYOUT_MAX_DAYS) {
     // Short period: a weeks×weekdays grid would be 1-2 sparse columns, so
     // instead draw one column per day, each an isotype-style stack of unit
     // blocks — the day's share of the period's busiest day, in block COUNT
@@ -733,7 +758,8 @@ export function buildUsageCardSummary(response: UsageParallelismResponse, byDay:
       peakDay: { atMs: p.peak.atMs, peak: p.peak.count },
       tasksShipped: response.tasksShipped,
       tokens,
-      calendar: dayScaffold.map((d) => ({ day: d.day, tokens: tokensByDay.get(d.day) ?? 0 }))
+      calendar: dayScaffold.map((d) => ({ day: d.day, tokens: tokensByDay.get(d.day) ?? 0 })),
+      periodDays: response.periodDays
     },
     emptyReason: null
   }
