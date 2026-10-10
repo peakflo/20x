@@ -50,22 +50,18 @@ export function UsageHeroCard({ data, loading, tokens, periodLabel, name, onOpen
     )
   }
 
+  // `summary` is only null when there's no agent-run data at all (live or
+  // backfilled) — once there's any, the card always draws (calendar, peak
+  // day, tasks, tokens all real); a not-yet-ready multiplier shows its own
+  // in-card placeholder instead of hiding the whole card. See
+  // buildUsageCardSummary / the module docstring in usage-card.ts.
   if (!summary) {
-    const headline =
-      built?.emptyReason === 'no-screen-time-data' ? 'Still learning your screen time'
-      : built?.emptyReason === 'not-enough-evidence-yet' ? 'Still gathering evidence'
-      : 'Run a few agents at once and your multiplier shows up here'
-    const detail =
-      built?.emptyReason === 'no-screen-time-data'
-        ? "We can see agent work in this period, but not yet how much time you spent with 20x open — the multiplier needs both. It'll appear once there's enough of each."
-      : built?.emptyReason === 'not-enough-evidence-yet'
-        ? 'Check back after a bit more agent work — the multiplier only shows once there is enough live run time to be a meaningful number, not a best-effort estimate.'
-      : data?.countingFromMs
-        ? `Counting from ${new Date(data.countingFromMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`
-        : 'Your multiplier tracks how much agent work gets done per hour you spend in the app.'
+    const detail = data?.countingFromMs
+      ? `Counting from ${new Date(data.countingFromMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}.`
+      : 'Your multiplier tracks how much agent work gets done per hour you spend in the app.'
     return (
       <div className="relative rounded-[22px] overflow-hidden bg-gradient-to-br from-[#1e96eb] to-[#1787d9] text-white flex flex-col items-center justify-center text-center gap-2 px-8" style={{ aspectRatio: '1200 / 630' }}>
-        <p className="text-xl font-semibold">{headline}</p>
+        <p className="text-xl font-semibold">Run a few agents at once and your multiplier shows up here</p>
         <p className="text-sm text-white/80 max-w-md">{detail}</p>
       </div>
     )

@@ -166,6 +166,19 @@ describe('UsageSettings', () => {
     expect(screen.getByText(/not your subscription bill/)).toBeInTheDocument()
   })
 
+  it('renders Top tasks and Models subtitles through SettingsSection\'s description prop, not a manual negative-margin <p>', async () => {
+    render(<UsageSettings />)
+    const topTasksSubtitle = await screen.findByText('Where the tokens and the cost went')
+    expect(topTasksSubtitle.tagName).toBe('P')
+    expect(topTasksSubtitle.className).toContain('text-sm')
+    expect(topTasksSubtitle.className).not.toContain('-mt-2')
+
+    const modelsSubtitle = screen.getByText("Cost is the provider's figure where it reports one, otherwise estimated from public API rates")
+    expect(modelsSubtitle.tagName).toBe('P')
+    expect(modelsSubtitle.className).toContain('text-sm')
+    expect(modelsSubtitle.className).not.toContain('-mt-2')
+  })
+
   it('reloads the summary for a different period', async () => {
     render(<UsageSettings />)
     await screen.findByText('claude-opus-4-7')

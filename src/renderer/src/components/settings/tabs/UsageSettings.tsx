@@ -151,11 +151,17 @@ export function UsageSettings() {
 
   const records: Array<[string, string]> = []
   if (cardSummary) {
-    const multiplierText = formatMultiplier(cardSummary.multiplier)
-    // formatMultiplier already includes the "×" for the capped ">1000×" case — every other branch returns the bare number.
-    records.push(['Agents in parallel, on average', multiplierText.endsWith('×') ? multiplierText : `${multiplierText}×`])
+    // "Most agents at once" is a plain aggregate (live + backfilled), always shown whenever there's any agent-run data.
     records.push(['Most agents at once', `${cardSummary.peakDay.peak} on ${new Date(cardSummary.peakDay.atMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`])
-    records.push(['Agent work done', `${Math.round(cardSummary.hours).toLocaleString('en-US')} hours in ${Math.round(cardSummary.wall).toLocaleString('en-US')}`])
+    // The multiplier/hours-based records are ratio-derived — only shown once the ratio itself is ready (both null together, never independently).
+    if (cardSummary.multiplier !== null) {
+      const multiplierText = formatMultiplier(cardSummary.multiplier)
+      // formatMultiplier already includes the "×" for the capped ">1000×" case — every other branch returns the bare number.
+      records.push(['Agents in parallel, on average', multiplierText.endsWith('×') ? multiplierText : `${multiplierText}×`])
+    }
+    if (cardSummary.hours !== null && cardSummary.wall !== null) {
+      records.push(['Agent work done', `${Math.round(cardSummary.hours).toLocaleString('en-US')} hours in ${Math.round(cardSummary.wall).toLocaleString('en-US')}`])
+    }
   }
   if (summary && summary.byDay.length > 0) {
     const biggest = summary.byDay.reduce((a, d) => (totalTokens(d) > totalTokens(a) ? d : a), summary.byDay[0])
@@ -292,8 +298,7 @@ export function UsageSettings() {
 
       <div className="grid gap-3 sm:grid-cols-2">
         {summary && summary.topTasks.length > 0 && (
-          <SettingsSection title="Top tasks" description="">
-            <p className="text-xs text-muted-foreground -mt-2 mb-1">Where the tokens and the cost went</p>
+          <SettingsSection title="Top tasks" description="Where the tokens and the cost went">
             <div className="rounded-lg border border-border bg-card overflow-hidden">
               <table className="w-full text-xs">
                 <tbody>
@@ -325,8 +330,7 @@ export function UsageSettings() {
       </div>
 
       {summary && summary.byModel.length > 0 && (
-        <SettingsSection title="Models" description="">
-          <p className="text-xs text-muted-foreground -mt-2 mb-1">Cost is the provider's figure where it reports one, otherwise estimated from public API rates</p>
+        <SettingsSection title="Models" description="Cost is the provider's figure where it reports one, otherwise estimated from public API rates">
           <div className="rounded-lg border border-border bg-card overflow-hidden">
             <table className="w-full text-xs">
               <thead className="bg-muted/50 text-muted-foreground">

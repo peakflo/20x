@@ -85,14 +85,15 @@ export function UsageHeroSection() {
     return <div className="rounded-2xl bg-muted animate-pulse" style={{ aspectRatio: '1200 / 630' }} />
   }
 
+  // `summary` is only null when there's no agent-run data at all (live or
+  // backfilled) — once there's any, the card always draws (calendar, peak
+  // day, tasks, tokens all real); a not-yet-ready multiplier shows its own
+  // in-card placeholder instead of hiding the whole card. See
+  // buildUsageCardSummary / the module docstring in usage-card.ts.
   if (!summary) {
-    const headline =
-      built?.emptyReason === 'no-screen-time-data' ? 'Still learning your screen time'
-      : built?.emptyReason === 'not-enough-evidence-yet' ? 'Still gathering evidence'
-      : 'Run a few agents at once and your multiplier shows up here'
     return (
       <div className="rounded-2xl bg-gradient-to-br from-[#1e96eb] to-[#1787d9] text-white flex flex-col items-center justify-center text-center gap-1.5 px-6 py-10">
-        <p className="text-base font-semibold">{headline}</p>
+        <p className="text-base font-semibold">Run a few agents at once and your multiplier shows up here</p>
         <p className="text-xs text-white/80">
           Your multiplier tracks how much agent work gets done per hour you spend in the app.
         </p>

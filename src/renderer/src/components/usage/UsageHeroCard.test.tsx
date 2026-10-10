@@ -41,7 +41,7 @@ describe('UsageHeroCard', () => {
     expect(await screen.findByText(/Run a few agents at once/)).toBeInTheDocument()
   })
 
-  it('shows a distinct "still learning your screen time" message when agent data exists but screen time does not', async () => {
+  it('still renders the real canvas (not the text-only empty state) when agent data exists but screen time does not — only the multiplier is pending', async () => {
     render(
       <UsageHeroCard
         data={response({ hasData: true, totalRunMs: 2 * 60 * 60 * 1000, peak: { count: 2, atMs: 10, day: '2026-01-01' } })}
@@ -52,13 +52,16 @@ describe('UsageHeroCard', () => {
         onOpenShare={() => {}}
       />
     )
-    expect(await screen.findByText(/Still learning your screen time/)).toBeInTheDocument()
+    expect(screen.queryByText(/Run a few agents at once/)).not.toBeInTheDocument()
+    const canvas = await screen.findByRole('img')
+    expect(canvas.getAttribute('aria-label')).toContain('Multiplier still gathering evidence.')
+    expect(canvas.getAttribute('aria-label')).toContain('Peak 2 agents at once')
   })
 
-  it('shows the "still gathering evidence" message when there is live agent data but under an hour of it', async () => {
+  it('still renders the real canvas when there is live agent data but under an hour of it — only the multiplier is pending', async () => {
     render(
       <UsageHeroCard
-        data={response({ hasData: true, totalRunMs: 5000 })}
+        data={response({ hasData: true, totalRunMs: 5000, screenTimeMs: 2 * 60 * 60 * 1000, multiplier: 0.0007, peak: { count: 2, atMs: 10, day: '2026-01-01' } })}
         loading={false}
         tokens={0}
         periodLabel="Last 30 days"
@@ -66,7 +69,9 @@ describe('UsageHeroCard', () => {
         onOpenShare={() => {}}
       />
     )
-    expect(await screen.findByText(/Still gathering evidence/)).toBeInTheDocument()
+    expect(screen.queryByText(/Run a few agents at once/)).not.toBeInTheDocument()
+    const canvas = await screen.findByRole('img')
+    expect(canvas.getAttribute('aria-label')).toContain('Multiplier still gathering evidence.')
   })
 
   it('mentions the counting-from date in the plain "no data" empty state when known', async () => {

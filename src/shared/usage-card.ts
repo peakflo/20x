@@ -17,6 +17,18 @@
  * colour intensity by that day's agent hours. See `buildCalendarGrid` /
  * the "calendar heatmap" section of `drawCard`.
  *
+ * ── Ratio vs. aggregate, two different gates ─────────────────
+ * The multiplier (the big number + "N hours of agent work in M hours")
+ * draws from LIVE (non-backfilled) data only, and only once there's at
+ * least an hour of it — a ratio from a few minutes of noisy data is worse
+ * than no ratio. Everything else on the card — the activity calendar, peak
+ * day/concurrency, tasks shipped, tokens — is a plain aggregate, not a
+ * ratio, and draws from ALL data (live + backfilled) with no minimum. So
+ * `drawCard` always draws the full card (real calendar, real peak day, real
+ * stats) whenever there's any agent-run data at all; only the multiplier
+ * digit and its sentence fall back to a placeholder when the ratio isn't
+ * ready. See `UsageCardSummary.multiplier` and `buildUsageCardSummary`.
+ *
  * ── Privacy, enforced by construction ───────────────────────
  * `UsageCardSummary` and `UsageCardOptions` are the ONLY way to get data into
  * `drawCard`. Neither type has a cost field, a task title, a repo name, or a
@@ -31,14 +43,19 @@ import { formatMultiplier, type UsageParallelismResponse } from './usage'
 // ── Data contract ────────────────────────────────────────────
 
 /**
- * One calendar day's live agent-hours, for the GitHub-style activity
- * calendar. `day` is a `YYYY-MM-DD` local-calendar-day key (see
- * `ParallelismDayRow.day` in shared/usage.ts) — no session, task, or agent
- * identity travels with it, just a date and an hour figure.
+ * One calendar day's agent-hours, for the GitHub-style activity calendar.
+ * `day` is a `YYYY-MM-DD` local-calendar-day key (see `ParallelismDayRow.day`
+ * in shared/usage.ts) — no session, task, or agent identity travels with it,
+ * just a date and an hour figure.
+ *
+ * Includes backfilled (best-effort historical) hours, unlike the
+ * multiplier/hours/wall trio below. The calendar is a plain per-day
+ * aggregate, not a ratio — a day's worth of real historical activity is
+ * useful context here even before this feature's own live tracking began,
+ * so it is never filtered down to live-only like the ratio is.
  */
 export interface UsageCardCalendarDay {
   day: string
-  /** Live (non-backfilled) agent run-hours that calendar day. */
   hours: number
 }
 
@@ -62,20 +79,33 @@ export interface UsageCardSummary {
   /**
    * Raw multiplier: agent run hours ÷ the user's own screen time in the app
    * (NOT agent wall-clock time — see usage-parallelism.ts's ParallelismSummary
-   * for why). Callers only build this once there IS data — "no data yet" is a
-   * UI-level empty state, handled before calling `drawCard`.
+   * for why), computed from LIVE (non-backfilled) data only, and only once
+   * there's at least an hour of it — see `buildUsageCardSummary`. Null means
+   * the ratio isn't ready yet (not enough live evidence, or no screen-time
+   * data to divide by); `drawCard` still draws the full card in that case —
+   * calendar, peak day, tasks, tokens are all real — just with a "—"
+   * placeholder in the number's place and a placeholder sentence instead of
+   * hiding the whole card behind a text-only empty state. That text-only
+   * empty state is reserved for when there's no agent-run data at all (see
+   * `UsageCardEmptyReason`).
    */
-  multiplier: number
-  /** Total agent run time in the period, in hours. The multiplier's numerator. */
-  hours: number
-  /** The user's own screen time in the app in the period, in hours — how long 20x was actually on screen. The multiplier's denominator ("N hours of agent work in M hours"). */
-  wall: number
+  multiplier: number | null
+  /** Live total agent run time in the period, in hours — the multiplier's numerator. Null exactly when `multiplier` is null. */
+  hours: number | null
+  /** The user's own screen time in the app in the period, in hours — how long 20x was actually on screen. The multiplier's denominator ("N hours of agent work in M hours"). Null exactly when `multiplier` is null. */
+  wall: number | null
+  /**
+   * Peak concurrency + which day, computed from ALL agent-run data (live
+   * and backfilled) — not gated by the multiplier's live-evidence
+   * threshold. This is a count, not a ratio: backfilled historical activity
+   * is legitimate context for "my busiest day ever", not something to hide.
+   */
   peakDay: UsageCardPeakDay
   /** Tasks that reached completed in the period. */
   tasksShipped: number
   /** Total tokens processed in the period — a count, never a cost. */
   tokens: number
-  /** One entry per calendar day in the period, live agent-hours only — drawn as a GitHub-style activity calendar. */
+  /** One entry per calendar day in the period (live + backfilled agent-hours) — drawn as a GitHub-style activity calendar. See `UsageCardCalendarDay`. */
   calendar: UsageCardCalendarDay[]
 }
 
@@ -155,8 +185,10 @@ function fmtTokens(value: number): string {
 
 /** The card's own `aria-label`/alt text — ports the mock's `renderHero` aria-label line. */
 export function usageCardAriaLabel(summary: UsageCardSummary): string {
-  return `${summary.periodLabel}: ${Math.round(summary.multiplier)} agents in parallel on average. `
-    + `${fmtInt(summary.hours)} hours of agent work in ${fmtInt(summary.wall)} hours. `
+  const ratio = summary.multiplier !== null && summary.hours !== null && summary.wall !== null
+    ? `${Math.round(summary.multiplier)} agents in parallel on average. ${fmtInt(summary.hours)} hours of agent work in ${fmtInt(summary.wall)} hours. `
+    : 'Multiplier still gathering evidence. '
+  return `${summary.periodLabel}: ${ratio}`
     + `Peak ${summary.peakDay.peak} agents at once, ${summary.tasksShipped} tasks shipped, ${fmtTokens(summary.tokens)} tokens.`
 }
 
@@ -201,6 +233,27 @@ export function drawTimes(ctx: UsageCardContext2D, x: number, y: number, size: n
   ctx.beginPath()
   ctx.moveTo(x, y); ctx.lineTo(x + size, y + size)
   ctx.moveTo(x + size, y); ctx.lineTo(x, y + size)
+  ctx.stroke()
+  ctx.restore()
+}
+
+/**
+ * The multiplier's "not ready yet" placeholder — a single round-capped
+ * horizontal stroke, in the same bespoke style as `drawTimes`/the logo's
+ * eyes, where the number would otherwise go. Deliberately NOT a text glyph
+ * (e.g. an em dash drawn via `fillText`): the big numeral's font stack
+ * leads with a system rounded face that isn't guaranteed to carry every
+ * punctuation glyph in every weight on every platform, and a missing glyph
+ * renders as a "tofu" box instead of a dash. A hand-drawn stroke has no
+ * such dependency.
+ */
+export function drawDash(ctx: UsageCardContext2D, x: number, y: number, width: number, color: string): void {
+  ctx.save()
+  ctx.strokeStyle = color
+  ctx.lineWidth = width * 0.2
+  ctx.lineCap = 'round'
+  ctx.beginPath()
+  ctx.moveTo(x, y); ctx.lineTo(x + width, y)
   ctx.stroke()
   ctx.restore()
 }
@@ -311,40 +364,57 @@ export function drawCard(ctx: UsageCardContext2D, W: number, H: number, summary:
   // which already has its own "×" baked in (so an absurd multiplier reads as
   // "this is a cap", not as a round number). That case skips drawTimes
   // entirely and shrinks to fit instead of assuming a single-number width.
-  const mult = formatMultiplier(summary.multiplier)
-  const isCapped = mult.endsWith('×')
   const numSize = wide ? 228 : (H > W ? 400 : 310)
   const numTop = wide ? pad + logoH + 26 : pad + logoH + (H > W ? 56 : 30)
   ctx.textAlign = 'left'
   ctx.textBaseline = 'alphabetic'
   ctx.fillStyle = t.ink
   const baseline = numTop + numSize * 0.78
-  if (isCapped) {
-    const maxNumeralWidth = (wide ? 760 : W) - pad * 2 - (wide ? 40 : 0)
-    const fitSize = fitText(ctx, mult, maxNumeralWidth, numSize, 800, USAGE_CARD_ROUND_FONT)
-    ctx.font = `800 ${fitSize}px ${USAGE_CARD_ROUND_FONT}`
-    ctx.fillText(mult, pad - fitSize * 0.03, numTop + fitSize * 0.78)
+  if (summary.multiplier === null) {
+    // Ratio not ready yet (not enough live evidence, or no screen-time
+    // data) — a bespoke dash, not a font glyph (see drawDash), where the
+    // number would otherwise go. The rest of the card (calendar/peak/
+    // tasks/tokens) still draws normally around it.
+    drawDash(ctx, pad, baseline - numSize * 0.33, numSize * 0.62, t.ink)
   } else {
-    ctx.font = `800 ${numSize}px ${USAGE_CARD_ROUND_FONT}`
-    ctx.fillText(mult, pad - numSize * 0.03, baseline)
-    const numW = ctx.measureText(mult).width
-    const xSize = numSize * 0.36
-    drawTimes(ctx, pad + numW + numSize * 0.06, baseline - xSize - numSize * 0.03, xSize, t.ink)
+    const mult = formatMultiplier(summary.multiplier)
+    const isCapped = mult.endsWith('×')
+    if (isCapped) {
+      const maxNumeralWidth = (wide ? 760 : W) - pad * 2 - (wide ? 40 : 0)
+      const fitSize = fitText(ctx, mult, maxNumeralWidth, numSize, 800, USAGE_CARD_ROUND_FONT)
+      ctx.font = `800 ${fitSize}px ${USAGE_CARD_ROUND_FONT}`
+      ctx.fillText(mult, pad - fitSize * 0.03, numTop + fitSize * 0.78)
+    } else {
+      ctx.font = `800 ${numSize}px ${USAGE_CARD_ROUND_FONT}`
+      ctx.fillText(mult, pad - numSize * 0.03, baseline)
+      const numW = ctx.measureText(mult).width
+      const xSize = numSize * 0.36
+      drawTimes(ctx, pad + numW + numSize * 0.06, baseline - xSize - numSize * 0.03, xSize, t.ink)
+    }
   }
 
-  // The sentence under it
+  // The sentence under it — a placeholder when the ratio isn't ready yet.
   const leftW = wide ? 640 : W - pad * 2
-  const line1 = `${fmtInt(summary.hours)} hours of agent work in ${fmtInt(summary.wall)} hours`
+  const line1 = summary.hours !== null && summary.wall !== null
+    ? `${fmtInt(summary.hours)} hours of agent work in ${fmtInt(summary.wall)} hours`
+    : 'Still learning your screen time'
   const s1 = fitText(ctx, line1, leftW, wide ? 30 : 40, 600, USAGE_CARD_SANS_FONT)
   ctx.fillStyle = t.ink
   ctx.font = `600 ${s1}px ${USAGE_CARD_SANS_FONT}`
   const sentenceY = baseline + (wide ? 50 : 72)
   ctx.fillText(line1, pad, sentenceY)
 
-  // Stats
+  // Stats — "agent hours" mirrors the sentence's own placeholder (same
+  // underlying `hours` field) so the card never shows a real-looking "0"
+  // right next to "Still learning your screen time". Uses a plain ASCII
+  // hyphen, not an em dash — this string goes through the generic stats
+  // loop's `fillText` below, not a bespoke stroke like `drawDash`, and a
+  // hyphen is virtually guaranteed to be in every font's basic Latin
+  // block (unlike an em dash, which some system "rounded" display faces
+  // omit — see `drawDash`'s docstring for where that bit us).
   const stats: Array<[string, string]> = [
     [String(summary.peakDay.peak), 'agents at peak'],
-    [fmtInt(summary.hours), 'agent hours'],
+    [summary.hours !== null ? fmtInt(summary.hours) : '-', 'agent hours'],
     [fmtInt(summary.tasksShipped), 'tasks shipped'],
     [fmtTokens(summary.tokens), 'tokens']
   ]
@@ -448,22 +518,19 @@ export function renderToCanvas(canvas: HTMLCanvasElement, shape: UsageCardShape,
 // both read the "ratio not computable yet" case the same way instead of
 // each inventing its own notion of "empty".
 
-/** Why `buildUsageCardSummary` returned null — lets callers phrase the empty state precisely instead of a single generic "no data" message. */
+/**
+ * Why `buildUsageCardSummary` returned a null `summary` — there is now only
+ * one such reason. Everything that used to be a separate "not ready yet"
+ * empty state (not enough live evidence, no screen-time data) is instead a
+ * null `multiplier`/`hours`/`wall` on an otherwise fully-populated
+ * `UsageCardSummary` — the card still draws (calendar, peak day, tasks,
+ * tokens all real), just with a placeholder where the ratio goes. A true
+ * empty state — no canvas at all — is reserved for when there's nothing
+ * whatsoever to draw.
+ */
 export type UsageCardEmptyReason =
-  /** No agent-run interval in the period at all. */
+  /** No agent-run interval in the period at all (live or backfilled) — there is nothing to draw. */
   | 'no-agent-data'
-  /**
-   * There's some live (non-backfilled) agent-run time recorded, but not yet
-   * an hour of it — not enough evidence to show a real multiplier. This is
-   * expected for every real user in roughly the first hour after this
-   * feature ships (or after a fresh install): the ratio only reflects
-   * live-observed data, never a backfilled estimate, so there's a brief
-   * honest "still gathering evidence" window before the real number can
-   * appear.
-   */
-  | 'not-enough-evidence-yet'
-  /** Enough live agent-run time exists, but there's no screen-time data to divide by yet (e.g. focus tracking only just started, or every agent run happened while the app was never focused). */
-  | 'no-screen-time-data'
 
 export interface UsageCardBuildResult {
   summary: UsageCardSummary | null
@@ -476,7 +543,7 @@ export interface UsageCardBuildResult {
  * card will show a real multiplier. Below this, a ratio is technically
  * computable but not a meaningful one — a few minutes of live agent work
  * against a few minutes of screen time can produce a wild number either
- * way. `totalRunMs` already excludes backfilled rows (see
+ * way. `response.parallelism.totalRunMs` is already live-only (see
  * `AgentManager.getUsageParallelismSummary`), so this is strictly "live
  * evidence", never padded by best-effort history.
  */
@@ -485,29 +552,34 @@ const MIN_EVIDENCE_RUN_MS = 60 * 60 * 1000 // 1 hour
 /**
  * Maps the backend's `UsageParallelismResponse` (+ the token count, which
  * comes from the existing token-usage summary, not this response) into the
- * narrow `UsageCardSummary` the card is allowed to draw. Returns a null
- * `summary` when the multiplier isn't computable, or isn't backed by enough
- * live evidence yet — `drawCard` always needs a real, meaningful number for
- * the headline, so every "not yet" case is handled by the caller (an
- * empty-state UI) instead of being drawn.
+ * narrow `UsageCardSummary` the card is allowed to draw.
+ *
+ * Returns a null `summary` only when there's no agent-run data at all (live
+ * or backfilled) — `hasData`/`peak` come from the backend's full (not
+ * live-only-filtered) sweep, so a user with only pre-release backfilled
+ * history still gets a real card, not the text-only empty state.
+ *
+ * Otherwise always returns a summary. `multiplier`/`hours`/`wall` are null
+ * within it when the ratio isn't ready — not enough live evidence yet
+ * (`totalRunMs < MIN_EVIDENCE_RUN_MS`), or no screen-time data to divide by
+ * (`multiplier === null` from the backend, e.g. focus tracking only just
+ * started) — `drawCard` renders a placeholder for just that region. Every
+ * other field (`calendar`, `peakDay`, `tasksShipped`, `tokens`) is a plain
+ * aggregate, not a ratio, and is always populated whenever there's any
+ * underlying data, live or backfilled.
  */
 export function buildUsageCardSummary(response: UsageParallelismResponse, tokens: number, periodLabel: string): UsageCardBuildResult {
   const p = response.parallelism
-  if (!p.hasData) {
+  if (!p.hasData || !p.peak) {
     return { summary: null, emptyReason: 'no-agent-data' }
   }
-  if (p.totalRunMs < MIN_EVIDENCE_RUN_MS) {
-    return { summary: null, emptyReason: 'not-enough-evidence-yet' }
-  }
-  if (p.multiplier === null || !p.peak) {
-    return { summary: null, emptyReason: 'no-screen-time-data' }
-  }
+  const ratioReady = p.totalRunMs >= MIN_EVIDENCE_RUN_MS && p.multiplier !== null
   return {
     summary: {
       periodLabel,
-      multiplier: p.multiplier,
-      hours: p.totalRunMs / (60 * 60 * 1000),
-      wall: p.screenTimeMs / (60 * 60 * 1000),
+      multiplier: ratioReady ? p.multiplier : null,
+      hours: ratioReady ? p.totalRunMs / (60 * 60 * 1000) : null,
+      wall: ratioReady ? p.screenTimeMs / (60 * 60 * 1000) : null,
       peakDay: { atMs: p.peak.atMs, peak: p.peak.count },
       tasksShipped: response.tasksShipped,
       tokens,

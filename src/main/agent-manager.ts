@@ -7,7 +7,7 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { mkdir, writeFile } from 'fs/promises'
 import { app, Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
-import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord } from './database'
+import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord, AgentRunIntervalRecord } from './database'
 import { TaskStatus, SessionStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -84,7 +84,7 @@ import {
   type AgentRunContext,
   type AgentSessionStatus
 } from './usage/agent-run-intervals'
-import { computeParallelismSummary, periodBoundsForDays, type UsageParallelismResponse } from './usage/usage-parallelism'
+import { computeParallelismSummary, periodBoundsForDays, type UsageParallelismResponse, type ParallelismSummary } from './usage/usage-parallelism'
 import type { UsageParallelismQuery } from './usage/usage-query'
 
 // Coding agent backend type enum
@@ -1385,39 +1385,65 @@ export class AgentManager extends EventEmitter {
     const { periodStartMs, periodEndMs } = periodBoundsForDays(query.days, nowMs)
     const utcOffsetMinutes = query.utcOffsetMinutes ?? -new Date(nowMs).getTimezoneOffset()
 
-    // Live-recorded rows only — the hero card/share image must never count a
-    // best-effort backfilled span (derived from transcript_parts/
-    // token_usage_events, not actually observed by the status-transition
-    // writer) toward the multiplier, agent hours, or the calendar. Nothing
-    // else currently reads agent_run_intervals, so this filter is scoped
-    // here rather than in the DB layer — a future consumer that genuinely
-    // wants backfilled history included should query unfiltered directly
-    // instead of relying on this method.
-    const rawIntervals = this.db.getAgentRunIntervalsOverlapping(periodStartMs, periodEndMs)
-      .filter((iv) => iv.endReason !== 'backfilled')
-      .map((iv) => ({
-        sessionId: iv.sessionId,
-        taskId: iv.taskId,
-        agentId: iv.agentId,
-        provider: iv.provider,
-        harnessInstanceId: iv.harnessInstanceId,
-        startedAtMs: iv.startedAtMs,
-        endedAtMs: iv.endedAtMs
-      }))
+    // Only the multiplier RATIO (totalRunMs/wallMs/multiplier below) is
+    // live-only — a best-effort backfilled span (derived from
+    // transcript_parts/token_usage_events, not actually observed by the
+    // status-transition writer) must never count toward "how much agent
+    // work got done per hour you watched". Everything else the card draws
+    // — peak concurrency, the peak day, and the per-day activity calendar —
+    // is a plain aggregate/count, not a ratio, and backfilled history is
+    // legitimate, useful context for those (that's the whole reason
+    // backfill exists). So this method sweeps the SAME underlying rows
+    // twice: once unfiltered (`fullSummary`, feeds peak/peakDayLanes/perDay
+    // and `hasData` — whether there's anything to draw AT ALL) and once
+    // live-only (`liveSummary`, feeds totalRunMs/wallMs/multiplier only).
+    const allRows = this.db.getAgentRunIntervalsOverlapping(periodStartMs, periodEndMs)
+    const toRawInterval = (iv: AgentRunIntervalRecord) => ({
+      sessionId: iv.sessionId,
+      taskId: iv.taskId,
+      agentId: iv.agentId,
+      provider: iv.provider,
+      harnessInstanceId: iv.harnessInstanceId,
+      startedAtMs: iv.startedAtMs,
+      endedAtMs: iv.endedAtMs
+    })
+    const rawIntervalsAll = allRows.map(toRawInterval)
+    const rawIntervalsLive = allRows.filter((iv) => iv.endReason !== 'backfilled').map(toRawInterval)
 
     const rawFocusIntervals = this.db.getAppFocusIntervalsOverlapping(periodStartMs, periodEndMs).map((iv) => ({
       startedAtMs: iv.startedAtMs,
       endedAtMs: iv.endedAtMs
     }))
 
-    const parallelism = computeParallelismSummary(rawIntervals, rawFocusIntervals, periodStartMs, periodEndMs, utcOffsetMinutes)
+    const fullSummary = computeParallelismSummary(rawIntervalsAll, rawFocusIntervals, periodStartMs, periodEndMs, utcOffsetMinutes)
+    const liveSummary = computeParallelismSummary(rawIntervalsLive, rawFocusIntervals, periodStartMs, periodEndMs, utcOffsetMinutes)
+
+    const parallelism: ParallelismSummary = {
+      periodStartMs,
+      periodEndMs,
+      // Whether there's anything to draw at all — true if ANY agent-run
+      // interval (live or backfilled) overlaps the period, matching
+      // `fullSummary`'s own notion of "no data" rather than the live-only
+      // sweep's (which would incorrectly report "no data" for a user with
+      // only pre-release backfilled history and no live time yet).
+      hasData: fullSummary.hasData,
+      totalRunMs: liveSummary.totalRunMs,
+      wallMs: liveSummary.wallMs,
+      screenTimeMs: liveSummary.screenTimeMs,
+      multiplier: liveSummary.multiplier,
+      peak: fullSummary.peak,
+      peakDayLanes: fullSummary.peakDayLanes,
+      perDay: fullSummary.perDay
+    }
 
     // The multiplier needs BOTH series — agent-run intervals and app-focus
     // intervals — so "counting from" is the LATER of their two earliest
     // starts (the earlier series' head is still "no data for the ratio"
     // until the later one begins too). The agent side only counts LIVE
-    // rows, matching the filter above — backfilled history doesn't move
-    // this date forward.
+    // rows — backfilled history doesn't move this date forward, since this
+    // date is specifically about the ratio's own evidence window, not
+    // about the calendar/peak context (which has no "counting from" notion
+    // — backfilled days just show up in it like any other day).
     const earliestAgent = this.db.getEarliestLiveAgentRunIntervalStart()
     const earliestFocus = this.db.getEarliestAppFocusIntervalStart()
     const countingFromMs = earliestAgent !== null && earliestFocus !== null

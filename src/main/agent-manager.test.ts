@@ -5063,6 +5063,32 @@ describe('AgentManager getUsageParallelismSummary — live-only (never backfille
     expect(result.parallelism.totalRunMs).toBe(60 * 60 * 1000)
   })
 
+  it('computes peak concurrency, hasData, and per-day hours from ALL data (live + backfilled) — not just live rows', () => {
+    const backfilledA = {
+      sessionId: 's-a', taskId: 't1', agentId: 'a1', provider: 'claude-code', harnessInstanceId: null,
+      startedAtMs: NOW - 3 * 60 * 60 * 1000, endedAtMs: NOW - 1 * 60 * 60 * 1000, endReason: 'backfilled'
+    }
+    const backfilledB = {
+      sessionId: 's-b', taskId: 't2', agentId: 'a2', provider: 'claude-code', harnessInstanceId: null,
+      startedAtMs: NOW - 3 * 60 * 60 * 1000, endedAtMs: NOW - 1 * 60 * 60 * 1000, endReason: 'backfilled'
+    }
+    const db = makeUsageDb({
+      getAgentRunIntervalsOverlapping: vi.fn(() => [backfilledA, backfilledB]),
+    })
+    const mgr = new AgentManager(db)
+    const result = mgr.getUsageParallelismSummary({ days: 30 }, NOW)
+    // Two backfilled sessions overlapping for 2 hours give a peak of 2 and a
+    // real calendar entry, even though NEITHER counts toward totalRunMs —
+    // the ratio numerator stays live-only, but there's still something to
+    // draw: a user with only pre-release backfilled history (no live time
+    // yet) must still get a real card, not the text-only empty state.
+    expect(result.parallelism.hasData).toBe(true)
+    expect(result.parallelism.peak?.count).toBe(2)
+    expect(result.parallelism.totalRunMs).toBe(0)
+    const totalPerDayHours = result.parallelism.perDay.reduce((sum, d) => sum + d.runHours, 0)
+    expect(totalPerDayHours).toBeGreaterThan(0)
+  })
+
   it('"counting from" is the later of the live-only agent-run start and the focus-interval start, ignoring backfilled history', () => {
     const earliestLiveAgentMs = NOW - 5 * DAY
     const earliestFocusMs = NOW - 3 * DAY

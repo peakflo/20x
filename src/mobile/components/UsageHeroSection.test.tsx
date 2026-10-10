@@ -82,6 +82,15 @@ describe('UsageHeroSection (mobile, read-only)', () => {
     expect(screen.queryByRole('button', { name: /share/i })).not.toBeInTheDocument()
   })
 
+  it('still renders the real canvas and Share button when agent data exists but the multiplier is not ready yet', async () => {
+    parallelism.mockResolvedValue(response({ hasData: true, totalRunMs: 5000, multiplier: null, screenTimeMs: 0 }))
+    render(<UsageHeroSection />)
+    expect(screen.queryByText(/Run a few agents at once/)).not.toBeInTheDocument()
+    const canvas = await screen.findByRole('img')
+    expect(canvas.getAttribute('aria-label')).toContain('Multiplier still gathering evidence.')
+    expect(screen.getByRole('button', { name: /share/i })).toBeInTheDocument()
+  })
+
   it('offers no shape/colour/name options (read-only — just a native share action)', async () => {
     render(<UsageHeroSection />)
     await screen.findByRole('img')

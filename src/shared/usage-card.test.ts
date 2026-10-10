@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   buildUsageCardSummary,
   drawCard,
+  drawDash,
   drawLogo,
   drawTimes,
   fitText,
@@ -116,6 +117,36 @@ describe('drawCard', () => {
     drawCard(ctx, W, H, makeSummary({ multiplier: 3.44 }), makeOptions())
     const texts = ctx.calls.fillText.map((args) => args[0])
     expect(texts).toContain('3.4')
+  })
+
+  it('draws a bespoke dash (not a text glyph) and a placeholder sentence when the multiplier is not ready yet — without hiding the rest of the card', () => {
+    const ctx = makeMockContext()
+    const [W, H] = USAGE_CARD_SHAPES.wide
+    const summary = makeSummary({ multiplier: null, hours: null, wall: null })
+    drawCard(ctx, W, H, summary, makeOptions())
+    const texts = ctx.calls.fillText.map((args) => args[0])
+    // The placeholder is a hand-drawn stroke (drawDash), not a fillText call — an em dash
+    // drawn through the big numeral's custom-font stack risks a missing-glyph "tofu" box on
+    // some platforms (see drawDash's docstring). No "—" (or any multiplier-shaped text) is drawn.
+    expect(texts).not.toContain('—')
+    expect(texts).toContain('Still learning your screen time')
+    expect(texts).not.toContain('NaN hours of agent work in NaN hours')
+    expect(ctx.calls.stroke.length).toBeGreaterThan(0) // the dash itself is a stroke, like drawTimes
+    // The rest of the card still draws for real: peak-day caption, "agent hours" placeholder tile, footer.
+    expect(texts).toContain(`${new Date(summary.peakDay.atMs).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, my busiest day: ${summary.peakDay.peak} agents at once`)
+    expect(texts).toContain('github.com/peakflo/20x')
+    expect(texts).toContain('-') // the "agent hours" stat tile's own placeholder — a plain ASCII hyphen, same reasoning
+    // One roundRect per calendar cell is still drawn, same as the ratio-ready case.
+    const expectedRoundRects = 1 /* logo */ + summary.calendar.length
+    expect(ctx.calls.roundRect).toHaveLength(expectedRoundRects)
+  })
+
+  it('drawDash strokes a single round-capped horizontal line — a bespoke glyph, not font text', () => {
+    const ctx = makeMockContext()
+    drawDash(ctx, 0, 0, 40, '#fff')
+    expect(ctx.calls.moveTo).toHaveLength(1)
+    expect(ctx.calls.lineTo).toHaveLength(1)
+    expect(ctx.calls.stroke).toHaveLength(1)
   })
 
   it('draws the literal footer URL, never a dynamic repo name', () => {
@@ -237,6 +268,14 @@ describe('usageCardAriaLabel', () => {
     expect(label).toContain('12 tasks shipped')
     expect(label).toContain('45M tokens')
   })
+
+  it('describes the multiplier as still gathering evidence, but still reports peak/tasks/tokens, when it is null', () => {
+    const label = usageCardAriaLabel(makeSummary({ multiplier: null, hours: null, wall: null, tasksShipped: 12, tokens: 45_000_000, peakDay: { atMs: Date.now(), peak: 5 } }))
+    expect(label).toContain('Multiplier still gathering evidence.')
+    expect(label).toContain('Peak 5 agents at once')
+    expect(label).toContain('12 tasks shipped')
+    expect(label).toContain('45M tokens')
+  })
 })
 
 // ── Privacy: no cost / task-title / repo / model field is reachable ─────
@@ -330,24 +369,58 @@ describe('buildUsageCardSummary', () => {
     ])
   })
 
-  it('returns no-agent-data when there is no agent-run data at all', () => {
+  it('returns no-agent-data (a null summary) when there is no agent-run data at all', () => {
     const response = makeParallelismResponse({ hasData: false, totalRunMs: 0, wallMs: 0, multiplier: null, peak: null, peakDayLanes: [] })
     const { summary, emptyReason } = buildUsageCardSummary(response, 0, 'Last 30 days')
     expect(summary).toBeNull()
     expect(emptyReason).toBe('no-agent-data')
   })
 
-  it('returns not-enough-evidence-yet when there is live agent data but under an hour of it', () => {
+  it('still returns a real (non-null) summary — with a null multiplier/hours/wall — when there is live agent data but under an hour of it', () => {
     const response = makeParallelismResponse({ hasData: true, totalRunMs: 30 * 60 * 1000 })
-    const { summary, emptyReason } = buildUsageCardSummary(response, 0, 'Last 30 days')
-    expect(summary).toBeNull()
-    expect(emptyReason).toBe('not-enough-evidence-yet')
+    const { summary, emptyReason } = buildUsageCardSummary(response, 10_000_000, 'Last 30 days')
+    expect(emptyReason).toBeNull()
+    expect(summary).not.toBeNull()
+    expect(summary!.multiplier).toBeNull()
+    expect(summary!.hours).toBeNull()
+    expect(summary!.wall).toBeNull()
+    // Everything else is a plain aggregate and is NOT gated by the evidence threshold.
+    expect(summary!.peakDay).toEqual({ atMs: 500, peak: 4 })
+    expect(summary!.tasksShipped).toBe(7)
+    expect(summary!.tokens).toBe(10_000_000)
+    expect(summary!.calendar).toEqual([
+      { day: '2026-01-01', hours: 2 },
+      { day: '2026-01-02', hours: 4 }
+    ])
   })
 
-  it('returns no-screen-time-data when enough agent data exists but the multiplier cannot be computed', () => {
+  it('still returns a real (non-null) summary — with a null multiplier/hours/wall — when enough agent data exists but the multiplier cannot be computed (no screen-time data)', () => {
     const response = makeParallelismResponse({ hasData: true, multiplier: null, screenTimeMs: 0 })
-    const { summary, emptyReason } = buildUsageCardSummary(response, 0, 'Last 30 days')
-    expect(summary).toBeNull()
-    expect(emptyReason).toBe('no-screen-time-data')
+    const { summary, emptyReason } = buildUsageCardSummary(response, 10_000_000, 'Last 30 days')
+    expect(emptyReason).toBeNull()
+    expect(summary).not.toBeNull()
+    expect(summary!.multiplier).toBeNull()
+    expect(summary!.hours).toBeNull()
+    expect(summary!.wall).toBeNull()
+    expect(summary!.peakDay).toEqual({ atMs: 500, peak: 4 })
+    expect(summary!.calendar.length).toBeGreaterThan(0)
+  })
+
+  it('includes backfilled-inclusive calendar/peak data even when the ratio is pending — the calendar is never empty just because the multiplier is', () => {
+    const response = makeParallelismResponse({
+      hasData: true,
+      totalRunMs: 10 * 60 * 1000, // under the 1-hour evidence threshold
+      perDay: [
+        { day: '2026-01-01', runHours: 14, wallHours: 1 }, // mostly backfilled history — way more than the tiny live totalRunMs above
+        { day: '2026-01-02', runHours: 9, wallHours: 1 }
+      ]
+    })
+    const { summary } = buildUsageCardSummary(response, 0, 'Last 30 days')
+    expect(summary).not.toBeNull()
+    expect(summary!.multiplier).toBeNull() // still gated — ratio stays live-only/evidence-gated
+    expect(summary!.calendar).toEqual([
+      { day: '2026-01-01', hours: 14 }, // calendar reflects the FULL (backfilled-inclusive) perDay figure, not the gated ratio
+      { day: '2026-01-02', hours: 9 }
+    ])
   })
 })
