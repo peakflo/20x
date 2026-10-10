@@ -432,8 +432,22 @@ function buildCalendarGrid(calendar: UsageCardCalendarDay[]): { cols: number; ce
  * each use the full range. A 0-token cell is always level 0, drawn in the
  * theme's `faint` token so it reads as "clearly empty" rather than "the
  * lightest shade of present". Shared by both activity-grid layouts.
+ *
+ * Guards against non-finite input (`NaN`/`Infinity`, or a value that was
+ * actually `undefined` at runtime despite its `number` type — e.g. a stale
+ * main-process build serving a response shape an already-rebuilt renderer
+ * no longer expects, across the IPC/REST boundary these types cross) by
+ * always returning level 0 rather than propagating the non-finite value
+ * into `frac`. Without this, a single `NaN` cell contaminates `maxTokens`
+ * (`Math.max` with a `NaN` argument always returns `NaN`), which then makes
+ * `frac` `NaN` for every OTHER cell too — `NaN > 0.75` etc. are all false,
+ * so every real cell silently falls through to the same level-1 return,
+ * reading as a flat, uniform wash instead of the intended GitHub-style
+ * gradient. See `finiteOrZero`, used where these values are first read, for
+ * the other half of this guard.
  */
-function calendarLevel(tokens: number, maxTokens: number): 0 | 1 | 2 | 3 | 4 {
+export function calendarLevel(tokens: number, maxTokens: number): 0 | 1 | 2 | 3 | 4 {
+  if (!Number.isFinite(tokens) || !Number.isFinite(maxTokens)) return 0
   if (tokens <= 0 || maxTokens <= 0) return 0
   const frac = tokens / maxTokens
   if (frac > 0.75) return 4
@@ -857,6 +871,27 @@ const MS_PER_HOUR = 60 * 60 * 1000
 /** Number of 3-hour buckets in a day — the day×hour grid's row count. */
 const HOUR_BUCKETS_PER_DAY = 8
 
+/**
+ * `n` if it's a real, finite number; `0` otherwise. Deliberately typed to
+ * accept more than `number` — every call site below passes something the
+ * TYPE claims is already a plain `number` (`ParallelismSummary.totalRunMsAll`,
+ * a `byDay`/`byDayHour` row's `tokens`, ...), but all of it arrives over an
+ * IPC/REST boundary as a deserialized JS value, which the type system can't
+ * actually guarantee at runtime: a stale main-process build serving an
+ * older response shape to an already-rebuilt renderer (a real, previously
+ * observed failure mode in this dev environment — see the "real-world
+ * repro" test for `buildUsageCardSummary`) can hand this code a field that
+ * is genuinely `undefined` despite its declared type, and `undefined /
+ * MS_PER_HOUR` is `NaN`, not a type error. Called at every point one of
+ * these values is first read, not just where it's finally displayed —
+ * `NaN`/`undefined` silently poison every later sum/`Math.max` they touch
+ * (see `calendarLevel`'s own docstring for exactly that chain breaking the
+ * activity grid's colour scale too), so the earlier this clamps, the better.
+ */
+function finiteOrZero(n: number | null | undefined): number {
+  return typeof n === 'number' && Number.isFinite(n) ? n : 0
+}
+
 export function buildUsageCardSummary(
   response: UsageParallelismResponse,
   byDay: UsageDayRow[],
@@ -878,8 +913,8 @@ export function buildUsageCardSummary(
   // keeps both activity-grid layouts' math correct (they depend on a
   // dense, gap-free day sequence) while still sourcing every value from
   // the same place the tokens-per-day chart does.
-  const tokensByDay = new Map(byDay.map((d) => [d.day, totalTokens(d)]))
-  const tokensByDayBucket = new Map(byDayHour.map((r) => [`${r.day}|${r.bucket}`, r.tokens]))
+  const tokensByDay = new Map(byDay.map((d) => [d.day, finiteOrZero(totalTokens(d))]))
+  const tokensByDayBucket = new Map(byDayHour.map((r) => [`${r.day}|${r.bucket}`, finiteOrZero(r.tokens)]))
   const dayScaffold = ensureDenseDayScaffold(p.perDay, response.periodDays)
   const hourlyCells: UsageCardDayHourCell[] = dayScaffold.flatMap((d) =>
     Array.from({ length: HOUR_BUCKETS_PER_DAY }, (_, bucket) => ({
@@ -891,14 +926,16 @@ export function buildUsageCardSummary(
   return {
     summary: {
       periodLabel,
-      multiplier: ratioReady ? p.multiplier : null,
+      multiplier: ratioReady && Number.isFinite(p.multiplier) ? p.multiplier : null,
       // Always the full (live + backfilled) total — a plain sum, never gated. See the field's own doc comment.
-      hours: p.totalRunMsAll / MS_PER_HOUR,
-      liveHours: ratioReady ? p.totalRunMs / MS_PER_HOUR : null,
-      wall: ratioReady ? p.screenTimeMs / MS_PER_HOUR : null,
+      // `finiteOrZero` guards the division itself (see its own docstring) — this is the exact
+      // chokepoint the round-10 "agent hours shows NaN" bug traced back to.
+      hours: finiteOrZero(p.totalRunMsAll) / MS_PER_HOUR,
+      liveHours: ratioReady ? finiteOrZero(p.totalRunMs) / MS_PER_HOUR : null,
+      wall: ratioReady ? finiteOrZero(p.screenTimeMs) / MS_PER_HOUR : null,
       peakDay: { atMs: p.peak.atMs, peak: p.peak.count },
       tasksShipped: response.tasksShipped,
-      tokens,
+      tokens: finiteOrZero(tokens),
       dailyCalendar: dayScaffold.map((d) => ({ day: d.day, tokens: tokensByDay.get(d.day) ?? 0 })),
       hourlyCells,
       periodDays: response.periodDays

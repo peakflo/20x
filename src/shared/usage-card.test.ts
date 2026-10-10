@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   buildUsageCardSummary,
+  calendarLevel,
   drawCard,
   drawDash,
   drawLogo,
@@ -693,5 +694,81 @@ describe('buildUsageCardSummary', () => {
     expect(summary!.multiplier).toBeNull() // still gated — ratio stays live-only/evidence-gated
     expect(summary!.dailyCalendar).toEqual(SPARSE_CALENDAR)
     expect(summary!.hourlyCells).toEqual(SPARSE_HOURLY_CELLS)
+  })
+
+  // ── Round 10: real-app report of "agent hours" showing NaN on the 30-day
+  // tab, with the activity grid rendering as a flat, uniform wash. Traced to
+  // `response.parallelism.totalRunMsAll` arriving as `undefined` at runtime
+  // despite its `number` type — plausible across a main-process/renderer
+  // version skew during local dev (the main process needs a full restart to
+  // pick up backend changes the renderer already has, a previously observed
+  // real failure mode — see "Revision round 6" in the PR description).
+  // `undefined / MS_PER_HOUR` is `NaN`, not a thrown error, so nothing short
+  // of an explicit runtime guard catches it. These tests force exactly that
+  // shape (TypeScript's static types can't prevent it, so the tests reach
+  // for it with `as unknown as number` the same way a stale/mismatched IPC
+  // payload effectively would) and assert the result is always finite.
+  it('real-world repro: totalRunMsAll arrives as undefined at runtime (a version-skewed payload) — "agent hours" stays a finite number, never NaN', () => {
+    const response = makeParallelismResponse({
+      totalRunMsAll: undefined as unknown as number
+    })
+    const { summary } = buildUsageCardSummary(response, THIN_BY_DAY, THIN_BY_DAY_HOUR, 10_000_000, 'Last 30 days')
+    expect(summary).not.toBeNull()
+    expect(Number.isFinite(summary!.hours)).toBe(true)
+    expect(summary!.hours).toBe(0) // no real data to fall back on — 0, not NaN
+  })
+
+  it('same guard applies to totalRunMs/screenTimeMs feeding liveHours/wall — NaN/undefined in, a finite number (or null, same gate as multiplier) out', () => {
+    const response = makeParallelismResponse({
+      totalRunMs: NaN,
+      screenTimeMs: undefined as unknown as number
+    })
+    const { summary } = buildUsageCardSummary(response, THIN_BY_DAY, THIN_BY_DAY_HOUR, 10_000_000, 'Last 30 days')
+    expect(summary).not.toBeNull()
+    // NaN totalRunMs fails the MIN_EVIDENCE_RUN_MS check (NaN >= anything is false), so the
+    // ratio is correctly gated off, not computed from garbage.
+    expect(summary!.liveHours).toBeNull()
+    expect(summary!.wall).toBeNull()
+  })
+
+  it('a malformed byDay/byDayHour row (NaN token total) does not poison the whole activity grid — every dailyCalendar/hourlyCells entry stays finite', () => {
+    const badByDay: UsageDayRow[] = [
+      { ...makeDayRow('2026-01-01', 1_000) },
+      { ...makeDayRow('2026-01-02', NaN) } // e.g. a corrupted pricing-accumulator row
+    ]
+    const badByDayHour: UsageDayHourRow[] = [
+      makeDayHourRow('2026-01-01', 4, 1_000),
+      makeDayHourRow('2026-01-02', 4, NaN)
+    ]
+    const { summary } = buildUsageCardSummary(makeParallelismResponse(), badByDay, badByDayHour, 10_000_000, 'Last 30 days')
+    expect(summary).not.toBeNull()
+    expect(summary!.dailyCalendar.every((d) => Number.isFinite(d.tokens))).toBe(true)
+    expect(summary!.hourlyCells.every((c) => Number.isFinite(c.tokens))).toBe(true)
+    // The real (non-corrupted) day's value is untouched — the guard only neutralizes the bad entry, not the whole grid.
+    expect(summary!.dailyCalendar[0]).toEqual({ day: '2026-01-01', tokens: 1_000 })
+  })
+})
+
+describe('calendarLevel', () => {
+  it('buckets a 0-token cell at level 0 and increasing fractions of maxTokens at levels 1-4', () => {
+    expect(calendarLevel(0, 100)).toBe(0)
+    expect(calendarLevel(10, 100)).toBe(1)
+    expect(calendarLevel(30, 100)).toBe(2)
+    expect(calendarLevel(60, 100)).toBe(3)
+    expect(calendarLevel(90, 100)).toBe(4)
+  })
+
+  it('treats a non-finite tokens or maxTokens as level 0, not an uncaught NaN comparison that falls through to level 1', () => {
+    // This is the exact chain that produced round 10's "flat wash, no visible variation" bug:
+    // a single NaN cell contaminates maxTokens (Math.max with a NaN argument is always NaN),
+    // which makes `frac` NaN for every OTHER cell too — `NaN > 0.75` etc. are all false, so
+    // every real cell silently fell through to the same `return 1`, not level 0.
+    expect(calendarLevel(NaN, 100)).toBe(0)
+    expect(calendarLevel(50, NaN)).toBe(0)
+    expect(calendarLevel(NaN, NaN)).toBe(0)
+    expect(calendarLevel(Infinity, 100)).toBe(0)
+    expect(calendarLevel(50, Infinity)).toBe(0)
+    // A real, non-contaminated cell next to the guard still buckets normally.
+    expect(calendarLevel(90, 100)).toBe(4)
   })
 })
