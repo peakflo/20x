@@ -9,6 +9,7 @@ import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '.
 import { ArtifactCard } from '../components/ArtifactCard'
 import { ChatInput, type ChatInputAttachment } from '../components/ChatInput'
 import { useArtifactStore } from '../stores/artifact-store'
+import type { Artifact } from '@shared/artifacts'
 import { cn } from '../lib/utils'
 import { captureAnalyticsEvent } from '@/lib/analytics'
 import type { Route } from '../App'
@@ -31,6 +32,7 @@ function collectSearchableText(value: unknown, output: string[]): void {
 // Stable empty list — a fresh `[]` per render would invalidate every memo and
 // effect keyed on `messages` while no session exists.
 const EMPTY_MESSAGES: AgentMessage[] = []
+const EMPTY_ARTIFACTS: Artifact[] = []
 
 // Cache per message object: search runs over the whole transcript on every
 // keystroke AND every streamed delta. Message objects are identity-stable per
@@ -78,15 +80,19 @@ const TranscriptRow = memo(function TranscriptRow({
   item,
   activeQuestionId,
   normalizedSearchQuery,
-  onAnswer
+  onAnswer,
+  artifacts,
+  onOpenArtifact
 }: {
   item: TranscriptItem
   activeQuestionId: string | null
   normalizedSearchQuery: string
   onAnswer: (answer: string) => void
+  artifacts: Artifact[]
+  onOpenArtifact: (artifact: Artifact) => void
 }) {
   if (item.type === 'activity') {
-    return <MessageActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} />
+    return <MessageActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} artifacts={artifacts} onOpenArtifact={onOpenArtifact} />
   }
 
   return (
@@ -95,6 +101,8 @@ const TranscriptRow = memo(function TranscriptRow({
       onAnswer={onAnswer}
       canAnswerQuestion={item.message.id === activeQuestionId}
       searchQuery={normalizedSearchQuery}
+      artifacts={artifacts}
+      onOpenArtifact={onOpenArtifact}
     />
   )
 })
@@ -108,7 +116,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const endSend = useAgentStore((s) => s.endSend)
   const artifactsByTask = useArtifactStore((s) => s.artifactsByTask)
   const hydrateArtifacts = useArtifactStore((s) => s.hydrate)
-  const artifacts = artifactsByTask.get(taskId) || []
+  const artifacts = artifactsByTask.get(taskId) || EMPTY_ARTIFACTS
+  const openArtifact = useCallback((artifact: Artifact) => onNavigate({ page: 'artifact', taskId, artifactId: artifact.id }), [onNavigate, taskId])
 
   // Bind this task's transcript from the durable projection on open (and taskId
   // change). The view renders projection state; live updates arrive as deltas.
@@ -754,6 +763,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                         activeQuestionId={activeQuestionId}
                         normalizedSearchQuery={normalizedSearchQuery}
                         onAnswer={handleAnswer}
+                        artifacts={artifacts}
+                        onOpenArtifact={openArtifact}
                       />
                     </div>
                   </div>

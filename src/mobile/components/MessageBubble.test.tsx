@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, fireEvent, cleanup } from '@testing-library/react'
 import { MessageBubble } from './MessageBubble'
 import type { AgentMessage } from '../stores/agent-store'
+import { ArtifactType } from '@shared/artifacts'
 
 function makeQuestionMessage(): AgentMessage {
   return {
@@ -58,6 +59,13 @@ describe('MessageBubble question actions', () => {
 describe('MessageBubble message layout', () => {
   afterEach(() => {
     cleanup()
+  })
+
+  it('shows a SCAD model card inside a message that names the file', () => {
+    const message: AgentMessage = { id: 'case', role: 'assistant', content: 'See zero2w_case.scad', timestamp: new Date(), partType: 'text' }
+    const artifact = { id: 'model', taskId: 'task', type: ArtifactType.FILE, title: 'Case', path: 'attachments/zero2w_case.scad', updatedAt: 1, reloadTrigger: 0 }
+    const view = render(<MessageBubble message={message} artifacts={[artifact]} onOpenArtifact={vi.fn()} />)
+    expect(view.getByRole('button', { name: 'Show 3D' })).toBeTruthy()
   })
 
   it('renders agent text full width without card bubble chrome while keeping user bubbles', () => {

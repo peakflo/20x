@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { AgentTranscriptPanel } from './AgentTranscriptPanel'
 import { SessionStatus } from '@/stores/agent-store'
+import { useArtifactStore } from '@/stores/artifact-store'
+import { ArtifactType } from '@shared/artifacts'
 
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -118,6 +120,15 @@ describe('AgentTranscriptPanel message layout', () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()
+  })
+
+  it('shows a SCAD model card in the chat message that names the file', () => {
+    useArtifactStore.setState({ artifactsByTask: { task: [{ id: 'case', taskId: 'task', type: ArtifactType.FILE, title: 'Case', path: 'attachments/zero2w_case.scad', updatedAt: 1, reloadTrigger: 0 }] } })
+    render(<AgentTranscriptPanel taskId="task" messages={[{
+      id: 'case-message', role: 'assistant', content: 'Open zero2w_case.scad here', timestamp: new Date(), partType: 'text'
+    }]} status={SessionStatus.IDLE} onStop={() => undefined} />)
+    expect(screen.getByRole('button', { name: 'Show 3D' })).toBeInTheDocument()
+    act(() => useArtifactStore.setState({ artifactsByTask: {} }))
   })
 
   it('always renders transcript content as markdown without a raw content control', () => {

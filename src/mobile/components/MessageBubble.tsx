@@ -2,6 +2,10 @@ import { memo, useMemo, useState, type ReactNode } from 'react'
 import { Markdown } from '@/components/ui/Markdown'
 import { cn } from '../lib/utils'
 import type { AgentMessage } from '../stores/agent-store'
+import type { Artifact } from '@shared/artifacts'
+import { findChatScadArtifact } from '@shared/scad-chat'
+import { InlineScadPreview } from '@/components/artifacts/viewers/InlineScadPreview'
+import { api } from '../api/client'
 
 function HighlightedText({ text, query }: { text: string; query?: string }) {
   const normalizedQuery = query?.trim()
@@ -457,20 +461,26 @@ const ReasoningMessage = memo(function ReasoningMessage({ message, searchQuery }
 // virtualization, which makes this the difference between O(changed) and O(all)
 // work per delta.
 export const MessageActivityGroup = memo(
-  function MessageActivityGroup({ messages, searchQuery }: { messages: AgentMessage[]; searchQuery?: string }) {
+  function MessageActivityGroup({ messages, searchQuery, artifacts = [], onOpenArtifact }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
     return (
       <div className="w-full border-l border-border/30 pl-2 py-0.5">
         {messages.map((message) => {
           if (message.partType === 'reasoning') {
             return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
           }
-          return <ToolCallMessage key={message.id} message={message} searchQuery={searchQuery} />
+          const artifact = findChatScadArtifact(message, artifacts)
+          return <div key={message.id}>
+            <ToolCallMessage message={message} searchQuery={searchQuery} />
+            {artifact && onOpenArtifact && <InlineScadPreview artifact={artifact} renderModel={api.artifacts.renderScad} onOpen={() => onOpenArtifact(artifact)} />}
+          </div>
         })}
       </div>
     )
   },
   (prev, next) =>
     prev.searchQuery === next.searchQuery &&
+    prev.artifacts === next.artifacts &&
+    prev.onOpenArtifact === next.onOpenArtifact &&
     prev.messages.length === next.messages.length &&
     prev.messages.every((message, index) => message === next.messages[index])
 )
@@ -519,11 +529,13 @@ interface MessageBubbleProps {
   onAnswer?: (answer: string) => void
   canAnswerQuestion?: boolean
   searchQuery?: string
+  artifacts?: Artifact[]
+  onOpenArtifact?: (artifact: Artifact) => void
 }
 
 // Memoized: message objects are identity-stable per part (store projection
 // cache), so bubbles only re-render when their own message actually changes.
-export const MessageBubble = memo(function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery, artifacts = [], onOpenArtifact }: MessageBubbleProps) {
   // Question — check by data content so it renders correctly regardless of partType
   if (message.tool?.questions && message.tool.questions.length > 0) {
     return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} searchQuery={searchQuery} />
@@ -541,7 +553,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onAnswer, ca
 
   // Tool call — require a name to avoid rendering ghost entries with no tool name
   if (isCompactActivityMessage(message)) {
-    return <MessageActivityGroup messages={[message]} searchQuery={searchQuery} />
+    return <MessageActivityGroup messages={[message]} searchQuery={searchQuery} artifacts={artifacts} onOpenArtifact={onOpenArtifact} />
   }
 
   // Task progress — live subagent task tracking
@@ -564,6 +576,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onAnswer, ca
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const isError = message.partType === 'error'
+  const scadArtifact = !isSystem && !isError && onOpenArtifact ? findChatScadArtifact(message, artifacts) : undefined
 
   return (
     <div className={cn('flex gap-2', isUser ? 'justify-end' : 'justify-start', !isUser && 'w-full')}>
@@ -577,6 +590,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onAnswer, ca
         <div className="break-words min-w-0">
           <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
         </div>
+        {scadArtifact && <InlineScadPreview artifact={scadArtifact} renderModel={api.artifacts.renderScad} onOpen={() => onOpenArtifact?.(scadArtifact)} />}
         {message.stepMeta && (
           <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
             {message.stepMeta.durationMs != null && <span>{(message.stepMeta.durationMs / 1000).toFixed(1)}s</span>}

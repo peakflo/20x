@@ -10,6 +10,8 @@ import { agentSessionApi, artifactApi, voiceApi } from '@/lib/ipc-client'
 import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
+import { findChatScadArtifact } from '@shared/scad-chat'
+import { InlineScadPreview } from '@/components/artifacts/viewers/InlineScadPreview'
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
 import { SpeakMessageButton } from '@/components/voice/SpeakMessageButton'
 import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
@@ -637,11 +639,13 @@ function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFAC
         if (message.partType === 'reasoning') {
           return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
         }
-        const artifact = findMessageArtifact(message, artifacts)
+        const artifact = findMessageArtifact(message, artifacts) || findChatScadArtifact(message, artifacts)
         return (
           <React.Fragment key={message.id}>
             <ToolCallMessage message={message} searchQuery={searchQuery} />
-            {artifact && onOpenArtifact && <ArtifactTranscriptCard artifact={artifact} onOpen={onOpenArtifact} />}
+            {artifact && onOpenArtifact && (artifact.path?.toLowerCase().endsWith('.scad') && artifactApi.renderScad
+              ? <InlineScadPreview artifact={artifact} renderModel={artifactApi.renderScad} onOpen={() => onOpenArtifact(artifact)} />
+              : <ArtifactTranscriptCard artifact={artifact} onOpen={onOpenArtifact} />)}
           </React.Fragment>
         )
       })}
@@ -649,7 +653,7 @@ function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFAC
   )
 }
 
-function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswerQuestion?: boolean; searchQuery?: string }) {
+function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswerQuestion?: boolean; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
   if (message.partType === 'question' && message.tool?.questions) {
     return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} searchQuery={searchQuery} />
   }
@@ -679,6 +683,7 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const isError = message.partType === 'error' || message.partType === 'retry'
+  const scadArtifact = !isSystem && !isError && onOpenArtifact ? findChatScadArtifact(message, artifacts) : undefined
 
   return (
     <div className={`flex gap-2 ${isUser ? 'justify-end' : 'justify-start'} ${!isUser ? 'w-full' : ''}`}>
@@ -699,6 +704,7 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
           </span>
         )}
         <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
+        {scadArtifact && artifactApi.renderScad && <InlineScadPreview artifact={scadArtifact} renderModel={artifactApi.renderScad} onOpen={() => onOpenArtifact?.(scadArtifact)} />}
         <div className={`flex items-center gap-2 mt-1 ${!isUser ? 'opacity-70' : ''}`}>
           <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
           {message.stepMeta && (
@@ -1391,6 +1397,8 @@ export function AgentTranscriptPanel({
                               onAnswer={onSend}
                               canAnswerQuestion={item.message.id === activeQuestionId}
                               searchQuery={normalizedSearchQuery}
+                              artifacts={taskArtifacts}
+                              onOpenArtifact={handleOpenArtifact}
                             />
                           )}
                         </div>
