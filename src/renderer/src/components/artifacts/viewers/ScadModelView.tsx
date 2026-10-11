@@ -66,7 +66,7 @@ export function ScadModelView({ stl }: { stl: string }) {
     try {
       const bytes = Uint8Array.from(atob(stl), (character) => character.charCodeAt(0))
       const mesh = parseScadStl(bytes)
-      gl = canvas.getContext('webgl', { antialias: true, alpha: false })
+      gl = canvas.getContext('webgl', { antialias: true, alpha: true })
       if (!gl) throw new Error('This device cannot show a WebGL 3D view.')
       const vertex = makeShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER)
       const fragment = makeShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER)
@@ -98,7 +98,8 @@ export function ScadModelView({ stl }: { stl: string }) {
       const zoomLocation = gl.getUniformLocation(program, 'uZoom')
       const aspectLocation = gl.getUniformLocation(program, 'uAspect')
       gl.enable(gl.DEPTH_TEST)
-      gl.clearColor(0.05, 0.07, 0.1, 1)
+      // Let the canvas CSS background follow the chat theme without rebuilding the model.
+      gl.clearColor(0, 0, 0, 0)
 
       const draw = () => {
         frame = 0
@@ -168,7 +169,7 @@ export function ScadModelView({ stl }: { stl: string }) {
   }, [stl])
 
   return <div className="relative h-full min-h-[240px] w-full">
-    <canvas ref={canvasRef} aria-label="3D SCAD preview" className="h-full w-full touch-none" />
+    <canvas ref={canvasRef} aria-label="3D SCAD preview" className="h-full w-full touch-none bg-background" />
     {error && <div role="alert" className="absolute inset-0 flex items-center justify-center bg-background p-4 text-center text-xs text-red-400">{error}</div>}
   </div>
 }
