@@ -46,6 +46,7 @@ import type {
   LocalCommandValidationResult,
   UpdateAcpAgentInstanceDTO
 } from '@shared/acp-registry'
+import type { CursorAuthStatus, CursorLoginCompleteEvent, CursorLoginUrlResult } from '@shared/cursor-auth'
 import type { ArtifactApi } from '@shared/artifacts'
 import type {
   VoiceActionOutcome,
@@ -288,6 +289,13 @@ interface ElectronAPI {
     delete: (id: string) => Promise<boolean>
     install: (id: string) => Promise<AcpInstallResult>
     validateLocalCommand: (executable: string) => Promise<LocalCommandValidationResult>
+  }
+  cursor: {
+    authStatus: () => Promise<CursorAuthStatus>
+    startBrowserLogin: () => Promise<CursorLoginUrlResult>
+    cancelBrowserLogin: () => Promise<void>
+    logout: () => Promise<void>
+    onLoginComplete: (callback: (event: CursorLoginCompleteEvent) => void) => () => void
   }
   agentSession: {
     start: (agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => Promise<AgentSessionStartResult>

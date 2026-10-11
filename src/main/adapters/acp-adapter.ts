@@ -19,11 +19,11 @@
  * the *shape* of its `initialize` response (see `detectGeneration`), not the
  * numeric `protocolVersion` it reports — some agents misreport that number.
  *
- * Cursor is NOT special-cased here. It is wired up today through a thin,
- * explicitly temporary shim in agent-manager.ts (see the comment at that
- * call site) while it moves to a native `@cursor/sdk` integration in a
- * separate stacked PR. Codex keeps its own separate, untouched
- * CodexAppServerAdapter.
+ * Cursor is NOT special-cased here, and nothing dispatches Cursor agents to
+ * this client anymore — Cursor now has its own dedicated adapter built on
+ * the official `@cursor/sdk` package (see `cursor-sdk-adapter.ts`), wired up
+ * in agent-manager.ts's `CodingAgentType.CURSOR` case. Codex keeps its own
+ * separate, untouched CodexAppServerAdapter.
  */
 
 import { spawn, ChildProcess } from 'child_process'

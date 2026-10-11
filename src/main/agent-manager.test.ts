@@ -59,6 +59,7 @@ vi.mock('electron', () => {
 vi.mock('./adapters/opencode-adapter', () => ({ OpencodeAdapter: vi.fn() }))
 vi.mock('./adapters/claude-code-adapter', () => ({ ClaudeCodeAdapter: vi.fn() }))
 vi.mock('./adapters/acp-adapter', () => ({ AcpAgentAdapter: vi.fn() }))
+vi.mock('./adapters/cursor-sdk-adapter', () => ({ CursorSdkAdapter: vi.fn() }))
 vi.mock('./adapters/codex-app-server-adapter', () => ({ CodexAppServerAdapter: vi.fn() }))
 vi.mock('./adapters/pi-adapter', () => ({ PiAdapter: vi.fn() }))
 vi.mock('./task-api-server', () => ({ getTaskApiPort: vi.fn(), waitForTaskApiServer: vi.fn() }))
@@ -72,6 +73,7 @@ vi.mock('./secret-broker', () => ({
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
 import { AcpAgentAdapter } from './adapters/acp-adapter'
+import { CursorSdkAdapter } from './adapters/cursor-sdk-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import { getTaskApiPort } from './task-api-server'
@@ -244,16 +246,15 @@ describe('AgentManager skill file paths', () => {
       expect(AcpAgentAdapter).not.toHaveBeenCalled()
     })
 
-    it('uses ACP for Cursor agents', () => {
+    it('uses the native Cursor SDK adapter for Cursor agents', () => {
       const mockDb = createMockDb({ coding_agent: 'cursor' })
       manager = new AgentManager(mockDb)
 
       const adapter = (manager as any).getAdapter('agent-1')
 
-      // TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR; this
-      // shim keeps it on the generic ACP client until then (see agent-manager.ts).
-      expect(adapter).toBeInstanceOf(AcpAgentAdapter)
-      expect(AcpAgentAdapter).toHaveBeenCalledWith({ command: 'cursor-agent', args: ['acp'] })
+      expect(adapter).toBeInstanceOf(CursorSdkAdapter)
+      expect(CursorSdkAdapter).toHaveBeenCalledWith({ db: mockDb })
+      expect(AcpAgentAdapter).not.toHaveBeenCalled()
     })
 
     it('uses the Pi RPC adapter for Pi agents', () => {

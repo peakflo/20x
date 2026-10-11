@@ -570,6 +570,24 @@ export function registerIpcHandlers(
     return failure ? { ok: false as const, kind: failure.kind, message: failure.message } : { ok: true as const }
   })
 
+  // Cursor SDK sign-in: Settings → Agents "Cursor" card (subscription login status/actions).
+  // API-key status is per-agent config (AgentForm), not shown here.
+  ipcMain.handle('cursor:authStatus', async () => {
+    return agentManager.cursorAuthStatus()
+  })
+
+  ipcMain.handle('cursor:startBrowserLogin', async () => {
+    return agentManager.startCursorBrowserLogin()
+  })
+
+  ipcMain.handle('cursor:cancelBrowserLogin', () => {
+    agentManager.cancelCursorBrowserLogin()
+  })
+
+  ipcMain.handle('cursor:logout', async () => {
+    await agentManager.cursorLogout()
+  })
+
   // Agent Session handlers
   ipcMain.handle('agentSession:start', async (_, agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => {
     agentManager.noteUserTaskActivity(taskId)

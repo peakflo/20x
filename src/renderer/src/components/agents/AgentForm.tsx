@@ -14,6 +14,7 @@ import { useMcpStore } from '@/stores/mcp-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
+import { CursorSettingsCard } from '@/components/settings/tabs/CursorSettingsCard'
 import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
 import { HARNESS_INSTANCE_PREFIX, harnessDropdownOptions } from '@shared/harness-instances'
 import { ACP_INSTANCE_PREFIX, acpInstanceDropdownOptions, parseAcpInstanceDropdownValue } from '@shared/harness-instances'
@@ -138,8 +139,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       // For Codex, fetch models dynamically from Codex CLI
       fetchCodexModels()
     } else if (codingAgent === CodingAgentType.CURSOR) {
+      // Show the small hardcoded fallback immediately so the picker is never
+      // empty, then replace it with the live catalog once it resolves.
       setAvailableModels(CURSOR_MODELS)
       setModel(CURSOR_MODELS[0].id)
+      fetchCursorModels()
     } else if (codingAgent === CodingAgentType.PI) {
       fetchModels()
     } else if (codingAgent === CodingAgentType.ACP) {
@@ -243,6 +247,31 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const fetchCodexModels = () => {
     // Use hardcoded models for Codex
     setAvailableModels(CODEX_MODELS)
+  }
+
+  /**
+   * Fetches Cursor's live model catalog via the same generic
+   * agentConfig:getProviders IPC path OpenCode/Pi use (CursorSdkAdapter.getProviders
+   * is backed by `Cursor.models.list`, 30-minute-cached on success). Unlike
+   * `fetchModels`, model ids are used bare (no `provider/` prefix) since
+   * Cursor has a single flat model id space, matching what the adapter's
+   * `AgentOptions.model.id` expects. Leaves the CURSOR_MODELS fallback in
+   * place on failure or an empty catalog so the picker is never empty.
+   */
+  const fetchCursorModels = async () => {
+    try {
+      if (!agentConfigApi || typeof agentConfigApi.getProviders !== 'function') return
+      const result = await agentConfigApi.getProviders(serverUrl, codingAgent)
+      const cursorProvider = result?.providers?.find((p) => p.id === 'cursor')
+      const rawModels = Array.isArray(cursorProvider?.models) ? cursorProvider.models : []
+      const models: Model[] = rawModels
+        .map((m) => (m && typeof m === 'object' ? (m as { id?: string; name?: string }) : null))
+        .filter((m): m is { id: string; name?: string } => !!m?.id)
+        .map((m) => ({ id: m.id, name: m.name || m.id }))
+      if (models.length > 0) setAvailableModels(models)
+    } catch (error) {
+      console.error('[AgentForm] Error fetching Cursor models:', error)
+    }
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -606,20 +635,27 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
               onChange={(e) => setAuthMethod(e.target.value as ClaudeAuthMethod)}
               className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
             >
-              <option value="subscription">Cursor CLI Login (default)</option>
+              <option value="subscription">Cursor Sign-in (default)</option>
               <option value="api_key">API Key</option>
             </select>
             {authMethod === 'subscription' && (
               <p className="text-xs text-muted-foreground">
-                Uses your existing Cursor CLI login, exactly like running <code>cursor-agent</code> in a terminal.
+                Uses the Cursor sign-in below. This credential is shared by every agent using this method.
                 {hasCursorEnv && (
                   <span className="block mt-1 text-yellow-500">
-                    Note: CURSOR_API_KEY found in environment but will be ignored in CLI login mode.
+                    Note: CURSOR_API_KEY found in environment but will be ignored while signed in this way.
                   </span>
                 )}
               </p>
             )}
           </div>
+
+          {authMethod === 'subscription' && (
+            <div className="space-y-1.5">
+              <Label>Cursor Sign-in</Label>
+              <CursorSettingsCard />
+            </div>
+          )}
 
           {authMethod === 'api_key' && (
             <div className="space-y-1.5">
