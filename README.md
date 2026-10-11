@@ -9,9 +9,9 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey.svg)](.)
 [![Discord](https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white)](https://discord.gg/fUVsqTWDxX)
 
-**One app. All your tasks. Powered by AI agents.**
+**Give 20x the task. Keep your focus.**
 
-20x is a desktop app that turns your task list into an AI-powered workforce. Connect your tools — Linear, HubSpot, YouTrack, GitLab, Notion, Peakflo — assign tasks to AI agents, and watch them work in real time.
+20x is a desktop app that brings tasks, AI agents, and results into one place. Connect a task source such as Linear, HubSpot, YouTrack, GitLab, Notion, or Peakflo. 20x keeps the task brief with the work, helps select an agent and the right tools, and brings the result back for review.
 
 **No cloud. No subscriptions. Everything runs on your machine.**
 
@@ -19,13 +19,13 @@
   <img src="resources/product-demo.gif" alt="20x product demo" />
 </p>
 
-## Why 20x?
+## Fewer small decisions. Fewer app switches.
 
-Most AI tools make you copy-paste context between tabs. 20x flips it: **your tasks come to the agents, not the other way around.**
+You should be able to hand off a task without copying its brief into a new chat, choosing an agent from scratch, or searching another app for the result. In 20x, the task, agent, work log, and output stay together.
 
-- Pull a task from Linear → AI agent picks it up, reads the context, writes the code, opens a PR
-- Got a backlog of tickets? → Queue them up, agents work through them while you review
-- Need human approval? → Agents pause and ask before doing anything risky
+1. **Bring in the task.** Connect a task source or create a task in 20x. Its brief stays attached.
+2. **Let 20x set up the work.** Triage sets the priority, agent, skills, and repository. The agent works from that context.
+3. **Review the result.** Follow the work log and output on the task. Approve a risky step when the agent asks.
 
 ## How It Works
 
@@ -45,11 +45,17 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
   <img src="resources/integrations.png" alt="20x integrations: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → 20x ↔ GitLab, Github, MCP → Claude Code, Opencode, OpenAI Codex, Cursor, Pi; Skills automatically improved" />
 </p>
 
+Light mode screenshots below show the app with sample tasks, skills, and browser content.
+
 ### 📊 Dashboard Workspace
 - **Overview dashboard** — See task completion stats, AI autonomy metrics, and agent success rates at a glance
 - **Kanban task board** — Tasks grouped by status with drag-and-drop support
 - **Workflow applications** — Launch and manage workflow apps directly from the dashboard
 - **Presetup wizard** — Guided templates to get started quickly with new applications
+
+<p align="center">
+  <img src="docs/screenshots/readme-dashboard-light.png" alt="20x light mode dashboard showing tasks moving from triage through agent work to review" width="960" />
+</p>
 
 ### 🤖 Multi-Agent Support
 - **Claude Code** — Anthropic's official agent SDK (Claude Sonnet 4.6)
@@ -60,6 +66,20 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 - **Live transcripts** — Watch agents think and work in real time with message counts
 - **Human-in-the-loop** — Approve risky actions before execution
 - **Task progress tracking** — Real-time progress events during agent execution
+
+The task brief, repository, skills, and agent work log stay in the same view.
+
+<p align="center">
+  <img src="docs/screenshots/readme-agent-work-light.png" alt="20x light mode task showing an agent work log beside the task brief, repository, and skill" width="960" />
+</p>
+
+### 🕸️ Canvas Workspace
+
+Open a parent task and its subtasks as linked panels. Keep an embedded browser beside them so the agent can work with the same reference page you see. The brief, related work, and browser remain in one workspace as you move between steps.
+
+<p align="center">
+  <img src="docs/screenshots/readme-canvas-light.png" alt="20x light mode canvas with a parent task linked to two subtasks and an embedded browser linked to the implementation subtask" width="960" />
+</p>
 
 ### 🔗 Smart Integrations
 - **Linear** — Pull issues, update status, post comments
@@ -78,6 +98,10 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 - **2-way sync** — Skills synchronize bidirectionally between 20x and Workflo
 - **Searchable skills** — Quickly find skills with built-in search
 
+<p align="center">
+  <img src="docs/screenshots/readme-skills-light.png" alt="20x light mode skills editor showing a reusable skill, confidence, and instructions" width="960" />
+</p>
+
 ### 🛠 Developer-First
 - **Git worktree management** — Isolated branches per task
 - **Repository context** — Agents know which repos to work on (GitHub & GitLab)
@@ -94,6 +118,10 @@ Most AI tools make you copy-paste context between tabs. 20x flips it: **your tas
 - **File attachments** — Add context files to tasks
 - **Output fields** — Structured task results
 - **Smart search** — Find anything fast
+
+<p align="center">
+  <img src="docs/screenshots/readme-review-light.png" alt="20x light mode task ready for review with the agent work log and structured output together" width="960" />
+</p>
 
 ### 🎙 Voice (desktop, optional)
 - **Local speech to text** — Runs on your machine; no audio is stored or sent anywhere
@@ -257,9 +285,9 @@ We welcome contributions! Here's how:
 - Cost tracking (token usage per session)
 - Agent templates (pre-configured profiles)
 - Plugin marketplace (community skills)
-- Light theme
 
 ### Recently Shipped
+- ✅ Light theme
 - ✅ Cursor coding agent support (Agent Client Protocol)
 - ✅ Idle workspace cleanup — node_modules pruning after 7 days
 - ✅ Browser console logs and network activity exposed via MCP

@@ -27,7 +27,10 @@ const { mockChildKill, mockSpawn } = vi.hoisted(() => {
 })
 
 vi.mock('child_process', () => ({
-  spawn: mockSpawn
+  spawn: mockSpawn,
+  // Only referenced via `promisify(execFile)` at module load time (ACP
+  // registry runner-presence checks) — never actually invoked by these tests.
+  execFile: vi.fn()
 }))
 
 import { ipcMain } from 'electron'

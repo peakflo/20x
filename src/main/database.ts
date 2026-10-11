@@ -38,12 +38,17 @@ export interface AgentMcpServerEntry {
 }
 
 export interface AgentConfigRecord {
-  coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor' | 'pi'
+  coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor' | 'pi' | 'acp'
   /**
    * Harness instance (one subscription login of the coding_agent). Unset means
    * the default instance of the coding_agent. Ignored for API-key agents.
    */
   harness_instance_id?: string
+  /**
+   * ACP agent instance this agent runs (one row of `acp_agent_instances`).
+   * Required when coding_agent is 'acp'; ignored otherwise.
+   */
+  acp_instance_id?: string
   model?: string
   reasoning_effort?: ReasoningEffort
   auth_method?: 'subscription' | 'api_key'
@@ -80,6 +85,73 @@ export interface CreateHarnessInstanceData {
 export interface UpdateHarnessInstanceData {
   label?: string
   home_path?: string
+}
+
+/** How an ACP agent instance's command was obtained. */
+export type AcpInstanceSource = 'registry' | 'local'
+/** Which distribution channel the registry resolver picked (or was pinned to). */
+export type AcpInstanceDistribution = 'auto' | 'binary' | 'npx' | 'uvx'
+
+/** A configured ACP (Agent Client Protocol) agent instance: a registry install or a local command. */
+export interface AcpAgentInstanceRecord {
+  id: string
+  display_name: string
+  source: AcpInstanceSource
+  /** Registry agent id (e.g. "devin"). Null for a local-command instance. */
+  registry_agent_id: string | null
+  /** Registry agent version this instance was installed at. Null for local commands. */
+  version: string | null
+  distribution: AcpInstanceDistribution
+  /** Executable override (registry instances) or the local command's executable (local instances). */
+  command_path: string | null
+  command_args: string[]
+  /** Non-secret env vars, stored as plain text. */
+  env: Record<string, string>
+  /** `secrets` table ids providing additional env vars (secret env vars never stored in plain text). */
+  secret_ids: string[]
+  auth_method_id: string | null
+  custom_models: string[]
+  created_at: string
+}
+
+interface AcpAgentInstanceRow {
+  id: string
+  display_name: string
+  source: string
+  registry_agent_id: string | null
+  version: string | null
+  distribution: string
+  command_path: string | null
+  command_args: string
+  env: string
+  secret_ids: string
+  auth_method_id: string | null
+  custom_models: string
+  created_at: string
+}
+
+export interface CreateAcpAgentInstanceData {
+  display_name: string
+  source: AcpInstanceSource
+  registry_agent_id?: string | null
+  version?: string | null
+  distribution?: AcpInstanceDistribution
+  command_path?: string | null
+  command_args?: string[]
+  env?: Record<string, string>
+  secret_ids?: string[]
+  auth_method_id?: string | null
+  custom_models?: string[]
+}
+
+export interface UpdateAcpAgentInstanceData {
+  display_name?: string
+  command_path?: string | null
+  command_args?: string[]
+  env?: Record<string, string>
+  secret_ids?: string[]
+  auth_method_id?: string | null
+  custom_models?: string[]
 }
 
 export interface McpServerConfigRecord {
@@ -361,6 +433,60 @@ export interface TranscriptPartRecord {
   rev: number
 }
 
+/** Raw `agent_run_intervals` row, snake_case as stored. */
+interface AgentRunIntervalRow {
+  id: string
+  task_id: string
+  agent_id: string
+  session_id: string
+  provider: string
+  harness_instance_id: string | null
+  started_at_ms: number
+  ended_at_ms: number | null
+  end_reason: string | null
+}
+
+/**
+ * One "an agent session was actively working" span. See
+ * src/main/usage/agent-run-intervals.ts (writer) and
+ * src/main/usage/usage-parallelism.ts (reader).
+ */
+export interface AgentRunIntervalRecord {
+  id: string
+  taskId: string
+  agentId: string
+  sessionId: string
+  provider: string
+  harnessInstanceId: string | null
+  startedAtMs: number
+  /** Null while the session is still working. */
+  endedAtMs: number | null
+  /** `'idle' | 'waiting_approval' | 'error' | 'stopped' | 'crash_recovered' | 'backfilled'` — free-form, not an enum: new reasons can be added without a migration. */
+  endReason: string | null
+}
+
+interface AppFocusIntervalRow {
+  id: string
+  started_at_ms: number
+  ended_at_ms: number | null
+  last_heartbeat_ms: number
+}
+
+/**
+ * One span the main window was focused/visible — the "my multiplier"
+ * denominator (the user's own screen time in the app). See
+ * src/main/usage/app-focus-intervals.ts (writer) and
+ * src/main/usage/usage-parallelism.ts (reader).
+ */
+export interface AppFocusIntervalRecord {
+  id: string
+  startedAtMs: number
+  /** Null while the window is still focused. */
+  endedAtMs: number | null
+  /** Last time this still-open interval was touched — crash recovery's close time, not `startedAtMs`. */
+  lastHeartbeatMs: number
+}
+
 export interface TaskRecord {
   server_pending_edits?: Record<string, unknown>
   server_managed?: boolean
@@ -627,11 +753,63 @@ function deserializeHarnessInstance(row: HarnessInstanceRow): HarnessInstanceRec
   }
 }
 
+function deserializeAcpAgentInstance(row: AcpAgentInstanceRow): AcpAgentInstanceRecord {
+  return {
+    id: row.id,
+    display_name: row.display_name,
+    source: row.source as AcpInstanceSource,
+    registry_agent_id: row.registry_agent_id,
+    version: row.version,
+    distribution: row.distribution as AcpInstanceDistribution,
+    command_path: row.command_path,
+    command_args: JSON.parse(row.command_args || '[]') as string[],
+    env: JSON.parse(row.env || '{}') as Record<string, string>,
+    secret_ids: JSON.parse(row.secret_ids || '[]') as string[],
+    auth_method_id: row.auth_method_id,
+    custom_models: JSON.parse(row.custom_models || '[]') as string[],
+    created_at: row.created_at
+  }
+}
+
+function deserializeAgentRunInterval(row: AgentRunIntervalRow): AgentRunIntervalRecord {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    agentId: row.agent_id,
+    sessionId: row.session_id,
+    provider: row.provider,
+    harnessInstanceId: row.harness_instance_id,
+    startedAtMs: row.started_at_ms,
+    endedAtMs: row.ended_at_ms,
+    endReason: row.end_reason
+  }
+}
+
+function deserializeAppFocusInterval(row: AppFocusIntervalRow): AppFocusIntervalRecord {
+  return {
+    id: row.id,
+    startedAtMs: row.started_at_ms,
+    endedAtMs: row.ended_at_ms,
+    lastHeartbeatMs: row.last_heartbeat_ms
+  }
+}
+
 /** Label for a migrated account_home: the harness name plus the directory name, e.g. "Codex · work". */
 function legacyInstanceLabel(homePath: string): string {
   const base = homePath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
   const name = base.replace(/^\.+/, '') || 'account'
   return name
+}
+
+/**
+ * Every agent is "always allow" (auto-approve) by default: the seeded Default
+ * Agent, agents created through the editor, and agents created
+ * programmatically (enterprise sync, plugin imports). An explicit
+ * permission_mode — including an explicit 'ask' — always wins.
+ */
+export function applyDefaultPermissionMode(config: AgentConfigRecord): AgentConfigRecord {
+  if (config.permission_mode !== undefined) return config
+  return { ...config, permission_mode: 'allow' }
 }
 
 function deserializeAgent(row: AgentRow): AgentRecord {
@@ -1059,8 +1237,11 @@ export class DatabaseManager {
 
     // These must run on EVERY startup (not just during migrations)
     // because they start runtime services (task API server) and
-    // ensure default records exist (MCP server, orchestrator skill).
+    // ensure default records exist (default agent, MCP server,
+    // orchestrator skill).
     this.ensureTranscriptRevColumn()
+    this.seedDefaultAgent()
+    this.migrateAgentPermissionDefaults()
     this.initializeTasksFts()
     this.initializeTaskManagementMcpServer()
     this.initializeOrchestratorSkill()
@@ -1191,6 +1372,22 @@ export class DatabaseManager {
         harness_type TEXT NOT NULL CHECK (harness_type IN ('claude-code', 'codex')),
         label TEXT NOT NULL,
         home_path TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS acp_agent_instances (
+        id TEXT PRIMARY KEY,
+        display_name TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('registry', 'local')),
+        registry_agent_id TEXT,
+        version TEXT,
+        distribution TEXT NOT NULL DEFAULT 'auto' CHECK (distribution IN ('auto', 'binary', 'npx', 'uvx')),
+        command_path TEXT,
+        command_args TEXT NOT NULL DEFAULT '[]',
+        env TEXT NOT NULL DEFAULT '{}',
+        secret_ids TEXT NOT NULL DEFAULT '[]',
+        auth_method_id TEXT,
+        custom_models TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL
       );
 
@@ -1363,6 +1560,54 @@ export class DatabaseManager {
       -- NOT here. On a DB created before rev existed, CREATE TABLE IF NOT EXISTS
       -- is a no-op (no rev column), so building a rev index here would fail with
       -- no-such-column before the ALTER TABLE migration runs.
+
+      -- One row per "an agent session was actively working" span. Opened the
+      -- instant a session's status becomes 'working', closed the instant it
+      -- leaves 'working' (idle/waiting_approval/error) or the session is torn
+      -- down. Powers the usage "parallelism" query engine (usage-parallelism.ts)
+      -- — multiplier, peak concurrency, per-day run hours. See
+      -- src/main/usage/agent-run-intervals.ts for the writer and
+      -- src/main/usage/usage-parallelism.ts for the reader. New table, so no
+      -- SCHEMA_VERSION bump is needed (CREATE TABLE IF NOT EXISTS runs on every
+      -- startup, including for existing installs).
+      CREATE TABLE IF NOT EXISTS agent_run_intervals (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        harness_instance_id TEXT,
+        started_at_ms INTEGER NOT NULL,
+        ended_at_ms INTEGER,
+        end_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_started ON agent_run_intervals(started_at_ms);
+      CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_ended ON agent_run_intervals(ended_at_ms);
+      -- Looked up by session_id on every status transition (to find the
+      -- currently-open interval for that session) and by open-ness on crash
+      -- recovery (startup sweep for ended_at_ms IS NULL rows).
+      CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_session_open ON agent_run_intervals(session_id, ended_at_ms);
+
+      -- One row per span the main window was focused/visible — the "my
+      -- multiplier" denominator is the user's own screen time in the app, not
+      -- agent wall-clock time. Single-user local app: no session/agent/task
+      -- columns. Opened on window focus, closed on blur/hide/minimize/quit.
+      -- See src/main/usage/app-focus-intervals.ts for the writer.
+      --
+      -- last_heartbeat_ms is touched periodically while the window stays
+      -- focused (not just at open/close) so a crash mid-session leaves a
+      -- precise, bounded trail instead of an open row that would otherwise
+      -- read as "focused" for however long until the next app start — crash
+      -- recovery closes any row still open at startup using this column, not
+      -- started_at_ms.
+      CREATE TABLE IF NOT EXISTS app_focus_intervals (
+        id TEXT PRIMARY KEY,
+        started_at_ms INTEGER NOT NULL,
+        ended_at_ms INTEGER,
+        last_heartbeat_ms INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_started ON app_focus_intervals(started_at_ms);
+      CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_ended ON app_focus_intervals(ended_at_ms);
     `)
   }
 
@@ -1834,18 +2079,64 @@ export class DatabaseManager {
       CREATE INDEX IF NOT EXISTS idx_skills_enterprise_id ON skills(enterprise_skill_id);
     `)
 
-    // Seed default agent if none exist
-    const agentCount = this.db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number }
-    if (agentCount.count === 0) {
-      const now = new Date().toISOString()
-      this.db.prepare(`
-        INSERT INTO agents (id, name, server_url, config, is_default, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 1, ?, ?)
-      `).run(createId(), 'Default Agent', 'http://localhost:4096', '{}', now, now)
-    }
-
     // Migration v4: FTS5 full-text search index for similar task search
     this.initializeTasksFts()
+  }
+
+  /**
+   * Ensures the Default Agent exists, seeded with `permission_mode: 'allow'`
+   * ("Allow automatically") — the app-wide default; the user can still change
+   * it in the agent editor.
+   *
+   * Runs on EVERY startup (not behind the schema-version gate): a fresh
+   * install gets the Default Agent on first launch, and an install whose
+   * agents were all removed gets it back — always with always-allow
+   * permissions. A no-op once any agent exists.
+   */
+  private seedDefaultAgent(): void {
+    const agentCount = this.db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number }
+    if (agentCount.count > 0) return
+
+    const now = new Date().toISOString()
+    this.db.prepare(`
+      INSERT INTO agents (id, name, server_url, config, is_default, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, ?, ?)
+    `).run(
+      createId(),
+      'Default Agent',
+      'http://localhost:4096',
+      JSON.stringify(applyDefaultPermissionMode({})),
+      now,
+      now
+    )
+  }
+
+  /**
+   * Backfills `permission_mode: 'allow'` on agents whose config does not carry
+   * the key. The app default changed from 'ask' to 'allow', and agents created
+   * before that change — including the previously seeded Default Agent — have
+   * no key at all.
+   *
+   * Only ABSENCE is backfilled. The data cannot tell "never changed" from "the
+   * user picked ask", so an explicit permission_mode ('ask' included) is always
+   * left alone. Idempotent: once every config carries the key the pass is a
+   * no-op, so it runs on every startup. JSON-safe: rows whose config is not a
+   * JSON object are skipped untouched.
+   */
+  private migrateAgentPermissionDefaults(): void {
+    const rows = this.db.prepare('SELECT id, config FROM agents').all() as Array<{ id: string; config: string | null }>
+    for (const row of rows) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(row.config || '{}')
+      } catch {
+        continue
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+      if ('permission_mode' in parsed) continue
+      ;(parsed as Record<string, unknown>).permission_mode = 'allow'
+      this.db.prepare('UPDATE agents SET config = ? WHERE id = ?').run(JSON.stringify(parsed), row.id)
+    }
   }
 
   /**
@@ -2203,6 +2494,27 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true })
   }
 
+  /**
+   * Removes the task's artifact registry and files (`.20x/artifacts.json`,
+   * `artifacts/<id>/...`), including inline HTML renders — but only those two
+   * subpaths, never the whole workspace directory. A git worktree checkout
+   * can live alongside them at `workspaces/<taskId>/<repoName>` (see
+   * `worktree-manager.ts`), and removing that needs `git worktree remove`
+   * (`WorktreeManager.cleanupTaskWorkspace`), not a raw directory delete, or
+   * the main repository is left with stale `.git/worktrees` metadata. Task
+   * deletion does not reliably run that worktree cleanup first (the
+   * interactive delete flow does, but only when repos + an org setting are
+   * present; a plugin-driven delete does not run it at all), so this stays
+   * scoped to what it safely owns.
+   */
+  deleteTaskWorkspace(taskId: string): void {
+    const dir = join(app.getPath('userData'), 'workspaces', taskId)
+    for (const name of ['.20x', 'artifacts']) {
+      const target = join(dir, name)
+      if (existsSync(target)) rmSync(target, { recursive: true, force: true })
+    }
+  }
+
   getTasks(): TaskRecord[] {
     if (!this.ensureDbOpen()) return []
 
@@ -2509,6 +2821,302 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     this.db.prepare('DELETE FROM transcript_parts WHERE task_id = ?').run(taskId)
   }
 
+  // ── agent_run_intervals ──────────────────────────────────────
+  // See src/main/usage/agent-run-intervals.ts (writer: live recording, crash
+  // recovery, backfill) and src/main/usage/usage-parallelism.ts (reader: the
+  // parallelism query engine). These methods are the only place that touches
+  // the table's SQL, per this file's "all schema + queries live in
+  // database.ts" convention (docs/database-migrations.md).
+
+  /**
+   * Opens a new run interval for a session, unless one is already open for
+   * it (idempotent — a duplicate "became working" signal is a no-op, not a
+   * second row).
+   */
+  openAgentRunInterval(input: {
+    taskId: string
+    agentId: string
+    sessionId: string
+    provider: string
+    harnessInstanceId: string | null
+    startedAtMs: number
+  }): AgentRunIntervalRecord {
+    if (!this.ensureDbOpen()) throw new Error('Database not open')
+    const existing = this.getOpenAgentRunIntervalForSession(input.sessionId)
+    if (existing) return existing
+
+    const id = createId()
+    this.db.prepare(`
+      INSERT INTO agent_run_intervals (id, task_id, agent_id, session_id, provider, harness_instance_id, started_at_ms, ended_at_ms, end_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+    `).run(id, input.taskId, input.agentId, input.sessionId, input.provider, input.harnessInstanceId ?? null, input.startedAtMs)
+
+    return {
+      id,
+      taskId: input.taskId,
+      agentId: input.agentId,
+      sessionId: input.sessionId,
+      provider: input.provider,
+      harnessInstanceId: input.harnessInstanceId ?? null,
+      startedAtMs: input.startedAtMs,
+      endedAtMs: null,
+      endReason: null
+    }
+  }
+
+  /**
+   * Inserts an already-closed interval directly — used by crash recovery
+   * (closing at last-known-activity time) and by the backfill job (deriving
+   * historical intervals from transcript/usage timestamps).
+   */
+  insertClosedAgentRunInterval(input: {
+    taskId: string
+    agentId: string
+    sessionId: string
+    provider: string
+    harnessInstanceId: string | null
+    startedAtMs: number
+    endedAtMs: number
+    endReason: string
+  }): AgentRunIntervalRecord {
+    if (!this.ensureDbOpen()) throw new Error('Database not open')
+    const id = createId()
+    this.db.prepare(`
+      INSERT INTO agent_run_intervals (id, task_id, agent_id, session_id, provider, harness_instance_id, started_at_ms, ended_at_ms, end_reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, input.taskId, input.agentId, input.sessionId, input.provider, input.harnessInstanceId ?? null, input.startedAtMs, input.endedAtMs, input.endReason)
+
+    return {
+      id,
+      taskId: input.taskId,
+      agentId: input.agentId,
+      sessionId: input.sessionId,
+      provider: input.provider,
+      harnessInstanceId: input.harnessInstanceId ?? null,
+      startedAtMs: input.startedAtMs,
+      endedAtMs: input.endedAtMs,
+      endReason: input.endReason
+    }
+  }
+
+  /** The currently-open interval for a session, if any (there should be at most one). */
+  getOpenAgentRunIntervalForSession(sessionId: string): AgentRunIntervalRecord | undefined {
+    if (!this.ensureDbOpen()) return undefined
+    const row = this.db.prepare(`
+      SELECT * FROM agent_run_intervals WHERE session_id = ? AND ended_at_ms IS NULL
+      ORDER BY started_at_ms DESC LIMIT 1
+    `).get(sessionId) as AgentRunIntervalRow | undefined
+    return row ? deserializeAgentRunInterval(row) : undefined
+  }
+
+  /**
+   * Closes the open interval for a session, if any. Idempotent: a session
+   * with no open interval (already closed, or never opened — e.g. an
+   * excluded session) is a no-op and returns null. Safe to call defensively
+   * from every session-destroy path, not just the status-broadcast hook.
+   */
+  closeOpenAgentRunInterval(sessionId: string, endedAtMs: number, endReason: string): AgentRunIntervalRecord | null {
+    if (!this.ensureDbOpen()) return null
+    const existing = this.getOpenAgentRunIntervalForSession(sessionId)
+    if (!existing) return null
+    // Never produce a negative-duration or zero-duration-by-mistake row from
+    // a clock hiccup — clamp the close time to at least the start time.
+    const resolvedEndedAtMs = Math.max(endedAtMs, existing.startedAtMs)
+    this.db.prepare(`
+      UPDATE agent_run_intervals SET ended_at_ms = ?, end_reason = ? WHERE id = ?
+    `).run(resolvedEndedAtMs, endReason, existing.id)
+    return { ...existing, endedAtMs: resolvedEndedAtMs, endReason }
+  }
+
+  /**
+   * Re-keys the open interval for a session whose in-memory id changed (the
+   * adapter revealed its "real" session id after the temp id was used to
+   * open the interval). No-op if nothing is open under the old id.
+   */
+  renameOpenAgentRunIntervalSession(oldSessionId: string, newSessionId: string): void {
+    if (!this.ensureDbOpen()) return
+    this.db.prepare(`
+      UPDATE agent_run_intervals SET session_id = ? WHERE session_id = ? AND ended_at_ms IS NULL
+    `).run(newSessionId, oldSessionId)
+  }
+
+  /** Every interval left open (`ended_at_ms IS NULL`) — crash-recovery candidates on startup. */
+  getOpenAgentRunIntervals(): AgentRunIntervalRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const rows = this.db.prepare(`SELECT * FROM agent_run_intervals WHERE ended_at_ms IS NULL`).all() as AgentRunIntervalRow[]
+    return rows.map(deserializeAgentRunInterval)
+  }
+
+  /**
+   * Intervals that could overlap `[startMs, endMs)` — a still-open interval
+   * (`ended_at_ms IS NULL`) always qualifies, since it may still be running.
+   * Callers (usage-parallelism.ts) are responsible for clipping to the exact
+   * bounds; this is a cheap overlap pre-filter, not the final clip.
+   */
+  getAgentRunIntervalsOverlapping(startMs: number, endMs: number): AgentRunIntervalRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const rows = this.db.prepare(`
+      SELECT * FROM agent_run_intervals
+      WHERE started_at_ms < ? AND (ended_at_ms IS NULL OR ended_at_ms > ?)
+      ORDER BY started_at_ms ASC
+    `).all(endMs, startMs) as AgentRunIntervalRow[]
+    return rows.map(deserializeAgentRunInterval)
+  }
+
+  /** Earliest interval start on record (including backfilled rows). */
+  getEarliestAgentRunIntervalStart(): number | null {
+    if (!this.ensureDbOpen()) return null
+    const row = this.db.prepare(`SELECT MIN(started_at_ms) AS m FROM agent_run_intervals`).get() as { m: number | null }
+    return row.m ?? null
+  }
+
+  /**
+   * Earliest LIVE (non-backfilled) interval start — the "counting from
+   * <date>" hint the usage card shows now actually means "since 20x started
+   * watching live", not "since the best-effort historical derivation
+   * reaches back to". A still-open row has `end_reason IS NULL`, which is
+   * live by definition (backfill always inserts pre-closed rows).
+   */
+  getEarliestLiveAgentRunIntervalStart(): number | null {
+    if (!this.ensureDbOpen()) return null
+    const row = this.db.prepare(
+      `SELECT MIN(started_at_ms) AS m FROM agent_run_intervals WHERE end_reason IS NULL OR end_reason != 'backfilled'`
+    ).get() as { m: number | null }
+    return row.m ?? null
+  }
+
+  /** Whether a session already has any interval row (open or closed) — the backfill job's per-session guard. */
+  hasAnyAgentRunIntervalForSession(sessionId: string): boolean {
+    if (!this.ensureDbOpen()) return false
+    const row = this.db.prepare('SELECT 1 FROM agent_run_intervals WHERE session_id = ? LIMIT 1').get(sessionId)
+    return !!row
+  }
+
+  /** Distinct session ids that already have at least one interval row — used by the backfill job to skip sessions it (or live recording) already covered. */
+  getSessionIdsWithAgentRunIntervals(): Set<string> {
+    if (!this.ensureDbOpen()) return new Set()
+    const rows = this.db.prepare('SELECT DISTINCT session_id FROM agent_run_intervals').all() as Array<{ session_id: string }>
+    return new Set(rows.map((r) => r.session_id))
+  }
+
+  /**
+   * Latest transcript activity for a task after `afterMs` — used by crash
+   * recovery as a fallback "last known activity" timestamp when no
+   * token_usage_events row exists for the session. transcript_parts has no
+   * session_id column, so this is scoped by task_id only; that is a safe
+   * approximation for crash recovery because the row being recovered is the
+   * task's one open interval at the moment the app died.
+   */
+  getLatestTranscriptActivityAfter(taskId: string, afterMs: number): number | null {
+    if (!this.ensureDbOpen()) return null
+    const row = this.db.prepare(`
+      SELECT MAX(created_at) AS m FROM transcript_parts WHERE task_id = ? AND created_at > ?
+    `).get(taskId, afterMs) as { m: number | null }
+    return row.m ?? null
+  }
+
+  /**
+   * "Tasks shipped" in `[startMs, endMs)`: non-recurring-template tasks that
+   * reached `completed`, using `updated_at` as the completion timestamp —
+   * the same convention `getCompletedTaskStats` already uses (there is no
+   * dedicated `completed_at` column). Counts BOTH top-level tasks and
+   * subtasks (`parent_task_id IS NOT NULL`) that independently reached
+   * `completed` in the window — earlier versions of this query reused
+   * `getCompletedTaskStats`'s top-level-only filter, which under-reported
+   * for anyone who ships real work through subtasks. A subtask completing
+   * doesn't imply its parent completed too (and vice versa), so each is its
+   * own count, not deduplicated against the other.
+   */
+  getTasksShippedCount(startMs: number, endMs: number): number {
+    if (!this.ensureDbOpen()) return 0
+    const startIso = new Date(startMs).toISOString()
+    const endIso = new Date(endMs).toISOString()
+    const row = this.db.prepare(`
+      SELECT COUNT(*) AS n FROM tasks
+      WHERE status = ?
+        AND NOT (is_recurring = 1 AND recurrence_parent_id IS NULL)
+        AND updated_at >= ? AND updated_at < ?
+    `).get(TaskStatus.Completed, startIso, endIso) as { n: number }
+    return row.n
+  }
+
+  // ── app_focus_intervals ──────────────────────────────────────
+  // See src/main/usage/app-focus-intervals.ts (writer: window focus/blur
+  // hooks, heartbeat, crash recovery) and src/main/usage/usage-parallelism.ts
+  // (reader — the "my multiplier" denominator). Single-user local app: at
+  // most one row is open at a time in the normal case, but every method here
+  // is still written defensively (idempotent open, no-op close when nothing
+  // is open) the same way the agent_run_intervals methods are.
+
+  /** Opens a new focus interval, unless one is already open (idempotent — a duplicate focus signal is a no-op). */
+  openAppFocusInterval(startedAtMs: number): AppFocusIntervalRecord {
+    if (!this.ensureDbOpen()) throw new Error('Database not open')
+    const existing = this.getOpenAppFocusIntervals()[0]
+    if (existing) return existing
+
+    const id = createId()
+    this.db.prepare(`
+      INSERT INTO app_focus_intervals (id, started_at_ms, ended_at_ms, last_heartbeat_ms)
+      VALUES (?, ?, NULL, ?)
+    `).run(id, startedAtMs, startedAtMs)
+    return { id, startedAtMs, endedAtMs: null, lastHeartbeatMs: startedAtMs }
+  }
+
+  /** Touches the open interval's heartbeat (periodic liveness signal, so crash recovery has a tight bound instead of `startedAtMs`). No-op if nothing is open. */
+  touchOpenAppFocusInterval(atMs: number): void {
+    if (!this.ensureDbOpen()) return
+    this.db.prepare(`UPDATE app_focus_intervals SET last_heartbeat_ms = ? WHERE ended_at_ms IS NULL`).run(atMs)
+  }
+
+  /** Closes the open interval, if any. Idempotent: no-op (returns null) when nothing is open. */
+  closeOpenAppFocusInterval(endedAtMs: number): AppFocusIntervalRecord | null {
+    if (!this.ensureDbOpen()) return null
+    const existing = this.getOpenAppFocusIntervals()[0]
+    if (!existing) return null
+    const resolvedEndedAtMs = Math.max(endedAtMs, existing.startedAtMs)
+    this.db.prepare(`UPDATE app_focus_intervals SET ended_at_ms = ?, last_heartbeat_ms = ? WHERE id = ?`)
+      .run(resolvedEndedAtMs, resolvedEndedAtMs, existing.id)
+    return { ...existing, endedAtMs: resolvedEndedAtMs, lastHeartbeatMs: resolvedEndedAtMs }
+  }
+
+  /**
+   * Closes one specific interval by id, regardless of whether it's the most
+   * recently-opened one — used by crash recovery so closing N open rows
+   * (an edge case; normally there is at most one) doesn't depend on
+   * `closeOpenAppFocusInterval`'s "most recent" semantics lining up with a
+   * caller's own iteration order.
+   */
+  closeAppFocusIntervalById(id: string, endedAtMs: number): void {
+    if (!this.ensureDbOpen()) return
+    this.db.prepare(`UPDATE app_focus_intervals SET ended_at_ms = ?, last_heartbeat_ms = ? WHERE id = ? AND ended_at_ms IS NULL`)
+      .run(endedAtMs, endedAtMs, id)
+  }
+
+  /** Every interval left open (`ended_at_ms IS NULL`) — crash-recovery candidates on startup. */
+  getOpenAppFocusIntervals(): AppFocusIntervalRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const rows = this.db.prepare(`SELECT * FROM app_focus_intervals WHERE ended_at_ms IS NULL ORDER BY started_at_ms DESC`).all() as AppFocusIntervalRow[]
+    return rows.map(deserializeAppFocusInterval)
+  }
+
+  /** Intervals that could overlap `[startMs, endMs)` — a still-open interval always qualifies. Callers clip to the exact bounds. */
+  getAppFocusIntervalsOverlapping(startMs: number, endMs: number): AppFocusIntervalRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const rows = this.db.prepare(`
+      SELECT * FROM app_focus_intervals
+      WHERE started_at_ms < ? AND (ended_at_ms IS NULL OR ended_at_ms > ?)
+      ORDER BY started_at_ms ASC
+    `).all(endMs, startMs) as AppFocusIntervalRow[]
+    return rows.map(deserializeAppFocusInterval)
+  }
+
+  /** Earliest focus interval on record — combined with the earliest agent-run interval, this is the "counting from <date>" bound for the multiplier (both series are needed to compute it). */
+  getEarliestAppFocusIntervalStart(): number | null {
+    if (!this.ensureDbOpen()) return null
+    const row = this.db.prepare(`SELECT MIN(started_at_ms) AS m FROM app_focus_intervals`).get() as { m: number | null }
+    return row.m ?? null
+  }
+
   /**
    * Batch-update sort_order for subtasks under a parent.
    * @param parentId  The parent task ID
@@ -2705,6 +3313,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
   deleteTask(id: string): boolean {
     this.deleteTaskAttachments(id)
+    this.deleteTaskWorkspace(id)
     this.deleteTranscriptParts(id)
     const result = this.db.prepare('DELETE FROM tasks WHERE id = ?').run(id)
     return result.changes > 0
@@ -2801,6 +3410,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   createAgent(data: CreateAgentData): AgentRecord | undefined {
     const id = createId()
     const now = new Date().toISOString()
+    const config = applyDefaultPermissionMode(data.config ?? {})
 
     this.db.prepare(`
       INSERT INTO agents (id, name, server_url, config, is_default, created_at, updated_at)
@@ -2809,7 +3419,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       id,
       data.name,
       data.server_url ?? 'http://localhost:4096',
-      JSON.stringify(data.config ?? {}),
+      JSON.stringify(config),
       data.is_default ? 1 : 0,
       now,
       now
@@ -2950,6 +3560,106 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       }
     })
     run()
+  }
+
+  // ── ACP agent instance CRUD ────────────────────────────────
+
+  listAcpAgentInstances(): AcpAgentInstanceRecord[] {
+    const rows = this.db.prepare('SELECT * FROM acp_agent_instances ORDER BY display_name ASC').all() as AcpAgentInstanceRow[]
+    return rows.map(deserializeAcpAgentInstance)
+  }
+
+  getAcpAgentInstance(id: string): AcpAgentInstanceRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM acp_agent_instances WHERE id = ?').get(id) as AcpAgentInstanceRow | undefined
+    return row ? deserializeAcpAgentInstance(row) : undefined
+  }
+
+  createAcpAgentInstance(data: CreateAcpAgentInstanceData): AcpAgentInstanceRecord {
+    const id = `acp_${createId()}`
+    const now = new Date().toISOString()
+    const distribution = data.distribution ?? 'auto'
+    this.db.prepare(`
+      INSERT INTO acp_agent_instances
+        (id, display_name, source, registry_agent_id, version, distribution, command_path, command_args, env, secret_ids, auth_method_id, custom_models, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      data.display_name.trim(),
+      data.source,
+      data.registry_agent_id ?? null,
+      data.version ?? null,
+      distribution,
+      data.command_path ?? null,
+      JSON.stringify(data.command_args ?? []),
+      JSON.stringify(data.env ?? {}),
+      JSON.stringify(data.secret_ids ?? []),
+      data.auth_method_id ?? null,
+      JSON.stringify(data.custom_models ?? []),
+      now
+    )
+    return this.getAcpAgentInstance(id) as AcpAgentInstanceRecord
+  }
+
+  updateAcpAgentInstance(id: string, data: UpdateAcpAgentInstanceData): AcpAgentInstanceRecord | undefined {
+    const setClauses: string[] = []
+    const values: unknown[] = []
+    if (data.display_name !== undefined) {
+      setClauses.push('display_name = ?')
+      values.push(data.display_name.trim())
+    }
+    if (data.command_path !== undefined) {
+      setClauses.push('command_path = ?')
+      values.push(data.command_path)
+    }
+    if (data.command_args !== undefined) {
+      setClauses.push('command_args = ?')
+      values.push(JSON.stringify(data.command_args))
+    }
+    if (data.env !== undefined) {
+      setClauses.push('env = ?')
+      values.push(JSON.stringify(data.env))
+    }
+    if (data.secret_ids !== undefined) {
+      setClauses.push('secret_ids = ?')
+      values.push(JSON.stringify(data.secret_ids))
+    }
+    if (data.auth_method_id !== undefined) {
+      setClauses.push('auth_method_id = ?')
+      values.push(data.auth_method_id)
+    }
+    if (data.custom_models !== undefined) {
+      setClauses.push('custom_models = ?')
+      values.push(JSON.stringify(data.custom_models))
+    }
+    if (setClauses.length > 0) {
+      this.db.prepare(`UPDATE acp_agent_instances SET ${setClauses.join(', ')} WHERE id = ?`).run(...values, id)
+    }
+    return this.getAcpAgentInstance(id)
+  }
+
+  /** Agents (by id) whose config currently points at this ACP instance. */
+  agentsReferencingAcpInstance(id: string): AgentRecord[] {
+    return this.getAgents().filter((agent) => agent.config?.acp_instance_id === id)
+  }
+
+  /**
+   * Removes an ACP agent instance row. Any agent still pointing at it has its
+   * `acp_instance_id` cleared (its `coding_agent` config is left as `'acp'`
+   * with no instance, which the UI surfaces as "needs reconfiguration" —
+   * unlike Claude Code/Codex harness instances, there is no implicit default
+   * ACP instance to fall back to).
+   */
+  deleteAcpAgentInstance(id: string): boolean {
+    const run = this.db.transaction((): boolean => {
+      for (const agent of this.agentsReferencingAcpInstance(id)) {
+        const config = { ...agent.config }
+        delete config.acp_instance_id
+        this.updateAgent(agent.id, { config })
+      }
+      this.usage.forgetInstance(id)
+      return this.db.prepare('DELETE FROM acp_agent_instances WHERE id = ?').run(id).changes > 0
+    })
+    return run()
   }
 
   // ── MCP Server CRUD ────────────────────────────────────────

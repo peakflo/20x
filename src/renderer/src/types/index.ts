@@ -35,7 +35,9 @@ export enum CodingAgentType {
   CLAUDE_CODE = 'claude-code',
   CODEX = 'codex',
   CURSOR = 'cursor',
-  PI = 'pi'
+  PI = 'pi',
+  /** A configured ACP (Agent Client Protocol) registry or local-command agent instance. */
+  ACP = 'acp'
 }
 
 export type AgentPermissionMode = 'ask' | 'allow'
@@ -43,6 +45,14 @@ export type AgentSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-ac
 
 export type ClaudeAuthMethod = 'subscription' | 'api_key'
 
+/**
+ * The fixed harness choices. `CodingAgentType.ACP` deliberately has no entry
+ * here: unlike these, an ACP agent isn't one fixed harness — each configured
+ * ACP agent instance (registry install or local command) is its own harness
+ * dropdown entry, built from `acp_agent_instances` at render time (see the
+ * agent form's harness dropdown), the same way a Claude Code/Codex harness
+ * instance ("Codex · Work") is appended rather than hardcoded here.
+ */
 export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
   { value: CodingAgentType.OPENCODE, label: 'OpenCode' },
   { value: CodingAgentType.CLAUDE_CODE, label: 'Claude Code' },
@@ -196,6 +206,8 @@ export interface AgentConfig {
   auth_method?: ClaudeAuthMethod
   /** Harness instance (subscription login) the agent runs under. Unset means the harness default. */
   harness_instance_id?: string
+  /** ACP agent instance this agent runs (one row of `acp_agent_instances`). Required when coding_agent is 'acp'. */
+  acp_instance_id?: string
   permission_mode?: AgentPermissionMode
   sandbox_mode?: AgentSandboxMode
   system_prompt?: string

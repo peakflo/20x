@@ -4,7 +4,8 @@ import { TaskStatus } from '@shared/constants'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 import { harnessInstanceDisplayName, type HarnessInstanceView } from '@shared/harness-instances'
 import { CollapsibleDescription } from '../components/CollapsibleDescription'
-import { useTaskStore, type Task } from '../stores/task-store'
+import { useTaskStore, type Task, type TaskAttachment } from '../stores/task-store'
+import { ScadAttachmentEditor } from '@/components/artifacts/viewers/ScadAttachmentEditor'
 import { useAgentStore, SessionStatus } from '../stores/agent-store'
 import { api } from '../api/client'
 import { useSessionControls } from '../hooks/useSessionControls'
@@ -104,6 +105,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   // Session feedback is collected before the completion request.
   const [completeModal, setCompleteModal] = useState<{ withFeedback: boolean } | null>(null)
   const [activeSection, setActiveSection] = useState<'details' | 'artifacts'>('details')
+  const [openScad, setOpenScad] = useState<TaskAttachment | null>(null)
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
   const agentMenuRef = useRef<HTMLDivElement>(null)
   const artifactsByTask = useArtifactStore((s) => s.artifactsByTask)
@@ -429,6 +431,15 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             }}
           />
         </div>
+
+        {task.attachments?.some((attachment) => attachment.filename.toLowerCase().endsWith('.scad')) && (
+          <div className="border-b border-border px-4 py-4">
+            <div className="mb-2 text-sm font-medium">SCAD files</div>
+            {task.attachments.filter((attachment) => attachment.filename.toLowerCase().endsWith('.scad')).map((attachment) => (
+              <button key={attachment.id} type="button" onClick={() => setOpenScad(attachment)} className="block py-2 text-sm text-primary" aria-label={`Edit ${attachment.filename}`}>{attachment.filename}</button>
+            ))}
+          </div>
+        )}
 
         {/* Metadata grid — matches desktop grid-cols-[auto_1fr], always visible */}
         <div className="px-4 py-4 border-b border-border">
@@ -854,6 +865,14 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           </div>
         )}
       </div>
+
+      {openScad && <div role="dialog" aria-label={`Edit ${openScad.filename}`} className="fixed inset-0 z-50 flex flex-col bg-background">
+        <div className="flex shrink-0 items-center justify-between border-b border-border/50 px-4 py-3">
+          <span className="truncate text-sm font-medium">{openScad.filename}</span>
+          <button type="button" onClick={() => setOpenScad(null)} className="px-2 py-1 text-sm text-primary" aria-label="Close SCAD editor">Close</button>
+        </div>
+        <div className="min-h-0 flex-1"><ScadAttachmentEditor taskId={taskId} attachment={openScad} api={api.attachments} /></div>
+      </div>}
 
       {/* Show the source action before submitting or skipping session feedback. */}
       {completeModal && (

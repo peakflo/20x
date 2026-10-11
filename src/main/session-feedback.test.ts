@@ -56,4 +56,14 @@ describe('session feedback completion', () => {
     await finishSessionFeedback(db, {executeAction} as never, taskId)
     expect(executeAction).not.toHaveBeenCalled()
   })
+
+  it('completes the parent even while a subtask is still open — finishing does not require subtasks to be done', async () => {
+    const subtaskId = db.createTask(makeTask({title: 'Draft the summary', status: 'not_started', parent_task_id: taskId}))!.id
+    updateTaskFromUser(db, taskId, {status: 'agent_learning', feedback_rating: 4, complete_at_source: false})
+    const executeAction = vi.fn()
+    await finishSessionFeedback(db, {executeAction} as never, taskId)
+    expect(db.getTask(taskId)?.status).toBe('completed')
+    // The open subtask is left exactly as it was — completing the parent doesn't touch it.
+    expect(db.getTask(subtaskId)?.status).toBe('not_started')
+  })
 })

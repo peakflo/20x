@@ -5,10 +5,13 @@ import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRe
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
 import {
   USAGE_LIMITS_UPDATED_CHANNEL,
+  USAGE_MODEL_PRICES_UPDATED_CHANNEL,
   USAGE_RECORDED_CHANNEL,
+  type CustomModelPrice,
   type ProviderUsageLimits,
   type TokenUsageRecord,
   type UsageLimitsRefreshResult,
+  type UsageParallelismResponse,
   type UsageSummary,
   type UsageSummaryQuery
 } from '../shared/usage'
@@ -40,12 +43,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('artifacts:scan', taskId),
     read: (taskId: string, relativePath: string): Promise<ArtifactContent | null> =>
       ipcRenderer.invoke('artifacts:read', taskId, relativePath),
+    saveScad: (taskId: string, relativePath: string, content: string, expectedContent: string): Promise<void> =>
+      ipcRenderer.invoke('artifacts:saveScad', taskId, relativePath, content, expectedContent),
+    renderScad: (taskId: string, relativePath: string): Promise<string> =>
+      ipcRenderer.invoke('artifacts:renderScad', taskId, relativePath),
     mcpCall: (input: import('../shared/artifact-mcp').ArtifactMcpCall): Promise<unknown> =>
       ipcRenderer.invoke('artifact:mcp-call', input),
     copyFile: (taskId: string, relativePath: string): Promise<ArtifactCopyFileResult> =>
-      ipcRenderer.invoke('artifacts:copyFile', taskId, relativePath)
+      ipcRenderer.invoke('artifacts:copyFile', taskId, relativePath),
+    saveAs: (taskId: string, relativePath: string, suggestedName: string): Promise<boolean> =>
+      ipcRenderer.invoke('artifacts:saveAs', taskId, relativePath, suggestedName)
   },
   attachments: {
+    readScad: (taskId: string, attachmentId: string): Promise<string> => ipcRenderer.invoke('attachments:readScad', taskId, attachmentId),
+    saveScad: (taskId: string, attachmentId: string, content: string, expectedContent: string): Promise<void> => ipcRenderer.invoke('attachments:saveScad', taskId, attachmentId, content, expectedContent),
+    renderScad: (taskId: string, attachmentId: string): Promise<string> => ipcRenderer.invoke('attachments:renderScad', taskId, attachmentId),
     pick: (): Promise<string[]> => ipcRenderer.invoke('attachments:pick'),
     save: (taskId: string, filePath: string): Promise<unknown> =>
       ipcRenderer.invoke('attachments:save', taskId, filePath),
@@ -102,6 +114,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     update: (id: string, data: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('harnessInstance:update', id, data),
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('harnessInstance:delete', id),
     detectCandidates: (harness: string): Promise<unknown[]> => ipcRenderer.invoke('harnessInstance:detectCandidates', harness)
+  },
+  acpRegistry: {
+    search: (query: string): Promise<unknown[]> => ipcRenderer.invoke('acpRegistry:search', query)
+  },
+  acpInstances: {
+    list: (): Promise<unknown[]> => ipcRenderer.invoke('acpInstance:list'),
+    create: (data: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('acpInstance:create', data),
+    update: (id: string, data: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('acpInstance:update', id, data),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('acpInstance:delete', id),
+    install: (id: string): Promise<unknown> => ipcRenderer.invoke('acpInstance:install', id),
+    validateLocalCommand: (executable: string): Promise<unknown> =>
+      ipcRenderer.invoke('acpInstance:validateLocalCommand', executable)
   },
   mcpServers: {
     getAll: (): Promise<unknown[]> => ipcRenderer.invoke('mcp:getAll'),
@@ -218,12 +242,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getLimitRecovery: (taskId: string): Promise<UsageLimitRecovery | null> =>
       ipcRenderer.invoke('usage:getLimitRecovery', taskId),
     setLimitRecoveryAutoResume: (taskId: string, autoResume: boolean): Promise<UsageLimitRecovery | null> =>
-      ipcRenderer.invoke('usage:setLimitRecoveryAutoResume', taskId, autoResume)
+      ipcRenderer.invoke('usage:setLimitRecoveryAutoResume', taskId, autoResume),
+    refreshRates: (options?: { force?: boolean }): Promise<{ refreshed: boolean; fetchedAt: number }> =>
+      ipcRenderer.invoke('usage:refreshRates', options),
+    listModelPrices: (): Promise<CustomModelPrice[]> => ipcRenderer.invoke('usage:listModelPrices'),
+    setModelPrice: (price: CustomModelPrice): Promise<CustomModelPrice[]> =>
+      ipcRenderer.invoke('usage:setModelPrice', price),
+    resetModelPrice: (model: string): Promise<CustomModelPrice[]> =>
+      ipcRenderer.invoke('usage:resetModelPrice', model),
+    getParallelismSummary: (query: { days: number; utcOffsetMinutes?: number }): Promise<UsageParallelismResponse> =>
+      ipcRenderer.invoke('usage:getParallelismSummary', query),
+    copyImageToClipboard: (pngBytes: ArrayBuffer): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('usage:copyImageToClipboard', pngBytes),
+    saveImage: (pngBytes: ArrayBuffer, defaultFileName: string): Promise<{ saved: boolean; filePath?: string }> =>
+      ipcRenderer.invoke('usage:saveImage', pngBytes, defaultFileName)
   },
   onUsageLimitRecoveryUpdated: (callback: (recovery: UsageLimitRecovery) => void): (() => void) => {
     const handler = (_: unknown, data: UsageLimitRecovery): void => callback(data)
     ipcRenderer.on(USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL, handler)
     return () => ipcRenderer.removeListener(USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL, handler)
+  },
+  onUsageModelPricesUpdated: (callback: (prices: CustomModelPrice[]) => void): (() => void) => {
+    const handler = (_: unknown, data: CustomModelPrice[]): void => callback(data)
+    ipcRenderer.on(USAGE_MODEL_PRICES_UPDATED_CHANNEL, handler)
+    return () => ipcRenderer.removeListener(USAGE_MODEL_PRICES_UPDATED_CHANNEL, handler)
   },
   onUsageLimitsUpdated: (callback: (limits: ProviderUsageLimits) => void): (() => void) => {
     const handler = (_: unknown, data: ProviderUsageLimits): void => callback(data)

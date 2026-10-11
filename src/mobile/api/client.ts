@@ -6,10 +6,11 @@
 import { getAuthToken } from './auth'
 import type { Artifact, ArtifactContent, PullRequestDetails } from '@shared/artifacts'
 import type { VoiceCapabilities } from '@shared/voice'
-import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
+import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageParallelismPeriod, UsageParallelismResponse, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { PushPreferences } from '@shared/push-notifications'
 import type { HarnessInstanceView } from '@shared/harness-instances'
+import type { AcpAgentInstanceView } from '@shared/acp-registry'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -110,6 +111,9 @@ export const api = {
   harnessInstances: {
     list: () => get<HarnessInstanceView[]>('/api/harness-instances')
   },
+  acpInstances: {
+    list: () => get<AcpAgentInstanceView[]>('/api/acp-instances')
+  },
   usage: {
     limits: () => get<ProviderUsageLimits[]>('/api/usage/limits'),
     refreshLimits: (force = false) => post<UsageLimitsRefreshResult>('/api/usage/limits/refresh', { force }),
@@ -123,7 +127,10 @@ export const api = {
       }
       const qs = params.toString()
       return get<UsageSummary | null>(`/api/usage/summary${qs ? `?${qs}` : ''}`)
-    }
+    },
+    /** "My multiplier" — the read-only hero card data for one of the four fixed periods. */
+    parallelism: (days: UsageParallelismPeriod, utcOffsetMinutes = -new Date().getTimezoneOffset()) =>
+      get<UsageParallelismResponse>(`/api/usage/parallelism?days=${days}&utcOffsetMinutes=${utcOffsetMinutes}`)
   },
   capabilities: {
     /** What this client can do. Voice capture is desktop-only in phase 1. */
@@ -159,8 +166,17 @@ export const api = {
       get<Artifact[]>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts`),
     content: (taskId: string, path: string) =>
       get<ArtifactContent>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/content?path=${encodeURIComponent(path)}`),
+    saveScad: (taskId: string, path: string, content: string, expectedContent: string) =>
+      post<{ success: boolean }>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/scad-save`, { path, content, expectedContent }).then(() => undefined),
+    renderScad: (taskId: string, path: string) =>
+      get<string>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/scad-preview?path=${encodeURIComponent(path)}`),
     mcpCall: (input: import('@shared/artifact-mcp').ArtifactMcpCall) =>
       post<unknown>(`/api/tasks/${encodeURIComponent(input.taskId)}/artifacts/mcp`, input)
+  },
+  attachments: {
+    readScad: (taskId: string, attachmentId: string) => get<string>(`/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/scad`),
+    saveScad: (taskId: string, attachmentId: string, content: string, expectedContent: string) => post<{ success: boolean }>(`/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/scad-save`, { content, expectedContent }).then(() => undefined),
+    renderScad: (taskId: string, attachmentId: string) => get<string>(`/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/scad-preview`)
   }
 }
 

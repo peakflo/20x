@@ -1,7 +1,18 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, fireEvent, cleanup } from '@testing-library/react'
-import { MessageBubble } from './MessageBubble'
+import { render, fireEvent, cleanup, screen, waitFor } from '@testing-library/react'
+import { MessageActivityGroup, MessageBubble } from './MessageBubble'
 import type { AgentMessage } from '../stores/agent-store'
+import { ArtifactType, type Artifact } from '@shared/artifacts'
+
+vi.mock('../lib/artifact-api', () => ({
+  mobileArtifactApi: {
+    scan: vi.fn().mockResolvedValue([]),
+    // 'text' — ArtifactContentKind.TEXT's value; factories can't reference
+    // top-level imports, since vi.mock is hoisted above them.
+    read: vi.fn().mockResolvedValue({ kind: 'text', content: '<p>chart</p>' }),
+    mcpCall: vi.fn()
+  }
+}))
 
 function makeQuestionMessage(): AgentMessage {
   return {
@@ -58,6 +69,13 @@ describe('MessageBubble question actions', () => {
 describe('MessageBubble message layout', () => {
   afterEach(() => {
     cleanup()
+  })
+
+  it('shows a SCAD model card inside a message that names the file', () => {
+    const message: AgentMessage = { id: 'case', role: 'assistant', content: 'See zero2w_case.scad', timestamp: new Date(), partType: 'text' }
+    const artifact = { id: 'model', taskId: 'task', type: ArtifactType.FILE, title: 'Case', path: 'attachments/zero2w_case.scad', updatedAt: 1, reloadTrigger: 0 }
+    const view = render(<MessageBubble message={message} artifacts={[artifact]} onOpenArtifact={vi.fn()} />)
+    expect(view.getByRole('button', { name: 'Show 3D' })).toBeTruthy()
   })
 
   it('renders agent text full width without card bubble chrome while keeping user bubbles', () => {
@@ -207,5 +225,102 @@ git push 2>&1 | tail -2`
 
     expect(getByRole('button', { name: /Read custom-dimensions\.js/i })).toBeTruthy()
     expect(queryByRole('button', { name: /workflow-builder/i })).toBeNull()
+  })
+})
+
+describe('MessageActivityGroup inline HTML renders', () => {
+  afterEach(() => cleanup())
+
+  function makeToolMessage(output: Record<string, unknown>): AgentMessage {
+    return {
+      id: 'tool-html-render',
+      role: 'assistant',
+      content: '',
+      timestamp: new Date('2026-03-10T00:00:00.000Z'),
+      partType: 'tool',
+      tool: {
+        name: 'html_render',
+        status: 'success',
+        input: JSON.stringify({ title: 'Q3 revenue' }),
+        output: JSON.stringify(output)
+      }
+    }
+  }
+
+  it('renders an inline HTML artifact in the message flow, not just as a card above the list', async () => {
+    const artifact: Artifact = {
+      id: 'task-1:workpiece:artifact_chart_abc12345',
+      taskId: 'task-1',
+      type: ArtifactType.HTML,
+      title: 'Q3 revenue',
+      path: 'artifacts/artifact_chart_abc12345/index.html',
+      inline: true,
+      heightHint: 320,
+      updatedAt: 1,
+      reloadTrigger: 0
+    }
+
+    render(
+      <MessageActivityGroup
+        messages={[makeToolMessage({ artifact_id: 'artifact_chart_abc12345', path: artifact.path, title: 'Q3 revenue' })]}
+        artifacts={[artifact]}
+        onOpenArtifact={vi.fn()}
+      />
+    )
+
+    expect(screen.getByText('Q3 revenue')).toBeTruthy()
+    await waitFor(() => expect(screen.getByTitle('Q3 revenue').getAttribute('srcdoc')).toContain('<p>chart</p>'))
+
+    // Sits at message level — not nested inside the indented tool-call
+    // column (.border-l.pl-2) that the ToolCallMessage row above it uses.
+    expect(screen.getByTitle('Q3 revenue').closest('.border-l.pl-2')).toBeNull()
+  })
+
+  it('navigates via onOpenArtifact (not the desktop artifact-tab store) when Expand is clicked', async () => {
+    const artifact: Artifact = {
+      id: 'task-1:workpiece:artifact_chart_abc12345',
+      taskId: 'task-1',
+      type: ArtifactType.HTML,
+      title: 'Q3 revenue',
+      path: 'artifacts/artifact_chart_abc12345/index.html',
+      inline: true,
+      updatedAt: 1,
+      reloadTrigger: 0
+    }
+    const onOpenArtifact = vi.fn()
+
+    render(
+      <MessageActivityGroup
+        messages={[makeToolMessage({ artifact_id: 'artifact_chart_abc12345', path: artifact.path, title: 'Q3 revenue' })]}
+        artifacts={[artifact]}
+        onOpenArtifact={onOpenArtifact}
+      />
+    )
+
+    await waitFor(() => expect(screen.getByTitle('Q3 revenue').getAttribute('srcdoc')).toContain('<p>chart</p>'))
+    fireEvent.click(screen.getByLabelText('Expand'))
+    expect(onOpenArtifact).toHaveBeenCalledWith(artifact)
+  })
+
+  it('does not render an InlineHtmlRender for a non-inline HTML artifact', () => {
+    const artifact: Artifact = {
+      id: 'task-1:workpiece:artifact_report_xyz98765',
+      taskId: 'task-1',
+      type: ArtifactType.HTML,
+      title: 'Report',
+      path: 'artifacts/artifact_report_xyz98765/index.html',
+      updatedAt: 1,
+      reloadTrigger: 0
+    }
+
+    render(
+      <MessageActivityGroup
+        messages={[makeToolMessage({ artifact_id: 'artifact_report_xyz98765', path: artifact.path, title: 'Report' })]}
+        artifacts={[artifact]}
+        onOpenArtifact={vi.fn()}
+      />
+    )
+
+    expect(screen.queryByTitle('Report')).toBeNull()
   })
 })

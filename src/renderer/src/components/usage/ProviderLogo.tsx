@@ -1,4 +1,4 @@
-import { Terminal } from 'lucide-react'
+import { Plug, Terminal } from 'lucide-react'
 import { AnthropicLogo, OpenAILogo, OpenCodeLogo, PiLogo } from '@/components/icons/AgentLogos'
 import { cn } from '@/lib/utils'
 import type { UsageProvider } from '@shared/usage'
@@ -9,7 +9,8 @@ export const PROVIDER_LOGO_TINT: Record<UsageProvider, string> = {
   codex: 'text-emerald-300/80',
   opencode: 'text-blue-300/80',
   cursor: 'text-violet-300/80',
-  pi: 'text-foreground/80'
+  pi: 'text-foreground/80',
+  acp: 'text-sky-300/80'
 }
 
 /** Logo for a coding-agent harness. Inherits `currentColor` unless `tinted`. */
@@ -26,5 +27,7 @@ export function ProviderLogo({ provider, className, tinted = false }: { provider
       return <Terminal className={classes} />
     case 'pi':
       return <PiLogo className={classes} />
+    case 'acp':
+      return <Plug className={classes} />
   }
 }

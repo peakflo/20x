@@ -10,10 +10,15 @@ import { agentSessionApi, artifactApi, voiceApi } from '@/lib/ipc-client'
 import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
+import { findChatScadArtifact } from '@shared/scad-chat'
+import { InlineScadPreview } from '@/components/artifacts/viewers/InlineScadPreview'
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
 import { SpeakMessageButton } from '@/components/voice/SpeakMessageButton'
 import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
 import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
+import { InlineHtmlRender } from '@/components/artifacts/InlineHtmlRender'
+import { findMessageArtifact } from '@/components/artifacts/find-message-artifact'
+import { htmlRenderFileName } from '@shared/html-render'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -586,16 +591,6 @@ const ReasoningMessage = React.memo(function ReasoningMessage({ message, searchQ
   )
 })
 
-function findMessageArtifact(message: AgentMessage, artifacts: Artifact[]): Artifact | undefined {
-  if (!message.tool || !['success', 'succeeded', 'complete', 'completed'].includes(message.tool.status?.toLowerCase?.() || '')) return undefined
-  let haystack = `${message.tool.title || ''}\n${message.content || ''}`
-  try { haystack += `\n${typeof message.tool.input === 'string' ? message.tool.input : JSON.stringify(message.tool.input)}\n${typeof message.tool.output === 'string' ? message.tool.output : JSON.stringify(message.tool.output)}` } catch { /* ignore unserializable tool payloads */ }
-  return artifacts.find((artifact) => {
-    const target = artifact.path || artifact.url
-    return !!target && (haystack.includes(target) || haystack.replace(/\\/g, '/').includes(target.replace(/\\/g, '/')))
-  })
-}
-
 function ArtifactTranscriptCard({ artifact, onOpen }: { artifact: Artifact; onOpen: (artifact: Artifact) => void }) {
   const [thumbnail, setThumbnail] = useState<string | null>(artifact.url && artifact.type === ArtifactType.IMAGE ? artifact.url : null)
   useEffect(() => {
@@ -630,26 +625,55 @@ function ArtifactTranscriptCard({ artifact, onOpen }: { artifact: Artifact; onOp
   )
 }
 
+function openExternalLink(href: string): boolean {
+  if (!/^https?:\/\//i.test(href)) return false
+  void window.electronAPI.shell.openExternal(href)
+  return true
+}
+
 function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
   return (
-    <div className="w-full border-l border-border/30 pl-2 py-0.5">
+    <>
+      <div className="w-full border-l border-border/30 pl-2 py-0.5">
+        {messages.map((message) => {
+          if (message.partType === 'reasoning') {
+            return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
+          }
+          const artifact = findMessageArtifact(message, artifacts) || findChatScadArtifact(message, artifacts)
+          const isInlineHtml = artifact?.type === ArtifactType.HTML && artifact.inline
+          const isScad = !!artifact?.path?.toLowerCase().endsWith('.scad') && !!artifactApi.renderScad
+          return (
+            <React.Fragment key={message.id}>
+              <ToolCallMessage message={message} searchQuery={searchQuery} />
+              {artifact && !isInlineHtml && onOpenArtifact && (isScad
+                ? <InlineScadPreview artifact={artifact} renderModel={artifactApi.renderScad!} onOpen={() => onOpenArtifact(artifact)} />
+                : <ArtifactTranscriptCard artifact={artifact} onOpen={onOpenArtifact} />)}
+            </React.Fragment>
+          )
+        })}
+      </div>
+      {/* Inline HTML renders sit at message level, not indented under the
+          tool-call column above — the page is the agent's visual reply, not
+          a detail of the tool call that produced it. */}
       {messages.map((message) => {
-        if (message.partType === 'reasoning') {
-          return <ReasoningMessage key={message.id} message={message} searchQuery={searchQuery} />
-        }
         const artifact = findMessageArtifact(message, artifacts)
+        if (!artifact || artifact.type !== ArtifactType.HTML || !artifact.inline) return null
         return (
-          <React.Fragment key={message.id}>
-            <ToolCallMessage message={message} searchQuery={searchQuery} />
-            {artifact && onOpenArtifact && <ArtifactTranscriptCard artifact={artifact} onOpen={onOpenArtifact} />}
-          </React.Fragment>
+          <InlineHtmlRender
+            key={message.id}
+            artifact={artifact}
+            artifactApi={artifactApi}
+            onExpand={() => onOpenArtifact?.(artifact)}
+            onLinkClick={openExternalLink}
+            onSaveAs={artifactApi.saveAs && artifact.path ? () => void artifactApi.saveAs!(artifact.taskId, artifact.path!, htmlRenderFileName(artifact.title)) : undefined}
+          />
         )
       })}
-    </div>
+    </>
   )
 }
 
-function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswerQuestion?: boolean; searchQuery?: string }) {
+function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswerQuestion?: boolean; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
   if (message.partType === 'question' && message.tool?.questions) {
     return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} searchQuery={searchQuery} />
   }
@@ -679,6 +703,7 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const isError = message.partType === 'error' || message.partType === 'retry'
+  const scadArtifact = !isSystem && !isError && onOpenArtifact ? findChatScadArtifact(message, artifacts) : undefined
 
   return (
     <div className={`flex gap-2 ${isUser ? 'justify-end' : 'justify-start'} ${!isUser ? 'w-full' : ''}`}>
@@ -699,6 +724,7 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
           </span>
         )}
         <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
+        {scadArtifact && artifactApi.renderScad && <InlineScadPreview artifact={scadArtifact} renderModel={artifactApi.renderScad} onOpen={() => onOpenArtifact?.(scadArtifact)} />}
         <div className={`flex items-center gap-2 mt-1 ${!isUser ? 'opacity-70' : ''}`}>
           <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
           {message.stepMeta && (
@@ -1391,6 +1417,8 @@ export function AgentTranscriptPanel({
                               onAnswer={onSend}
                               canAnswerQuestion={item.message.id === activeQuestionId}
                               searchQuery={normalizedSearchQuery}
+                              artifacts={taskArtifacts}
+                              onOpenArtifact={handleOpenArtifact}
                             />
                           )}
                         </div>

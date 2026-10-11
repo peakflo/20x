@@ -60,7 +60,7 @@ describe('harness instance store', () => {
 
     expect(db.getHarnessInstance(instance.id)).toBeUndefined()
     const after = db.getAgent(agent.id)!
-    expect(after.config).toEqual({ coding_agent: 'codex', model: 'gpt' })
+    expect(after.config).toEqual({ coding_agent: 'codex', model: 'gpt', permission_mode: 'allow' })
     expect(db.getTask(task.id)?.session_id).toBe('thread-1')
   })
 })
@@ -105,8 +105,8 @@ describe('account_home migration', () => {
 
     runAccountHomeMigration()
 
-    expect(db.getAgent(plain.id)!.config).toEqual({ coding_agent: 'codex' })
-    expect(db.getAgent(blank.id)!.config).toEqual({ coding_agent: 'codex' })
+    expect(db.getAgent(plain.id)!.config).toEqual({ coding_agent: 'codex', permission_mode: 'allow' })
+    expect(db.getAgent(blank.id)!.config).toEqual({ coding_agent: 'codex', permission_mode: 'allow' })
     expect(db.getAgent(set.id)!.config.harness_instance_id).toBe(existing.id)
     expect(db.listHarnessInstances()).toEqual([expect.objectContaining({ id: existing.id })])
   })

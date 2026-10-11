@@ -13,6 +13,7 @@ import {
   readRegisteredTaskArtifactFile,
   readTaskArtifact,
   resolveTaskArtifactFilePath,
+  saveTaskScadArtifact,
   scanTaskArtifacts,
   writeRegisteredTaskArtifactFile
 } from './artifacts'
@@ -64,6 +65,29 @@ describe('task artifact files', () => {
     await symlink(outsideFile, join(workspaceDir, 'linked.md'))
 
     expect(await scanTaskArtifacts(workspaceDir)).toEqual([])
+  })
+
+  it('shows SCAD deliverables and attachments without listing repository source', async () => {
+    await mkdir(join(workspaceDir, 'attachments'))
+    await mkdir(join(workspaceDir, 'repo'))
+    await writeFile(join(workspaceDir, 'case.scad'), 'cube(10);')
+    await writeFile(join(workspaceDir, 'attachments', 'zero2w_case.scad'), 'sphere(5);')
+    await writeFile(join(workspaceDir, 'repo', 'source.scad'), 'cylinder(8);')
+
+    const entries = await scanTaskArtifacts(workspaceDir)
+    expect(entries.map((entry) => entry.path).sort()).toEqual(['attachments/zero2w_case.scad', 'case.scad'])
+    expect((await readTaskArtifact(workspaceDir, 'attachments/zero2w_case.scad'))?.content).toBe('sphere(5);')
+  })
+
+  it('saves a SCAD artifact only when its original text still matches', async () => {
+    await mkdir(join(workspaceDir, 'attachments'))
+    const path = join(workspaceDir, 'attachments', 'case.scad')
+    await writeFile(path, 'cube(10);')
+    await saveTaskScadArtifact(workspaceDir, 'task-1', 'attachments/case.scad', 'cube(12);', 'cube(10);')
+    expect(await readFile(path, 'utf8')).toBe('cube(12);')
+    await expect(saveTaskScadArtifact(workspaceDir, 'task-1', 'attachments/case.scad', 'cube(14);', 'cube(10);')).rejects.toThrow('changed on disk')
+    expect(await readFile(path, 'utf8')).toBe('cube(12);')
+    await expect(saveTaskScadArtifact(workspaceDir, 'task-1', '../outside.scad', 'x', 'y')).rejects.toThrow()
   })
 
   it('groups a multi-file output directory into one logical artifact', async () => {
