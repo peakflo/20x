@@ -105,8 +105,8 @@ export function ScadEditor({ artifact, content, read, save, renderModel }: {
     {externalChange && <div role="alert" className="bg-amber-500/10 px-3 py-2 text-xs text-amber-300">The file changed on disk. Reload before you save.</div>}
     {error && <div role="alert" className="bg-red-500/10 px-3 py-2 text-xs text-red-400">{error}</div>}
     <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-      <textarea aria-label="SCAD source" spellCheck={false} value={draft} onChange={(event) => setDraft(event.target.value)} className="min-h-[240px] w-full resize-none border-0 bg-[#0d1117] p-3 font-mono text-xs text-foreground outline-none md:h-full md:w-1/2" />
-      <div className="min-h-[240px] w-full border-t border-border/50 md:h-full md:w-1/2 md:border-l md:border-t-0">
+      <textarea aria-label="SCAD source" spellCheck={false} value={draft} onChange={(event) => setDraft(event.target.value)} className="min-h-[240px] w-full flex-1 resize-none border-0 bg-[#0d1117] p-3 font-mono text-xs text-foreground outline-none md:h-full md:w-1/2 md:flex-none" />
+      <div className="min-h-[240px] w-full flex-1 border-t border-border/50 md:h-full md:w-1/2 md:flex-none md:border-l md:border-t-0">
         {stl ? <Suspense fallback={<div className="p-4 text-xs text-muted-foreground">Loading 3D view…</div>}><ScadModelView stl={stl} /></Suspense> : <div className="flex h-full items-center justify-center p-4 text-center text-xs text-muted-foreground">{busy ? 'Rendering model…' : '3D preview is not available.'}</div>}
       </div>
     </div>
