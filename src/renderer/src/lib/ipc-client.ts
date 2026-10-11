@@ -3,7 +3,7 @@ import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentAp
 import type { ArtifactApi } from '@shared/artifacts'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { CustomModelPrice, ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageParallelismResponse, UsageSummary, UsageSummaryQuery } from '@shared/usage'
-import type { HarnessInstanceView } from '@shared/harness-instances'
+import type { DetectedHarnessCandidate, HarnessInstanceView } from '@shared/harness-instances'
 import type {
   AcpAgentInstanceView,
   AcpInstallResult,
@@ -146,6 +146,11 @@ export const harnessInstanceApi = {
 
   delete: (id: string): Promise<boolean> => {
     return window.electronAPI.harnessInstances.delete(id)
+  },
+
+  /** Folders on disk that already have a login for this harness but aren't a stored instance yet. */
+  detectCandidates: (harness: 'claude-code' | 'codex'): Promise<DetectedHarnessCandidate[]> => {
+    return window.electronAPI.harnessInstances.detectCandidates(harness)
   }
 }
 

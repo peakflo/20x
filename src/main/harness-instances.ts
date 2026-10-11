@@ -24,7 +24,7 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmdirSync, symlinkSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'path'
-import type { HarnessType } from '../shared/harness-instances'
+import type { DetectedHarnessCandidate, HarnessType } from '../shared/harness-instances'
 
 /**
  * Codex state that every instance shares with the real default home.
@@ -170,6 +170,81 @@ function listRootDatabases(home: string): string[] {
   } catch {
     return []
   }
+}
+
+/** Credential file that marks a folder as already signed in to a harness. */
+const CREDENTIAL_FILE: Record<HarnessType, string> = {
+  codex: 'auth.json',
+  'claude-code': '.credentials.json'
+}
+
+/** Default config-folder name of a harness, without an inherited override. */
+const DEFAULT_FOLDER_PREFIX: Record<HarnessType, string> = {
+  codex: '.codex',
+  'claude-code': '.claude'
+}
+
+/** Turns a folder-name suffix into a human label, e.g. "_work" → "Work", "" → "Detected". */
+function labelFromFolderSuffix(dirName: string, prefix: string): string {
+  const rest = dirName.slice(prefix.length).replace(/^[-_.]+/, '')
+  if (!rest) return 'Detected'
+  return rest
+    .split(/[-_.]+/)
+    .filter(Boolean)
+    .map((word) => word[0].toUpperCase() + word.slice(1))
+    .join(' ')
+}
+
+/**
+ * Finds folders next to the user's home directory that already hold a login for
+ * this harness (its credential file) but are not the harness's current default
+ * home and are not already a stored instance. Read-only: never reads or copies
+ * the credential file's contents, only checks that it exists. This is how a
+ * user who ran `CODEX_HOME=~/.codex_work codex login` (or the Claude equivalent)
+ * outside 20x gets offered that folder instead of having to retype its path.
+ *
+ * Claude Code may keep its login in the OS keychain instead of
+ * `.credentials.json`; a folder like that is not detected here and still needs
+ * to be added by hand.
+ */
+export function detectHarnessInstanceCandidates(
+  harness: HarnessType,
+  options: {
+    env?: Record<string, string | undefined>
+    home?: string
+    /** Home paths of instances already stored, so they are not offered again. */
+    existingHomePaths?: readonly string[]
+  } = {}
+): DetectedHarnessCandidate[] {
+  const env = options.env ?? process.env
+  const home = options.home ?? homedir()
+  const real = resolve(realHomeFor(harness, env, home))
+  const existing = new Set(
+    (options.existingHomePaths ?? [])
+      .map((path) => normalizeHomePath(path, home))
+      .filter((path): path is string => Boolean(path))
+      .map((path) => resolve(path))
+  )
+  const prefix = DEFAULT_FOLDER_PREFIX[harness]
+  const credentialFile = CREDENTIAL_FILE[harness]
+
+  let entries: string[]
+  try {
+    entries = readdirSync(home)
+  } catch {
+    return []
+  }
+
+  const candidates: DetectedHarnessCandidate[] = []
+  for (const name of entries) {
+    if (!name.startsWith(prefix)) continue
+    const full = resolve(join(home, name))
+    if (full === real || existing.has(full)) continue
+    if (isSymlink(full) || !isRealDirectory(full)) continue
+    if (!existsSync(join(full, credentialFile))) continue
+    candidates.push({ home_path: full, suggested_label: labelFromFolderSuffix(name, prefix) })
+  }
+  return candidates.sort((a, b) => a.home_path.localeCompare(b.home_path))
 }
 
 /**

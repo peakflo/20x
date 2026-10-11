@@ -37,7 +37,7 @@ import type {
   HeartbeatLog
 } from './index'
 import type { PullRequestDetails } from '@shared/artifacts'
-import type { HarnessInstanceView } from '@shared/harness-instances'
+import type { DetectedHarnessCandidate, HarnessInstanceView } from '@shared/harness-instances'
 import type {
   AcpAgentInstanceView,
   AcpInstallResult,
@@ -277,6 +277,7 @@ interface ElectronAPI {
     create: (data: { harness_type: 'claude-code' | 'codex'; label: string; home_path: string }) => Promise<HarnessInstanceView>
     update: (id: string, data: { label?: string; home_path?: string }) => Promise<HarnessInstanceView | undefined>
     delete: (id: string) => Promise<boolean>
+    detectCandidates: (harness: 'claude-code' | 'codex') => Promise<DetectedHarnessCandidate[]>
   }
   acpRegistry: {
     search: (query: string) => Promise<AcpRegistrySearchResult[]>

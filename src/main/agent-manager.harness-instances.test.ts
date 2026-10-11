@@ -31,7 +31,9 @@ vi.mock('electron', () => ({
   powerSaveBlocker: { start: vi.fn(() => 1), stop: vi.fn(), isStarted: vi.fn(() => false) },
 }))
 // Filesystem layout is covered by harness-instances.test.ts. Here an instance is
-// shareable unless its home path says otherwise.
+// shareable unless its home path says otherwise, and detection is a spy so these
+// tests do not depend on the real filesystem.
+const detectCandidatesMock = vi.hoisted(() => vi.fn(() => [] as Array<{ home_path: string; suggested_label: string }>))
 vi.mock('./harness-instances', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./harness-instances')>()
   return {
@@ -39,7 +41,8 @@ vi.mock('./harness-instances', async (importOriginal) => {
     linkSharedHistory: vi.fn(({ instanceHome }: { instanceHome: string }) => ({
       shareable: !instanceHome.includes('not-shareable'),
       links: []
-    }))
+    })),
+    detectHarnessInstanceCandidates: detectCandidatesMock
   }
 })
 
@@ -168,6 +171,38 @@ describe('one adapter per harness instance', () => {
     const { manager } = setup({ agents: {}, taskAgent: 'agent-old' })
     expect((manager as any).harnessInstanceLabel('hi_work', 'codex')).toBe('Codex · Work')
     expect((manager as any).harnessInstanceLabel('default:codex', 'codex')).toBe('Codex')
+  })
+})
+
+describe('detecting already-signed-in accounts for the "Add account" dialog', () => {
+  beforeEach(() => {
+    detectCandidatesMock.mockReset().mockReturnValue([])
+  })
+
+  it('passes the home paths of every stored instance, so they are not offered again', () => {
+    const { manager } = setup({ agents: {}, taskAgent: 'agent-old' })
+
+    manager.detectHarnessInstanceCandidates('codex')
+
+    expect(detectCandidatesMock).toHaveBeenCalledWith('codex', {
+      existingHomePaths: Object.values(INSTANCES).map((i) => i.home_path)
+    })
+  })
+
+  it('returns what the filesystem scan finds', () => {
+    detectCandidatesMock.mockReturnValue([{ home_path: '/accounts/codex-new', suggested_label: 'New' }])
+    const { manager } = setup({ agents: {}, taskAgent: 'agent-old' })
+
+    expect(manager.detectHarnessInstanceCandidates('codex')).toEqual([
+      { home_path: '/accounts/codex-new', suggested_label: 'New' }
+    ])
+  })
+
+  it('returns no candidates for an invalid harness, without touching the filesystem', () => {
+    const { manager } = setup({ agents: {}, taskAgent: 'agent-old' })
+
+    expect(manager.detectHarnessInstanceCandidates('not-a-harness')).toEqual([])
+    expect(detectCandidatesMock).not.toHaveBeenCalled()
   })
 })
 

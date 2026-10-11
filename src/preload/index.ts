@@ -112,7 +112,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: (): Promise<unknown[]> => ipcRenderer.invoke('harnessInstance:list'),
     create: (data: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('harnessInstance:create', data),
     update: (id: string, data: Record<string, unknown>): Promise<unknown> => ipcRenderer.invoke('harnessInstance:update', id, data),
-    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('harnessInstance:delete', id)
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('harnessInstance:delete', id),
+    detectCandidates: (harness: string): Promise<unknown[]> => ipcRenderer.invoke('harnessInstance:detectCandidates', harness)
   },
   acpRegistry: {
     search: (query: string): Promise<unknown[]> => ipcRenderer.invoke('acpRegistry:search', query)

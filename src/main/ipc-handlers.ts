@@ -528,6 +528,10 @@ export function registerIpcHandlers(
     return agentManager.deleteHarnessInstance(id)
   })
 
+  ipcMain.handle('harnessInstance:detectCandidates', (_, harness: string) => {
+    return agentManager.detectHarnessInstanceCandidates(harness)
+  })
+
   // ACP agents: registry search + configured instances (registry install or local command)
   ipcMain.handle('acpRegistry:search', async (_, query: string) => {
     const client = getAcpRegistryClient()
