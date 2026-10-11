@@ -44,6 +44,13 @@ import { initCrashLogger } from './crash-logger'
 import { installProcessStreamErrorHandlers } from './process-stream-errors'
 import { getWindowsPathEntries, prependMissingWindowsPaths } from './windows-runtime-paths'
 import { initAnalytics, shutdownAnalytics } from './analytics-service'
+import {
+  recordFocusGained,
+  recordFocusLost,
+  touchFocusHeartbeat,
+  recoverCrashedFocusIntervals,
+  FOCUS_HEARTBEAT_INTERVAL_MS
+} from './usage/app-focus-intervals'
 
 /**
  * Validate that a URL is safe to open via shell.openExternal.
@@ -63,6 +70,8 @@ function isExternalUrl(url: string): boolean {
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let isQuitting = false
+/** Heartbeat timer for the open app_focus_interval — runs only while the window is focused. */
+let focusHeartbeatTimer: ReturnType<typeof setInterval> | null = null
 let db: DatabaseManager | null = null
 let agentManager: AgentManager | null = null
 let githubManager: GitHubManager | null = null
@@ -337,6 +346,11 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+    // `.show()` triggers a native 'focus' event on most platforms, but not
+    // guaranteed everywhere — call this directly too so the first
+    // app_focus_intervals row always opens, rather than depending on launch
+    // being the one time 'focus' might not fire.
+    if (mainWindow?.isFocused()) onWindowFocusGained()
 
     // Initialize auto-updater (only in production)
     if (!is.dev && mainWindow) {
@@ -468,6 +482,36 @@ function createWindow(): void {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
+  // "My multiplier" denominator: track how much time the user actually spent
+  // with the app on screen. Opened on focus, closed on blur/hide/minimize
+  // (and on quit — see the `before-quit` handler) — not on every visibility
+  // wobble, so a user alt-tabbing briefly doesn't fragment the record more
+  // than necessary; the query engine unions intervals anyway, so any
+  // resulting fragmentation doesn't affect the total.
+  const stopFocusHeartbeat = (): void => {
+    if (focusHeartbeatTimer) {
+      clearInterval(focusHeartbeatTimer)
+      focusHeartbeatTimer = null
+    }
+  }
+  const onWindowFocusGained = (): void => {
+    if (!db) return
+    recordFocusGained(db, Date.now())
+    stopFocusHeartbeat()
+    focusHeartbeatTimer = setInterval(() => {
+      if (db) touchFocusHeartbeat(db, Date.now())
+    }, FOCUS_HEARTBEAT_INTERVAL_MS)
+    focusHeartbeatTimer.unref?.()
+  }
+  const onWindowFocusLost = (): void => {
+    stopFocusHeartbeat()
+    if (db) recordFocusLost(db, Date.now())
+  }
+  mainWindow.on('focus', onWindowFocusGained)
+  mainWindow.on('blur', onWindowFocusLost)
+  mainWindow.on('hide', onWindowFocusLost)
+  mainWindow.on('minimize', onWindowFocusLost)
+
   mainWindow.on('close', async (event) => {
     if (!isQuitting) {
       const minimizeToTray = await db?.getSetting('minimize_to_tray')
@@ -488,6 +532,10 @@ function createWindow(): void {
     mainWindow = null
     // A closed window must not keep reporting the screen it last showed.
     setTaskApiUiState(null)
+    // Defensive: 'blur'/'hide' normally already closed the focus interval,
+    // but this guarantees it regardless of event ordering on quit. No-op if
+    // nothing is open.
+    onWindowFocusLost()
   })
 
   // Set main window for managers
@@ -948,6 +996,19 @@ app.whenReady().then(async () => {
   db = new DatabaseManager()
   db.initialize()
 
+  // "My multiplier" denominator: close any app-focus interval left open by a
+  // crash, before anything else (including window creation below, which is
+  // the only thing that could open a new one) can observe or query
+  // app_focus_intervals. See recoverCrashedFocusIntervals for why this is
+  // safe to call on every normal cold start too (idempotent — a clean
+  // shutdown always leaves nothing open).
+  try {
+    const { recovered } = recoverCrashedFocusIntervals(db, Date.now())
+    if (recovered > 0) console.log(`[Main] app_focus_intervals crash recovery: closed ${recovered}`)
+  } catch (err) {
+    console.error('[Main] app_focus_intervals crash recovery failed:', err)
+  }
+
   // Sync enterprise email into PostHog payloads before any analytics event
   try {
     const storedEmail = db.getSetting('enterprise_user_email')
@@ -1337,6 +1398,15 @@ app.on('before-quit', async (event) => {
   if (isShuttingDown) {
     return
   }
+
+  // Defensive close for the open app-focus interval, independent of whatever
+  // combination of 'blur'/'hide'/'closed' did or didn't fire on the way
+  // here — idempotent, so a no-op if one of those already closed it.
+  if (focusHeartbeatTimer) {
+    clearInterval(focusHeartbeatTimer)
+    focusHeartbeatTimer = null
+  }
+  if (db) recordFocusLost(db, Date.now())
 
   panelBrowserBroker.stopAll()
 

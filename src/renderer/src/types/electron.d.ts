@@ -38,6 +38,14 @@ import type {
 } from './index'
 import type { PullRequestDetails } from '@shared/artifacts'
 import type { HarnessInstanceView } from '@shared/harness-instances'
+import type {
+  AcpAgentInstanceView,
+  AcpInstallResult,
+  AcpRegistrySearchResult,
+  CreateAcpAgentInstanceDTO,
+  LocalCommandValidationResult,
+  UpdateAcpAgentInstanceDTO
+} from '@shared/acp-registry'
 import type { ArtifactApi } from '@shared/artifacts'
 import type {
   VoiceActionOutcome,
@@ -270,6 +278,17 @@ interface ElectronAPI {
     update: (id: string, data: { label?: string; home_path?: string }) => Promise<HarnessInstanceView | undefined>
     delete: (id: string) => Promise<boolean>
   }
+  acpRegistry: {
+    search: (query: string) => Promise<AcpRegistrySearchResult[]>
+  }
+  acpInstances: {
+    list: () => Promise<AcpAgentInstanceView[]>
+    create: (data: CreateAcpAgentInstanceDTO) => Promise<AcpAgentInstanceView>
+    update: (id: string, data: UpdateAcpAgentInstanceDTO) => Promise<AcpAgentInstanceView | undefined>
+    delete: (id: string) => Promise<boolean>
+    install: (id: string) => Promise<AcpInstallResult>
+    validateLocalCommand: (executable: string) => Promise<LocalCommandValidationResult>
+  }
   agentSession: {
     start: (agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => Promise<AgentSessionStartResult>
     resume: (agentId: string, taskId: string, ocSessionId: string) => Promise<AgentSessionStartResult & { ended?: boolean }>
@@ -294,6 +313,9 @@ interface ElectronAPI {
     >
   }
   attachments: {
+    readScad: (taskId: string, attachmentId: string) => Promise<string>
+    saveScad: (taskId: string, attachmentId: string, content: string, expectedContent: string) => Promise<void>
+    renderScad: (taskId: string, attachmentId: string) => Promise<string>
     pick: () => Promise<string[]>
     save: (taskId: string, filePath: string) => Promise<FileAttachment>
     remove: (taskId: string, attachmentId: string) => Promise<void>
@@ -528,8 +550,16 @@ interface ElectronAPI {
     setCursorKeychainAccess: (enabled: boolean) => Promise<import('@shared/usage').UsageLimitsRefreshResult>
     getLimitRecovery: (taskId: string) => Promise<import('@shared/usage-limit-recovery').UsageLimitRecovery | null>
     setLimitRecoveryAutoResume: (taskId: string, autoResume: boolean) => Promise<import('@shared/usage-limit-recovery').UsageLimitRecovery | null>
+    refreshRates: (options?: { force?: boolean }) => Promise<{ refreshed: boolean; fetchedAt: number }>
+    listModelPrices: () => Promise<import('@shared/usage').CustomModelPrice[]>
+    setModelPrice: (price: import('@shared/usage').CustomModelPrice) => Promise<import('@shared/usage').CustomModelPrice[]>
+    resetModelPrice: (model: string) => Promise<import('@shared/usage').CustomModelPrice[]>
+    getParallelismSummary: (query: { days: number; utcOffsetMinutes?: number }) => Promise<import('@shared/usage').UsageParallelismResponse>
+    copyImageToClipboard: (pngBytes: ArrayBuffer) => Promise<{ success: boolean }>
+    saveImage: (pngBytes: ArrayBuffer, defaultFileName: string) => Promise<{ saved: boolean; filePath?: string }>
   }
   onUsageLimitRecoveryUpdated: (callback: (recovery: import('@shared/usage-limit-recovery').UsageLimitRecovery) => void) => () => void
+  onUsageModelPricesUpdated: (callback: (prices: import('@shared/usage').CustomModelPrice[]) => void) => () => void
   onUsageLimitsUpdated: (callback: (limits: import('@shared/usage').ProviderUsageLimits) => void) => () => void
   onUsageRecorded: (callback: (records: import('@shared/usage').TokenUsageRecord[]) => void) => () => void
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void

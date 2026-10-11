@@ -1,7 +1,7 @@
 import { updateTaskFromUser } from './session-feedback'
-import { ipcMain, dialog, shell, Notification, app, session } from 'electron'
+import { ipcMain, dialog, shell, Notification, app, session, clipboard as electronClipboard, ClipboardItem } from 'electron'
 import * as childProcess from 'child_process'
-import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync } from 'fs'
+import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join, basename, extname } from 'path'
 import { networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
@@ -16,8 +16,8 @@ import { panelBrowserBroker } from './panel-browser-broker'
 import { getAgentBrowserSession } from './agent-browser-session'
 import { listBrowserImportSources, importBrowserSessions, clearImportedBrowserSessions, normalizeDomains } from './browser-session-import'
 import type { BrowserImportRequest } from '../shared/browser-session-import'
-import type { UsageSummaryQuery } from '../shared/usage'
-import { sanitizeUsageSummaryQuery } from './usage/usage-query'
+import type { CustomModelPrice, UsageSummaryQuery } from '../shared/usage'
+import { sanitizeUsageSummaryQuery, sanitizeUsageParallelismQuery } from './usage/usage-query'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -27,6 +27,8 @@ import type {
   UpdateAgentData,
   CreateHarnessInstanceData,
   UpdateHarnessInstanceData,
+  CreateAcpAgentInstanceData,
+  UpdateAcpAgentInstanceData,
   CreateMcpServerData,
   UpdateMcpServerData,
   CreateTaskSourceData,
@@ -50,11 +52,17 @@ import type { ClaudePluginManager } from './claude-plugin-manager'
 import type { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import type { EnterpriseStateSync } from './enterprise-state-sync'
 import { analytics } from './analytics-service'
-import { listTaskArtifactEntries, readTaskArtifact, resolveTaskArtifactFilePath } from './artifacts'
+import { listTaskArtifactEntries, readTaskArtifact, resolveTaskArtifactFilePath, saveTaskScadArtifact } from './artifacts'
+import { renderTaskScadArtifact } from './scad-preview'
+import { readScadAttachment, renderScadAttachment, saveScadAttachment } from './scad-attachments'
 import { writeArtifactFileToClipboard } from './artifact-clipboard'
 import { ArtifactClipboardMode, type ArtifactCopyFileResult } from '../shared/artifacts'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { resolveTerminalCwd } from './terminal-cwd'
+import { getAcpInstallManager, getAcpRegistryClient } from './acp-registry/runtime'
+import { searchAgents, filterInstallableOnThisPlatform } from './acp-registry/registry-client'
+import { resolveAcpInstanceCommand } from './acp-registry/resolve-instance'
+import { validateLocalCommand } from './acp-registry/local-command'
 
 const MIME_MAP: Record<string, string> = {
   '.pdf': 'application/pdf',
@@ -345,6 +353,14 @@ export function registerIpcHandlers(
     return readTaskArtifact(db.getWorkspaceDir(taskId), relativePath)
   })
 
+  ipcMain.handle('artifacts:saveScad', async (_, taskId: string, relativePath: string, content: string, expectedContent: string) => {
+    await saveTaskScadArtifact(db.getWorkspaceDir(taskId), taskId, relativePath, content, expectedContent)
+  })
+
+  ipcMain.handle('artifacts:renderScad', async (_, taskId: string, relativePath: string) => {
+    return renderTaskScadArtifact(db.getWorkspaceDir(taskId), taskId, relativePath)
+  })
+
   ipcMain.handle('artifact:mcp-call', async (_, input: ArtifactMcpCall) => {
     if (!mcpToolCaller) throw new Error('Organisation Workspace is not connected')
     return callArtifactMcp(db, mcpToolCaller, input, 'desktop')
@@ -354,6 +370,16 @@ export function registerIpcHandlers(
     const filePath = await resolveTaskArtifactFilePath(db.getWorkspaceDir(taskId), relativePath)
     if (!filePath) return { mode: ArtifactClipboardMode.UNAVAILABLE }
     return writeArtifactFileToClipboard(filePath)
+  })
+
+  ipcMain.handle('artifacts:saveAs', async (_, taskId: string, relativePath: string, suggestedName: string): Promise<boolean> => {
+    const filePath = await resolveTaskArtifactFilePath(db.getWorkspaceDir(taskId), relativePath)
+    if (!filePath) return false
+    const safeName = basename(suggestedName) || basename(filePath)
+    const result = await dialog.showSaveDialog({ defaultPath: join(app.getPath('downloads'), safeName), filters: [{ name: 'HTML', extensions: ['html', 'htm'] }] })
+    if (result.canceled || !result.filePath) return false
+    copyFileSync(filePath, result.filePath)
+    return true
   })
 
   ipcMain.handle('attachments:open', (_, taskId: string, attachmentId: string) => {
@@ -381,6 +407,10 @@ export function registerIpcHandlers(
       console.log('[IPC] No matching file found for attachment ID:', attachmentId)
     }
   })
+
+  ipcMain.handle('attachments:readScad', (_, taskId: string, attachmentId: string) => readScadAttachment(db, taskId, attachmentId))
+  ipcMain.handle('attachments:saveScad', (_, taskId: string, attachmentId: string, content: string, expectedContent: string) => saveScadAttachment(db, taskId, attachmentId, content, expectedContent))
+  ipcMain.handle('attachments:renderScad', (_, taskId: string, attachmentId: string) => renderScadAttachment(db, taskId, attachmentId))
 
   ipcMain.handle('attachments:download', (_, taskId: string, attachmentId: string) => {
     console.log('[IPC] attachments:download called:', { taskId, attachmentId })
@@ -498,6 +528,72 @@ export function registerIpcHandlers(
     return agentManager.deleteHarnessInstance(id)
   })
 
+  // ACP agents: registry search + configured instances (registry install or local command)
+  ipcMain.handle('acpRegistry:search', async (_, query: string) => {
+    const client = getAcpRegistryClient()
+    const { index } = await client.load()
+    const matches = searchAgents(index, query ?? '')
+    const installable = await filterInstallableOnThisPlatform(matches)
+    const installableIds = new Set(installable.map((a) => a.id))
+    return matches.slice(0, 50).map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      description: agent.description ?? null,
+      version: agent.version,
+      license: agent.license ?? null,
+      licenseUrl: agent.license_url ?? null,
+      repository: agent.repository ?? null,
+      website: agent.website ?? null,
+      icon: agent.icon ?? null,
+      installableHere: installableIds.has(agent.id)
+    }))
+  })
+
+  ipcMain.handle('acpInstance:list', () => {
+    return db.listAcpAgentInstances()
+  })
+
+  ipcMain.handle('acpInstance:create', (_, data: CreateAcpAgentInstanceData) => {
+    return db.createAcpAgentInstance(data)
+  })
+
+  ipcMain.handle('acpInstance:update', (_, id: string, data: UpdateAcpAgentInstanceData) => {
+    const updated = db.updateAcpAgentInstance(id, data)
+    // A command/args/env/auth change must not keep running against a cached
+    // adapter built from the old config.
+    agentManager.forgetHarnessInstanceAdapters(id)
+    return updated
+  })
+
+  ipcMain.handle('acpInstance:delete', (_, id: string) => {
+    const removed = db.deleteAcpAgentInstance(id)
+    agentManager.forgetHarnessInstanceAdapters(id)
+    return removed
+  })
+
+  /**
+   * Pre-warms (downloads/installs) a registry-sourced instance ahead of use,
+   * so the "Add agent" flow can show real install progress/errors instead of
+   * discovering them on the agent's first prompt. Local-command instances
+   * need no install step and resolve immediately.
+   */
+  ipcMain.handle('acpInstance:install', async (_, id: string) => {
+    const instance = db.getAcpAgentInstance(id)
+    if (!instance) return { ok: false as const, error: 'ACP agent instance not found' }
+    try {
+      const { index } = await getAcpRegistryClient().load()
+      const resolved = await resolveAcpInstanceCommand(instance, { registryIndex: index, installManager: getAcpInstallManager() })
+      return { ok: true as const, command: resolved.command }
+    } catch (err) {
+      return { ok: false as const, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle('acpInstance:validateLocalCommand', async (_, executable: string) => {
+    const failure = await validateLocalCommand({ executable })
+    return failure ? { ok: false as const, kind: failure.kind, message: failure.message } : { ok: true as const }
+  })
+
   // Agent Session handlers
   ipcMain.handle('agentSession:start', async (_, agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => {
     agentManager.noteUserTaskActivity(taskId)
@@ -593,6 +689,54 @@ export function registerIpcHandlers(
 
   ipcMain.handle('usage:getSummary', (_, query?: UsageSummaryQuery) => {
     return agentManager.getUsageSummary(sanitizeUsageSummaryQuery(query))
+  })
+
+  ipcMain.handle('usage:refreshRates', async (_, options?: { force?: boolean }) => {
+    return await agentManager.refreshUsageRates({ force: options?.force === true })
+  })
+
+  ipcMain.handle('usage:listModelPrices', () => {
+    return agentManager.listUsageModelPrices()
+  })
+
+  ipcMain.handle('usage:setModelPrice', (_, price: CustomModelPrice) => {
+    return agentManager.setUsageModelPrice(price)
+  })
+
+  ipcMain.handle('usage:resetModelPrice', (_, model: string) => {
+    return agentManager.resetUsageModelPrice(model)
+  })
+
+  // "My multiplier" — parallel-agent summary for the usage hero card + records panel.
+  ipcMain.handle('usage:getParallelismSummary', (_, query?: { days?: number; utcOffsetMinutes?: number }) => {
+    return agentManager.getUsageParallelismSummary(sanitizeUsageParallelismQuery(query))
+  })
+
+  // Share dialog: put the exported PNG on the OS clipboard as an image.
+  // The DOM `Clipboard` interface shadows Electron's in the main-process type
+  // graph (see artifact-clipboard.ts), so the import is narrowed back here too.
+  // This Electron version's clipboard module is the Web Clipboard API shape
+  // (ClipboardItem + write), not the older writeImage/nativeImage one.
+  ipcMain.handle('usage:copyImageToClipboard', async (_, pngBytes: ArrayBuffer) => {
+    const clipboard = electronClipboard as unknown as Electron.Clipboard
+    try {
+      await clipboard.write([new ClipboardItem({ 'image/png': new Blob([pngBytes], { type: 'image/png' }) })])
+      return { success: true }
+    } catch (error) {
+      console.error('[IPC] usage:copyImageToClipboard failed:', error)
+      return { success: false }
+    }
+  })
+
+  // Share dialog: save the exported PNG to disk via a native save dialog.
+  ipcMain.handle('usage:saveImage', async (_, pngBytes: ArrayBuffer, defaultFileName: string) => {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      defaultPath: defaultFileName,
+      filters: [{ name: 'PNG Image', extensions: ['png'] }]
+    })
+    if (canceled || !filePath) return { saved: false }
+    writeFileSync(filePath, Buffer.from(pngBytes))
+    return { saved: true, filePath }
   })
 
   // Durable transcript snapshot: the renderer hydrates transcript state from

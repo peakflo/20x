@@ -1,6 +1,7 @@
 import { ArtifactFileSelector } from '@/components/artifacts/ArtifactFileSelector'
 import { useArtifactNavigation } from '@/components/artifacts/use-artifact-navigation'
 import { ArtifactHtmlFrame } from '@/components/artifacts/viewers/ArtifactHtmlFrame'
+import { ScadEditor } from '@/components/artifacts/viewers/ScadArtifactView'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isLocalArtifactLink } from '@shared/artifact-navigation'
 import { handleArtifactMcpMessage } from '@shared/artifact-mcp-host'
@@ -177,7 +178,10 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
             void handleArtifactMcpMessage(content.content, { taskId, path: artifact.path }, data, reply, api.artifacts.mcpCall)
           }} />
         )}
-        {!loading && !error && artifact?.type === ArtifactType.FILE && content && (
+        {!loading && !error && artifact?.path?.toLowerCase().endsWith('.scad') && content && (
+          <ScadEditor key={artifact.path} artifact={artifact} content={content} read={api.artifacts.content} save={api.artifacts.saveScad} renderModel={api.artifacts.renderScad} />
+        )}
+        {!loading && !error && artifact?.type === ArtifactType.FILE && !artifact.path?.toLowerCase().endsWith('.scad') && content && (
           content.kind === ArtifactContentKind.DATA_URL && content.mimeType?.startsWith('video/')
             ? <video controls src={content.content} className="h-full w-full object-contain" />
             : content.kind === ArtifactContentKind.DATA_URL && content.mimeType?.startsWith('audio/')

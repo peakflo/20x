@@ -2,8 +2,16 @@ import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, 
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
-import type { ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageSummary, UsageSummaryQuery } from '@shared/usage'
+import type { CustomModelPrice, ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageParallelismResponse, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { HarnessInstanceView } from '@shared/harness-instances'
+import type {
+  AcpAgentInstanceView,
+  AcpInstallResult,
+  AcpRegistrySearchResult,
+  CreateAcpAgentInstanceDTO,
+  LocalCommandValidationResult,
+  UpdateAcpAgentInstanceDTO
+} from '@shared/acp-registry'
 import type {
   MicrophonePermission,
   VoiceActionOutcome,
@@ -71,7 +79,10 @@ export const taskApi = {
 export const artifactApi: ArtifactApi = {
   scan: (taskId) => window.electronAPI.artifacts.scan(taskId),
   read: (taskId, relativePath) => window.electronAPI.artifacts.read(taskId, relativePath),
-  copyFile: (taskId, relativePath) => window.electronAPI.artifacts.copyFile(taskId, relativePath)
+  saveScad: (taskId, relativePath, content, expectedContent) => window.electronAPI.artifacts.saveScad(taskId, relativePath, content, expectedContent),
+  renderScad: (taskId, relativePath) => window.electronAPI.artifacts.renderScad(taskId, relativePath),
+  copyFile: (taskId, relativePath) => window.electronAPI.artifacts.copyFile(taskId, relativePath),
+  saveAs: (taskId, relativePath, suggestedName) => window.electronAPI.artifacts.saveAs(taskId, relativePath, suggestedName)
 }
 
 export const mcpServerApi = {
@@ -135,6 +146,38 @@ export const harnessInstanceApi = {
 
   delete: (id: string): Promise<boolean> => {
     return window.electronAPI.harnessInstances.delete(id)
+  }
+}
+
+export const acpRegistryApi = {
+  search: (query: string): Promise<AcpRegistrySearchResult[]> => {
+    return window.electronAPI.acpRegistry.search(query)
+  }
+}
+
+export const acpInstanceApi = {
+  list: (): Promise<AcpAgentInstanceView[]> => {
+    return window.electronAPI.acpInstances.list()
+  },
+
+  create: (data: CreateAcpAgentInstanceDTO): Promise<AcpAgentInstanceView> => {
+    return window.electronAPI.acpInstances.create(data)
+  },
+
+  update: (id: string, data: UpdateAcpAgentInstanceDTO): Promise<AcpAgentInstanceView | undefined> => {
+    return window.electronAPI.acpInstances.update(id, data)
+  },
+
+  delete: (id: string): Promise<boolean> => {
+    return window.electronAPI.acpInstances.delete(id)
+  },
+
+  install: (id: string): Promise<AcpInstallResult> => {
+    return window.electronAPI.acpInstances.install(id)
+  },
+
+  validateLocalCommand: (executable: string): Promise<LocalCommandValidationResult> => {
+    return window.electronAPI.acpInstances.validateLocalCommand(executable)
   }
 }
 
@@ -259,6 +302,9 @@ export const onTasksRefresh = (callback: () => void): (() => void) => {
 }
 
 export const attachmentApi = {
+  readScad: (taskId: string, attachmentId: string): Promise<string> => window.electronAPI.attachments.readScad(taskId, attachmentId),
+  saveScad: (taskId: string, attachmentId: string, content: string, expectedContent: string): Promise<void> => window.electronAPI.attachments.saveScad(taskId, attachmentId, content, expectedContent),
+  renderScad: (taskId: string, attachmentId: string): Promise<string> => window.electronAPI.attachments.renderScad(taskId, attachmentId),
   pick: (): Promise<string[]> => {
     return window.electronAPI.attachments.pick()
   },
@@ -322,11 +368,36 @@ export const usageApi = {
   },
   setLimitRecoveryAutoResume(taskId: string, autoResume: boolean): Promise<UsageLimitRecovery | null> {
     return window.electronAPI.usage.setLimitRecoveryAutoResume(taskId, autoResume)
+  },
+  refreshRates(options?: { force?: boolean }): Promise<{ refreshed: boolean; fetchedAt: number }> {
+    return window.electronAPI.usage.refreshRates(options)
+  },
+  listModelPrices(): Promise<CustomModelPrice[]> {
+    return window.electronAPI.usage.listModelPrices()
+  },
+  setModelPrice(price: CustomModelPrice): Promise<CustomModelPrice[]> {
+    return window.electronAPI.usage.setModelPrice(price)
+  },
+  resetModelPrice(model: string): Promise<CustomModelPrice[]> {
+    return window.electronAPI.usage.resetModelPrice(model)
+  },
+  getParallelismSummary(query: { days: number; utcOffsetMinutes?: number }): Promise<UsageParallelismResponse> {
+    return window.electronAPI.usage.getParallelismSummary(query)
+  },
+  copyImageToClipboard(pngBytes: ArrayBuffer): Promise<{ success: boolean }> {
+    return window.electronAPI.usage.copyImageToClipboard(pngBytes)
+  },
+  saveImage(pngBytes: ArrayBuffer, defaultFileName: string): Promise<{ saved: boolean; filePath?: string }> {
+    return window.electronAPI.usage.saveImage(pngBytes, defaultFileName)
   }
 }
 
 export const onUsageLimitRecoveryUpdated = (callback: (recovery: UsageLimitRecovery) => void): (() => void) => {
   return window.electronAPI.onUsageLimitRecoveryUpdated(callback)
+}
+
+export const onUsageModelPricesUpdated = (callback: (prices: CustomModelPrice[]) => void): (() => void) => {
+  return window.electronAPI.onUsageModelPricesUpdated(callback)
 }
 
 export const onUsageLimitsUpdated = (callback: (limits: ProviderUsageLimits) => void): (() => void) => {

@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest'
 import {
+  buildUsageChartSeries,
   effectiveUsedPercent,
+  formatMultiplier,
   formatResetIn,
   formatTokenCount,
   formatUsd,
   mergeUsageLimits,
   totalTokens,
   usageLimitLevel,
+  usagePeriodForParallelismDays,
   type ProviderUsageLimits
 } from './usage'
 
@@ -99,5 +102,82 @@ describe('usage helpers', () => {
 
   it('counts reasoning inside output when totalling tokens', () => {
     expect(totalTokens({ inputTokens: 1, cacheReadTokens: 2, cacheWriteTokens: 3, outputTokens: 4, reasoningTokens: 4 })).toBe(10)
+  })
+})
+
+describe('formatMultiplier', () => {
+  it('shows one decimal below 10 and a rounded integer at 10+', () => {
+    expect(formatMultiplier(3.44)).toBe('3.4')
+    expect(formatMultiplier(10)).toBe('10')
+    expect(formatMultiplier(137.2)).toBe('137')
+  })
+
+  it('caps absurd multipliers at ">1000×" instead of a wall of digits', () => {
+    expect(formatMultiplier(1000)).toBe('>1000×')
+    expect(formatMultiplier(48_231)).toBe('>1000×')
+    expect(formatMultiplier(999.4)).toBe('999') // just under the cap, still a rounded integer
+  })
+})
+
+describe('usagePeriodForParallelismDays', () => {
+  it('maps every supported period to its UsagePeriod key', () => {
+    expect(usagePeriodForParallelismDays(7)).toBe('7d')
+    expect(usagePeriodForParallelismDays(30)).toBe('30d')
+    expect(usagePeriodForParallelismDays(90)).toBe('90d')
+    expect(usagePeriodForParallelismDays(182)).toBe('182d')
+  })
+})
+
+describe('buildUsageChartSeries', () => {
+  it('assigns the first 4 providers (by the fixed USAGE_PROVIDERS order) real colours', () => {
+    const series = buildUsageChartSeries(['cursor', 'claude-code', 'codex'], 'dark')
+    expect(series.map((s) => s.key)).toEqual(['claude-code', 'codex', 'cursor'])
+    expect(series.every((s) => s.color.startsWith('#'))).toBe(true)
+  })
+
+  it('pins claude-code to orange and codex to blue, in both themes', () => {
+    const dark = buildUsageChartSeries(['cursor', 'claude-code', 'codex'], 'dark')
+    expect(dark.find((s) => s.key === 'claude-code')!.color).toBe('#d95926')
+    expect(dark.find((s) => s.key === 'codex')!.color).toBe('#3987e5')
+
+    const light = buildUsageChartSeries(['cursor', 'claude-code', 'codex'], 'light')
+    expect(light.find((s) => s.key === 'claude-code')!.color).toBe('#eb6834')
+    expect(light.find((s) => s.key === 'codex')!.color).toBe('#2a78d6')
+
+    // cursor isn't pinned — it just gets whatever's left of the pool, and must not collide with either pinned colour.
+    const cursorColor = dark.find((s) => s.key === 'cursor')!.color
+    expect(cursorColor).not.toBe('#d95926')
+    expect(cursorColor).not.toBe('#3987e5')
+  })
+
+  it('frees a pinned colour for the next provider in canonical order when its owner is absent', () => {
+    // No claude-code: codex still gets blue (its own pin), and orange — freed from claude-code — goes to opencode instead of disappearing.
+    const withoutClaudeCode = buildUsageChartSeries(['codex', 'opencode', 'cursor'], 'dark')
+    expect(withoutClaudeCode.find((s) => s.key === 'codex')!.color).toBe('#3987e5')
+    expect(withoutClaudeCode.find((s) => s.key === 'opencode')!.color).toBe('#d95926')
+
+    // No codex: claude-code still gets orange (its own pin), and blue — freed from codex — goes to opencode instead.
+    const withoutCodex = buildUsageChartSeries(['claude-code', 'opencode', 'cursor'], 'dark')
+    expect(withoutCodex.find((s) => s.key === 'claude-code')!.color).toBe('#d95926')
+    expect(withoutCodex.find((s) => s.key === 'opencode')!.color).toBe('#3987e5')
+  })
+
+  it('folds a 5th+ provider into one "Other" series instead of growing the palette', () => {
+    const series = buildUsageChartSeries(['claude-code', 'codex', 'opencode', 'cursor', 'pi', 'acp'], 'dark')
+    expect(series).toHaveLength(5)
+    const other = series.find((s) => s.key === 'other')!
+    expect(other.providers).toEqual(['pi', 'acp'])
+    expect(other.label).toBe('Other')
+  })
+
+  it('uses the light-theme palette when asked, and never colours text with a series colour', () => {
+    const dark = buildUsageChartSeries(['claude-code'], 'dark')
+    const light = buildUsageChartSeries(['claude-code'], 'light')
+    expect(dark[0].color).not.toBe(light[0].color)
+  })
+
+  it('omits providers with no data entirely, in any input order', () => {
+    const series = buildUsageChartSeries(['acp', 'claude-code'], 'dark')
+    expect(series.map((s) => s.key)).toEqual(['claude-code', 'acp'])
   })
 })

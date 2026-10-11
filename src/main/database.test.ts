@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect, beforeEach } from 'vitest'
@@ -83,6 +83,52 @@ describe('Task CRUD', () => {
     expect(db.deleteTask('non-existent')).toBe(false)
   })
 
+  it('removes the task artifacts — including inline HTML renders — along with the task', () => {
+    const task = db.createTask(makeTask())!
+    // `createTestDb` stubs `getWorkspaceDir` to a fixed path unrelated to the
+    // real one (see db-test-helper.ts), so build the real path the same way
+    // `deleteTaskWorkspace` does (both read `app.getPath('userData')`,
+    // mocked to '/tmp/pf-desktop-test' in test/setup-main.ts) rather than
+    // going through the stub.
+    const workspaceDir = join('/tmp/pf-desktop-test', 'workspaces', task.id)
+    // Simulate what html_render/create_artifact leave behind.
+    mkdirSync(join(workspaceDir, 'artifacts', 'artifact_chart_abc12345'), { recursive: true })
+    writeFileSync(join(workspaceDir, 'artifacts', 'artifact_chart_abc12345', 'index.html'), '<p>chart</p>')
+    mkdirSync(join(workspaceDir, '.20x'), { recursive: true })
+    writeFileSync(join(workspaceDir, '.20x', 'artifacts.json'), '{"version":1,"artifacts":[]}')
+    expect(existsSync(join(workspaceDir, 'artifacts'))).toBe(true)
+    expect(existsSync(join(workspaceDir, '.20x'))).toBe(true)
+
+    db.deleteTask(task.id)
+
+    expect(existsSync(join(workspaceDir, 'artifacts'))).toBe(false)
+    expect(existsSync(join(workspaceDir, '.20x'))).toBe(false)
+  })
+
+  it('never touches a git worktree checkout living alongside the artifacts in the same workspace', () => {
+    // Worktrees nest at workspaces/<taskId>/<repoName> (worktree-manager.ts),
+    // sharing the parent directory with .20x/artifacts. Deleting a task must
+    // not rm -rf that sibling: a worktree needs `git worktree remove`
+    // (WorktreeManager.cleanupTaskWorkspace), or the main repo is left with
+    // stale .git/worktrees metadata. Some deletion paths (e.g. a
+    // Workflo-linked task deleted remotely, see peakflo-plugin.ts) call
+    // db.deleteTask with no prior worktree cleanup at all.
+    const task = db.createTask(makeTask())!
+    const workspaceDir = join('/tmp/pf-desktop-test', 'workspaces', task.id)
+    const worktreeDir = join(workspaceDir, 'my-repo')
+    mkdirSync(worktreeDir, { recursive: true })
+    writeFileSync(join(worktreeDir, '.git'), 'gitdir: /somewhere/.git/worktrees/my-repo\n')
+    writeFileSync(join(worktreeDir, 'README.md'), '# checked out repo\n')
+    mkdirSync(join(workspaceDir, '.20x'), { recursive: true })
+    writeFileSync(join(workspaceDir, '.20x', 'artifacts.json'), '{"version":1,"artifacts":[]}')
+
+    db.deleteTask(task.id)
+
+    expect(existsSync(join(workspaceDir, '.20x'))).toBe(false)
+    expect(existsSync(join(worktreeDir, '.git'))).toBe(true)
+    expect(existsSync(join(worktreeDir, 'README.md'))).toBe(true)
+  })
+
   it('getByExternalId finds the right task', () => {
     // First create an MCP server for the foreign key
     const server = db.createMcpServer({ name: 'Test Server' })!
@@ -107,6 +153,42 @@ describe('Task CRUD', () => {
 
   it('returns undefined for non-existent external_id', () => {
     expect(db.getTaskByExternalId('src', 'nope')).toBeUndefined()
+  })
+})
+
+describe('getTasksShippedCount', () => {
+  const windowStart = Date.now() - 60_000
+  const windowEnd = Date.now() + 60_000
+
+  it('counts a completed top-level task that was updated in the window', () => {
+    db.createTask(makeTask({ title: 'Top-level', status: 'completed' }))
+    expect(db.getTasksShippedCount(windowStart, windowEnd)).toBe(1)
+  })
+
+  it('counts a completed SUBTASK too — not just its top-level parent', () => {
+    const parent = db.createTask(makeTask({ title: 'Parent', status: 'not_started' }))!
+    db.createTask(makeTask({ title: 'Subtask', status: 'completed', parent_task_id: parent.id }))
+    // The parent itself never completed — only the subtask did — and it still counts.
+    expect(db.getTasksShippedCount(windowStart, windowEnd)).toBe(1)
+  })
+
+  it('counts a completed top-level task AND a completed subtask of a DIFFERENT task together, not deduplicated', () => {
+    db.createTask(makeTask({ title: 'Top-level, completed', status: 'completed' }))
+    const parent = db.createTask(makeTask({ title: 'Parent', status: 'not_started' }))!
+    db.createTask(makeTask({ title: 'Subtask, completed', status: 'completed', parent_task_id: parent.id }))
+    expect(db.getTasksShippedCount(windowStart, windowEnd)).toBe(2)
+  })
+
+  it('does not count a subtask that has not reached completed', () => {
+    const parent = db.createTask(makeTask({ title: 'Parent', status: 'completed' }))!
+    db.createTask(makeTask({ title: 'Subtask, in progress', status: 'in_progress', parent_task_id: parent.id }))
+    // Only the parent counts — the subtask is still open.
+    expect(db.getTasksShippedCount(windowStart, windowEnd)).toBe(1)
+  })
+
+  it('does not count a completed task outside the window', () => {
+    db.createTask(makeTask({ title: 'Completed long ago', status: 'completed' }))
+    expect(db.getTasksShippedCount(Date.now() + 3_600_000, Date.now() + 7_200_000)).toBe(0)
   })
 })
 
@@ -252,12 +334,27 @@ describe('getHeartbeatDueTasks', () => {
   })
 })
 
+describe('Task completion', () => {
+  it('completes a parent task even while its subtasks are still open', () => {
+    const parent = db.createTask(makeTask({ title: 'Parent', status: 'ready_for_review' }))!
+    const subtask = db.createTask(makeTask({ title: 'Write the report', status: 'not_started', parent_task_id: parent.id }))!
+
+    const updated = db.updateTask(parent.id, { status: 'completed' })
+
+    expect(updated?.status).toBe('completed')
+    // Finishing the parent doesn't touch the subtask's own status.
+    expect(db.getTask(subtask.id)?.status).toBe('not_started')
+  })
+})
+
 describe('Agent CRUD', () => {
   it('creates and retrieves an agent', () => {
     const agent = db.createAgent(makeAgent({ name: 'My Agent' }))
     expect(agent).toBeDefined()
     expect(agent!.name).toBe('My Agent')
-    expect(agent!.config).toEqual({})
+    // New agents default to always-allow permissions; see the
+    // 'agent permission_mode' describe below for the full matrix.
+    expect(agent!.config).toEqual({ permission_mode: 'allow' })
     expect(agent!.is_default).toBe(false)
   })
 
@@ -283,6 +380,157 @@ describe('Agent CRUD', () => {
     const agent = db.createAgent(makeAgent())!
     expect(db.deleteAgent(agent.id)).toBe(true)
     expect(db.getAgent(agent.id)).toBeUndefined()
+  })
+})
+
+describe('agent permission_mode — always allow by default', () => {
+  /**
+   * Injects an in-memory DB and builds the real schema, so private seed/
+   * migration methods can run against exact rows.
+   */
+  function makeRawManager(): { manager: DatabaseManager; rawDb: InstanceType<typeof RawDatabase> } {
+    const rawDb = new RawDatabase(':memory:')
+    rawDb.pragma('journal_mode = WAL')
+    rawDb.pragma('foreign_keys = ON')
+    const manager = new RealDatabaseManager()
+    ;(manager as unknown as { db: unknown }).db = rawDb
+    ;(manager as unknown as { createTables(): void }).createTables()
+    return { manager, rawDb }
+  }
+
+  function insertRawAgent(
+    rawDb: InstanceType<typeof RawDatabase>,
+    id: string,
+    config: string,
+    isDefault = 0
+  ): void {
+    rawDb
+      .prepare(
+        'INSERT INTO agents (id, name, server_url, config, is_default, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      )
+      .run(id, id, 'http://localhost:4096', config, isDefault, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+  }
+
+  function rawConfigById(
+    rawDb: InstanceType<typeof RawDatabase>
+  ): Map<string, { config: string; updated_at: string }> {
+    const rows = rawDb.prepare('SELECT id, config, updated_at FROM agents').all() as Array<{
+      id: string
+      config: string
+      updated_at: string
+    }>
+    return new Map(rows.map((r) => [r.id, { config: r.config, updated_at: r.updated_at }]))
+  }
+
+  it('seeds the Default Agent with permission_mode allow on a fresh install', () => {
+    // seedDefaultAgent runs on EVERY startup (initialize()), not behind the
+    // schema-version gate — a fresh install gets the Default Agent on first
+    // launch, always with always-allow permissions.
+    const { manager, rawDb } = makeRawManager()
+    try {
+      ;(manager as unknown as { seedDefaultAgent(): void }).seedDefaultAgent()
+
+      const agents = manager.getAgents()
+      expect(agents).toHaveLength(1)
+      expect(agents[0].name).toBe('Default Agent')
+      expect(agents[0].is_default).toBe(true)
+      expect(agents[0].config.permission_mode).toBe('allow')
+    } finally {
+      rawDb.close()
+    }
+  })
+
+  it('seed is a no-op once any agent exists (no duplicate Default Agent)', () => {
+    const { manager, rawDb } = makeRawManager()
+    try {
+      manager.createAgent(makeAgent({ name: 'Only Agent' }))
+
+      ;(manager as unknown as { seedDefaultAgent(): void }).seedDefaultAgent()
+
+      expect(manager.getAgents().map((a) => a.name)).toEqual(['Only Agent'])
+    } finally {
+      rawDb.close()
+    }
+  })
+
+  it('createAgent fills a missing permission_mode with allow; explicit values win', () => {
+    const defaulted = db.createAgent(makeAgent({ name: 'No Mode', config: {} }))
+    expect(defaulted!.config.permission_mode).toBe('allow')
+
+    const explicitAsk = db.createAgent(makeAgent({ name: 'Ask', config: { permission_mode: 'ask' } }))
+    expect(explicitAsk!.config.permission_mode).toBe('ask')
+
+    const explicitAllow = db.createAgent(makeAgent({ name: 'Allow', config: { permission_mode: 'allow', model: 'm1' } }))
+    expect(explicitAllow!.config.permission_mode).toBe('allow')
+    expect(explicitAllow!.config.model).toBe('m1')
+  })
+
+  it('backfill sets allow only where permission_mode is absent (explicit ask/allow untouched)', () => {
+    const { manager, rawDb } = makeRawManager()
+    try {
+      insertRawAgent(rawDb, 'default-no-key', '{}', 1)
+      insertRawAgent(rawDb, 'no-key-with-other-fields', '{"model":"gpt-4","skill_ids":["s1"]}')
+      insertRawAgent(rawDb, 'explicit-ask', '{"permission_mode":"ask"}')
+      insertRawAgent(rawDb, 'explicit-allow', '{"permission_mode":"allow"}')
+
+      ;(manager as unknown as { migrateAgentPermissionDefaults(): void }).migrateAgentPermissionDefaults()
+
+      const rows = rawConfigById(rawDb)
+      expect(JSON.parse(rows.get('default-no-key')!.config)).toEqual({ permission_mode: 'allow' })
+      expect(JSON.parse(rows.get('no-key-with-other-fields')!.config)).toEqual({
+        model: 'gpt-4',
+        skill_ids: ['s1'],
+        permission_mode: 'allow'
+      })
+      // "never changed" cannot be told apart from "user chose ask" — the key
+      // being present means the row is left byte-identical.
+      expect(rows.get('explicit-ask')!.config).toBe('{"permission_mode":"ask"}')
+      expect(rows.get('explicit-allow')!.config).toBe('{"permission_mode":"allow"}')
+    } finally {
+      rawDb.close()
+    }
+  })
+
+  it('backfill is JSON-safe: invalid or non-object configs are skipped untouched', () => {
+    const { manager, rawDb } = makeRawManager()
+    try {
+      insertRawAgent(rawDb, 'invalid-json', 'not-json{')
+      insertRawAgent(rawDb, 'array-config', '[]')
+      insertRawAgent(rawDb, 'string-config', '"hello"')
+      insertRawAgent(rawDb, 'null-config', 'null')
+
+      expect(() =>
+        (manager as unknown as { migrateAgentPermissionDefaults(): void }).migrateAgentPermissionDefaults()
+      ).not.toThrow()
+
+      const rows = rawConfigById(rawDb)
+      expect(rows.get('invalid-json')!.config).toBe('not-json{')
+      expect(rows.get('array-config')!.config).toBe('[]')
+      expect(rows.get('string-config')!.config).toBe('"hello"')
+      expect(rows.get('null-config')!.config).toBe('null')
+    } finally {
+      rawDb.close()
+    }
+  })
+
+  it('backfill is idempotent — a second pass rewrites nothing', () => {
+    const { manager, rawDb } = makeRawManager()
+    try {
+      insertRawAgent(rawDb, 'default-no-key', '{}', 1)
+      insertRawAgent(rawDb, 'explicit-ask', '{"permission_mode":"ask"}')
+      insertRawAgent(rawDb, 'invalid-json', 'not-json{')
+
+      const migrate = () => (manager as unknown as { migrateAgentPermissionDefaults(): void }).migrateAgentPermissionDefaults()
+      migrate()
+      const afterFirst = rawConfigById(rawDb)
+      migrate()
+
+      const afterSecond = rawConfigById(rawDb)
+      expect([...afterSecond.entries()]).toEqual([...afterFirst.entries()])
+      expect(JSON.parse(afterSecond.get('default-no-key')!.config)).toEqual({ permission_mode: 'allow' })
+    } finally {
+      rawDb.close()
+    }
   })
 })
 

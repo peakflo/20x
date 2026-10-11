@@ -12,6 +12,7 @@ import { ImageArtifactView } from './viewers/ImageArtifactView'
 import { HtmlArtifactView } from './viewers/HtmlArtifactView'
 import { PrArtifactView } from './viewers/PrArtifactView'
 import { FileArtifactView } from './viewers/FileArtifactView'
+import { ScadArtifactView } from './viewers/ScadArtifactView'
 import { handleArtifactMcpMessage } from '@shared/artifact-mcp-host'
 
 export const ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS = 30_000
@@ -75,6 +76,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
 }
 
 function ArtifactViewer({ artifact, artifactApi, refreshTrigger, onLinkClick }: { artifact: Artifact; artifactApi: ArtifactApi; refreshTrigger: number; onLinkClick: (href: string) => boolean }) {
+  if (artifact.path?.toLowerCase().endsWith('.scad')) return <ScadArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
   switch (artifact.type) {
     case ArtifactType.MARKDOWN: return <MarkdownArtifactView onLinkClick={onLinkClick} artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
     case ArtifactType.IMAGE: return <ImageArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />

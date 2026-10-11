@@ -3,6 +3,7 @@ import { Bot } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useUsageStore } from '@/stores/usage-store'
 import { useHarnessInstanceStore } from '@/stores/harness-instance-store'
+import { useAcpInstanceStore } from '@/stores/acp-instance-store'
 import type { Agent } from '@/types'
 import { USAGE_PROVIDER_LABELS, isUsageProvider, type UsageProvider } from '@shared/usage'
 import { defaultHarnessInstanceId, harnessInstanceDisplayName } from '@shared/harness-instances'
@@ -34,13 +35,23 @@ export function AgentDetailsCard({ agent, className }: { agent: Agent; className
   const provider = isUsageProvider(agent.config?.coding_agent) ? agent.config.coding_agent : null
   const config = agent.config ?? {}
   // The agent's own account: its harness instance, or the harness default when it has none.
-  const instanceId = provider ? (config.harness_instance_id || defaultHarnessInstanceId(provider)) : null
+  // An ACP agent has no "default" instance — it IS one specific configured instance.
+  const instanceId = provider
+    ? provider === 'acp'
+      ? config.acp_instance_id ?? null
+      : config.harness_instance_id || defaultHarnessInstanceId(provider)
+    : null
   const limits = useUsageStore((s) => (instanceId ? s.limits.find((l) => (l.instanceId ?? defaultHarnessInstanceId(l.provider)) === instanceId) ?? null : null))
   const instance = useHarnessInstanceStore((s) => (config.harness_instance_id ? s.instances.find((i) => i.id === config.harness_instance_id) ?? null : null))
   const loadInstances = useHarnessInstanceStore((s) => s.load)
   useEffect(() => { void loadInstances() }, [loadInstances])
+  const acpInstance = useAcpInstanceStore((s) => (config.acp_instance_id ? s.instances.find((i) => i.id === config.acp_instance_id) ?? null : null))
+  const loadAcpInstances = useAcpInstanceStore((s) => s.load)
+  useEffect(() => { void loadAcpInstances() }, [loadAcpInstances])
   const harnessName = provider ? USAGE_PROVIDER_LABELS[provider] : 'Unknown'
-  const accountLabel = instance ? harnessInstanceDisplayName(instance.harness_type, instance.label) : null
+  const accountLabel = provider === 'acp'
+    ? (acpInstance?.display_name ?? null)
+    : instance ? harnessInstanceDisplayName(instance.harness_type, instance.label) : null
   const usesApiKey = config.auth_method === 'api_key'
   const mcpCount = config.mcp_servers?.length ?? 0
   const skillCount = config.skill_ids?.length ?? 0

@@ -33,7 +33,7 @@ vi.mock('fs/promises', () => ({
 }))
 
 // Mock heavy dependencies to avoid loading electron/native modules
-vi.mock('child_process', () => ({ spawn: vi.fn() }))
+vi.mock('child_process', () => ({ spawn: vi.fn(), execFile: vi.fn() }))
 const notificationInstances: Array<{ show: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn>; _listeners: Map<string, () => void>; opts: { title: string; body: string } }> = []
 
 vi.mock('electron', () => {
@@ -58,7 +58,7 @@ vi.mock('electron', () => {
 })
 vi.mock('./adapters/opencode-adapter', () => ({ OpencodeAdapter: vi.fn() }))
 vi.mock('./adapters/claude-code-adapter', () => ({ ClaudeCodeAdapter: vi.fn() }))
-vi.mock('./adapters/acp-adapter', () => ({ AcpAdapter: vi.fn() }))
+vi.mock('./adapters/acp-adapter', () => ({ AcpAgentAdapter: vi.fn() }))
 vi.mock('./adapters/codex-app-server-adapter', () => ({ CodexAppServerAdapter: vi.fn() }))
 vi.mock('./adapters/pi-adapter', () => ({ PiAdapter: vi.fn() }))
 vi.mock('./task-api-server', () => ({ getTaskApiPort: vi.fn(), waitForTaskApiServer: vi.fn() }))
@@ -71,7 +71,7 @@ vi.mock('./secret-broker', () => ({
 
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
-import { AcpAdapter } from './adapters/acp-adapter'
+import { AcpAgentAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import { getTaskApiPort } from './task-api-server'
@@ -136,6 +136,18 @@ function createMockDb(agentConfig: Record<string, unknown> = {}) {
     deleteSetting: vi.fn(),
     getWorkspaceDir: vi.fn(() => '/tmp/test-workspace'),
     updateTask: vi.fn(),
+    // agent_run_intervals ("my multiplier") — not under test here, stubbed so
+    // the status-transition/session-destroy hooks in agent-manager.ts (which
+    // call these unconditionally, not just best-effort) don't throw.
+    getOpenAgentRunIntervals: vi.fn(() => []),
+    getOpenAgentRunIntervalForSession: vi.fn(() => undefined),
+    openAgentRunInterval: vi.fn(),
+    closeOpenAgentRunInterval: vi.fn(() => null),
+    renameOpenAgentRunIntervalSession: vi.fn(),
+    getAgentRunIntervalsOverlapping: vi.fn(() => []),
+    getEarliestAgentRunIntervalStart: vi.fn(() => null),
+    getTasksShippedCount: vi.fn(() => 0),
+    getLatestTranscriptActivityAfter: vi.fn(() => null),
   } as unknown as ConstructorParameters<typeof AgentManager>[0]
 }
 
@@ -229,7 +241,7 @@ describe('AgentManager skill file paths', () => {
 
       expect(adapter).toBeInstanceOf(CodexAppServerAdapter)
       expect(CodexAppServerAdapter).toHaveBeenCalledOnce()
-      expect(AcpAdapter).not.toHaveBeenCalled()
+      expect(AcpAgentAdapter).not.toHaveBeenCalled()
     })
 
     it('uses the app server even if the old ACP override is set', () => {
@@ -241,7 +253,7 @@ describe('AgentManager skill file paths', () => {
 
       expect(adapter).toBeInstanceOf(CodexAppServerAdapter)
       expect(CodexAppServerAdapter).toHaveBeenCalledOnce()
-      expect(AcpAdapter).not.toHaveBeenCalled()
+      expect(AcpAgentAdapter).not.toHaveBeenCalled()
     })
 
     it('uses ACP for Cursor agents', () => {
@@ -250,8 +262,10 @@ describe('AgentManager skill file paths', () => {
 
       const adapter = (manager as any).getAdapter('agent-1')
 
-      expect(adapter).toBeInstanceOf(AcpAdapter)
-      expect(AcpAdapter).toHaveBeenCalledWith('cursor')
+      // TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR; this
+      // shim keeps it on the generic ACP client until then (see agent-manager.ts).
+      expect(adapter).toBeInstanceOf(AcpAgentAdapter)
+      expect(AcpAgentAdapter).toHaveBeenCalledWith({ command: 'cursor-agent', args: ['acp'] })
     })
 
     it('uses the Pi RPC adapter for Pi agents', () => {
@@ -4279,6 +4293,43 @@ describe('Workflo task execution owner', () => {
   })
 })
 
+describe('AgentManager sessionsShareHistory (ACP instance-pair awareness)', () => {
+  function acpAgent(id: string, acpInstanceId?: string) {
+    return { id, config: { coding_agent: 'acp', ...(acpInstanceId ? { acp_instance_id: acpInstanceId } : {}) } }
+  }
+  function codexAgent(id: string) {
+    return { id, config: { coding_agent: 'codex' } }
+  }
+
+  function shareHistory(a: unknown, b: unknown): boolean {
+    const db = createMockDb() as any
+    const mgr = new AgentManager(db)
+    return (mgr as any).sessionsShareHistory(a, b)
+  }
+
+  it('two ACP agents referencing the same instance share history', () => {
+    expect(shareHistory(acpAgent('a1', 'acp_devin'), acpAgent('a2', 'acp_devin'))).toBe(true)
+  })
+
+  it('two ACP agents referencing different instances do NOT share history, even though both are "acp"', () => {
+    expect(shareHistory(acpAgent('a1', 'acp_devin'), acpAgent('a2', 'acp_goose'))).toBe(false)
+  })
+
+  it('an ACP agent with no configured instance never shares history', () => {
+    expect(shareHistory(acpAgent('a1'), acpAgent('a2', 'acp_devin'))).toBe(false)
+    expect(shareHistory(acpAgent('a1'), acpAgent('a2'))).toBe(false)
+  })
+
+  it('an ACP agent paired with a non-ACP agent does not share history', () => {
+    expect(shareHistory(acpAgent('a1', 'acp_devin'), codexAgent('a2'))).toBe(false)
+  })
+
+  it('non-ACP agents keep the existing per-side shareable-instance rule, unaffected by the ACP branch', () => {
+    expect(shareHistory(codexAgent('a1'), codexAgent('a2'))).toBe(true)
+    expect(shareHistory(undefined, codexAgent('a2'))).toBe(true) // no "from" agent: default to shareable
+  })
+})
+
 describe('AgentManager context handoff on agent reassignment', () => {
   const PREVIOUS_AGENT = { id: 'agent-old', name: 'Claude Lead', config: { coding_agent: 'claude-code' } }
   const CURRENT_AGENT = { id: 'agent-1', name: 'Codex Lead', config: { coding_agent: 'codex', system_prompt: 'You are helpful.' } }
@@ -4975,5 +5026,85 @@ describe('AgentManager serverOverloaded retry on the initial turn', () => {
     await vi.advanceTimersByTimeAsync(OVERLOAD_RETRY_BASE_DELAY_MS * 2 ** (MAX_OVERLOAD_RETRY_ATTEMPTS + 2))
     expect(adapter.sendPrompt).toHaveBeenCalledTimes(expectedCalls)
     expect((manager as any).overloadRetryTracker.getAttempts('session-1')).toBe(MAX_OVERLOAD_RETRY_ATTEMPTS)
+  })
+})
+
+describe('AgentManager getUsageParallelismSummary — live-only (never backfilled) evidence', () => {
+  const NOW = Date.UTC(2026, 5, 15, 12, 0, 0)
+  const DAY = 24 * 60 * 60 * 1000
+
+  function makeUsageDb(overrides: Record<string, unknown> = {}) {
+    return {
+      getAgentRunIntervalsOverlapping: vi.fn(() => []),
+      getAppFocusIntervalsOverlapping: vi.fn(() => []),
+      getEarliestLiveAgentRunIntervalStart: vi.fn(() => null),
+      getEarliestAppFocusIntervalStart: vi.fn(() => null),
+      getTasksShippedCount: vi.fn(() => 0),
+      ...overrides,
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+  }
+
+  it('excludes backfilled agent-run intervals from totalRunMs and the multiplier', () => {
+    const liveInterval = {
+      sessionId: 's-live', taskId: 't1', agentId: 'a1', provider: 'claude-code', harnessInstanceId: null,
+      startedAtMs: NOW - 2 * 60 * 60 * 1000, endedAtMs: NOW - 1 * 60 * 60 * 1000, endReason: 'idle'
+    }
+    const backfilledInterval = {
+      sessionId: 's-backfilled', taskId: 't2', agentId: 'a1', provider: 'claude-code', harnessInstanceId: null,
+      startedAtMs: NOW - 10 * 60 * 60 * 1000, endedAtMs: NOW - 5 * 60 * 60 * 1000, endReason: 'backfilled'
+    }
+    const db = makeUsageDb({
+      getAgentRunIntervalsOverlapping: vi.fn(() => [liveInterval, backfilledInterval]),
+      getAppFocusIntervalsOverlapping: vi.fn(() => [{ startedAtMs: NOW - 2 * 60 * 60 * 1000, endedAtMs: NOW - 1 * 60 * 60 * 1000 }]),
+    })
+    const mgr = new AgentManager(db)
+    const result = mgr.getUsageParallelismSummary({ days: 30 }, NOW)
+    // Only the 1-hour live interval counts — the 5-hour backfilled one must not inflate totalRunMs.
+    expect(result.parallelism.totalRunMs).toBe(60 * 60 * 1000)
+  })
+
+  it('computes peak concurrency, hasData, and per-day hours from ALL data (live + backfilled) — not just live rows', () => {
+    const backfilledA = {
+      sessionId: 's-a', taskId: 't1', agentId: 'a1', provider: 'claude-code', harnessInstanceId: null,
+      startedAtMs: NOW - 3 * 60 * 60 * 1000, endedAtMs: NOW - 1 * 60 * 60 * 1000, endReason: 'backfilled'
+    }
+    const backfilledB = {
+      sessionId: 's-b', taskId: 't2', agentId: 'a2', provider: 'claude-code', harnessInstanceId: null,
+      startedAtMs: NOW - 3 * 60 * 60 * 1000, endedAtMs: NOW - 1 * 60 * 60 * 1000, endReason: 'backfilled'
+    }
+    const db = makeUsageDb({
+      getAgentRunIntervalsOverlapping: vi.fn(() => [backfilledA, backfilledB]),
+    })
+    const mgr = new AgentManager(db)
+    const result = mgr.getUsageParallelismSummary({ days: 30 }, NOW)
+    // Two backfilled sessions overlapping for 2 hours give a peak of 2 and a
+    // real calendar entry, even though NEITHER counts toward totalRunMs —
+    // the ratio numerator stays live-only, but there's still something to
+    // draw: a user with only pre-release backfilled history (no live time
+    // yet) must still get a real card, not the text-only empty state.
+    expect(result.parallelism.hasData).toBe(true)
+    expect(result.parallelism.peak?.count).toBe(2)
+    expect(result.parallelism.totalRunMs).toBe(0)
+    const totalPerDayHours = result.parallelism.perDay.reduce((sum, d) => sum + d.runHours, 0)
+    expect(totalPerDayHours).toBeGreaterThan(0)
+  })
+
+  it('"counting from" is the later of the live-only agent-run start and the focus-interval start, ignoring backfilled history', () => {
+    const earliestLiveAgentMs = NOW - 5 * DAY
+    const earliestFocusMs = NOW - 3 * DAY
+    const db = makeUsageDb({
+      getEarliestLiveAgentRunIntervalStart: vi.fn(() => earliestLiveAgentMs),
+      getEarliestAppFocusIntervalStart: vi.fn(() => earliestFocusMs),
+    })
+    const mgr = new AgentManager(db)
+    const result = mgr.getUsageParallelismSummary({ days: 30 }, NOW)
+    expect(result.countingFromMs).toBe(earliestFocusMs) // the later of the two
+  })
+
+  it('"counting from" is null when either series has no data yet', () => {
+    const db = makeUsageDb({ getEarliestLiveAgentRunIntervalStart: vi.fn(() => NOW - DAY) })
+    const mgr = new AgentManager(db)
+    const result = mgr.getUsageParallelismSummary({ days: 30 }, NOW)
+    expect(result.countingFromMs).toBeNull()
   })
 })

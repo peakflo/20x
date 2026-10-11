@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { readFileSync } from 'fs'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -7,6 +8,19 @@ import { makeTask, makeAgent } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
 import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskAutomationTrigger, startTaskApiServer, stopTaskApiServer } from './task-api-server'
 import { TaskStatus } from '../shared/constants'
+import { HTML_RENDER_MAX_HEIGHT, HTML_RENDER_MAX_LENGTH, HTML_RENDER_MAX_TITLE_LENGTH } from '../shared/html-render'
+
+vi.mock('./html-render', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./html-render')>()
+  return {
+    ...actual,
+    captureHtmlPreview: vi.fn(async () => ({
+      png: Buffer.from('fake-png'),
+      contentHeight: 360,
+      consoleErrors: []
+    }))
+  }
+})
 
 /**
  * The handleRoute function is not exported, so we test the triage-related
@@ -74,6 +88,122 @@ describe('explicit artifact workpiece routes', () => {
       expect.objectContaining({ artifactId: created.artifact.artifactId, files: ['README.md'] })
     ])
     await rm(workspaceDir, { recursive: true, force: true })
+  })
+})
+
+describe('/html_render', () => {
+  let workspaceDir: string
+
+  beforeEach(async () => {
+    workspaceDir = await mkdtemp(join(tmpdir(), '20x-task-api-html-render-'))
+    vi.spyOn(db, 'getWorkspaceDir').mockReturnValue(workspaceDir)
+  })
+
+  afterEach(async () => {
+    await rm(workspaceDir, { recursive: true, force: true })
+  })
+
+  it('publishes an inline HTML artifact and notifies listeners', async () => {
+    const task = db.createTask(makeTask({ title: 'Chart task' }))!
+    const notify = vi.fn()
+    setTaskApiNotifier(notify)
+
+    const result = await handleRoute(db, '/html_render', {
+      task_id: task.id,
+      html: '<!doctype html><html><body><p>Q3 revenue</p></body></html>',
+      title: 'Q3 revenue',
+      height: 320
+    }) as { artifact_id: string; path: string; title: string; message: string }
+
+    expect(result.artifact_id).toMatch(/^artifact_/)
+    expect(result.path).toBe(`artifacts/${result.artifact_id}/index.html`)
+    expect(result.title).toBe('Q3 revenue')
+    expect(result.message).toMatch(/above your reply/i)
+    expect(notify).toHaveBeenCalledWith('artifact:updated', expect.objectContaining({
+      taskId: task.id,
+      artifact: expect.objectContaining({ inline: true, heightHint: 320 })
+    }))
+
+    const listed = await handleRoute(db, '/list_artifacts', { task_id: task.id }) as Array<{ inline?: boolean; heightHint?: number }>
+    expect(listed).toEqual([expect.objectContaining({ inline: true, heightHint: 320 })])
+  })
+
+  it('rejects html over the length limit', async () => {
+    const task = db.createTask(makeTask({ title: 'Oversized' }))!
+    const result = await handleRoute(db, '/html_render', {
+      task_id: task.id,
+      html: 'x'.repeat(HTML_RENDER_MAX_LENGTH + 1),
+      title: 'Too big'
+    }) as { error?: string }
+    expect(result.error).toMatch(/at most/)
+  })
+
+  it('rejects a title over the length limit', async () => {
+    const task = db.createTask(makeTask({ title: 'Oversized title' }))!
+    const result = await handleRoute(db, '/html_render', {
+      task_id: task.id,
+      html: '<p>ok</p>',
+      title: 'x'.repeat(HTML_RENDER_MAX_TITLE_LENGTH + 1)
+    }) as { error?: string }
+    expect(result.error).toMatch(/at most/)
+  })
+
+  it('clamps an out-of-range height hint instead of failing', async () => {
+    const task = db.createTask(makeTask({ title: 'Clamped height' }))!
+    const result = await handleRoute(db, '/html_render', {
+      task_id: task.id,
+      html: '<p>ok</p>',
+      title: 'Clamped',
+      height: 9999
+    }) as { artifact_id: string }
+    const listed = await handleRoute(db, '/list_artifacts', { task_id: task.id }) as Array<{ heightHint?: number }>
+    expect(listed[0].heightHint).toBe(HTML_RENDER_MAX_HEIGHT)
+    expect(result.artifact_id).toBeDefined()
+  })
+
+  it('rejects a missing local image instead of publishing a broken page', async () => {
+    const task = db.createTask(makeTask({ title: 'Broken image' }))!
+    const result = await handleRoute(db, '/html_render', {
+      task_id: task.id,
+      html: '<img src="/no/such/image.png">',
+      title: 'Broken'
+    }) as { error?: string }
+    expect(result.error).toMatch(/not found/i)
+    const listed = await handleRoute(db, '/list_artifacts', { task_id: task.id })
+    expect(listed).toEqual([])
+  })
+
+  it('requires an existing task', async () => {
+    const result = await handleRoute(db, '/html_render', { task_id: 'nope', html: '<p>x</p>', title: 'x' }) as { error?: string }
+    expect(result.error).toBe('Task not found')
+  })
+})
+
+describe('/html_preview', () => {
+  it('returns an image block plus metrics and a saved-PNG path fallback for a valid page', async () => {
+    const result = await handleRoute(db, '/html_preview', { html: '<p>hi</p>', width: 600, appearance: 'light' }) as {
+      image: { mimeType: string; data: string }
+      path: string
+      contentHeight: number
+      consoleErrors: string[]
+      missingImages: string[]
+    }
+    expect(result.image).toEqual({ mimeType: 'image/png', data: Buffer.from('fake-png').toString('base64') })
+    expect(result.path).toMatch(/20x-html-previews[/\\].+\.png$/)
+    expect(readFileSync(result.path)).toEqual(Buffer.from('fake-png'))
+    expect(result.contentHeight).toBe(360)
+    expect(result.consoleErrors).toEqual([])
+    expect(result.missingImages).toEqual([])
+  })
+
+  it('reports a missing local image instead of failing — html_render is the strict one', async () => {
+    const result = await handleRoute(db, '/html_preview', { html: '<img src="/no/such/image.png">' }) as { missingImages: string[] }
+    expect(result.missingImages).toEqual(['/no/such/image.png'])
+  })
+
+  it('requires html', async () => {
+    const result = await handleRoute(db, '/html_preview', {}) as { error?: string }
+    expect(result.error).toMatch(/required/)
   })
 })
 

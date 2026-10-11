@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import {
+  acpInstanceDropdownOptions,
   defaultHarnessInstanceId,
   agentInstanceId,
   harnessDropdownOptions,
   harnessInstanceDisplayName,
+  harnessTypeLabel,
   harnessTypeOf,
   isDefaultHarnessInstanceId,
+  parseAcpInstanceDropdownValue,
   signInCommand
 } from './harness-instances'
 
@@ -90,5 +93,42 @@ describe('agentInstanceId', () => {
     expect(agentInstanceId({ coding_agent: 'codex', harness_instance_id: 'hi_work', auth_method: 'api_key' }, instances)).toBeNull()
     expect(agentInstanceId({ coding_agent: 'opencode', harness_instance_id: 'hi_work' }, instances)).toBeNull()
     expect(agentInstanceId({ coding_agent: 'codex' }, instances)).toBeNull()
+  })
+})
+
+describe('harnessTypeLabel', () => {
+  it('labels an ACP agent', () => {
+    expect(harnessTypeLabel('acp')).toBe('ACP agent')
+  })
+})
+
+describe('acpInstanceDropdownOptions', () => {
+  it('gives each ACP instance its own top-level dropdown entry', () => {
+    const options = acpInstanceDropdownOptions([
+      { id: 'acp_devin', display_name: 'Devin' },
+      { id: 'acp_local', display_name: 'My Local Agent' }
+    ])
+    expect(options).toEqual([
+      { value: 'acp-instance:acp_devin', label: 'Devin' },
+      { value: 'acp-instance:acp_local', label: 'My Local Agent' }
+    ])
+  })
+
+  it('returns an empty list when there are no configured instances', () => {
+    expect(acpInstanceDropdownOptions([])).toEqual([])
+  })
+})
+
+describe('parseAcpInstanceDropdownValue', () => {
+  it('extracts the instance id from a prefixed value', () => {
+    expect(parseAcpInstanceDropdownValue('acp-instance:acp_devin')).toBe('acp_devin')
+  })
+
+  it('returns null for a value without the ACP instance prefix', () => {
+    expect(parseAcpInstanceDropdownValue('codex')).toBeNull()
+    expect(parseAcpInstanceDropdownValue('instance:hi_work')).toBeNull()
+    expect(parseAcpInstanceDropdownValue(null)).toBeNull()
+    expect(parseAcpInstanceDropdownValue(undefined)).toBeNull()
+    expect(parseAcpInstanceDropdownValue('acp-instance:')).toBeNull()
   })
 })

@@ -5,16 +5,18 @@ import { spawn } from 'child_process'
 import { join } from 'path'
 import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSync } from 'fs'
 import { mkdir, writeFile } from 'fs/promises'
-import { Notification, powerSaveBlocker } from 'electron'
+import { app, Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
-import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord } from './database'
+import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord, AgentRunIntervalRecord } from './database'
 import { TaskStatus, SessionStatus } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
 import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
-import { AcpAdapter } from './adapters/acp-adapter'
+import { AcpAgentAdapter } from './adapters/acp-adapter'
+import { getAcpInstallManager, getAcpRegistryClient } from './acp-registry/runtime'
+import { resolveAcpInstanceCommand } from './acp-registry/resolve-instance'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
@@ -27,9 +29,12 @@ import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, wr
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
 import { analytics } from './analytics-service'
 import { UsageTracker, type UsageLimitsProbeTarget } from './usage/usage-tracker'
+import { RateTableService } from './usage/usage-pricing-service'
+import { createRateResolver } from './usage/usage-pricing'
+import { listCustomModelPrices, setCustomModelPrice, resetCustomModelPrice } from './usage/usage-custom-prices'
 import { agentInstanceId, harnessInstanceDisplayName, harnessTypeLabel, harnessTypeOf, defaultHarnessInstanceId, isDefaultHarnessInstanceId, isHarnessType, type HarnessInstanceView, type HarnessType } from '../shared/harness-instances'
 import { instanceHomeError, instanceHomeFor, linkSharedHistory, normalizeHomePath, realHomeFor } from './harness-instances'
-import { CURSOR_KEYCHAIN_ACCESS_SETTING } from './usage/cursor-limits'
+import { CURSOR_KEYCHAIN_ACCESS_SETTING, probeCursorUsageLimits } from './usage/cursor-limits'
 import { UsageLimitRecoveryScheduler, UsageLimitRecoveryStore } from './usage/usage-limit-recovery'
 import {
   AUTO_RESUME_LIMITED_TASKS_SETTING,
@@ -41,7 +46,9 @@ import {
 import { isUsageProvider } from '../shared/usage'
 import {
   USAGE_LIMITS_UPDATED_CHANNEL,
+  USAGE_MODEL_PRICES_UPDATED_CHANNEL,
   USAGE_RECORDED_CHANNEL,
+  type CustomModelPrice,
   type ProviderUsageLimits,
   type UsageLimitsRefreshResult,
   type UsageProvider,
@@ -67,6 +74,18 @@ import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../s
 import { sendMobilePush } from './mobile-push'
 import { AgentPushEvents, type QuestionPart } from './agent-push-events'
 import { formatRetryDelay, isOverloadError, MAX_OVERLOAD_RETRY_ATTEMPTS, OverloadRetryTracker } from './overload-retry'
+import {
+  recordAgentStatusTransition,
+  closeSessionIntervalOnDestroy,
+  renameSessionOnRekey,
+  recoverCrashedIntervals,
+  runAgentRunIntervalBackfill,
+  isAgentSessionStatus,
+  type AgentRunContext,
+  type AgentSessionStatus
+} from './usage/agent-run-intervals'
+import { computeParallelismSummary, periodBoundsForDays, type UsageParallelismResponse, type ParallelismSummary } from './usage/usage-parallelism'
+import type { UsageParallelismQuery } from './usage/usage-query'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -74,7 +93,9 @@ enum CodingAgentType {
   CLAUDE_CODE = 'claude-code',
   CODEX = 'codex',
   CURSOR = 'cursor',
-  PI = 'pi'
+  PI = 'pi',
+  /** A configured ACP (Agent Client Protocol) registry or local-command agent instance. */
+  ACP = 'acp'
 }
 
 /** Handoff block ready to send with the next prompt of a session. */
@@ -91,11 +112,13 @@ const ARTIFACT_WORKSPACE_INSTRUCTIONS = `
 
 [Workspace Deliverables]
 Repository files are code and appear in the task's Changes view; do not treat ordinary source files as artifacts.
-For every standalone user-facing deliverable, first call \`create_artifact\` on the task-management MCP server. Then use \`write_artifact_file\`, \`read_artifact_file\`, and \`edit_artifact_file\` with the returned artifact_id. Multiple supporting files belong to that one artifact; mark its preview entry file with \`preview: true\`. Do not create artifact files with generic filesystem Write/Edit tools. Screenshots and pull requests are detected automatically.`
+For every standalone user-facing deliverable, first call \`create_artifact\` on the task-management MCP server. Then use \`write_artifact_file\`, \`read_artifact_file\`, and \`edit_artifact_file\` with the returned artifact_id. Multiple supporting files belong to that one artifact; mark its preview entry file with \`preview: true\`. Do not create artifact files with generic filesystem Write/Edit tools. Screenshots and pull requests are detected automatically.
+When a chart, table, diagram, image collage, or mockup would say more than prose, build a self-contained HTML page, check it with \`html_preview\`, then publish it with \`html_render\` before your final reply. The user sees it above your reply, so don't announce or restate it.`
 
 /** Short reminder for follow-up / resume system prompts — full rules live in the initial user message. */
 const ARTIFACT_WORKSPACE_REMINDER =
-  '\nStandalone deliverables: if task-management is available, use create_artifact / write_artifact_file (not ordinary Write/Edit).'
+  '\nStandalone deliverables: if task-management is available, use create_artifact / write_artifact_file (not ordinary Write/Edit). '
+  + 'For charts/tables/diagrams, prefer html_preview then html_render over describing them in prose.'
 
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
@@ -232,8 +255,18 @@ function isCodexAppServerAdapter(adapter: CodingAgentAdapter): boolean {
   return adapter instanceof CodexAppServerAdapter || adapter.constructor?.name === 'CodexAppServerAdapter'
 }
 
-function getAgentProvider(agent: { config?: { coding_agent?: string } } | null | undefined): string {
+export function getAgentProvider(agent: { config?: { coding_agent?: string } } | null | undefined): string {
   return agent?.config?.coding_agent || CodingAgentType.OPENCODE
+}
+
+/**
+ * The harness instance (subscription account) an agent's config points at, or
+ * null for the default instance / an API-key agent. Reused by
+ * agent-run-intervals.ts so run-interval rows record the same instance
+ * identity as the rest of agent-manager.ts, without hardcoding a provider list.
+ */
+export function getAgentHarnessInstanceId(agent: { config?: { harness_instance_id?: string } } | null | undefined): string | null {
+  return agent?.config?.harness_instance_id ?? null
 }
 
 /**
@@ -347,6 +380,8 @@ export class AgentManager extends EventEmitter {
   private adapters: Map<string, CodingAgentAdapter> = new Map()  // Adapter instances
   /** Subscription usage tracker; created lazily (undefined = not yet, null = unavailable). */
   private usageTracker: UsageTracker | null | undefined = undefined
+  /** Public rate table (fetch + disk cache + TTL); created lazily. */
+  private usagePricingService: RateTableService | undefined = undefined
   /** Whether each stored harness instance shares session history with the default home. Set on create, update and startup. */
   private instanceSharing = new Map<string, boolean>()
   /** Continues tasks after a usage-limit reset; created lazily (null = unavailable). */
@@ -475,7 +510,91 @@ export class AgentManager extends EventEmitter {
   constructor(db: DatabaseManager) {
     super()
     this.db = db
+
+    // Crash recovery: close any agent_run_intervals row left open by a
+    // previous run that crashed or was force-quit, before anything else
+    // (including the idle-session reaper, or any IPC call) can observe or
+    // query stale open intervals. `this.sessions` is empty at this point in
+    // a normal cold start, so every open row found here predates this
+    // process and is closed; see recoverCrashedIntervals' isSessionActive
+    // param for the (currently theoretical) "still genuinely running" case.
+    try {
+      const { recovered, skippedStillActive } = recoverCrashedIntervals(this.db, (sessionId) => this.sessions.has(sessionId), Date.now())
+      if (recovered > 0 || skippedStillActive > 0) {
+        console.log(`[AgentManager] agent_run_intervals crash recovery: closed ${recovered}, left ${skippedStillActive} open (still active)`)
+      }
+    } catch (err) {
+      console.error('[AgentManager] agent_run_intervals crash recovery failed:', err)
+    }
+
+    // Best-effort backfill of historical intervals (from before this table
+    // existed) from token_usage_events. One-time (guarded by a settings
+    // flag) and can touch a lot of rows, so it's deferred off the startup
+    // path entirely rather than run inline here.
+    setImmediate(() => {
+      try {
+        const result = runAgentRunIntervalBackfill(this.db)
+        if (result.sessionsInserted > 0 || result.sessionsSkipped > 0) {
+          console.log(`[AgentManager] agent_run_intervals backfill: ${result.sessionsInserted} sessions (${result.intervalsInserted} intervals), ${result.sessionsSkipped} skipped`)
+        }
+      } catch (err) {
+        console.error('[AgentManager] agent_run_intervals backfill failed:', err)
+      }
+    })
+
     this.startIdleSessionReaper()
+  }
+
+  /**
+   * Resolves the per-session identity agent-run-intervals.ts needs to
+   * open/close a row: provider and harness instance come from the agent's
+   * config (same fields the rest of this file already reads via
+   * `getAgentProvider`/`getAgentHarnessInstanceId`), task status comes from
+   * the live task record (for the AgentLearning exclusion).
+   */
+  private buildAgentRunContext(sessionId: string, agentId: string, taskId: string, isTriageSession: boolean): AgentRunContext {
+    const agent = this.db.getAgent(agentId)
+    const task = this.db.getTask(taskId)
+    return {
+      taskId,
+      agentId,
+      sessionId,
+      provider: getAgentProvider(agent),
+      harnessInstanceId: getAgentHarnessInstanceId(agent),
+      isTriageSession,
+      taskStatus: task?.status
+    }
+  }
+
+  // ── agent_run_intervals: defensive wrappers ──────────────────
+  // This bookkeeping must never be the reason a session fails to start,
+  // send, or stop — every call site below goes through one of these instead
+  // of calling agent-run-intervals.ts directly, so a DB error (or, in tests,
+  // a minimal mock `db` that doesn't implement these methods) is logged and
+  // swallowed rather than breaking the actual session operation in progress.
+
+  private recordAgentRunTransition(ctx: AgentRunContext, prevStatus: AgentSessionStatus | undefined, nextStatus: AgentSessionStatus, atMs: number): void {
+    try {
+      recordAgentStatusTransition(this.db, ctx, prevStatus, nextStatus, atMs)
+    } catch (err) {
+      console.error('[AgentManager] agent_run_intervals recordAgentStatusTransition failed:', err)
+    }
+  }
+
+  private closeAgentRunInterval(sessionId: string, atMs: number, endReason: string): void {
+    try {
+      closeSessionIntervalOnDestroy(this.db, sessionId, atMs, endReason)
+    } catch (err) {
+      console.error('[AgentManager] agent_run_intervals closeSessionIntervalOnDestroy failed:', err)
+    }
+  }
+
+  private renameAgentRunIntervalSession(oldSessionId: string, newSessionId: string): void {
+    try {
+      renameSessionOnRekey(this.db, oldSessionId, newSessionId)
+    } catch (err) {
+      console.error('[AgentManager] agent_run_intervals renameSessionOnRekey failed:', err)
+    }
   }
 
   /** True when the tool delegates to subagents or blocks on subtask progress —
@@ -810,7 +929,12 @@ export class AgentManager extends EventEmitter {
     // environment (CODEX_HOME / CLAUDE_CONFIG_DIR) belong to that login, so two
     // instances of one harness can run in parallel.
     const instance = this.resolveAgentInstance(agent)
-    const cacheKey = this.adapterCacheKey(backendType, instance?.id)
+    // An ACP agent's "instance" is which configured ACP agent it is (possibly
+    // an entirely different program), not a subscription login — so it needs
+    // its own id in the cache key too, distinct from resolveAgentInstance's
+    // claude-code/codex-only notion of instance.
+    const acpInstanceId = backendType === CodingAgentType.ACP ? agent.config?.acp_instance_id : undefined
+    const cacheKey = this.adapterCacheKey(backendType, instance?.id ?? acpInstanceId)
 
     // Return cached adapter
     if (this.adapters.has(cacheKey)) {
@@ -834,14 +958,43 @@ export class AgentManager extends EventEmitter {
         console.log('[AgentManager] Creating new CodexAppServerAdapter for', instance?.id ?? 'default')
         adapter = new CodexAppServerAdapter({ harnessHome: instance?.home })
         break
-      case CodingAgentType.CURSOR:
-        console.log('[AgentManager] Creating new AcpAdapter for Cursor')
-        adapter = new AcpAdapter('cursor')
+      case CodingAgentType.CURSOR: {
+        console.log('[AgentManager] Creating new AcpAgentAdapter for Cursor')
+        // TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR; this shim keeps it on the generic ACP client until then.
+        const cursorAdapter = new AcpAgentAdapter({ command: 'cursor-agent', args: ['acp'] })
+        this.wireCursorPlanLimits(cursorAdapter)
+        adapter = cursorAdapter
         break
+      }
       case CodingAgentType.PI:
         console.log('[AgentManager] Creating new PiAdapter')
         adapter = new PiAdapter(this.db)
         break
+      case CodingAgentType.ACP: {
+        if (!acpInstanceId) {
+          console.warn('[AgentManager] ACP agent has no configured instance (acp_instance_id)')
+          return null
+        }
+        const acpInstance = this.db.getAcpAgentInstance(acpInstanceId)
+        if (!acpInstance) {
+          console.warn(`[AgentManager] ACP agent instance not found: ${acpInstanceId}`)
+          return null
+        }
+        console.log('[AgentManager] Creating new AcpAgentAdapter for ACP instance', acpInstance.display_name)
+        // Command/args resolve lazily in initialize() — installing a registry
+        // agent (or just finding its binary) can need network/filesystem
+        // work, and getAdapter() itself must stay synchronous.
+        adapter = new AcpAgentAdapter({
+          command: '',
+          args: [],
+          registryAgentId: acpInstance.registry_agent_id ?? undefined,
+          resolveProcessConfig: async () => {
+            const { index } = await getAcpRegistryClient().load()
+            return resolveAcpInstanceCommand(acpInstance, { registryIndex: index, installManager: getAcpInstallManager() })
+          }
+        })
+        break
+      }
       default:
         console.warn(`[AgentManager] Unknown coding agent type: ${backendType}`)
         return null
@@ -909,8 +1062,38 @@ export class AgentManager extends EventEmitter {
     return this.resolveAgentInstance(agent)?.shareable ?? true
   }
 
+  /**
+   * Whether a same-harness switch between two agents can resume the same
+   * backend session id natively. For Claude Code/Codex this is "are both
+   * sides' logins shareable" (`sharesSessionHistory`), since every shareable
+   * instance of one harness type links into the same real session store.
+   *
+   * ACP is different: `coding_agent === 'acp'` only says "some configured
+   * ACP agent," not which one — two ACP agents can be entirely different,
+   * incompatible programs (e.g. one registry agent vs. another, or a local
+   * command). So for ACP, "shared" additionally requires both sides to
+   * reference the exact same `acp_instance_id`; otherwise this always
+   * returns false and the switch falls through to a handoff.
+   */
+  private sessionsShareHistory(a: AgentRecord | undefined, b: AgentRecord | undefined): boolean {
+    const isAcp = a?.config?.coding_agent === 'acp' || b?.config?.coding_agent === 'acp'
+    if (isAcp) {
+      return (
+        a?.config?.coding_agent === 'acp' &&
+        b?.config?.coding_agent === 'acp' &&
+        !!a.config.acp_instance_id &&
+        a.config.acp_instance_id === b?.config?.acp_instance_id
+      )
+    }
+    return this.sharesSessionHistory(a) && this.sharesSessionHistory(b)
+  }
+
   /** Display label of an instance for usage and notes. Reads the current name, so renames show at once. */
   harnessInstanceLabel(instanceId: string, provider: UsageProvider): string {
+    if (provider === 'acp') {
+      const acpInstance = this.db.getAcpAgentInstance(instanceId)
+      return acpInstance?.display_name ?? harnessTypeLabel(provider)
+    }
     if (isDefaultHarnessInstanceId(instanceId)) return harnessTypeLabel(provider)
     const stored = this.db.getHarnessInstance(instanceId)
     return stored ? harnessInstanceDisplayName(stored.harness_type, stored.label) : harnessTypeLabel(provider)
@@ -918,10 +1101,25 @@ export class AgentManager extends EventEmitter {
 
   // ── Subscription usage tracking ──────────────────────────
 
+  /** Public rate table (fetch + 24h TTL + disk cache + bundled fallback) used to estimate cost for harnesses that don't report one. */
+  private getUsagePricingService(): RateTableService {
+    if (!this.usagePricingService) {
+      this.usagePricingService = new RateTableService({
+        cacheFilePath: join(app.getPath('userData'), 'usage', 'model-prices-cache.json')
+      })
+    }
+    return this.usagePricingService
+  }
+
   private getUsageTracker(): UsageTracker | null {
     if (this.usageTracker !== undefined) return this.usageTracker
     try {
-      const tracker = new UsageTracker(this.db.usage, Date.now, (instanceId, provider) => this.harnessInstanceLabel(instanceId, provider))
+      const tracker = new UsageTracker(
+        this.db.usage,
+        Date.now,
+        (instanceId, provider) => this.harnessInstanceLabel(instanceId, provider),
+        () => createRateResolver(listCustomModelPrices(this.db), this.getUsagePricingService().getTable())
+      )
       tracker.on('recorded', (records) => {
         this.sendToRenderer(USAGE_RECORDED_CHANNEL, records)
         for (const record of records) {
@@ -1036,14 +1234,32 @@ export class AgentManager extends EventEmitter {
 
   /** Usage and plan limits of an adapter are attributed to the harness instance it serves. */
   private wireUsageTracking(adapter: CodingAgentAdapter, instanceId: string): void {
-    if (adapter instanceof AcpAdapter) {
-      adapter.cursorKeychainAccess = () => this.db.getSetting(CURSOR_KEYCHAIN_ACCESS_SETTING) === 'true'
-    }
     adapter.onUsage = (report) => {
       this.getUsageTracker()?.recordUsage({ ...report, instanceId })
     }
     adapter.onUsageLimits = (event) => {
       this.getUsageTracker()?.applyLimitsEvent({ ...event, instanceId })
+    }
+  }
+
+  /**
+   * TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR. Until
+   * then it runs on the generic AcpAgentAdapter, which has no Cursor-shaped
+   * fields (the generic client's `probeUsageLimits` always resolves to
+   * null). This overrides that one instance's `probeUsageLimits` with
+   * Cursor's own CLI/Keychain-based plan-limit probe, reading the user's
+   * Keychain-access consent live (not captured once at creation time) so
+   * toggling `setCursorKeychainAccess` takes effect on the next probe.
+   */
+  private wireCursorPlanLimits(adapter: AcpAgentAdapter): void {
+    let inFlight: Promise<ProviderUsageLimits | null> | null = null
+    adapter.probeUsageLimits = () => {
+      if (inFlight) return inFlight
+      const pending = probeCursorUsageLimits({
+        allowKeychain: this.db.getSetting(CURSOR_KEYCHAIN_ACCESS_SETTING) === 'true'
+      }).finally(() => { inFlight = null })
+      inFlight = pending
+      return pending
     }
   }
 
@@ -1083,6 +1299,11 @@ export class AgentManager extends EventEmitter {
 
   listHarnessInstances(): HarnessInstanceView[] {
     return this.db.listHarnessInstances().map((instance) => this.toInstanceView(instance))
+  }
+
+  /** Configured ACP agent instances (registry installs or local commands). Read-only on mobile. */
+  listAcpAgentInstances(): AcpAgentInstanceRecord[] {
+    return this.db.listAcpAgentInstances()
   }
 
   createHarnessInstance(data: CreateHarnessInstanceData): HarnessInstanceView {
@@ -1147,7 +1368,123 @@ export class AgentManager extends EventEmitter {
   }
 
   getUsageSummary(query: UsageSummaryQuery = {}): UsageSummary | null {
+    // Opportunistic, non-blocking: prices with whatever table is already loaded (live fetch, disk cache, or the
+    // bundled fallback) and kicks off a background refresh if the 24h TTL has lapsed — never awaited here.
+    void this.getUsagePricingService().ensureFresh().catch(() => undefined)
     return this.getUsageTracker()?.getSummary(query) ?? null
+  }
+
+  /**
+   * The "my multiplier" card data for one of the four fixed periods
+   * (7/30/90/182 days) ending now: the parallelism summary (multiplier, peak,
+   * peak-day lanes, per-day run hours) plus tasks shipped and the earliest
+   * interval on record (phase 2's "counting from <date>" hint when coverage
+   * is thin). `nowMs` is a parameter — not read from inside this method via
+   * a default — purely so callers/tests can pin it; production call sites
+   * simply omit it.
+   */
+  getUsageParallelismSummary(query: UsageParallelismQuery, nowMs: number = Date.now()): UsageParallelismResponse {
+    const { periodStartMs, periodEndMs } = periodBoundsForDays(query.days, nowMs)
+    const utcOffsetMinutes = query.utcOffsetMinutes ?? -new Date(nowMs).getTimezoneOffset()
+
+    // Only the multiplier RATIO (totalRunMs/wallMs/multiplier below) is
+    // live-only — a best-effort backfilled span (derived from
+    // transcript_parts/token_usage_events, not actually observed by the
+    // status-transition writer) must never count toward "how much agent
+    // work got done per hour you watched". Everything else the card draws
+    // — peak concurrency, the peak day, and the per-day activity calendar —
+    // is a plain aggregate/count, not a ratio, and backfilled history is
+    // legitimate, useful context for those (that's the whole reason
+    // backfill exists). So this method sweeps the SAME underlying rows
+    // twice: once unfiltered (`fullSummary`, feeds peak/peakDayLanes/perDay
+    // and `hasData` — whether there's anything to draw AT ALL) and once
+    // live-only (`liveSummary`, feeds totalRunMs/wallMs/multiplier only).
+    const allRows = this.db.getAgentRunIntervalsOverlapping(periodStartMs, periodEndMs)
+    const toRawInterval = (iv: AgentRunIntervalRecord) => ({
+      sessionId: iv.sessionId,
+      taskId: iv.taskId,
+      agentId: iv.agentId,
+      provider: iv.provider,
+      harnessInstanceId: iv.harnessInstanceId,
+      startedAtMs: iv.startedAtMs,
+      endedAtMs: iv.endedAtMs
+    })
+    const rawIntervalsAll = allRows.map(toRawInterval)
+    const rawIntervalsLive = allRows.filter((iv) => iv.endReason !== 'backfilled').map(toRawInterval)
+
+    const rawFocusIntervals = this.db.getAppFocusIntervalsOverlapping(periodStartMs, periodEndMs).map((iv) => ({
+      startedAtMs: iv.startedAtMs,
+      endedAtMs: iv.endedAtMs
+    }))
+
+    const fullSummary = computeParallelismSummary(rawIntervalsAll, rawFocusIntervals, periodStartMs, periodEndMs, utcOffsetMinutes)
+    const liveSummary = computeParallelismSummary(rawIntervalsLive, rawFocusIntervals, periodStartMs, periodEndMs, utcOffsetMinutes)
+
+    const parallelism: ParallelismSummary = {
+      periodStartMs,
+      periodEndMs,
+      // Whether there's anything to draw at all — true if ANY agent-run
+      // interval (live or backfilled) overlaps the period, matching
+      // `fullSummary`'s own notion of "no data" rather than the live-only
+      // sweep's (which would incorrectly report "no data" for a user with
+      // only pre-release backfilled history and no live time yet).
+      hasData: fullSummary.hasData,
+      totalRunMs: liveSummary.totalRunMs,
+      // Full (live + backfilled) total — the "agent hours" stat tile's own number, distinct
+      // from the live-only totalRunMs above that feeds the ratio/sentence.
+      totalRunMsAll: fullSummary.totalRunMs,
+      wallMs: liveSummary.wallMs,
+      screenTimeMs: liveSummary.screenTimeMs,
+      multiplier: liveSummary.multiplier,
+      peak: fullSummary.peak,
+      peakDayLanes: fullSummary.peakDayLanes,
+      perDay: fullSummary.perDay
+    }
+
+    // The multiplier needs BOTH series — agent-run intervals and app-focus
+    // intervals — so "counting from" is the LATER of their two earliest
+    // starts (the earlier series' head is still "no data for the ratio"
+    // until the later one begins too). The agent side only counts LIVE
+    // rows — backfilled history doesn't move this date forward, since this
+    // date is specifically about the ratio's own evidence window, not
+    // about the calendar/peak context (which has no "counting from" notion
+    // — backfilled days just show up in it like any other day).
+    const earliestAgent = this.db.getEarliestLiveAgentRunIntervalStart()
+    const earliestFocus = this.db.getEarliestAppFocusIntervalStart()
+    const countingFromMs = earliestAgent !== null && earliestFocus !== null
+      ? Math.max(earliestAgent, earliestFocus)
+      : null
+
+    return {
+      periodDays: query.days,
+      periodStartMs,
+      periodEndMs,
+      parallelism,
+      tasksShipped: this.db.getTasksShippedCount(periodStartMs, periodEndMs),
+      countingFromMs
+    }
+  }
+
+  /** Re-fetches the public rate table. `force` ignores the 24h TTL but never the 60s floor. */
+  async refreshUsageRates(options: { force?: boolean } = {}): Promise<{ refreshed: boolean; fetchedAt: number }> {
+    const result = await this.getUsagePricingService().refresh(options)
+    return { refreshed: result.refreshed, fetchedAt: this.getUsagePricingService().getFetchedAt() }
+  }
+
+  listUsageModelPrices(): CustomModelPrice[] {
+    return listCustomModelPrices(this.db)
+  }
+
+  setUsageModelPrice(price: CustomModelPrice): CustomModelPrice[] {
+    const prices = setCustomModelPrice(this.db, price)
+    this.sendToRenderer(USAGE_MODEL_PRICES_UPDATED_CHANNEL, prices)
+    return prices
+  }
+
+  resetUsageModelPrice(model: string): CustomModelPrice[] {
+    const prices = resetCustomModelPrice(this.db, model)
+    this.sendToRenderer(USAGE_MODEL_PRICES_UPDATED_CHANNEL, prices)
+    return prices
   }
 
   /**
@@ -1166,7 +1503,11 @@ export class AgentManager extends EventEmitter {
     for (const agent of this.db.getAgents()) {
       const provider = agent.config?.coding_agent
       if (!isUsageProvider(provider) || agent.config?.auth_method === 'api_key') continue
-      const instanceId = this.resolveAgentInstance(agent)?.id ?? defaultHarnessInstanceId(provider)
+      // resolveAgentInstance only knows Claude Code/Codex accounts; an ACP
+      // agent's instance is which configured ACP agent it is, from its own config.
+      const instanceId = provider === 'acp'
+        ? agent.config?.acp_instance_id ?? defaultHarnessInstanceId(provider)
+        : this.resolveAgentInstance(agent)?.id ?? defaultHarnessInstanceId(provider)
       if (probed.has(instanceId)) continue
       const adapter = this.getAdapter(agent.id)
       if (!adapter?.probeUsageLimits) continue
@@ -2734,6 +3075,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         if (session) {
           this.sessions.delete(sessionId)
           this.sessions.set(realSessionId, session)
+          // An open run interval (if any) was opened under the temp id — carry it over,
+          // otherwise it would never close (nothing else ever queries the old id again).
+          this.renameAgentRunIntervalSession(sessionId, realSessionId)
 
           // Record redirect so stale IDs from the renderer still resolve.
           // Cap the redirects map to prevent unbounded growth across many sessions.
@@ -2856,7 +3200,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
       // Check for pending approval (ACP + OpenCode adapters) — include in same batch
       if ('getPendingApproval' in adapter && typeof adapter.getPendingApproval === 'function') {
-        const approval = (adapter as unknown as AcpAdapter).getPendingApproval(sessionId)
+        const approval = (adapter as unknown as AcpAgentAdapter).getPendingApproval(sessionId)
         if (approval && !entry.seenPartIds.has(`approval-${approval.toolCallId}`)) {
           entry.seenPartIds.add(`approval-${approval.toolCallId}`)
 
@@ -4360,6 +4704,11 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     // In learning mode, skip output extraction, task status, and renderer notification
     if (session.learningMode) {
+      // No agent:status broadcast follows on this path, so the usual hook
+      // never runs — close directly. (`learningMode` is not currently set
+      // anywhere, but this keeps the status mutation and the interval close
+      // inseparable regardless.)
+      this.closeAgentRunInterval(sessionId, Date.now(), 'idle')
       session.status = 'idle'
       return
     }
@@ -4600,6 +4949,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const session = this.sessions.get(sessionId)
     if (!session) return
 
+    // Defensive close, independent of the agent:status broadcast hook: both
+    // callers of this method (triage completion, learn-from-session) release
+    // the backend session without necessarily going through a 'working' ->
+    // other status broadcast first. No-op if nothing is open (the common
+    // case — the session was already idle, or excluded).
+    this.closeAgentRunInterval(sessionId, Date.now(), reason)
+
     this.stopAdapterPolling(sessionId)
     const adapter = session.adapter ?? this.getAdapter(session.agentId)
     if (!adapter) return
@@ -4628,6 +4984,14 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       provider: getAgentProvider(this.db.getAgent(session.agentId)),
       resetTaskStatus
     })
+
+    // Defensive close, independent of the agent:status broadcast hook: this
+    // method's own final 'idle' broadcast (below) fires AFTER `this.sessions`
+    // and `this.lastSentStatus` are already cleared, so the broadcast hook
+    // has no session to look up and no real prevStatus to compare against by
+    // then. Close here instead, while `session` is still known. No-op if
+    // nothing is open (session was already idle, or excluded).
+    this.closeAgentRunInterval(sessionId, Date.now(), 'stopped')
 
     // Stop polling for this session
     this.stopAdapterPolling(sessionId)
@@ -5099,7 +5463,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const adapter = this.getAdapter(session.agentId)
 
     const approvalAdapter = adapter && 'respondToApproval' in adapter
-      && typeof (adapter as unknown as AcpAdapter).respondToApproval === 'function'
+      && typeof (adapter as unknown as AcpAgentAdapter).respondToApproval === 'function'
 
     // --- Question responses: pass structured answers ---
     // OpenCode implements both response methods. The renderer must identify a
@@ -5206,7 +5570,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       }
       console.log(`[AgentManager] Responding to ACP adapter approval with: ${selectedOption}`)
       // OpenCode adapter returns boolean (true=handled, false=no permission found).
-      // AcpAdapter returns void. Cast to boolean|void to handle both.
+      // AcpAgentAdapter returns void. Cast to boolean|void to handle both.
       const handled = await (adapter as unknown as {
         respondToApproval: (sid: string, approved: boolean, opt?: string, requestId?: string) => Promise<boolean | void>
       }).respondToApproval(sessionId, approved, selectedOption, requestId)
@@ -5239,7 +5603,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
       // If no pending permission was found (stale prompt after watchdog abort
       // or app restart), send a continuation message so the session recovers.
-      // AcpAdapter returns void (undefined), which won't match === false.
+      // AcpAgentAdapter returns void (undefined), which won't match === false.
       if (handled === false && approved) {
         console.log(`[AgentManager] No pending permission found for ${sessionId}, sending continuation message to recover session`)
         this.doSendAdapterMessage(session, sessionId, 'continue').catch((err) => {
@@ -6355,7 +6719,7 @@ Important:
         // Reachability is only known once the first prompt is answered. A
         // missing session then falls back to a handoff (see fallBackToHandoff).
         sessionReachable: true,
-        sessionsShared: this.sharesSessionHistory(from) && this.sharesSessionHistory(to)
+        sessionsShared: this.sessionsShareHistory(from, to)
       }
     )
   }
@@ -6396,7 +6760,7 @@ Important:
       {
         hasHistory: transcript.length > 0,
         sessionReachable: false,
-        sessionsShared: this.sharesSessionHistory(previous) && this.sharesSessionHistory(current)
+        sessionsShared: this.sessionsShareHistory(previous, current)
       }
     )
     if (plan !== 'handoff') {
@@ -6604,10 +6968,23 @@ Important:
     // Show OS notification when agent transitions from working to idle/waiting_approval
     // and the app window is not focused
     if (channel === 'agent:status' && data && typeof data === 'object') {
-      const { sessionId, status, taskId } = data as { sessionId?: string; status?: string; taskId?: string }
+      const { sessionId, status, taskId, agentId } = data as { sessionId?: string; status?: string; taskId?: string; agentId?: string }
       if (sessionId && status) {
         const prevStatus = this.lastSentStatus.get(sessionId)
         this.lastSentStatus.set(sessionId, status)
+
+        // agent_run_intervals: open on entering 'working', close on leaving it.
+        // Only reachable while the session is still in `this.sessions` — the
+        // one destroy path that deletes before this broadcast (stopSession)
+        // closes its interval explicitly instead of relying on this hook.
+        if (agentId && taskId && isAgentSessionStatus(status) && (prevStatus === undefined || isAgentSessionStatus(prevStatus))) {
+          const liveSession = this.sessions.get(sessionId)
+          if (liveSession) {
+            const ctx = this.buildAgentRunContext(sessionId, agentId, taskId, !!liveSession.isTriageSession)
+            this.recordAgentRunTransition(ctx, prevStatus as AgentSessionStatus | undefined, status, Date.now())
+          }
+        }
+
         const pushEvent = this.pushEvents.statusChanged(sessionId, prevStatus, status)
         const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
         if (pushEvent && taskId && isWindowInactive) {

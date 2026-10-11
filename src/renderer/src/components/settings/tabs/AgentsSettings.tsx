@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
-import { Plus, Loader2, Wifi, WifiOff, RefreshCw, Edit3, Trash2, Terminal } from 'lucide-react'
+import { Plus, Loader2, Wifi, WifiOff, RefreshCw, Edit3, Trash2, Terminal, Plug } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { SettingsSection } from '../SettingsSection'
 import { HarnessInstancesSection } from './HarnessInstancesSection'
+import { AcpAgentsSection } from './AcpAgentsSection'
 import { AgentFormDialog } from '../forms/AgentFormDialog'
 import { OpenCodeLogo, AnthropicLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
 import { useAgentStore } from '@/stores/agent-store'
+import { useAcpInstanceStore } from '@/stores/acp-instance-store'
 import { agentConfigApi } from '@/lib/ipc-client'
 import { CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS, CodingAgentType } from '@/types'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
@@ -27,9 +29,12 @@ export function AgentsSettings() {
   const { agents, fetchAgents, createAgent, updateAgent, deleteAgent } = useAgentStore()
   const [connections, setConnections] = useState<Map<string, ConnectionInfo>>(new Map())
   const [agentDialog, setAgentDialog] = useState<AgentDialogState>({ open: false })
+  const acpInstances = useAcpInstanceStore((s) => s.instances)
+  const loadAcpInstances = useAcpInstanceStore((s) => s.load)
 
   useEffect(() => {
     fetchAgents()
+    void loadAcpInstances()
   }, [])
 
   useEffect(() => {
@@ -67,6 +72,22 @@ export function AgentsSettings() {
         status: 'connected',
         providerCount: 1,
         modelCount: CURSOR_MODELS.length,
+        testedAt: new Date()
+      }))
+      return
+    }
+
+    // ACP agents run a locally-spawned process too (never an HTTP server),
+    // so the same "runs locally, no connection test" rule applies — this
+    // agent's `server_url` is just OpenCode's unused default
+    // ('http://localhost:4096') and testing against it as a real server
+    // reliably fails with "Backend returned no provider list".
+    if (agent.config.coding_agent === CodingAgentType.ACP) {
+      const instance = acpInstances.find((i) => i.id === agent.config.acp_instance_id)
+      setConnections((prev) => new Map(prev).set(agent.id, {
+        status: 'connected',
+        providerCount: 1,
+        modelCount: instance && instance.custom_models.length > 0 ? instance.custom_models.length : undefined,
         testedAt: new Date()
       }))
       return
@@ -116,7 +137,6 @@ export function AgentsSettings() {
 
   return (
     <>
-      <HarnessInstancesSection />
       <SettingsSection
         title="Coding Agents"
         description="Manage AI coding agents for task execution"
@@ -148,7 +168,9 @@ export function AgentsSettings() {
               const isCodex = agent.config.coding_agent === CodingAgentType.CODEX
               const isCursor = agent.config.coding_agent === CodingAgentType.CURSOR
               const isPi = agent.config.coding_agent === CodingAgentType.PI
-              const isCliAgent = isClaudeCode || isCodex || isCursor || isPi
+              const isAcp = agent.config.coding_agent === CodingAgentType.ACP
+              const acpInstance = isAcp ? acpInstances.find((i) => i.id === agent.config.acp_instance_id) : undefined
+              const isCliAgent = isClaudeCode || isCodex || isCursor || isPi || isAcp
 
               return (
                 <div key={agent.id} className="rounded-lg border border-border bg-card overflow-hidden">
@@ -190,9 +212,16 @@ export function AgentsSettings() {
                             <PiLogo className="h-3.5 w-3.5 text-foreground/80" />
                           </span>
                         )}
+                        {isAcp && (
+                          <span title={acpInstance?.display_name ?? 'ACP agent'}>
+                            <Plug className="h-3.5 w-3.5 text-cyan-300/80" />
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-muted-foreground truncate mt-0.5">
-                        {isCliAgent ? 'Local CLI' : agent.server_url}
+                        {isAcp
+                          ? (acpInstance?.display_name ?? 'ACP agent')
+                          : isCliAgent ? 'Local CLI' : agent.server_url}
                         {agent.config.model && <span className="text-foreground/60"> · {agent.config.model}</span>}
                       </div>
                     </div>
@@ -277,6 +306,9 @@ export function AgentsSettings() {
           </div>
         )}
       </SettingsSection>
+
+      <HarnessInstancesSection />
+      <AcpAgentsSection />
 
       <AgentFormDialog
         agent={agentDialog.agent}
