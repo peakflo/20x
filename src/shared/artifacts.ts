@@ -115,6 +115,8 @@ export interface ArtifactCopyFileResult {
 export interface ArtifactApi {
   scan: (taskId: string) => Promise<ArtifactFileEntry[]>
   read: (taskId: string, relativePath: string) => Promise<ArtifactContent | null>
+  saveScad?: (taskId: string, relativePath: string, content: string, expectedContent: string) => Promise<void>
+  renderScad?: (taskId: string, relativePath: string) => Promise<string>
   mcpCall?: (input: import('./artifact-mcp').ArtifactMcpCall) => Promise<unknown>
   /** Desktop only. Absent when the viewer runs outside Electron. */
   copyFile?: (taskId: string, relativePath: string) => Promise<ArtifactCopyFileResult>
@@ -252,7 +254,7 @@ export function artifactWorkpieceForPath(path: string, type: ArtifactType): Arti
     return { key: segments.join('/'), title: segments.at(-1)!, grouped: false }
   }
 
-  if (segments.length === 1 && type !== ArtifactType.FILE) {
+  if (segments.length === 1 && (type !== ArtifactType.FILE || segments[0].toLowerCase().endsWith('.scad'))) {
     return { key: segments[0], title: segments[0], grouped: false }
   }
   return null

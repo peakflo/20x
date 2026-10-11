@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { Paperclip, X, FileText, Download } from 'lucide-react'
 import { attachmentApi } from '@/lib/ipc-client'
+import { ScadAttachmentEditor } from '@/components/artifacts/viewers/ScadAttachmentEditor'
 import type { FileAttachment } from '@/types'
 
 export interface PendingFile {
@@ -35,6 +36,7 @@ export function TaskAttachments({
   onPendingChange
 }: TaskAttachmentsProps) {
   const [isDragging, setIsDragging] = useState(false)
+  const [openScad, setOpenScad] = useState<FileAttachment | null>(null)
 
   const processFilePaths = useCallback(
     async (filePaths: string[]) => {
@@ -113,7 +115,9 @@ export function TaskAttachments({
   }
 
   const handleOpen = (attachment: FileAttachment) => {
-    if (taskId) attachmentApi.open(taskId, attachment.id)
+    if (!taskId) return
+    if (attachment.filename.toLowerCase().endsWith('.scad')) setOpenScad(attachment)
+    else void attachmentApi.open(taskId, attachment.id)
   }
 
   const handleDownload = (attachment: FileAttachment) => {
@@ -123,6 +127,7 @@ export function TaskAttachments({
   const totalCount = items.length + pendingFiles.length
 
   return (
+    <>
     <div
       className={`relative space-y-2 rounded-md p-2 -m-2 transition-colors ${
         isDragging ? 'border-2 border-dashed border-primary/50 bg-primary/5' : 'border-2 border-transparent'
@@ -211,5 +216,15 @@ export function TaskAttachments({
         </button>
       )}
     </div>
+    {openScad && taskId && <div role="dialog" aria-label={`Edit ${openScad.filename}`} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="flex h-[85vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-border bg-background shadow-xl">
+        <div className="flex items-center justify-between border-b border-border/50 px-4 py-2">
+          <span className="truncate text-sm font-medium">{openScad.filename}</span>
+          <button type="button" onClick={() => setOpenScad(null)} className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-accent" aria-label="Close SCAD editor">Close</button>
+        </div>
+        <div className="min-h-0 flex-1"><ScadAttachmentEditor taskId={taskId} attachment={openScad} api={attachmentApi} /></div>
+      </div>
+    </div>}
+    </>
   )
 }

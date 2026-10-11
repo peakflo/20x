@@ -56,6 +56,7 @@ const MEDIA_MIME_TYPES: Record<string, string> = {
 }
 const TEXT_MIME_TYPES: Record<string, string> = {
   '.py': 'text/plain',
+  '.scad': 'text/plain',
   '.sh': 'text/plain',
   '.sql': 'text/plain',
   '.ini': 'text/plain',
@@ -475,7 +476,9 @@ export async function scanTaskArtifacts(workspaceDir: string): Promise<ArtifactF
       const relativePath = relative(rootPath, absolutePath).split(sep).join('/')
       // A previewable source file is still code. Only root deliverables or files
       // below an explicit output boundary become logical artifact workpieces.
-      const workpiece = artifactWorkpieceForPath(relativePath, type)
+      const workpiece = relativePath.startsWith('attachments/') && relativePath.toLowerCase().endsWith('.scad')
+        ? { key: relativePath, title: entry.name, grouped: false }
+        : artifactWorkpieceForPath(relativePath, type)
       if (!workpiece) continue
 
       try {
@@ -536,6 +539,20 @@ export async function resolveTaskArtifactFilePath(workspaceDir: string, artifact
   } catch {
     return null
   }
+}
+
+/** Save only a SCAD file that is shown by the task artifact list. The old text
+ * prevents a silent overwrite when an agent changes the file during editing. */
+export async function saveTaskScadArtifact(workspaceDir: string, taskId: string, artifactPath: string, content: string, expectedContent: string): Promise<void> {
+  if (extname(artifactPath).toLowerCase() !== '.scad') throw new Error('Only SCAD files can be edited here')
+  if (Buffer.byteLength(content, 'utf8') > MAX_TEXT_BYTES) throw new Error('SCAD file exceeds the text limit')
+  const entries = await listTaskArtifactEntries(workspaceDir, taskId)
+  if (!entries.some((entry) => entry.path === artifactPath || entry.files?.includes(artifactPath))) throw new Error('SCAD artifact not found')
+  const filePath = await resolveTaskArtifactFilePath(workspaceDir, artifactPath)
+  if (!filePath) throw new Error('SCAD artifact not found')
+  const current = await readFile(filePath, 'utf8')
+  if (current !== expectedContent) throw new Error('This SCAD file changed on disk. Reload it before you save.')
+  await writeFile(filePath, content, 'utf8')
 }
 
 /** Read a previewable artifact while enforcing task-workspace containment. */

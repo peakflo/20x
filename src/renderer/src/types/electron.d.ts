@@ -313,6 +313,9 @@ interface ElectronAPI {
     >
   }
   attachments: {
+    readScad: (taskId: string, attachmentId: string) => Promise<string>
+    saveScad: (taskId: string, attachmentId: string, content: string, expectedContent: string) => Promise<void>
+    renderScad: (taskId: string, attachmentId: string) => Promise<string>
     pick: () => Promise<string[]>
     save: (taskId: string, filePath: string) => Promise<FileAttachment>
     remove: (taskId: string, attachmentId: string) => Promise<void>

@@ -166,8 +166,17 @@ export const api = {
       get<Artifact[]>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts`),
     content: (taskId: string, path: string) =>
       get<ArtifactContent>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/content?path=${encodeURIComponent(path)}`),
+    saveScad: (taskId: string, path: string, content: string, expectedContent: string) =>
+      post<{ success: boolean }>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/scad-save`, { path, content, expectedContent }).then(() => undefined),
+    renderScad: (taskId: string, path: string) =>
+      get<string>(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/scad-preview?path=${encodeURIComponent(path)}`),
     mcpCall: (input: import('@shared/artifact-mcp').ArtifactMcpCall) =>
       post<unknown>(`/api/tasks/${encodeURIComponent(input.taskId)}/artifacts/mcp`, input)
+  },
+  attachments: {
+    readScad: (taskId: string, attachmentId: string) => get<string>(`/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/scad`),
+    saveScad: (taskId: string, attachmentId: string, content: string, expectedContent: string) => post<{ success: boolean }>(`/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/scad-save`, { content, expectedContent }).then(() => undefined),
+    renderScad: (taskId: string, attachmentId: string) => get<string>(`/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/scad-preview`)
   }
 }
 

@@ -18,7 +18,9 @@ import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
 import type { SyncManager } from './sync-manager'
 import type { PluginRegistry } from './plugins/registry'
-import { listTaskArtifactEntries, readTaskArtifact } from './artifacts'
+import { listTaskArtifactEntries, readTaskArtifact, saveTaskScadArtifact } from './artifacts'
+import { renderTaskScadArtifact } from './scad-preview'
+import { readScadAttachment, renderScadAttachment, saveScadAttachment } from './scad-attachments'
 import type { Artifact, ArtifactFileEntry } from '../shared/artifacts'
 import { MOBILE_VOICE_CAPABILITIES } from '../shared/voice'
 import { TaskStatus } from '../shared/constants'
@@ -435,6 +437,28 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
     return content
   }
 
+  const scadPreviewMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/artifacts\/scad-preview$/)
+  if (scadPreviewMatch) {
+    const taskId = decodeURIComponent(scadPreviewMatch[1])
+    if (!db.getTask(taskId)) throw Object.assign(new Error('Task not found'), { status: 404 })
+    const path = url.searchParams.get('path')
+    if (!path) throw Object.assign(new Error('path is required'), { status: 400 })
+    return renderTaskScadArtifact(db.getWorkspaceDir(taskId), taskId, path)
+  }
+
+  const attachmentScadMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/attachments\/([^/]+)\/scad$/)
+  if (attachmentScadMatch) {
+    const taskId = decodeURIComponent(attachmentScadMatch[1])
+    const attachmentId = decodeURIComponent(attachmentScadMatch[2])
+    return readScadAttachment(db, taskId, attachmentId)
+  }
+  const attachmentScadPreviewMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/attachments\/([^/]+)\/scad-preview$/)
+  if (attachmentScadPreviewMatch) {
+    const taskId = decodeURIComponent(attachmentScadPreviewMatch[1])
+    const attachmentId = decodeURIComponent(attachmentScadPreviewMatch[2])
+    return renderScadAttachment(db, taskId, attachmentId)
+  }
+
   // GET /api/tasks/:taskId/artifacts — explicit workpiece registry plus the
   // bounded legacy import/recovery scan.
   const artifactsMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/artifacts$/)
@@ -661,6 +685,30 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     if (!artifactMcpCaller) throw Object.assign(new Error('Organisation Workspace is not connected'), { status: 503 })
     const input = { ...params, taskId: decodeURIComponent(artifactMcpMatch[1]) } as unknown as ArtifactMcpCall
     return artifactMcpCaller(input)
+  }
+
+  const saveScadMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/artifacts\/scad-save$/)
+  if (saveScadMatch) {
+    const taskId = decodeURIComponent(saveScadMatch[1])
+    if (!db.getTask(taskId)) throw Object.assign(new Error('Task not found'), { status: 404 })
+    const { path, content, expectedContent } = params
+    if (typeof path !== 'string' || typeof content !== 'string' || typeof expectedContent !== 'string') {
+      throw Object.assign(new Error('path, content, and expectedContent are required'), { status: 400 })
+    }
+    await saveTaskScadArtifact(db.getWorkspaceDir(taskId), taskId, path, content, expectedContent)
+    return { success: true }
+  }
+
+  const attachmentScadSaveMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/attachments\/([^/]+)\/scad-save$/)
+  if (attachmentScadSaveMatch) {
+    const taskId = decodeURIComponent(attachmentScadSaveMatch[1])
+    const attachmentId = decodeURIComponent(attachmentScadSaveMatch[2])
+    const { content, expectedContent } = params
+    if (typeof content !== 'string' || typeof expectedContent !== 'string') {
+      throw Object.assign(new Error('content and expectedContent are required'), { status: 400 })
+    }
+    await saveScadAttachment(db, taskId, attachmentId, content, expectedContent)
+    return { success: true }
   }
 
   // POST /api/auth/pair/initiate — phone sends init code, server generates PIN

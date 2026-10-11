@@ -79,6 +79,8 @@ export const taskApi = {
 export const artifactApi: ArtifactApi = {
   scan: (taskId) => window.electronAPI.artifacts.scan(taskId),
   read: (taskId, relativePath) => window.electronAPI.artifacts.read(taskId, relativePath),
+  saveScad: (taskId, relativePath, content, expectedContent) => window.electronAPI.artifacts.saveScad(taskId, relativePath, content, expectedContent),
+  renderScad: (taskId, relativePath) => window.electronAPI.artifacts.renderScad(taskId, relativePath),
   copyFile: (taskId, relativePath) => window.electronAPI.artifacts.copyFile(taskId, relativePath)
 }
 
@@ -299,6 +301,9 @@ export const onTasksRefresh = (callback: () => void): (() => void) => {
 }
 
 export const attachmentApi = {
+  readScad: (taskId: string, attachmentId: string): Promise<string> => window.electronAPI.attachments.readScad(taskId, attachmentId),
+  saveScad: (taskId: string, attachmentId: string, content: string, expectedContent: string): Promise<void> => window.electronAPI.attachments.saveScad(taskId, attachmentId, content, expectedContent),
+  renderScad: (taskId: string, attachmentId: string): Promise<string> => window.electronAPI.attachments.renderScad(taskId, attachmentId),
   pick: (): Promise<string[]> => {
     return window.electronAPI.attachments.pick()
   },

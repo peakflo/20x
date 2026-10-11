@@ -52,7 +52,9 @@ import type { ClaudePluginManager } from './claude-plugin-manager'
 import type { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import type { EnterpriseStateSync } from './enterprise-state-sync'
 import { analytics } from './analytics-service'
-import { listTaskArtifactEntries, readTaskArtifact, resolveTaskArtifactFilePath } from './artifacts'
+import { listTaskArtifactEntries, readTaskArtifact, resolveTaskArtifactFilePath, saveTaskScadArtifact } from './artifacts'
+import { renderTaskScadArtifact } from './scad-preview'
+import { readScadAttachment, renderScadAttachment, saveScadAttachment } from './scad-attachments'
 import { writeArtifactFileToClipboard } from './artifact-clipboard'
 import { ArtifactClipboardMode, type ArtifactCopyFileResult } from '../shared/artifacts'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
@@ -351,6 +353,14 @@ export function registerIpcHandlers(
     return readTaskArtifact(db.getWorkspaceDir(taskId), relativePath)
   })
 
+  ipcMain.handle('artifacts:saveScad', async (_, taskId: string, relativePath: string, content: string, expectedContent: string) => {
+    await saveTaskScadArtifact(db.getWorkspaceDir(taskId), taskId, relativePath, content, expectedContent)
+  })
+
+  ipcMain.handle('artifacts:renderScad', async (_, taskId: string, relativePath: string) => {
+    return renderTaskScadArtifact(db.getWorkspaceDir(taskId), taskId, relativePath)
+  })
+
   ipcMain.handle('artifact:mcp-call', async (_, input: ArtifactMcpCall) => {
     if (!mcpToolCaller) throw new Error('Organisation Workspace is not connected')
     return callArtifactMcp(db, mcpToolCaller, input, 'desktop')
@@ -387,6 +397,10 @@ export function registerIpcHandlers(
       console.log('[IPC] No matching file found for attachment ID:', attachmentId)
     }
   })
+
+  ipcMain.handle('attachments:readScad', (_, taskId: string, attachmentId: string) => readScadAttachment(db, taskId, attachmentId))
+  ipcMain.handle('attachments:saveScad', (_, taskId: string, attachmentId: string, content: string, expectedContent: string) => saveScadAttachment(db, taskId, attachmentId, content, expectedContent))
+  ipcMain.handle('attachments:renderScad', (_, taskId: string, attachmentId: string) => renderScadAttachment(db, taskId, attachmentId))
 
   ipcMain.handle('attachments:download', (_, taskId: string, attachmentId: string) => {
     console.log('[IPC] attachments:download called:', { taskId, attachmentId })

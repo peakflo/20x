@@ -43,12 +43,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('artifacts:scan', taskId),
     read: (taskId: string, relativePath: string): Promise<ArtifactContent | null> =>
       ipcRenderer.invoke('artifacts:read', taskId, relativePath),
+    saveScad: (taskId: string, relativePath: string, content: string, expectedContent: string): Promise<void> =>
+      ipcRenderer.invoke('artifacts:saveScad', taskId, relativePath, content, expectedContent),
+    renderScad: (taskId: string, relativePath: string): Promise<string> =>
+      ipcRenderer.invoke('artifacts:renderScad', taskId, relativePath),
     mcpCall: (input: import('../shared/artifact-mcp').ArtifactMcpCall): Promise<unknown> =>
       ipcRenderer.invoke('artifact:mcp-call', input),
     copyFile: (taskId: string, relativePath: string): Promise<ArtifactCopyFileResult> =>
       ipcRenderer.invoke('artifacts:copyFile', taskId, relativePath)
   },
   attachments: {
+    readScad: (taskId: string, attachmentId: string): Promise<string> => ipcRenderer.invoke('attachments:readScad', taskId, attachmentId),
+    saveScad: (taskId: string, attachmentId: string, content: string, expectedContent: string): Promise<void> => ipcRenderer.invoke('attachments:saveScad', taskId, attachmentId, content, expectedContent),
+    renderScad: (taskId: string, attachmentId: string): Promise<string> => ipcRenderer.invoke('attachments:renderScad', taskId, attachmentId),
     pick: (): Promise<string[]> => ipcRenderer.invoke('attachments:pick'),
     save: (taskId: string, filePath: string): Promise<unknown> =>
       ipcRenderer.invoke('attachments:save', taskId, filePath),
