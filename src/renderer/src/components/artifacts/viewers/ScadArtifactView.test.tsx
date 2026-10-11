@@ -34,4 +34,36 @@ describe('SCAD editor', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
     await waitFor(() => expect((screen.getByRole('textbox', { name: 'SCAD source' }) as HTMLTextAreaElement).value).toBe('cube(14);'))
   })
+
+  it('switches between 3D, source, and both without losing the source draft', async () => {
+    const renderModel = vi.fn().mockResolvedValue('c3Rs')
+    render(<ScadEditor artifact={artifact} content={{ kind: ArtifactContentKind.TEXT, content: 'cube(10);' }} renderModel={renderModel} />)
+    await screen.findByText('3D model')
+    expect(screen.getByRole('button', { name: 'Both' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('region', { name: 'SCAD 3D model' }).nextElementSibling).toBe(screen.getByRole('separator', { name: 'Resize source panel' }))
+    expect(screen.getByRole('separator', { name: 'Resize source panel' }).nextElementSibling).toBe(screen.getByRole('region', { name: 'SCAD source panel' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'SCAD source' }), { target: { value: 'cube(12);' } })
+
+    fireEvent.click(screen.getByRole('button', { name: '3D artifact' }))
+    expect(screen.queryByRole('textbox', { name: 'SCAD source' })).toBeNull()
+    expect(screen.getByRole('region', { name: 'SCAD 3D model' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }))
+    expect(screen.queryByRole('region', { name: 'SCAD 3D model' })).toBeNull()
+    expect((screen.getByRole('textbox', { name: 'SCAD source' }) as HTMLTextAreaElement).value).toBe('cube(12);')
+  })
+
+  it('changes the bottom source height with the divider', () => {
+    render(<ScadEditor artifact={artifact} content={{ kind: ArtifactContentKind.TEXT, content: 'cube(10);' }} />)
+    const divider = screen.getByRole('separator', { name: 'Resize source panel' })
+    const sourcePanel = screen.getByRole('region', { name: 'SCAD source panel' })
+    Object.defineProperty(divider.parentElement, 'clientHeight', { configurable: true, value: 600 })
+    expect(sourcePanel.style.height).toBe('240px')
+    fireEvent.pointerDown(divider, { pointerId: 1, button: 0, clientY: 400 })
+    fireEvent.pointerMove(divider, { pointerId: 1, clientY: 320 })
+    fireEvent.pointerUp(divider, { pointerId: 1 })
+    expect(sourcePanel.style.height).toBe('320px')
+    fireEvent.keyDown(divider, { key: 'ArrowDown' })
+    expect(sourcePanel.style.height).toBe('300px')
+  })
 })

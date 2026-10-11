@@ -168,7 +168,7 @@ export function ScadModelView({ stl }: { stl: string }) {
     }
   }, [stl])
 
-  return <div className="relative h-full min-h-[240px] w-full">
+  return <div className="relative h-full min-h-0 w-full">
     <canvas ref={canvasRef} aria-label="3D SCAD preview" className="h-full w-full touch-none bg-background" />
     {error && <div role="alert" className="absolute inset-0 flex items-center justify-center bg-background p-4 text-center text-xs text-red-400">{error}</div>}
   </div>
