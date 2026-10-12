@@ -150,9 +150,9 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="relative flex flex-col h-full">
       {/* Header */}
-      <div className="glass-bar scroll-edge-top relative z-10 shrink-0 -mb-[160px] px-4 pt-3 pb-2">
+      <div className="glass-bar relative z-10 shrink-0 -mb-[160px] px-4 pt-3 pb-2">
         <div className="flex items-center justify-between mb-2">
           <h1 className="text-lg font-semibold">Tasks</h1>
           <div className="flex items-center gap-1">
@@ -244,6 +244,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
         )}
 
       </div>
+      <div aria-hidden="true" className="scroll-edge-overlay h-[188px]" />
     </div>
   )
 }

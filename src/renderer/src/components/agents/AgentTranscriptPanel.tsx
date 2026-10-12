@@ -1253,7 +1253,7 @@ export function AgentTranscriptPanel({
         </div>
       )}
       {/* Header — windows-titlebar-safe adds right padding on Windows to avoid title bar overlay */}
-      <div className={cn('glass-bar scroll-edge-top relative z-10 shrink-0 windows-titlebar-safe', !showErrorBanner && !systemStatus && !latestTodos && (isSearchOpen ? '-mb-[132px]' : '-mb-[68px]'))}>
+      <div className={cn('glass-bar relative z-10 shrink-0 windows-titlebar-safe', !showErrorBanner && !systemStatus && !latestTodos && (isSearchOpen ? '-mb-[132px]' : '-mb-[68px]'))}>
       <div
         className="flex min-h-[68px] items-center justify-between gap-3 px-4 py-3"
         onContextMenu={handleHeaderContextMenu}
@@ -1326,12 +1326,12 @@ export function AgentTranscriptPanel({
                 }
               }}
               placeholder="Search transcript..."
-              className="glass-control h-12 w-full pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
+              className="glass-control h-12 w-full pl-10 pr-16 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
             />
+            <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[11px] tabular-nums text-muted-foreground">
+              {normalizedSearchQuery ? `${searchResultIndexes.length ? activeSearchResult + 1 : 0}/${searchResultIndexes.length}` : '0/0'}
+            </span>
           </div>
-          <span className="w-16 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
-            {normalizedSearchQuery ? `${searchResultIndexes.length ? activeSearchResult + 1 : 0}/${searchResultIndexes.length}` : '0/0'}
-          </span>
           <Button
             type="button"
             variant="ghost"
@@ -1449,6 +1449,9 @@ export function AgentTranscriptPanel({
             </>
           )}
         </div>
+        {!showErrorBanner && !systemStatus && !latestTodos && (
+          <div aria-hidden="true" className={cn('scroll-edge-overlay', isSearchOpen ? 'h-[176px]' : 'h-[128px]')} />
+        )}
 
         {/* Scroll to bottom button */}
         {showScrollToBottom && messages.length > 0 && (
@@ -1504,13 +1507,13 @@ export function AgentTranscriptPanel({
               </div>
             )}
             <div className="flex items-end gap-2">
-              <div className="glass-composer min-w-0 flex-1">
+              <div className="glass-composer flex min-w-0 flex-1 items-center">
               <textarea
                 ref={inputRef}
                 rows={1}
                 disabled={isStarting}
                 placeholder={isStarting ? 'Starting agent…' : 'Write a message...'}
-                className="w-full bg-transparent px-5 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none resize-none overflow-hidden max-h-32 min-h-[48px] disabled:opacity-60"
+                className="w-full bg-transparent px-5 py-[15px] leading-[22px] text-sm text-foreground placeholder:text-muted-foreground focus:outline-none resize-none overflow-hidden max-h-32 min-h-[52px] disabled:opacity-60"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()

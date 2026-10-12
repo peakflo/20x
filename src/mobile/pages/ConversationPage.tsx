@@ -445,7 +445,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header — matches desktop AgentTranscriptPanel header */}
-      <div className={cn('glass-bar scroll-edge-top relative z-10 shrink-0', !latestTodos && (isSearchOpen ? (normalizedSearchQuery ? '-mb-[184px]' : '-mb-[132px]') : '-mb-[68px]'))}>
+      <div className={cn('glass-bar relative z-10 shrink-0', !latestTodos && (isSearchOpen ? (normalizedSearchQuery ? '-mb-[184px]' : '-mb-[132px]') : '-mb-[68px]'))}>
       <div className="flex min-h-[68px] items-center justify-between gap-2 px-3 py-3">
         <div className="flex items-center gap-2 min-w-0">
           <button onClick={() => onNavigate({ page: 'detail', taskId })} className="glass-action !h-11 !w-11 shrink-0">
@@ -578,12 +578,12 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                 }
               }}
               placeholder="Search transcript..."
-              className="glass-control h-12 w-full pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring/30"
+              className="glass-control h-12 w-full pl-9 pr-14 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring/30"
             />
+            {normalizedSearchQuery && <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[11px] tabular-nums text-muted-foreground">
+              {`${searchResultIndexes.length ? activeSearchResult + 1 : 0}/${searchResultIndexes.length}`}
+            </span>}
           </div>
-          {normalizedSearchQuery && <span className="w-14 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
-            {normalizedSearchQuery ? `${searchResultIndexes.length ? activeSearchResult + 1 : 0}/${searchResultIndexes.length}` : '0/0'}
-          </span>}
           {normalizedSearchQuery && <>
           <button
             onClick={() => goToSearchResult(-1)}
@@ -789,6 +789,9 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             </div>
           )}
         </div>
+        {!latestTodos && (
+          <div aria-hidden="true" className={cn('scroll-edge-overlay', isSearchOpen ? (normalizedSearchQuery ? 'h-[228px]' : 'h-[176px]') : 'h-[120px]')} />
+        )}
 
         {/* Scroll to bottom button */}
         {showScrollToBottom && messages.length > 0 && (

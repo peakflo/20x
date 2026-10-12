@@ -177,12 +177,12 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
     // radius, same hairline, same shadow. Sitting flush against the rail while
     // the work had rounded corners read as unfinished.
     <aside
-      className="app-chrome glass-panel relative flex flex-col shrink-0 overflow-hidden rounded-2xl border text-sidebar-foreground my-2 ml-2"
+      className="app-chrome glass-panel glass-scroll-panel relative flex flex-col shrink-0 overflow-hidden rounded-2xl border text-sidebar-foreground my-2 ml-2"
       style={{ width: sidebarWidth }}
     >
       {sidebarView === 'tasks' ? (
         <>
-          <div className={cn('scroll-edge-top relative z-10 shrink-0', filtersOpen ? '-mb-[278px]' : '-mb-[176px]')}>
+          <div className={cn('relative z-10 shrink-0', filtersOpen ? '-mb-[278px]' : '-mb-[176px]')}>
           <div className="no-drag flex items-center justify-between px-4 pt-4 pb-3">
             <div className="flex items-center gap-2">
               <h2 className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">Tasks</h2>
@@ -235,10 +235,11 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             </div>
           </div>
 
-          <div className="no-drag px-3 pb-3 flex items-center gap-2">
+          <div className="no-drag px-3 pb-3">
+            <div className="glass-composer flex min-h-10 items-center gap-1 px-2">
             <button
               onClick={() => setFiltersOpen(!filtersOpen)}
-              className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
+              className="flex items-center gap-1.5 rounded-full px-2 py-1.5 text-xs text-foreground hover:bg-accent/40 cursor-pointer"
             >
               <ChevronDown className={`h-3 w-3 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
               Filters
@@ -252,12 +253,13 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             <select
               value={sortField}
               onChange={(e) => setSortField(e.target.value as SortField)}
-              className="rounded-md border border-input bg-transparent px-2 py-1.5 text-xs text-muted-foreground cursor-pointer"
+              className="rounded-full !border-0 !bg-transparent px-2 py-1.5 text-xs text-foreground cursor-pointer"
             >
               {sortOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
+            </div>
           </div>
 
           {filtersOpen && (
@@ -327,6 +329,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
               onLoadMoreCompleted={loadMoreCompleted}
             />
           </div>
+          <div aria-hidden="true" className={cn('scroll-edge-overlay', filtersOpen ? 'h-[278px]' : 'h-[176px]')} />
 
           <div className="px-4 py-2.5 border-t text-xs text-muted-foreground tabular-nums">
             {activeCount} active
