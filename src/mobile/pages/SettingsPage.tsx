@@ -28,6 +28,14 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage({ onNavigate }: SettingsPageProps) {
+  const [glassOpacity, setGlassOpacity] = useState(() => {
+    try {
+      const stored = Number(localStorage.getItem('ui-glass-opacity'))
+      return stored >= 40 && stored <= 100 ? stored : 55
+    } catch {
+      return 55
+    }
+  })
   const [sources, setSources] = useState<TaskSource[]>([])
   const [plugins, setPlugins] = useState<PluginMeta[]>([])
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set())
@@ -82,6 +90,14 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
     }
   }, [sources])
 
+  const changeGlassOpacity = (value: number) => {
+    setGlassOpacity(value)
+    document.documentElement.style.setProperty('--glass-opacity', `${value}%`)
+    document.documentElement.style.setProperty('--glass-blur', value === 100 ? '0px' : '18px')
+    document.documentElement.classList.toggle('glass-solid-mode', value === 100)
+    try { localStorage.setItem('ui-glass-opacity', String(value)) } catch { /* ignore */ }
+  }
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -100,6 +116,14 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-6">
+        <section className="rounded-2xl bg-card p-4 space-y-2" aria-label="Appearance">
+          <div className="flex items-center justify-between">
+            <label htmlFor="mobile-glass-opacity" className="text-sm font-semibold">Glass opacity</label>
+            <output htmlFor="mobile-glass-opacity" className="text-xs tabular-nums text-muted-foreground">{glassOpacity}%</output>
+          </div>
+          <input id="mobile-glass-opacity" type="range" min="40" max="100" value={glassOpacity} onChange={(event) => changeGlassOpacity(Number(event.target.value))} className="w-full accent-primary" />
+          <p className="text-xs text-muted-foreground">Lower values reveal more content. At 100%, blur turns off.</p>
+        </section>
         {/* Error banner */}
         {error && (
           <div className="flex items-center justify-between bg-destructive/10 text-destructive text-xs rounded-md px-3 py-2">

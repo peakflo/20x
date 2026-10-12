@@ -445,9 +445,10 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header — matches desktop AgentTranscriptPanel header */}
-      <div className={cn('glass-bar relative z-10 shrink-0 flex items-center justify-between px-4 py-3 border-b', !isSearchOpen && !latestTodos && '-mb-12')}>
+      <div className={cn('glass-bar scroll-edge-top relative z-10 shrink-0', !latestTodos && (isSearchOpen ? (normalizedSearchQuery ? '-mb-[184px]' : '-mb-[132px]') : '-mb-[68px]'))}>
+      <div className="flex min-h-[68px] items-center justify-between gap-2 px-3 py-3">
         <div className="flex items-center gap-2 min-w-0">
-          <button onClick={() => onNavigate({ page: 'detail', taskId })} className="p-1.5 shrink-0 active:opacity-60 hover:bg-accent rounded-md transition-colors">
+          <button onClick={() => onNavigate({ page: 'detail', taskId })} className="glass-action !h-11 !w-11 shrink-0">
             <svg className="w-4 h-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="m15 18-6-6 6-6" />
             </svg>
@@ -498,7 +499,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                 })
               }}
               title="Search transcript"
-              className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground active:opacity-60 transition-colors"
+              className="glass-action !h-11 !w-11 text-muted-foreground hover:text-foreground"
             >
               <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
@@ -509,7 +510,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
               <button
                 onClick={handleRestart}
                 title="Restart session"
-                className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground active:opacity-60 transition-colors"
+                className="glass-action !h-11 !w-11 text-muted-foreground hover:text-foreground"
               >
                 <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
@@ -522,7 +523,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
               <button
                 onClick={handleStop}
                 title="Stop session"
-                className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground active:opacity-60 transition-colors"
+                className="glass-action !h-11 !w-11 text-muted-foreground hover:text-foreground"
               >
                 <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6"/>
@@ -534,7 +535,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
               <button
                 onClick={handleStart}
                 title="Start agent"
-                className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground active:opacity-60 transition-colors"
+                className="glass-action !h-11 !w-11 text-muted-foreground hover:text-foreground"
               >
                 <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="6 3 20 12 6 21 6 3"/>
@@ -545,7 +546,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
               <button
                 onClick={handleResume}
                 title="Resume session"
-                className="inline-flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground active:opacity-60 transition-colors"
+                className="glass-action !h-11 !w-11 text-muted-foreground hover:text-foreground"
               >
                 <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <polygon points="6 3 20 12 6 21 6 3"/>
@@ -559,8 +560,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       <UsageLimitRecoveryNotice taskId={taskId} />
 
       {isSearchOpen && (
-        <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-border/50">
-          <div className="relative min-w-0 flex-1">
+        <div className="shrink-0 flex min-h-16 flex-wrap items-center gap-2 px-3 py-2">
+          <div className={cn('relative min-w-0 flex-1', normalizedSearchQuery && '!w-full !flex-none')}>
             <svg className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
             </svg>
@@ -577,17 +578,18 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                 }
               }}
               placeholder="Search transcript..."
-              className="glass-control h-8 w-full pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring/30"
+              className="glass-control h-12 w-full pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring/30"
             />
           </div>
-          <span className="w-14 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+          {normalizedSearchQuery && <span className="w-14 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
             {normalizedSearchQuery ? `${searchResultIndexes.length ? activeSearchResult + 1 : 0}/${searchResultIndexes.length}` : '0/0'}
-          </span>
+          </span>}
+          {normalizedSearchQuery && <>
           <button
             onClick={() => goToSearchResult(-1)}
             disabled={searchResultIndexes.length === 0}
             title="Previous result"
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground disabled:opacity-40"
+            className="glass-action !h-10 !w-10 text-muted-foreground hover:text-foreground"
           >
             <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="m18 15-6-6-6 6"/>
@@ -597,16 +599,17 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             onClick={() => goToSearchResult(1)}
             disabled={searchResultIndexes.length === 0}
             title="Next result"
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground disabled:opacity-40"
+            className="glass-action !h-10 !w-10 text-muted-foreground hover:text-foreground"
           >
             <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="m6 9 6 6 6-6"/>
             </svg>
           </button>
+          </>}
           <button
             onClick={closeSearch}
             title="Close search"
-            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-white/5 hover:text-foreground"
+            className="glass-action !h-10 !w-10 text-muted-foreground hover:text-foreground"
           >
             <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
@@ -614,6 +617,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           </button>
         </div>
       )}
+      </div>
 
       {/* Pinned todo summary — matches desktop TodoSummary subheader */}
       {latestTodos && (
@@ -681,7 +685,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className={cn('h-full overflow-y-auto p-4 pb-28 space-y-2 text-sm', !isSearchOpen && !latestTodos && 'pt-16')}
+          className={cn('glass-chat-canvas h-full overflow-y-auto p-4 pb-36 space-y-2 text-sm', !latestTodos && (isSearchOpen ? (normalizedSearchQuery ? 'pt-48' : 'pt-36') : 'pt-20'))}
         >
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
@@ -790,7 +794,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         {showScrollToBottom && messages.length > 0 && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-card border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border shadow-lg transition-all duration-200 opacity-80 hover:opacity-100 active:opacity-100"
+            className="absolute bottom-28 right-3 flex items-center gap-1.5 rounded-full bg-card border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border shadow-lg transition-all duration-200 opacity-80 hover:opacity-100 active:opacity-100"
             title="Scroll to bottom"
           >
             <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -802,7 +806,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       </div>
 
       {/* Input area — matches desktop transcript panel input */}
-      <div className="glass-bar relative z-10 shrink-0 border-t -mt-20">
+      <div className="glass-bar relative z-10 shrink-0 -mt-24">
         {showAttachmentPicker && taskAttachments.length > 0 && (
           <div className="border-b border-border/50 px-3 py-2 max-h-40 overflow-y-auto bg-muted/20">
             <div className="flex items-center justify-between mb-2">

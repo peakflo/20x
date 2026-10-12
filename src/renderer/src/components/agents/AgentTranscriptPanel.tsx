@@ -707,6 +707,11 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
 
   return (
     <div className={`flex gap-2 ${isUser ? 'justify-end' : 'justify-start'} ${!isUser ? 'w-full' : ''}`}>
+      {!isUser && !isSystem && !isError && (
+        <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-primary/30 bg-primary/20 text-primary" aria-hidden="true">
+          <Terminal className="h-3.5 w-3.5" />
+        </span>
+      )}
       <div
         className={`overflow-hidden min-w-0 ${
           isError
@@ -735,6 +740,7 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
           {!isUser && !isSystem && !isError && <SpeakMessageButton text={message.content} />}
         </div>
       </div>
+      {isUser && <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-violet-500/30 bg-violet-500/20 text-violet-500 text-[10px] font-semibold" aria-hidden="true">U</span>}
     </div>
   )
 }
@@ -1247,8 +1253,9 @@ export function AgentTranscriptPanel({
         </div>
       )}
       {/* Header — windows-titlebar-safe adds right padding on Windows to avoid title bar overlay */}
+      <div className={cn('glass-bar scroll-edge-top relative z-10 shrink-0 windows-titlebar-safe', !showErrorBanner && !systemStatus && !latestTodos && (isSearchOpen ? '-mb-[132px]' : '-mb-[68px]'))}>
       <div
-        className={cn('glass-bar relative z-10 flex items-center justify-between px-4 py-3 border-b shrink-0 windows-titlebar-safe', !isSearchOpen && !showErrorBanner && !systemStatus && !latestTodos && '-mb-12')}
+        className="flex min-h-[68px] items-center justify-between gap-3 px-4 py-3"
         onContextMenu={handleHeaderContextMenu}
         title="Right-click to copy debug info"
       >
@@ -1277,7 +1284,7 @@ export function AgentTranscriptPanel({
                   return nextOpen
                 })
               }}
-              className="h-8 w-8 rounded-full p-0"
+              className="glass-action !h-11 !w-11 p-0"
               title="Search transcript"
             >
               <Search className="h-3.5 w-3.5" />
@@ -1287,14 +1294,14 @@ export function AgentTranscriptPanel({
                 variant="ghost"
                 size="sm"
                 onClick={onRestart}
-                className="h-8 w-8 rounded-full p-0"
+                className="glass-action !h-11 !w-11 p-0"
                 title="Restart session"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
               </Button>
             )}
             {(status === SessionStatus.WORKING || status === SessionStatus.WAITING_APPROVAL) && (
-              <Button variant="ghost" size="sm" onClick={onStop} className="h-8 w-8 rounded-full p-0" title="Stop session">
+              <Button variant="ghost" size="sm" onClick={onStop} className="glass-action !h-11 !w-11 p-0" title="Stop session">
                 <StopCircle className="h-3.5 w-3.5" />
               </Button>
             )}
@@ -1303,7 +1310,7 @@ export function AgentTranscriptPanel({
       </div>
 
       {isSearchOpen && (
-        <div className="flex items-center gap-2 border-b border-border/50 px-4 py-2 shrink-0">
+        <div className="flex min-h-16 items-center gap-2 px-4 py-2 shrink-0">
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <input
@@ -1319,7 +1326,7 @@ export function AgentTranscriptPanel({
                 }
               }}
               placeholder="Search transcript..."
-              className="glass-control h-8 w-full pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
+              className="glass-control h-12 w-full pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
             />
           </div>
           <span className="w-16 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
@@ -1331,7 +1338,7 @@ export function AgentTranscriptPanel({
             size="icon"
             onClick={() => goToSearchResult(-1)}
             disabled={searchResultIndexes.length === 0}
-            className="h-8 w-8"
+            className="glass-action !h-10 !w-10"
             title="Previous result"
           >
             <ArrowUp className="h-3.5 w-3.5" />
@@ -1342,16 +1349,17 @@ export function AgentTranscriptPanel({
             size="icon"
             onClick={() => goToSearchResult(1)}
             disabled={searchResultIndexes.length === 0}
-            className="h-8 w-8"
+            className="glass-action !h-10 !w-10"
             title="Next result"
           >
             <ArrowDown className="h-3.5 w-3.5" />
           </Button>
-          <Button type="button" variant="ghost" size="icon" onClick={closeSearch} className="h-8 w-8" title="Close search">
+          <Button type="button" variant="ghost" size="icon" onClick={closeSearch} className="glass-action !h-10 !w-10" title="Close search">
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
       )}
+      </div>
 
       {/* Error banner */}
       {showErrorBanner && lastErrorMessage && (
@@ -1377,7 +1385,7 @@ export function AgentTranscriptPanel({
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className={cn('h-full overflow-y-auto p-4 pb-28 text-sm', !isSearchOpen && !showErrorBanner && !systemStatus && !latestTodos && 'pt-16')}
+          className={cn('glass-chat-canvas h-full overflow-y-auto p-4 pb-36 text-sm', !showErrorBanner && !systemStatus && !latestTodos && (isSearchOpen ? 'pt-36' : 'pt-20'))}
         >
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-xs">
@@ -1446,7 +1454,7 @@ export function AgentTranscriptPanel({
         {showScrollToBottom && messages.length > 0 && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-3 right-3 flex items-center gap-1.5 rounded-full bg-card border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border shadow-lg transition-all duration-200 opacity-80 hover:opacity-100"
+            className="absolute bottom-28 right-3 flex items-center gap-1.5 rounded-full bg-card border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border shadow-lg transition-all duration-200 opacity-80 hover:opacity-100"
             title="Scroll to bottom"
           >
             <ArrowDown className="h-3 w-3" />
@@ -1456,12 +1464,12 @@ export function AgentTranscriptPanel({
       </div>
 
       {/* Input + Footer */}
-      <div className={cn('glass-bar relative z-10 border-t shrink-0', onSend && '-mt-20')}>
+      <div className={cn('glass-bar relative z-10 shrink-0', onSend && '-mt-24')}>
         {onSend && (
           <div
             data-testid="transcript-composer"
             data-voice-composer={composerKey}
-            className={`relative px-4 py-3 space-y-2.5 transition-colors ${isDragOverComposer ? 'bg-primary/5' : ''}`}
+            className={`relative px-4 py-4 space-y-2.5 transition-colors ${isDragOverComposer ? 'bg-primary/5' : ''}`}
             onDragOver={handleComposerDragOver}
             onDragEnter={handleComposerDragOver}
             onDragLeave={handleComposerDragLeave}
@@ -1496,12 +1504,13 @@ export function AgentTranscriptPanel({
               </div>
             )}
             <div className="flex items-end gap-2">
+              <div className="glass-composer min-w-0 flex-1">
               <textarea
                 ref={inputRef}
                 rows={1}
                 disabled={isStarting}
                 placeholder={isStarting ? 'Starting agent…' : 'Write a message...'}
-                className="glass-control flex-1 px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[40px] disabled:opacity-60"
+                className="w-full bg-transparent px-5 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none resize-none overflow-hidden max-h-32 min-h-[48px] disabled:opacity-60"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
@@ -1511,21 +1520,22 @@ export function AgentTranscriptPanel({
                 onInput={(event) => { autoResize(); setInputHasValue(!!event.currentTarget.value.trim()) }}
                 onChange={(event) => setInputHasValue(!!event.currentTarget.value.trim())}
               />
-              <VoiceMicButton mode="dictation" onSubmit={handleSend} className="!h-10 !w-10 !rounded-full" />
+              </div>
+              <VoiceMicButton mode="dictation" onSubmit={handleSend} className="glass-action !h-11 !w-11 !rounded-full" />
               {onPickAttachments && (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 onClick={handleAddAttachments}
-                className="glass-action !h-10 !w-10"
+                className="glass-action !h-11 !w-11"
                 title="Attach files"
                 aria-label="Attach files"
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
             )}
-              <Button variant="default" size="icon" onClick={handleSend} disabled={isStarting || !inputHasValue} className="glass-action glass-send !h-10 !w-10" aria-label="Send message">
+              <Button variant="default" size="icon" onClick={handleSend} disabled={isStarting || !inputHasValue} className="glass-action glass-send !h-11 !w-11" aria-label="Send message">
                 <Send className="h-4 w-4" />
               </Button>
             </div>

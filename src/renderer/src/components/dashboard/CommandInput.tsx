@@ -102,11 +102,11 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
 
   return (
     <div
-      className="rounded-[24px] border border-[var(--glass-outline)] bg-[var(--glass-panel)] overflow-hidden shadow-sm transition-all duration-200 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30"
+      className="space-y-2"
       data-voice-composer={VOICE_COMPOSER_KEY}
     >
       {/* Text area */}
-      <div className="px-4 pt-3 pb-2">
+      <div className="glass-composer px-5 py-3">
         <textarea
           ref={textareaRef}
           value={text}
@@ -119,7 +119,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
       </div>
 
       {/* Toolbar */}
-      <div className="flex items-center gap-1 px-3 pb-2.5 pt-1.5 border-t border-border">
+      <div className="flex items-center gap-2 px-1">
         {/* Agent selector pill */}
         <div className="relative" ref={dropdownRef}>
           <button
@@ -154,8 +154,6 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
         </div>
 
         {/* Separator */}
-        <div className="w-px h-4 bg-border mx-1" />
-
         {/* Attach file */}
         <button
           className="glass-action text-foreground/60 hover:text-foreground hover:bg-accent transition-colors cursor-pointer"

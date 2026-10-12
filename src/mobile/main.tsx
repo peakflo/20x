@@ -15,6 +15,12 @@ initAnalytics('mobile')
     const dark = stored === 'dark' || ((stored === 'system' || !stored) && prefersDark)
     document.documentElement.classList.toggle('dark', dark)
     document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+    const glassOpacity = Number(localStorage.getItem('ui-glass-opacity'))
+    if (glassOpacity >= 40 && glassOpacity <= 100) {
+      document.documentElement.style.setProperty('--glass-opacity', `${glassOpacity}%`)
+      document.documentElement.style.setProperty('--glass-blur', glassOpacity === 100 ? '0px' : '18px')
+      document.documentElement.classList.toggle('glass-solid-mode', glassOpacity === 100)
+    }
   } catch {
     /* keep the default dark class from index.html */
   }

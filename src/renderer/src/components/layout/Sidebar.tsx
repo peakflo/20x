@@ -9,7 +9,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { useUserStore } from '@/stores/user-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { useAgentSchedulerStore } from '@/stores/agent-scheduler-store'
-import { isSnoozed } from '@/lib/utils'
+import { cn, isSnoozed } from '@/lib/utils'
 import { TaskStatus, TASK_STATUSES, TASK_PRIORITIES } from '@/types'
 import type { WorkfloTask, TaskPriority } from '@/types'
 
@@ -182,6 +182,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
     >
       {sidebarView === 'tasks' ? (
         <>
+          <div className={cn('scroll-edge-top relative z-10 shrink-0', filtersOpen ? '-mb-[278px]' : '-mb-[176px]')}>
           <div className="no-drag flex items-center justify-between px-4 pt-4 pb-3">
             <div className="flex items-center gap-2">
               <h2 className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">Tasks</h2>
@@ -193,21 +194,21 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             </div>
             <div className="flex items-center gap-1">
               {sources.length > 0 && (
-                <Button size="sm" variant="ghost" onClick={handleSyncAll} disabled={isSyncingAll || syncingIds.size > 0} title="Sync all sources">
+                <Button size="icon" variant="ghost" onClick={handleSyncAll} disabled={isSyncingAll || syncingIds.size > 0} title="Sync all sources" className="glass-action !h-10 !w-10">
                   {isSyncingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                 </Button>
               )}
               <Button
-                size="sm"
+                size="icon"
                 variant={isAutoStartEnabled ? 'default' : 'ghost'}
                 onClick={toggleAutoStart}
                 title={isAutoStartEnabled ? 'Disable auto-run' : 'Enable auto-run'}
+                className="glass-action !h-10 !w-10"
               >
                 {isAutoStartEnabled ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
               </Button>
-              <Button size="sm" onClick={onCreateTask}>
-                <Plus className="h-3.5 w-3.5" />
-                New
+              <Button size="icon" variant="ghost" onClick={onCreateTask} className="glass-action !h-10 !w-10" title="Create task" aria-label="Create task">
+                <Plus className="h-4 w-4" />
               </Button>
             </div>
           </div>
@@ -221,7 +222,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search tasks..."
-                className="glass-control w-full pl-9 pr-8 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20 transition-all"
+                className="glass-control h-11 w-full pl-10 pr-8 text-sm placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20 transition-all"
               />
               {searchQuery && (
                 <button
@@ -313,10 +314,9 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
               )}
             </div>
           )}
+          </div>
 
-          <div className="mx-3 border-t" />
-
-          <div className="flex-1 overflow-y-auto pt-1">
+          <div className={cn('flex-1 overflow-y-auto', filtersOpen ? 'pt-[286px]' : 'pt-[184px]')}>
             <TaskList
               tasks={tasks}
               selectedTaskId={selectedTaskId}

@@ -1,10 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ChatInput } from './ChatInput'
+import { api } from '../api/client'
 
 describe('ChatInput attachments', () => {
   afterEach(() => {
     cleanup()
+    vi.restoreAllMocks()
   })
 
   it('sends selected attachments with the message', () => {
@@ -34,5 +36,15 @@ describe('ChatInput attachments', () => {
     fireEvent.click(screen.getByLabelText('Remove spec.md'))
 
     expect(onRemoveAttachment).toHaveBeenCalledWith('att-1')
+  })
+
+  it('shows the unavailable voice explanation only when requested', async () => {
+    vi.spyOn(api.capabilities, 'get').mockResolvedValue({ voice: { available: false, reason: 'Voice capture is available on desktop.' } } as Awaited<ReturnType<typeof api.capabilities.get>>)
+    render(<ChatInput onSend={vi.fn()} />)
+
+    const explanation = 'Voice capture is available on desktop.'
+    expect(screen.queryByRole('status')).toBeNull()
+    fireEvent.click(await screen.findByRole('button', { name: 'Why voice input is unavailable' }))
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(explanation))
   })
 })

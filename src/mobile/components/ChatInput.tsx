@@ -33,6 +33,7 @@ export function ChatInput({
   onOpenAttachmentPicker
 }: ChatInputProps) {
   const [value, setValue] = useState('')
+  const [voiceNote, setVoiceNote] = useState<string | null>(null)
   const [voiceReason, setVoiceReason] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -78,7 +79,7 @@ export function ChatInput({
   }
 
   return (
-    <div className="px-3 py-3 space-y-2">
+    <div className="px-3 py-4 space-y-2">
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {attachments.map((attachment) => (
@@ -107,9 +108,10 @@ export function ChatInput({
         </div>
       )}
 
-      {voiceReason && <p className="text-[11px] text-muted-foreground" role="status">{voiceReason}</p>}
+      {voiceNote && <p className="glass-popover rounded-xl border px-3 py-2 text-xs text-foreground" role="status">{voiceNote}</p>}
 
       <div className="flex items-end gap-2">
+        <div className="glass-composer min-w-0 flex-1">
         <textarea
           ref={textareaRef}
           value={value}
@@ -118,8 +120,9 @@ export function ChatInput({
           placeholder={placeholder}
           disabled={disabled}
           rows={1}
-          className="glass-control min-w-0 flex-1 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground resize-none overflow-hidden max-h-32 focus:outline-none focus:ring-2 focus:ring-primary/30 min-h-[44px] disabled:opacity-40"
+          className="w-full bg-transparent px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground resize-none overflow-hidden max-h-32 focus:outline-none min-h-[48px] disabled:opacity-40"
         />
+        </div>
         {onOpenAttachmentPicker && (
           <button
             type="button"
@@ -131,6 +134,19 @@ export function ChatInput({
           >
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.2-9.19a4 4 0 0 1 5.65 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </button>
+        )}
+        {voiceReason && (
+          <button
+            type="button"
+            onClick={() => setVoiceNote((current) => current ? null : voiceReason)}
+            className="glass-action text-muted-foreground"
+            title={voiceReason}
+            aria-label="Why voice input is unavailable"
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/><path d="M12 11v5"/><path d="M12 8h.01"/>
             </svg>
           </button>
         )}

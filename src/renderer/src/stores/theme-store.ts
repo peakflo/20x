@@ -3,6 +3,14 @@ import { create } from 'zustand'
 export type ThemeMode = 'light' | 'dark' | 'system'
 
 const STORAGE_KEY = 'ui-theme'
+const GLASS_STORAGE_KEY = 'ui-glass-opacity'
+
+function applyGlassOpacity(value: number): void {
+  const root = document.documentElement
+  root.style.setProperty('--glass-opacity', `${value}%`)
+  root.style.setProperty('--glass-blur', value === 100 ? '0px' : '18px')
+  root.classList.toggle('glass-solid-mode', value === 100)
+}
 
 function systemPrefersDark(): boolean {
   return typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -25,7 +33,9 @@ interface ThemeState {
   mode: ThemeMode
   /** The concrete theme currently painted. */
   resolved: 'light' | 'dark'
+  glassOpacity: number
   setMode: (mode: ThemeMode) => void
+  setGlassOpacity: (value: number) => void
   /** Flip between light and dark, pinning an explicit preference. */
   toggle: () => void
 }
@@ -37,11 +47,20 @@ const initialMode: ThemeMode = (() => {
     return 'dark'
   }
 })()
+const initialGlassOpacity = (() => {
+  try {
+    const stored = Number(localStorage.getItem(GLASS_STORAGE_KEY))
+    return stored >= 40 && stored <= 100 ? stored : 55
+  } catch {
+    return 55
+  }
+})()
 
 export const useThemeStore = create<ThemeState>((set, get) => {
   // Apply immediately (the index.html pre-paint script already set the class to
   // avoid FOUC — this keeps the store authoritative once JS boots).
   const resolved = applyMode(initialMode)
+  applyGlassOpacity(initialGlassOpacity)
 
   // Keep "system" mode reactive to OS-level changes.
   if (typeof window !== 'undefined') {
@@ -55,6 +74,13 @@ export const useThemeStore = create<ThemeState>((set, get) => {
   return {
     mode: initialMode,
     resolved,
+    glassOpacity: initialGlassOpacity,
+    setGlassOpacity: (value) => {
+      const next = Math.max(40, Math.min(100, Math.round(value)))
+      try { localStorage.setItem(GLASS_STORAGE_KEY, String(next)) } catch { /* ignore */ }
+      applyGlassOpacity(next)
+      set({ glassOpacity: next })
+    },
     setMode: (mode) => {
       try { localStorage.setItem(STORAGE_KEY, mode) } catch { /* ignore */ }
       set({ mode, resolved: applyMode(mode) })

@@ -6,6 +6,9 @@ import { vi } from 'vitest'
 // Mock the mobile API client
 vi.mock('../src/mobile/api/client', () => ({
   api: {
+    capabilities: {
+      get: vi.fn().mockResolvedValue({ voice: { available: false, reason: 'Voice capture is available on desktop.' } })
+    },
     tasks: {
       list: vi.fn().mockResolvedValue([]),
       get: vi.fn().mockResolvedValue(undefined),

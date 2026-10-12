@@ -810,7 +810,7 @@ export function AppLayout() {
       {/* ── Content area: left rail + optional sidebar + workspace + orchestrator ── */}
       <div className="app-chrome-field flex flex-1 min-h-0 overflow-hidden bg-background">
         {/* Primary navigation — slim vertical icon rail */}
-        <nav className="app-chrome glass-bar no-drag flex w-9 flex-shrink-0 flex-col items-center gap-0.5 py-1.5">
+        <nav className="app-chrome glass-panel no-drag flex w-10 flex-shrink-0 flex-col items-center gap-0.5 rounded-2xl border py-2 my-2 ml-2">
           {NAV_ITEMS.map(({ key, label, icon: Icon }, i) => {
             const active = sidebarView === key && activeModal !== 'settings'
             return (

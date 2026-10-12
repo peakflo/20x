@@ -612,6 +612,9 @@ export const MessageBubble = memo(function MessageBubble({ message, onAnswer, ca
 
   return (
     <div className={cn('flex gap-2', isUser ? 'justify-end' : 'justify-start', !isUser && 'w-full')}>
+      {!isUser && !isSystem && !isError && (
+        <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-primary/30 bg-primary/20 text-primary text-[11px] font-semibold" aria-hidden="true">20</span>
+      )}
       <div className={cn(
         'overflow-hidden min-w-0',
         isUser && 'max-w-[90%] rounded-md px-3 py-2 bg-secondary text-foreground',
@@ -632,6 +635,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onAnswer, ca
           </div>
         )}
       </div>
+      {isUser && <span className="mt-1 grid h-7 w-7 shrink-0 place-items-center rounded-full border border-violet-500/30 bg-violet-500/20 text-violet-500 text-[10px] font-semibold" aria-hidden="true">U</span>}
     </div>
   )
 })
