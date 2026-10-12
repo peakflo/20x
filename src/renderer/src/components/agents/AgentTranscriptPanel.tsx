@@ -1513,7 +1513,7 @@ export function AgentTranscriptPanel({
                 rows={1}
                 disabled={isStarting}
                 placeholder={isStarting ? 'Starting agent…' : 'Write a message...'}
-                className="w-full bg-transparent px-5 py-[15px] leading-[22px] text-sm text-foreground placeholder:text-muted-foreground focus:outline-none resize-none overflow-hidden max-h-32 min-h-[52px] disabled:opacity-60"
+                className="w-full bg-transparent px-5 py-[11px] leading-[22px] text-sm text-foreground placeholder:text-muted-foreground focus:outline-none resize-none overflow-hidden max-h-32 min-h-[44px] disabled:opacity-60"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
@@ -1524,21 +1524,21 @@ export function AgentTranscriptPanel({
                 onChange={(event) => setInputHasValue(!!event.currentTarget.value.trim())}
               />
               </div>
-              <VoiceMicButton mode="dictation" onSubmit={handleSend} className="glass-action !h-11 !w-11 !rounded-full" />
+              <VoiceMicButton mode="dictation" onSubmit={handleSend} className="glass-action !h-[44px] !w-[44px] !rounded-full" />
               {onPickAttachments && (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 onClick={handleAddAttachments}
-                className="glass-action !h-11 !w-11"
+                className="glass-action !h-[44px] !w-[44px]"
                 title="Attach files"
                 aria-label="Attach files"
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
             )}
-              <Button variant="default" size="icon" onClick={handleSend} disabled={isStarting || !inputHasValue} className="glass-action glass-send !h-11 !w-11" aria-label="Send message">
+              <Button variant="default" size="icon" onClick={handleSend} disabled={isStarting || !inputHasValue} className="glass-action glass-send !h-[44px] !w-[44px]" aria-label="Send message">
                 <Send className="h-4 w-4" />
               </Button>
             </div>
