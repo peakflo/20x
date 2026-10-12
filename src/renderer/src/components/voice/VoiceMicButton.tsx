@@ -165,7 +165,7 @@ export function VoiceMicButton({
       size="icon"
       disabled={busy || otherIsListening}
       onClick={toggle}
-      className={`h-[32px] w-[32px] shrink-0 rounded-lg ${accent} ${className}`}
+      className={`h-[32px] w-[32px] shrink-0 rounded-lg ${listening ? 'text-[#061b2c]' : accent} ${className}`}
       title={
         title ??
         (engineState === 'loading'

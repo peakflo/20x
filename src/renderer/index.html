@@ -13,6 +13,18 @@
           var root = document.documentElement;
           if (dark) root.classList.add("dark");
           root.style.colorScheme = dark ? "dark" : "light";
+          var storedGlass = localStorage.getItem("ui-glass-opacity");
+          if (storedGlass !== null) {
+            var glass = Math.max(40, Math.min(100, Math.round(Number(storedGlass))));
+            if (Number.isFinite(glass)) {
+              var progress = Math.max(0, (glass - 55) / 45);
+              root.style.setProperty("--glass-opacity", glass + "%");
+              root.style.setProperty("--glass-solid-mix", Math.pow(progress, 3) * 100 + "%");
+              root.style.setProperty("--glass-blur-factor", String(1 - progress));
+              root.style.setProperty("--glass-popover-alpha", String(Math.min(1, .84 + (glass - 55) * .0015)));
+              root.classList.toggle("glass-solid-mode", glass === 100);
+            }
+          }
         } catch (e) {}
       })();
     </script>

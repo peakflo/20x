@@ -137,6 +137,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const [todosExpanded, setTodosExpanded] = useState(false)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [isMoreOpen, setIsMoreOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [activeSearchResult, setActiveSearchResult] = useState(0)
   const [showAttachmentPicker, setShowAttachmentPicker] = useState(false)
@@ -358,9 +359,14 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     if (task?.agent_id && session?.sessionId) _restartSession(task.agent_id, session.sessionId)
   }, [task?.agent_id, session?.sessionId, _restartSession])
 
+  const headerClearance = latestTodos ? 16 : isSearchOpen ? (normalizedSearchQuery ? 192 : 144) : 80
+  const hasLeadingContent = Boolean(session?.systemStatus || artifacts.length)
   const virtualizer = useVirtualizer({
     count: transcriptItems.length,
     getScrollElement: () => scrollRef.current,
+    paddingStart: hasLeadingContent ? 0 : headerClearance,
+    paddingEnd: 80,
+    scrollPaddingEnd: 80,
     estimateSize: () => 120,
     overscan: 8
   })
@@ -445,30 +451,19 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header — matches desktop AgentTranscriptPanel header */}
-      <div className={cn('glass-bar relative z-10 shrink-0', !latestTodos && (isSearchOpen ? (normalizedSearchQuery ? '-mb-[184px]' : '-mb-[132px]') : '-mb-[68px]'))}>
-      <div className="flex min-h-[68px] items-center justify-between gap-2 px-3 py-3">
+      <div className={cn('glass-bar pointer-events-none relative z-10 shrink-0', !latestTodos && (isSearchOpen ? (normalizedSearchQuery ? '-mb-[184px]' : '-mb-[132px]') : '-mb-[68px]'))}>
+      <div className="pointer-events-auto flex min-h-[68px] items-center justify-between gap-2 px-3 py-3">
         <div className="flex items-center gap-2 min-w-0">
-          <button onClick={() => onNavigate({ page: 'detail', taskId })} className="glass-action !h-11 !w-11 shrink-0">
+          <button onClick={() => onNavigate({ page: 'detail', taskId })} className="glass-action !h-[44px] !w-[44px] shrink-0" aria-label="Back to task">
             <svg className="w-4 h-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="m15 18-6-6 6-6" />
             </svg>
           </button>
-          {/* Terminal icon */}
-          <svg className="h-4 w-4 text-muted-foreground shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>
-          </svg>
-          <span className="text-sm font-medium truncate">
-            {task?.title || 'Agent transcript'}
-            <span className="ml-2 text-xs font-mono text-muted-foreground">
-              ({messages.length})
-            </span>
-          </span>
-        </div>
-        <div className="flex items-center gap-3 shrink-0">
-          {/* Status indicator — matches desktop */}
-          {session && (
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium">{task?.title || 'Agent transcript'}</div>
+            {session && (
             <span className={cn(
-              'text-xs flex items-center gap-1',
+              'text-[11px] flex items-center gap-1',
               isStarting && 'text-green-400',
               !isStarting && session.status === SessionStatus.WORKING && 'text-green-400',
               !isStarting && session.status === SessionStatus.ERROR && 'text-red-400',
@@ -487,9 +482,12 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                 </>
               )}
             </span>
-          )}
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
           {/* Icon buttons — matches desktop AgentTranscriptPanel */}
-          <div className="flex items-center gap-1">
+          <div className="relative flex items-center gap-1">
             <button
               onClick={() => {
                 setIsSearchOpen((open) => {
@@ -499,68 +497,34 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                 })
               }}
               title="Search transcript"
-              className="glass-action !h-11 !w-11 text-muted-foreground hover:text-foreground"
+              aria-label="Search transcript"
+              className="glass-action !h-[44px] !w-[44px] text-muted-foreground hover:text-foreground"
             >
               <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
               </svg>
             </button>
-            {/* Restart — matches desktop RotateCcw icon */}
-            {messages.length > 0 && hasSession && (
-              <button
-                onClick={handleRestart}
-                title="Restart session"
-                className="glass-action !h-11 !w-11 text-muted-foreground hover:text-foreground"
-              >
-                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-                  <path d="M3 3v5h5"/>
-                </svg>
+            {((messages.length > 0 && hasSession) || canStop || canStart || canResume) && <>
+              <button type="button" onClick={() => setIsMoreOpen((open) => !open)} className="glass-action !h-[44px] !w-[44px] text-muted-foreground hover:text-foreground" aria-label="Conversation actions" aria-expanded={isMoreOpen} aria-controls="conversation-actions">
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
               </button>
-            )}
-            {/* Stop — matches desktop StopCircle icon */}
-            {canStop && (
-              <button
-                onClick={handleStop}
-                title="Stop session"
-                className="glass-action !h-11 !w-11 text-muted-foreground hover:text-foreground"
-              >
-                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6"/>
-                </svg>
-              </button>
-            )}
-            {/* Start / Resume — only when no active session */}
-            {canStart && (
-              <button
-                onClick={handleStart}
-                title="Start agent"
-                className="glass-action !h-11 !w-11 text-muted-foreground hover:text-foreground"
-              >
-                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="6 3 20 12 6 21 6 3"/>
-                </svg>
-              </button>
-            )}
-            {canResume && (
-              <button
-                onClick={handleResume}
-                title="Resume session"
-                className="glass-action !h-11 !w-11 text-muted-foreground hover:text-foreground"
-              >
-                <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polygon points="6 3 20 12 6 21 6 3"/>
-                </svg>
-              </button>
-            )}
+              {isMoreOpen && (
+                <div id="conversation-actions" role="menu" className="glass-popover absolute right-0 top-12 z-30 min-w-40 rounded-2xl border p-1 text-foreground">
+                  {messages.length > 0 && hasSession && <button role="menuitem" className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => { setIsMoreOpen(false); handleRestart() }}>Restart session</button>}
+                  {canStop && <button role="menuitem" className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => { setIsMoreOpen(false); handleStop() }}>Stop session</button>}
+                  {canStart && <button role="menuitem" className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => { setIsMoreOpen(false); handleStart() }}>Start agent</button>}
+                  {canResume && <button role="menuitem" className="w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-accent" onClick={() => { setIsMoreOpen(false); handleResume() }}>Resume session</button>}
+                </div>
+              )}
+            </>}
           </div>
         </div>
       </div>
 
-      <UsageLimitRecoveryNotice taskId={taskId} />
+      <div className="pointer-events-auto"><UsageLimitRecoveryNotice taskId={taskId} /></div>
 
       {isSearchOpen && (
-        <div className="shrink-0 flex min-h-16 flex-wrap items-center gap-2 px-3 py-2">
+        <div className="pointer-events-auto shrink-0 flex min-h-16 flex-wrap items-center gap-2 px-3 py-2">
           <div className={cn('relative min-w-0 flex-1', normalizedSearchQuery && '!w-full !flex-none')}>
             <svg className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
@@ -578,7 +542,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                 }
               }}
               placeholder="Search transcript..."
-              className="glass-control h-12 w-full pl-9 pr-14 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring/30"
+              className="glass-control h-[48px] w-full pl-9 pr-14 text-sm text-foreground placeholder:text-[var(--glass-placeholder)] focus:outline-none focus:ring-1 focus:ring-ring/30"
             />
             {normalizedSearchQuery && <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[11px] tabular-nums text-muted-foreground">
               {`${searchResultIndexes.length ? activeSearchResult + 1 : 0}/${searchResultIndexes.length}`}
@@ -589,7 +553,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             onClick={() => goToSearchResult(-1)}
             disabled={searchResultIndexes.length === 0}
             title="Previous result"
-            className="glass-action !h-10 !w-10 text-muted-foreground hover:text-foreground"
+            aria-label="Previous search result"
+            className="glass-action !h-[40px] !w-[40px] text-muted-foreground hover:text-foreground"
           >
             <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="m18 15-6-6-6 6"/>
@@ -599,7 +564,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             onClick={() => goToSearchResult(1)}
             disabled={searchResultIndexes.length === 0}
             title="Next result"
-            className="glass-action !h-10 !w-10 text-muted-foreground hover:text-foreground"
+            aria-label="Next search result"
+            className="glass-action !h-[40px] !w-[40px] text-muted-foreground hover:text-foreground"
           >
             <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="m6 9 6 6 6-6"/>
@@ -609,7 +575,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           <button
             onClick={closeSearch}
             title="Close search"
-            className="glass-action !h-10 !w-10 text-muted-foreground hover:text-foreground"
+            aria-label="Close transcript search"
+            className="glass-action !h-[40px] !w-[40px] text-muted-foreground hover:text-foreground"
           >
             <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
@@ -685,8 +652,9 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className={cn('glass-chat-canvas h-full overflow-y-auto p-4 pb-36 space-y-2 text-sm', !latestTodos && (isSearchOpen ? (normalizedSearchQuery ? 'pt-48' : 'pt-36') : 'pt-20'))}
+          className="h-full overflow-y-auto px-4 space-y-2 text-sm"
         >
+          {hasLeadingContent && <div aria-hidden="true" style={{ height: headerClearance }} />}
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
               {!hasSession && !canStart && !canResume && (
@@ -797,21 +765,21 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         {showScrollToBottom && messages.length > 0 && (
           <button
             onClick={scrollToBottom}
-            className="absolute bottom-28 right-3 flex items-center gap-1.5 rounded-full bg-card border border-border/50 px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-border shadow-lg transition-all duration-200 opacity-80 hover:opacity-100 active:opacity-100"
+            className="glass-action absolute bottom-32 right-4 z-20 !h-[44px] !w-[44px] text-muted-foreground hover:text-foreground"
             title="Scroll to bottom"
+            aria-label="Scroll to bottom"
           >
             <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>
             </svg>
-            <span>Bottom</span>
           </button>
         )}
       </div>
 
       {/* Input area — matches desktop transcript panel input */}
-      <div className="glass-bar relative z-10 shrink-0 -mt-24">
+      <div className="glass-bar glass-composer-rail pointer-events-none relative z-10 shrink-0 -mt-[80px]">
         {showAttachmentPicker && taskAttachments.length > 0 && (
-          <div className="border-b border-border/50 px-3 py-2 max-h-40 overflow-y-auto bg-muted/20">
+          <div className="glass-popover pointer-events-auto mx-3 mb-2 max-h-40 overflow-y-auto rounded-2xl border px-3 py-2">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs text-muted-foreground">Attach files to this message</span>
               <button

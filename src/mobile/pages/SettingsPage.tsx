@@ -5,6 +5,7 @@ import { SubscriptionUsageSection } from '../components/SubscriptionUsageSection
 import { UsageHeroSection } from '../components/UsageHeroSection'
 import { AcpAgentsSection } from '../components/AcpAgentsSection'
 import { PushSettings } from '../components/PushSettings'
+import { applyGlassOpacity, GLASS_OPACITY_STORAGE_KEY, readGlassOpacity } from '@shared/glass-settings'
 
 interface TaskSource {
   id: string
@@ -28,14 +29,7 @@ interface SettingsPageProps {
 }
 
 export function SettingsPage({ onNavigate }: SettingsPageProps) {
-  const [glassOpacity, setGlassOpacity] = useState(() => {
-    try {
-      const stored = Number(localStorage.getItem('ui-glass-opacity'))
-      return stored >= 40 && stored <= 100 ? stored : 55
-    } catch {
-      return 55
-    }
-  })
+  const [glassOpacity, setGlassOpacity] = useState(readGlassOpacity)
   const [sources, setSources] = useState<TaskSource[]>([])
   const [plugins, setPlugins] = useState<PluginMeta[]>([])
   const [syncingIds, setSyncingIds] = useState<Set<string>>(new Set())
@@ -91,11 +85,9 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
   }, [sources])
 
   const changeGlassOpacity = (value: number) => {
-    setGlassOpacity(value)
-    document.documentElement.style.setProperty('--glass-opacity', `${value}%`)
-    document.documentElement.style.setProperty('--glass-blur', value === 100 ? '0px' : '18px')
-    document.documentElement.classList.toggle('glass-solid-mode', value === 100)
-    try { localStorage.setItem('ui-glass-opacity', String(value)) } catch { /* ignore */ }
+    const next = applyGlassOpacity(value)
+    setGlassOpacity(next)
+    try { localStorage.setItem(GLASS_OPACITY_STORAGE_KEY, String(next)) } catch { /* ignore */ }
   }
 
   return (

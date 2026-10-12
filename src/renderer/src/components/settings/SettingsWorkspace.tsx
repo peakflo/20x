@@ -73,7 +73,7 @@ export function SettingsWorkspace() {
         orientation="horizontal"
       >
         {/* Left Navigation Sidebar */}
-        <Tabs.List className="shrink-0 w-60 border-r border-border bg-[var(--glass-panel)] py-4 space-y-1 px-3">
+        <Tabs.List className="glass-panel shrink-0 w-60 border-r border-border py-4 space-y-1 px-3">
           {tabs.map(({ value, label, iconName }) => {
             const Icon = ICON_MAP[iconName as keyof typeof ICON_MAP]
             return (

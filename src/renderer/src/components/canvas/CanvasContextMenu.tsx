@@ -115,8 +115,8 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
   return (
     <div
       ref={menuRef}
-      className="fixed z-[9999] min-w-[220px] max-w-[280px] glass-popover border rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100"
-      style={{ left: position.clientX, top: position.clientY }}
+      className="fixed z-[9999] min-w-[220px] max-w-[280px] glass-popover border rounded-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100"
+      style={{ left: Math.max(12, Math.min(position.clientX, window.innerWidth - 292)), top: Math.max(12, Math.min(position.clientY, window.innerHeight - 652)) }}
     >
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border/20">
@@ -131,7 +131,7 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
         </button>
       </div>
 
-      <div className="py-1 max-h-[400px] overflow-y-auto custom-scrollbar">
+      <div className="py-1 max-h-[min(600px,calc(100vh-72px))] overflow-y-auto custom-scrollbar">
         {/* Create Task — always at top */}
         <MenuItem
           icon={<Plus className="h-3.5 w-3.5 text-green-400" />}

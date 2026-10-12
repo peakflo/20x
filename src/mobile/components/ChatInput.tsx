@@ -79,7 +79,7 @@ export function ChatInput({
   }
 
   return (
-    <div className="px-3 py-4 space-y-2">
+    <div className="pointer-events-auto px-3 py-4 space-y-2">
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {attachments.map((attachment) => (
@@ -111,31 +111,6 @@ export function ChatInput({
       {voiceNote && <p className="glass-popover rounded-xl border px-3 py-2 text-xs text-foreground" role="status">{voiceNote}</p>}
 
       <div className="flex items-end gap-2">
-        <div className="glass-composer flex min-w-0 flex-1 items-center">
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={(e) => { setValue(e.target.value); autoResize() }}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder}
-          disabled={disabled}
-          rows={1}
-          className={`w-full bg-transparent pl-4 ${voiceReason ? 'pr-10' : 'pr-4'} py-[13px] leading-[22px] text-sm text-foreground placeholder:text-muted-foreground resize-none overflow-hidden max-h-32 focus:outline-none min-h-[48px] disabled:opacity-40`}
-        />
-        {voiceReason && (
-          <button
-            type="button"
-            onClick={() => setVoiceNote((current) => current ? null : voiceReason)}
-            className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
-            title={voiceReason}
-            aria-label="Why voice input is unavailable"
-          >
-            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/><path d="M12 11v5"/><path d="M12 8h.01"/>
-            </svg>
-          </button>
-        )}
-        </div>
         {onOpenAttachmentPicker && (
           <button
             type="button"
@@ -150,6 +125,32 @@ export function ChatInput({
             </svg>
           </button>
         )}
+        <div className="glass-composer flex min-w-0 flex-1 items-center">
+        <textarea
+          ref={textareaRef}
+          value={value}
+          onChange={(e) => { setValue(e.target.value); autoResize() }}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          disabled={disabled}
+          rows={1}
+          className={`w-full bg-transparent pl-4 ${voiceReason ? 'pr-12' : 'pr-4'} py-[13px] leading-[22px] text-sm text-foreground placeholder:text-[var(--glass-placeholder)] resize-none overflow-hidden max-h-32 focus:outline-none min-h-[48px] disabled:opacity-40`}
+        />
+        {voiceReason && (
+          <button
+            type="button"
+            onClick={() => setVoiceNote((current) => current ? null : voiceReason)}
+            className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            title={voiceReason}
+            aria-label="Why voice input is unavailable"
+            aria-expanded={Boolean(voiceNote)}
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/><path d="M12 11v5"/><path d="M12 8h.01"/>
+            </svg>
+          </button>
+        )}
+        </div>
         <button
           onClick={handleSend}
           disabled={disabled || !value.trim()}

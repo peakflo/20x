@@ -152,7 +152,7 @@ export function TaskHeaderBar({
     && (action !== TaskPrimaryAction.COMPLETE || !onAction)
 
   return (
-    <header className="glass-bar relative z-10 flex h-12 shrink-0 items-center gap-2 border-b px-3">
+    <header className="glass-bar relative z-20 flex h-12 shrink-0 items-center gap-2 border-b px-3">
       {onBack && (
         <Button variant="ghost" size="icon" onClick={onBack} title="Back">
           <ArrowLeft className="h-4 w-4" />

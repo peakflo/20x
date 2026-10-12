@@ -277,7 +277,7 @@ const BoardColumn = memo(function BoardColumn({ column, tasks, onSelect, agentMa
   return (
     <div className={`min-w-[230px] max-w-[320px] flex-1 flex flex-col rounded-xl ${column.columnBg} border border-border/15`}>
       {/* Sticky header within column */}
-      <div className={`sticky top-0 z-10 glass-bar rounded-t-xl border-b border-border/15`}>
+      <div className="sticky top-0 z-10 rounded-t-xl border-b border-border/15 bg-card">
         <ColumnHeader column={column} count={tasks.length} />
       </div>
 

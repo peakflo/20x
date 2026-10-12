@@ -194,7 +194,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             </div>
             <div className="flex items-center gap-1">
               {sources.length > 0 && (
-                <Button size="icon" variant="ghost" onClick={handleSyncAll} disabled={isSyncingAll || syncingIds.size > 0} title="Sync all sources" className="glass-action !h-10 !w-10">
+                <Button size="icon" variant="ghost" onClick={handleSyncAll} disabled={isSyncingAll || syncingIds.size > 0} title="Sync all sources" className="glass-action !h-[40px] !w-[40px]">
                   {isSyncingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                 </Button>
               )}
@@ -203,11 +203,11 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 variant={isAutoStartEnabled ? 'default' : 'ghost'}
                 onClick={toggleAutoStart}
                 title={isAutoStartEnabled ? 'Disable auto-run' : 'Enable auto-run'}
-                className="glass-action !h-10 !w-10"
+                className={cn('glass-action !h-[40px] !w-[40px]', isAutoStartEnabled && 'text-[#061b2c]')}
               >
                 {isAutoStartEnabled ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
               </Button>
-              <Button size="icon" variant="ghost" onClick={onCreateTask} className="glass-action !h-10 !w-10" title="Create task" aria-label="Create task">
+              <Button size="icon" variant="ghost" onClick={onCreateTask} className="glass-action !h-[40px] !w-[40px]" title="Create task" aria-label="Create task">
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
@@ -222,7 +222,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search tasks..."
-                className="glass-control h-11 w-full pl-10 pr-8 text-sm placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20 transition-all"
+                className="glass-control h-[44px] w-full pl-10 pr-8 text-sm placeholder:text-[var(--glass-placeholder)] focus:ring-2 focus:ring-ring/20 transition-all"
               />
               {searchQuery && (
                 <button
@@ -236,10 +236,10 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           </div>
 
           <div className="no-drag px-3 pb-3">
-            <div className="glass-composer flex min-h-10 items-center gap-1 px-2">
+            <div className="flex min-h-10 items-center gap-1 rounded-xl border border-[var(--glass-outline)] bg-[var(--glass-inset)] px-2">
             <button
               onClick={() => setFiltersOpen(!filtersOpen)}
-              className="flex items-center gap-1.5 rounded-full px-2 py-1.5 text-xs text-foreground hover:bg-accent/40 cursor-pointer"
+              className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-foreground hover:bg-accent/40 cursor-pointer"
             >
               <ChevronDown className={`h-3 w-3 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
               Filters
@@ -253,7 +253,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             <select
               value={sortField}
               onChange={(e) => setSortField(e.target.value as SortField)}
-              className="rounded-full !border-0 !bg-transparent px-2 py-1.5 text-xs text-foreground cursor-pointer"
+              className="rounded-lg !border-0 !bg-transparent px-2 py-1.5 text-xs text-foreground cursor-pointer"
             >
               {sortOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -358,7 +358,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 value={skillSearchQuery}
                 onChange={(e) => setSkillSearchQuery(e.target.value)}
                 placeholder="Search skills..."
-                className="glass-control w-full pl-9 pr-8 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20 transition-all"
+                className="glass-control w-full pl-9 pr-8 py-2 text-sm shadow-xs placeholder:text-[var(--glass-placeholder)] focus:ring-2 focus:ring-ring/20 transition-all"
               />
               {skillSearchQuery && (
                 <button

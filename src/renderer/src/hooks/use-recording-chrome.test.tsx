@@ -201,8 +201,11 @@ describe('the surfaces that carry the mark', () => {
         expect(markup, `${name} should carry ${shape}`).toContain(shape)
       }
     }
-    expect(panels.sidebar).toContain('glass-panel')
+    expect(panels.sidebar).toContain('glass-panel glass-scroll-panel')
+    expect(panels.sidebar).toContain('my-2 ml-2')
+    expect(panels.workspace).toContain('m-2')
     for (const name of ['workspace', 'mastermind'] as const) {
+      expect(panels[name]).toContain('border-border')
       expect(panels[name]).toContain('bg-card')
       expect(panels[name]).toContain('shadow-card')
     }

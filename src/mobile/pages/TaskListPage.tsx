@@ -152,14 +152,14 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
   return (
     <div className="relative flex flex-col h-full">
       {/* Header */}
-      <div className="glass-bar relative z-10 shrink-0 -mb-[160px] px-4 pt-3 pb-2">
-        <div className="flex items-center justify-between mb-2">
+      <div className="glass-bar pointer-events-none relative z-10 shrink-0 -mb-[160px] px-4 pt-3 pb-2">
+        <div className="pointer-events-auto flex items-center justify-between mb-2">
           <h1 className="text-lg font-semibold">Tasks</h1>
           <div className="flex items-center gap-1">
             <button
               onClick={() => syncAndFetch()}
               disabled={isLoading || isSyncing}
-              className="glass-action !h-11 !w-11 disabled:opacity-40"
+              className="glass-action !h-[44px] !w-[44px] disabled:opacity-40"
               aria-label="Sync and refresh tasks"
               title="Sync all sources"
             >
@@ -169,7 +169,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
             </button>
             <button
               onClick={() => onNavigate({ page: 'settings' })}
-              className="glass-action !h-11 !w-11"
+              className="glass-action !h-[44px] !w-[44px]"
               aria-label="Settings"
               title="Settings"
             >
@@ -180,7 +180,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
             </button>
             <button
               onClick={() => onNavigate({ page: 'create' })}
-              className="glass-action !h-11 !w-11"
+              className="glass-action !h-[44px] !w-[44px]"
               aria-label="Create task"
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
@@ -194,11 +194,11 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search tasks..."
-          className="glass-control w-full px-5 h-12 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 mb-2"
+          className="glass-control pointer-events-auto w-full px-5 h-[48px] text-sm text-foreground placeholder:text-[var(--glass-placeholder)] focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 mb-2"
         />
 
         {/* Filter pills */}
-        <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
+        <div className="pointer-events-auto flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
           {FILTER_OPTIONS.map((opt) => (
             <button
               key={opt.value}

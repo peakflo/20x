@@ -277,7 +277,8 @@ describe('TopBarVoiceButton', () => {
       useVoiceStore.setState({ turnId: 'turn-1', state: 'listening' })
     })
     // Listening is the filled state, and the idle tint gets out of its way.
-    expect(mic.className).toContain('bg-primary text-primary-foreground')
+    expect(mic.className).toContain('bg-primary')
+    expect(mic.className).toContain('text-[#061b2c]')
     expect(mic.className).not.toContain('bg-primary/10')
   })
 })

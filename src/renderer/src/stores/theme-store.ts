@@ -1,16 +1,9 @@
 import { create } from 'zustand'
+import { applyGlassOpacity, GLASS_OPACITY_STORAGE_KEY, readGlassOpacity } from '@shared/glass-settings'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 
 const STORAGE_KEY = 'ui-theme'
-const GLASS_STORAGE_KEY = 'ui-glass-opacity'
-
-function applyGlassOpacity(value: number): void {
-  const root = document.documentElement
-  root.style.setProperty('--glass-opacity', `${value}%`)
-  root.style.setProperty('--glass-blur', value === 100 ? '0px' : '18px')
-  root.classList.toggle('glass-solid-mode', value === 100)
-}
 
 function systemPrefersDark(): boolean {
   return typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -47,14 +40,7 @@ const initialMode: ThemeMode = (() => {
     return 'dark'
   }
 })()
-const initialGlassOpacity = (() => {
-  try {
-    const stored = Number(localStorage.getItem(GLASS_STORAGE_KEY))
-    return stored >= 40 && stored <= 100 ? stored : 55
-  } catch {
-    return 55
-  }
-})()
+const initialGlassOpacity = readGlassOpacity()
 
 export const useThemeStore = create<ThemeState>((set, get) => {
   // Apply immediately (the index.html pre-paint script already set the class to
@@ -76,9 +62,8 @@ export const useThemeStore = create<ThemeState>((set, get) => {
     resolved,
     glassOpacity: initialGlassOpacity,
     setGlassOpacity: (value) => {
-      const next = Math.max(40, Math.min(100, Math.round(value)))
-      try { localStorage.setItem(GLASS_STORAGE_KEY, String(next)) } catch { /* ignore */ }
-      applyGlassOpacity(next)
+      const next = applyGlassOpacity(value)
+      try { localStorage.setItem(GLASS_OPACITY_STORAGE_KEY, String(next)) } catch { /* ignore */ }
       set({ glassOpacity: next })
     },
     setMode: (mode) => {

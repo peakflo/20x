@@ -5,8 +5,13 @@ import { SessionStatus } from '@/stores/agent-store'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
 
+const virtualizerOptions = vi.hoisted(() => vi.fn())
+
 vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
+  useVirtualizer: (options: { count: number; paddingStart?: number; paddingEnd?: number }) => {
+    virtualizerOptions(options)
+    const { count } = options
+    return ({
     getTotalSize: () => count * 120,
     getVirtualItems: () => Array.from({ length: count }, (_, index) => ({
       index,
@@ -16,13 +21,28 @@ vi.mock('@tanstack/react-virtual', () => ({
     })),
     scrollToIndex: vi.fn(),
     measureElement: vi.fn()
-  })
+  })}
 }))
 
 describe('AgentTranscriptPanel drag and drop attachments', () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()
+  })
+
+  it('includes header and composer clearance in the virtualized scroll height', () => {
+    render(
+      <AgentTranscriptPanel
+        messages={[{ id: 'latest', role: 'assistant', content: 'Newest answer', timestamp: new Date(), partType: 'text' }]}
+        status={SessionStatus.IDLE}
+        onStop={() => undefined}
+        onSend={() => undefined}
+      />
+    )
+
+    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 80, paddingEnd: 76, scrollPaddingEnd: 76 })
+    fireEvent.click(screen.getByRole('button', { name: 'Search transcript' }))
+    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 144, paddingEnd: 76 })
   })
 
   it('adds dropped files as pending attachments and sends them with the message', async () => {
