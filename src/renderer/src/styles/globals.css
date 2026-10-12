@@ -111,10 +111,10 @@
   --glass-inset: rgba(0, 0, 0, .045);
   --glass-placeholder: #62636a;
   --glass-edge: rgba(0, 0, 0, 0.08);
-  --glass-outline: rgba(0, 0, 0, 0.08);
+  --glass-outline: rgba(0, 0, 0, 0.11);
   --glass-solid: #f4f4f5;
   --glass-shadow: 0 10px 28px rgba(0, 0, 0, 0.13), 0 2px 5px rgba(0, 0, 0, 0.08);
-  --glass-shadow-control: 0 2px 5px rgba(0, 0, 0, .08), 0 1px 2px rgba(0, 0, 0, .05);
+  --glass-shadow-control: 0 2px 5px rgba(0, 0, 0, .10), 0 1px 2px rgba(0, 0, 0, .06);
   --glass-rim: inset 0 1px 0 rgba(255, 255, 255, 0.45);
   --glass-edge-wash: rgba(244, 244, 245, 0.62);
   --chrome-solid: #f4f4f5;
@@ -347,7 +347,7 @@ body, .theme-transition {
 }
 .glass-composer:focus-within::before { border-color: color-mix(in srgb, var(--ring) 28%, var(--glass-outline)); }
 .glass-composer-rail::before { content: ""; position: absolute; inset: -64px 0 0; z-index: -1; pointer-events: none; background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--background) 88%, transparent) 45%, var(--background) 72%); backdrop-filter: blur(var(--glass-composer-blur)); -webkit-backdrop-filter: blur(var(--glass-composer-blur)); mask-image: linear-gradient(to bottom, transparent 0%, black 45%); -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 45%); }
-.glass-action { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 44px; height: 44px; border: 1px solid var(--glass-outline); border-radius: 9999px; background: var(--glass-control); box-shadow: var(--glass-rim), var(--glass-shadow-control); transition: transform 150ms, background-color 150ms, box-shadow 150ms; }
+.glass-action { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 44px; height: 44px; border: 1px solid var(--glass-outline); border-radius: 9999px !important; background: var(--glass-control); box-shadow: var(--glass-rim), var(--glass-shadow-control); transition: transform 150ms, background-color 150ms, box-shadow 150ms; }
 .glass-action:hover:not(:disabled) { background: color-mix(in srgb, var(--glass-control) 94%, white); box-shadow: var(--glass-rim), var(--glass-shadow-control), 0 0 0 1px var(--glass-edge); }
 .glass-action:active:not(:disabled) { transform: scale(.96); }
 .glass-action:focus-visible, .glass-control:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
