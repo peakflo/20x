@@ -50,7 +50,7 @@ export function SettingsWorkspace() {
   return (
     <div className="h-full flex flex-col min-h-0">
       {/* Header */}
-      <div className="shrink-0 px-6 py-4 border-b border-border bg-background flex items-start justify-between">
+      <div className="shrink-0 px-6 py-4 glass-bar border-b flex items-start justify-between">
         <div>
           <h1 className="text-lg font-semibold text-foreground">Settings</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
@@ -70,7 +70,7 @@ export function SettingsWorkspace() {
         orientation="horizontal"
       >
         {/* Left Navigation Sidebar */}
-        <Tabs.List className="shrink-0 w-60 border-r border-border bg-background/50 py-4 space-y-1 px-3">
+        <Tabs.List className="shrink-0 w-60 border-r border-border bg-[var(--glass-panel)] py-4 space-y-1 px-3">
           {tabs.map(({ value, label, iconName }) => {
             const Icon = ICON_MAP[iconName as keyof typeof ICON_MAP]
             return (

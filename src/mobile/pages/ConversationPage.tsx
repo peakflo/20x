@@ -445,7 +445,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header — matches desktop AgentTranscriptPanel header */}
-      <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-border/50">
+      <div className={cn('glass-bar relative z-10 shrink-0 flex items-center justify-between px-4 py-3 border-b', !isSearchOpen && !latestTodos && '-mb-12')}>
         <div className="flex items-center gap-2 min-w-0">
           <button onClick={() => onNavigate({ page: 'detail', taskId })} className="p-1.5 shrink-0 active:opacity-60 hover:bg-accent rounded-md transition-colors">
             <svg className="w-4 h-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -577,7 +577,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                 }
               }}
               placeholder="Search transcript..."
-              className="h-8 w-full rounded-md border border-input bg-transparent pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/30"
+              className="glass-control h-8 w-full pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring/30"
             />
           </div>
           <span className="w-14 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
@@ -681,7 +681,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className="h-full overflow-y-auto p-4 space-y-2 text-sm"
+          className={cn('h-full overflow-y-auto p-4 pb-28 space-y-2 text-sm', !isSearchOpen && !latestTodos && 'pt-16')}
         >
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
@@ -802,7 +802,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
       </div>
 
       {/* Input area — matches desktop transcript panel input */}
-      <div className="shrink-0 border-t border-border/50">
+      <div className="glass-bar relative z-10 shrink-0 border-t -mt-20">
         {showAttachmentPicker && taskAttachments.length > 0 && (
           <div className="border-b border-border/50 px-3 py-2 max-h-40 overflow-y-auto bg-muted/20">
             <div className="flex items-center justify-between mb-2">

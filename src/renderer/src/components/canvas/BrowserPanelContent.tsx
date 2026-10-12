@@ -641,7 +641,7 @@ function BrowserUrlBar({
           <>
             {/* Invisible backdrop to close the menu on outside click */}
             <div className="fixed inset-0 z-40" onClick={() => setRefreshMenuOpen(false)} />
-            <div className="absolute left-0 top-full mt-1 z-50 w-44 rounded-md border border-border/40 bg-popover shadow-lg py-1">
+            <div className="absolute left-0 top-full mt-1 z-50 w-44 rounded-md glass-popover border shadow-lg py-1">
               <button
                 type="button"
                 onClick={() => {

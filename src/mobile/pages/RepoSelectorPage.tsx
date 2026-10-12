@@ -140,7 +140,7 @@ export function RepoSelectorPage({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="shrink-0 px-2 py-3 border-b border-border space-y-2">
+      <div className="glass-bar relative z-10 shrink-0 px-2 py-3 border-b space-y-2">
         <div className="flex items-center gap-2">
         <button
           onClick={() => onNavigate({ page: 'detail', taskId })}
@@ -321,7 +321,7 @@ export function RepoSelectorPage({
       </div>
 
       {/* Footer */}
-      <div className="shrink-0 flex items-center justify-between px-4 py-3 border-t border-border">
+      <div className="glass-bar shrink-0 flex items-center justify-between px-4 py-3 border-t">
         <span className="text-xs text-muted-foreground">
           {selected.size} repo{selected.size !== 1 ? 's' : ''} selected
         </span>

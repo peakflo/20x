@@ -593,7 +593,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
       </div>
 
       {/* ── Bottom action bar ──────────────────────────────── */}
-      <div className="shrink-0 border-t border-border px-4 py-3 flex gap-3">
+      <div className="glass-bar shrink-0 border-t px-4 py-3 flex gap-3">
         <button
           onClick={() => isEdit && taskId ? onNavigate({ page: 'detail', taskId }) : onNavigate({ page: 'list' })}
           className="flex-1 h-10 rounded-md border border-input text-sm font-medium text-foreground active:opacity-60 transition-colors"
@@ -614,7 +614,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
 
 function Header({ onBack, title }: { onBack: () => void; title: string }) {
   return (
-    <div className="shrink-0 flex items-center gap-2 px-2 py-3 border-b border-border">
+    <div className="glass-bar relative z-10 shrink-0 flex items-center gap-2 px-2 py-3 border-b">
       <button onClick={onBack} className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors">
         <svg className="w-5 h-5 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="m15 18-6-6 6-6" />

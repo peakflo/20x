@@ -102,7 +102,7 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between border-b px-6 py-4 shrink-0">
+      <div className="flex items-center justify-between glass-bar border-b px-6 py-4 shrink-0">
         <div className="flex items-center gap-2.5">
           <Badge variant="teal">v{skill.version}</Badge>
           <span className="text-xs text-muted-foreground">{formatRelativeDate(skill.updated_at)}</span>

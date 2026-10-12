@@ -50,7 +50,7 @@ export function SubtaskPickerDialog({ open, onOpenChange, subtasks, onSelect }: 
         <DialogPrimitive.Content
           aria-describedby={undefined}
           onKeyDown={onKeyDown}
-          className="fixed left-1/2 top-[24%] z-50 w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-2xl border border-border bg-popover shadow-2xl outline-none"
+          className="fixed left-1/2 top-[24%] z-50 w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 overflow-hidden rounded-2xl glass-popover border shadow-2xl outline-none"
         >
           <DialogPrimitive.Title className="border-b border-border/60 px-4 py-3 text-sm font-semibold">
             Open subtask

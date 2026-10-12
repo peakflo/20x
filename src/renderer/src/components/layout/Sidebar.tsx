@@ -177,7 +177,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
     // radius, same hairline, same shadow. Sitting flush against the rail while
     // the work had rounded corners read as unfinished.
     <aside
-      className="app-chrome relative flex flex-col shrink-0 overflow-hidden rounded-2xl border border-border bg-card text-sidebar-foreground shadow-card my-2 ml-2"
+      className="app-chrome glass-panel relative flex flex-col shrink-0 overflow-hidden rounded-2xl border text-sidebar-foreground my-2 ml-2"
       style={{ width: sidebarWidth }}
     >
       {sidebarView === 'tasks' ? (
@@ -221,7 +221,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search tasks..."
-                className="w-full rounded-lg border border-input bg-card pl-9 pr-8 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 transition-all"
+                className="glass-control w-full pl-9 pr-8 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20 transition-all"
               />
               {searchQuery && (
                 <button
@@ -355,7 +355,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 value={skillSearchQuery}
                 onChange={(e) => setSkillSearchQuery(e.target.value)}
                 placeholder="Search skills..."
-                className="w-full rounded-lg border border-input bg-card pl-9 pr-8 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/20 transition-all"
+                className="glass-control w-full pl-9 pr-8 py-2 text-sm shadow-xs placeholder:text-muted-foreground focus:ring-2 focus:ring-ring/20 transition-all"
               />
               {skillSearchQuery && (
                 <button

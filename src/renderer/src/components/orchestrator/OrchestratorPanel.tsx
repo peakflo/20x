@@ -160,13 +160,13 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     // square against the work.
     <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-card">
       {/* Header with agent selector */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+      <div className="glass-bar relative z-10 flex items-center justify-between px-4 py-3 border-b shrink-0">
         {/* A warm session is not a conversation: the choice stays open until
             something has actually been said. */}
         <select
           value={selectedAgentId || ''}
           onChange={(e) => handleAgentChange(e.target.value)}
-          className="text-xs bg-background border border-border rounded px-2 py-1 cursor-pointer hover:border-primary/50 transition-colors"
+          className="glass-control text-xs px-3 py-1 cursor-pointer hover:border-primary/50 transition-colors"
           disabled={(currentSession?.messages?.length ?? 0) > 0}
         >
           {agents.map((agent) => (

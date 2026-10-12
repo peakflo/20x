@@ -152,7 +152,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="shrink-0 px-4 pt-3 pb-2 border-b border-border/30">
+      <div className="glass-bar relative z-10 shrink-0 px-4 pt-3 pb-2 border-b">
         <div className="flex items-center justify-between mb-2">
           <h1 className="text-lg font-semibold">Tasks</h1>
           <div className="flex items-center gap-1">
@@ -187,7 +187,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search tasks..."
-          className="w-full bg-transparent border border-input rounded-md px-3 py-1 h-9 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 mb-2"
+          className="glass-control w-full px-3 py-1 h-9 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 mb-2"
         />
 
         {/* Filter pills */}

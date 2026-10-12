@@ -51,7 +51,7 @@ export function SkillSelectorPage({
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="shrink-0 flex items-center gap-2 px-2 py-3 border-b border-border">
+      <div className="glass-bar relative z-10 shrink-0 flex items-center gap-2 px-2 py-3 border-b">
         <button
           onClick={() => onNavigate({ page: 'detail', taskId })}
           className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors"
@@ -152,7 +152,7 @@ export function SkillSelectorPage({
       </div>
 
       {/* Footer */}
-      <div className="shrink-0 flex items-center justify-between px-4 py-3 border-t border-border">
+      <div className="glass-bar shrink-0 flex items-center justify-between px-4 py-3 border-t">
         <span className="text-xs text-muted-foreground">
           {selected.size} skill{selected.size !== 1 ? 's' : ''} selected
         </span>

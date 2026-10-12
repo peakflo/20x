@@ -33,7 +33,6 @@ export function ChatInput({
   onOpenAttachmentPicker
 }: ChatInputProps) {
   const [value, setValue] = useState('')
-  const [voiceNote, setVoiceNote] = useState<string | null>(null)
   const [voiceReason, setVoiceReason] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -108,11 +107,7 @@ export function ChatInput({
         </div>
       )}
 
-      {voiceNote && (
-        <p className="mb-2 rounded-lg border border-border/50 px-3 py-2 text-xs text-muted-foreground" role="status">
-          {voiceNote}
-        </p>
-      )}
+      {voiceReason && <p className="text-[11px] text-muted-foreground" role="status">{voiceReason}</p>}
 
       <div className="flex items-end gap-2">
         <textarea
@@ -123,14 +118,14 @@ export function ChatInput({
           placeholder={placeholder}
           disabled={disabled}
           rows={1}
-          className="flex-1 bg-input border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground resize-none overflow-hidden max-h-32 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/30 min-h-[32px] disabled:opacity-40"
+          className="glass-control min-w-0 flex-1 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground resize-none overflow-hidden max-h-32 focus:outline-none focus:ring-2 focus:ring-primary/30 min-h-[44px] disabled:opacity-40"
         />
         {onOpenAttachmentPicker && (
           <button
             type="button"
             onClick={onOpenAttachmentPicker}
             disabled={disabled}
-            className="h-[32px] w-[32px] shrink-0 rounded-lg flex items-center justify-center border border-border/50 text-muted-foreground hover:text-foreground active:opacity-80 disabled:opacity-30 transition-colors"
+            className="glass-action text-muted-foreground hover:text-foreground active:opacity-80"
             title="Attach files"
             aria-label="Attach files"
           >
@@ -139,23 +134,10 @@ export function ChatInput({
             </svg>
           </button>
         )}
-        {voiceReason && (
-          <button
-            type="button"
-            onClick={() => setVoiceNote(voiceReason)}
-            className="h-[32px] w-[32px] shrink-0 rounded-lg flex items-center justify-center border border-border/50 text-muted-foreground active:opacity-80 transition-colors"
-            title={voiceReason}
-            aria-label={voiceReason}
-          >
-            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><line x1="12" y1="19" x2="12" y2="22" />
-            </svg>
-          </button>
-        )}
         <button
           onClick={handleSend}
           disabled={disabled || !value.trim()}
-          className="h-[32px] w-[32px] shrink-0 rounded-lg flex items-center justify-center bg-primary text-primary-foreground active:opacity-80 disabled:opacity-30 transition-colors"
+          className="glass-action glass-send active:opacity-80"
           aria-label="Send message"
         >
           <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

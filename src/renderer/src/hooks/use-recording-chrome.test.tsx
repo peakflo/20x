@@ -195,12 +195,16 @@ describe('the surfaces that carry the mark', () => {
       mastermind: drawer.slice(drawer.indexOf('return ('), drawer.indexOf('{/* Header')),
     }
 
-    // One shape language. A panel that opts out reads as unfinished beside
-    // the others.
+    // One shape language. Navigation gets glass, while the work stays solid.
     for (const [name, markup] of Object.entries(panels)) {
-      for (const shape of ['rounded-2xl', 'border border-border', 'bg-card', 'shadow-card']) {
+      for (const shape of ['rounded-2xl', 'border']) {
         expect(markup, `${name} should carry ${shape}`).toContain(shape)
       }
+    }
+    expect(panels.sidebar).toContain('glass-panel')
+    for (const name of ['workspace', 'mastermind'] as const) {
+      expect(panels[name]).toContain('bg-card')
+      expect(panels[name]).toContain('shadow-card')
     }
   })
 

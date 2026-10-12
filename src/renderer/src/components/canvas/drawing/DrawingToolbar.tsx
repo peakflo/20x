@@ -289,7 +289,7 @@ export function DrawingToolbar() {
 function SwatchPopover({ children }: { children: React.ReactNode }) {
   return (
     <div
-      className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 flex flex-wrap items-center gap-1.5 w-44 p-2 bg-popover border border-border/50 rounded-xl shadow-2xl"
+      className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 flex flex-wrap items-center gap-1.5 w-44 p-2 glass-popover border rounded-xl shadow-2xl"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
     >

@@ -1110,7 +1110,7 @@ export function InfiniteCanvas() {
       })}
 
       {/* ── HUD: zoom controls ── */}
-      <div className="absolute bottom-4 left-4 flex items-center gap-1 bg-[var(--canvas-toolbar)] backdrop-blur-sm border border-border/40 rounded-lg p-1 z-10">
+      <div className="glass-panel absolute bottom-4 left-4 z-10 flex items-center gap-1 rounded-full border p-1">
         <Button
           variant="ghost"
           size="sm"

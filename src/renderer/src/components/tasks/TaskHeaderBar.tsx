@@ -152,7 +152,7 @@ export function TaskHeaderBar({
     && (action !== TaskPrimaryAction.COMPLETE || !onAction)
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border/50 bg-background px-3">
+    <header className="glass-bar relative z-10 flex h-12 shrink-0 items-center gap-2 border-b px-3">
       {onBack && (
         <Button variant="ghost" size="icon" onClick={onBack} title="Back">
           <ArrowLeft className="h-4 w-4" />
@@ -193,7 +193,7 @@ export function TaskHeaderBar({
           {!(task.server_managed && isTaskClosed(task.status)) && <ChevronDown className="h-3 w-3 text-muted-foreground transition-colors group-hover:text-foreground" />}
         </button>
         {statusMenuOpen && (
-          <div role="menu" aria-label="Task status" className="absolute right-0 top-7 z-50 w-48 overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
+          <div role="menu" aria-label="Task status" className="absolute right-0 top-7 z-50 w-48 overflow-hidden rounded-lg glass-popover border p-1 shadow-xl">
             {TASK_STATUSES.map((status) => (
               <button
                 key={status.value}
@@ -233,7 +233,7 @@ export function TaskHeaderBar({
             </button>
             </AgentHoverCard>
             {agentMenuOpen && (
-              <div role="menu" aria-label="Agent" className="absolute right-0 top-7 z-50 w-48 overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
+              <div role="menu" aria-label="Agent" className="absolute right-0 top-7 z-50 w-48 overflow-hidden rounded-lg glass-popover border p-1 shadow-xl">
                 <button
                   type="button"
                   role="menuitemradio"
@@ -315,7 +315,7 @@ export function TaskHeaderBar({
           <MoreHorizontal className="h-4 w-4" />
         </Button>
         {menuOpen && (
-          <div className="absolute right-0 top-9 z-50 w-44 overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
+          <div className="absolute right-0 top-9 z-50 w-44 overflow-hidden rounded-lg glass-popover border p-1 shadow-xl">
             {[
               { label: 'Send to Workflo', icon: ExternalLink, action: enterpriseConnected && !task.source_id ? () => uploadToWorkflo(false) : undefined },
               { label: 'Run agent in Workflo', icon: HarnessIcon, action: enterpriseConnected && !task.source_id && task.agent_id ? () => uploadToWorkflo(true) : undefined },

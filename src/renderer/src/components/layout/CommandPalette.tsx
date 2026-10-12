@@ -204,7 +204,7 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
         <DialogPrimitive.Content
           onKeyDown={onKeyDown}
           aria-label="Command palette"
-          className="fixed left-1/2 top-[14%] z-[101] w-full max-w-[560px] -translate-x-1/2 overflow-hidden rounded-2xl border border-border bg-popover shadow-float data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+          className="fixed left-1/2 top-[14%] z-[101] w-full max-w-[560px] -translate-x-1/2 overflow-hidden glass-popover rounded-2xl border shadow-float data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           <DialogPrimitive.Title className="sr-only">Command palette</DialogPrimitive.Title>
           <div className="flex items-center gap-2.5 border-b border-border px-4">

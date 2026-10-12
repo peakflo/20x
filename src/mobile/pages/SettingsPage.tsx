@@ -85,7 +85,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border/30 shrink-0">
+      <div className="glass-bar relative z-10 flex items-center justify-between px-4 py-3 border-b shrink-0">
         <button
           onClick={() => onNavigate({ page: 'list' })}
           className="flex items-center gap-1 text-sm text-muted-foreground"

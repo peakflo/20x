@@ -713,7 +713,7 @@ export function AppLayout() {
     <>
       {completionDialog}
       {/* ── Top bar: drag region with logo (left) + nav switcher (center) + actions (right) ── */}
-      <div className="app-chrome drag-region bg-background h-8 flex-shrink-0 flex items-center justify-center px-3 pt-2.5 windows-titlebar-pad">
+      <div className="app-chrome glass-bar drag-region h-8 flex-shrink-0 flex items-center justify-center px-3 pt-2.5 windows-titlebar-pad">
         {/* Logo + wordmark + update indicator — pinned left. The white logo mark
             always sits on a brand-gradient tile, so it stays visible in both themes. */}
         <div className="no-drag absolute left-3 flex items-center gap-1.5 macos-titlebar-pad">
@@ -770,7 +770,7 @@ export function AppLayout() {
             captureAnalyticsEvent('command_palette_toggled', { source: 'top_bar' })
           }}
           title="Search or run a command"
-          className="no-drag flex h-7 w-[230px] max-w-[34vw] items-center gap-2 rounded-lg border border-border/60 bg-muted/40 px-2.5 text-[11px] text-muted-foreground shadow-xs transition-colors hover:bg-accent hover:text-foreground cursor-pointer"
+          className="no-drag glass-control flex h-7 w-[230px] max-w-[34vw] items-center gap-2 px-2.5 text-[11px] text-muted-foreground shadow-xs transition-colors hover:bg-accent hover:text-foreground cursor-pointer focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Search className="h-3 w-3 shrink-0" />
           <span className="flex-1 truncate text-left">Search or run a command…</span>
@@ -810,7 +810,7 @@ export function AppLayout() {
       {/* ── Content area: left rail + optional sidebar + workspace + orchestrator ── */}
       <div className="app-chrome-field flex flex-1 min-h-0 overflow-hidden bg-background">
         {/* Primary navigation — slim vertical icon rail */}
-        <nav className="app-chrome no-drag flex w-9 flex-shrink-0 flex-col items-center gap-0.5 bg-background py-1.5">
+        <nav className="app-chrome glass-bar no-drag flex w-9 flex-shrink-0 flex-col items-center gap-0.5 py-1.5">
           {NAV_ITEMS.map(({ key, label, icon: Icon }, i) => {
             const active = sidebarView === key && activeModal !== 'settings'
             return (
@@ -836,7 +836,7 @@ export function AppLayout() {
                 )}
                 <Icon className="h-4 w-4" />
                 {/* Hover flyout label + shortcut */}
-                <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 flex -translate-y-1/2 translate-x-[-4px] items-center gap-2 whitespace-nowrap rounded-lg border border-border bg-popover px-2 py-1 text-xs font-medium text-foreground opacity-0 shadow-pop transition-all duration-150 group-hover:translate-x-0 group-hover:opacity-100">
+                <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 flex -translate-y-1/2 translate-x-[-4px] items-center gap-2 whitespace-nowrap rounded-lg glass-popover border px-2 py-1 text-xs font-medium text-foreground opacity-0 shadow-pop transition-all duration-150 group-hover:translate-x-0 group-hover:opacity-100">
                   {label}
                   <kbd className="rounded border border-border bg-muted px-1 text-[10px] text-muted-foreground">{modKey}{i + 1}</kbd>
                 </span>

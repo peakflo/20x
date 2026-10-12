@@ -143,7 +143,7 @@ export function TokensPerDayChart({ days, colorScheme }: TokensPerDayChartProps)
             ) : null)}
           </svg>
           {hovered && (
-            <div className="absolute top-1 right-1 min-w-[170px] rounded-lg border border-border bg-popover px-2.5 py-2 text-xs shadow-lg pointer-events-none">
+            <div className="absolute top-1 right-1 min-w-[170px] rounded-lg glass-popover border px-2.5 py-2 text-xs shadow-lg pointer-events-none">
               <div className="font-semibold mb-1">{fmtDate(hovered.day)}</div>
               {series.map((s) => (
                 <div key={s.key} className="flex justify-between gap-3 text-muted-foreground">

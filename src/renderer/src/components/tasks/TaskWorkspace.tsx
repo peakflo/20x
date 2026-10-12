@@ -1149,8 +1149,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
             <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
               <div className="min-h-0 flex-1">{detailsView}</div>
               {!hasSession && panelLayout === 'both' && !isTaskClosed(task.status) && (
-                <div className="sticky bottom-0 mx-auto w-full max-w-[780px] shrink-0 border-t border-border/50 bg-background/95 px-6 py-3 backdrop-blur">
-                  <div className="flex items-end gap-2 rounded-xl border border-border/50 bg-card p-2 shadow-lg">
+                <div className="sticky bottom-0 mx-auto w-full max-w-[780px] shrink-0 glass-bar border-t px-6 py-3">
+                  <div className="flex items-end gap-2 glass-control rounded-full p-2 shadow-lg">
                     <textarea
                       value={kickoffMessage}
                       onChange={(event) => setKickoffMessage(event.target.value)}
@@ -1161,7 +1161,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
                       className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none placeholder:text-muted-foreground"
                       aria-label="Kickoff instructions"
                     />
-                    <Button onClick={() => void handleKickoff()} disabled={!kickoffMessage.trim()} className="h-9 gap-1.5">
+                    <Button onClick={() => void handleKickoff()} disabled={!kickoffMessage.trim()} className="glass-send !h-10 rounded-full px-4">
                       {task.agent_id ? <Send className="h-3.5 w-3.5" /> : <Sparkles className="h-3.5 w-3.5" />}
                       {task.agent_id ? 'Start' : 'Triage'}
                     </Button>

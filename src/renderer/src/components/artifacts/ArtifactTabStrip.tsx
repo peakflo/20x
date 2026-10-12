@@ -32,7 +32,7 @@ export function ArtifactTabStrip({
   ]
 
   return (
-    <div className={cn('flex min-w-0 items-center gap-1 overflow-x-auto border-b border-border/50 bg-background px-2 py-1.5', className)}>
+    <div className={cn('flex min-w-0 items-center gap-1 overflow-x-auto glass-bar border-b px-2 py-1.5', className)}>
       {pinned.filter((tab) => tab.visible).map((tab) => {
         const Icon = tab.icon
         return (

@@ -102,7 +102,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
 
   return (
     <div
-      className="rounded-lg border border-border/80 bg-muted overflow-hidden shadow-sm transition-all duration-200 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30"
+      className="rounded-[24px] border border-[var(--glass-outline)] bg-[var(--glass-panel)] overflow-hidden shadow-sm transition-all duration-200 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30"
       data-voice-composer={VOICE_COMPOSER_KEY}
     >
       {/* Text area */}
@@ -132,7 +132,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
           </button>
 
           {showAgentDropdown && (
-            <div className="absolute bottom-full left-0 mb-1 w-48 rounded-lg border border-border bg-popover shadow-lg py-1 z-50">
+            <div className="absolute bottom-full left-0 mb-1 w-48 glass-popover rounded-2xl border shadow-lg py-1 z-50">
               {agents.map((agent) => (
                 <button
                   key={agent.id}
@@ -158,14 +158,14 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
 
         {/* Attach file */}
         <button
-          className="p-1.5 rounded-md text-foreground/60 hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+          className="glass-action text-foreground/60 hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
           title="Attach file"
         >
           <Paperclip className="h-4 w-4" />
         </button>
 
         {/* Dictate. With "Keep talking" on, each pause sends to Mastermind. */}
-        <VoiceMicButton mode="dictation" onSubmit={submitField} className="h-[30px] w-[30px]" />
+        <VoiceMicButton mode="dictation" onSubmit={submitField} className="!h-10 !w-10 !rounded-full" />
 
         {/* Spacer */}
         <div className="flex-1" />
@@ -183,9 +183,9 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
         <button
           onClick={handleSend}
           disabled={!text.trim()}
-          className={`p-1.5 rounded-lg transition-all duration-150 cursor-pointer ${
+          className={`glass-action !h-10 !w-10 transition-all duration-150 cursor-pointer ${
             text.trim()
-              ? 'bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm'
+              ? 'glass-send shadow-sm'
               : 'bg-accent text-muted-foreground cursor-not-allowed'
           }`}
           title="Send to Mastermind"

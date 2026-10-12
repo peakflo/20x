@@ -148,7 +148,7 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border/50 px-3 py-3">
+      <div className="glass-bar relative z-10 flex shrink-0 items-center gap-2 border-b px-3 py-3">
         <button type="button" onClick={handleBack} className="rounded-md p-1.5 active:opacity-60" aria-label="Back to task">
           <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m15 18-6-6 6-6"/></svg>
         </button>

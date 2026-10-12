@@ -322,7 +322,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       />
 
       {/* Top-bar agent switcher — mirrors desktop TaskHeaderBar, always visible without opening Details */}
-      <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b border-border/50">
+      <div className="glass-bar relative z-10 shrink-0 flex items-center gap-2 px-4 py-2 border-b">
         <span className="text-xs text-muted-foreground shrink-0">Agent</span>
         <div ref={agentMenuRef} className="relative">
           <button
@@ -339,7 +339,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             <svg className="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
           </button>
           {agentMenuOpen && (
-            <div role="menu" aria-label="Agent" className="absolute left-0 top-7 z-50 w-48 overflow-hidden rounded-lg border border-border/50 bg-popover p-1 shadow-xl">
+            <div role="menu" aria-label="Agent" className="absolute left-0 top-7 z-50 w-48 overflow-hidden glass-popover rounded-xl border p-1 shadow-xl">
               <button
                 type="button"
                 role="menuitemradio"
@@ -379,7 +379,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         </span>
       </div>
 
-      <div className="shrink-0 border-b border-border/50 px-4 py-2">
+      <div className="glass-bar shrink-0 border-b px-4 py-2">
         <div className="grid grid-cols-2 rounded-md bg-muted/40 p-0.5 text-xs">
           <button
             type="button"
@@ -867,7 +867,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       </div>
 
       {openScad && <div role="dialog" aria-label={`Edit ${openScad.filename}`} className="fixed inset-0 z-50 flex flex-col bg-background">
-        <div className="flex shrink-0 items-center justify-between border-b border-border/50 px-4 py-3">
+        <div className="glass-bar flex shrink-0 items-center justify-between border-b px-4 py-3">
           <span className="truncate text-sm font-medium">{openScad.filename}</span>
           <button type="button" onClick={() => setOpenScad(null)} className="px-2 py-1 text-sm text-primary" aria-label="Close SCAD editor">Close</button>
         </div>
@@ -955,7 +955,7 @@ function SubtasksSection({ subtasks, onNavigateToTask, onReorderSubtasks }: { su
   const displaySubtasks = getDisplayOrder()
 
   return (
-    <div className="px-4 py-3 border-b border-border">
+    <div className="glass-bar px-4 py-3 border-b">
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
           <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1018,7 +1018,7 @@ function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sour
   const [completeAtSource, setCompleteAtSource] = useState(true)
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div role="dialog" aria-label={withFeedback ? 'Session feedback' : 'Complete task'} className="mx-4 w-full max-w-md rounded-xl border bg-card p-5 space-y-4">
+      <div role="dialog" aria-label={withFeedback ? 'Session feedback' : 'Complete task'} className="glass-popover mx-4 w-full max-w-md rounded-2xl border p-5 space-y-4">
         <h2>{withFeedback ? 'Session feedback' : 'Complete task'}</h2>
         {sourceName && (
           <div className="rounded-md border p-3 text-sm space-y-2">
@@ -1047,7 +1047,7 @@ function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sour
 
 function Header({ onBack, title, rightAction }: { onBack: () => void; title: string; rightAction?: React.ReactNode }) {
   return (
-    <div className="shrink-0 flex items-center gap-2 px-2 py-3 border-b border-border">
+    <div className="glass-bar shrink-0 flex items-center gap-2 px-2 py-3 border-b">
       <button onClick={onBack} className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors">
         <svg className="w-5 h-5 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="m15 18-6-6 6-6" />

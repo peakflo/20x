@@ -54,7 +54,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
     <section className={cn('flex h-full min-h-0 min-w-0 flex-col bg-background', className)} data-task-artifacts>
       <div className="relative">
         <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? 'pr-52' : 'pr-11'} />
-        <div className="absolute right-2 top-1.5 flex items-center gap-1 bg-background">
+        <div className="absolute right-2 top-1.5 flex items-center gap-1 glass-control">
           {activeArtifact && <ArtifactCopyActions key={`${activeArtifact.id}:${selectedArtifact?.path}`} artifact={selectedArtifact!} artifactApi={artifactApi} />}
           <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
         </div>

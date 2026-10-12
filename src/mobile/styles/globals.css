@@ -11,6 +11,8 @@
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-glass-control: var(--glass-control);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
@@ -30,6 +32,7 @@
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-xl: 18px;
+  --radius-2xl: 24px;
 
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
@@ -40,6 +43,17 @@
   --foreground: #121212;
   --card: #ffffff;
   --card-foreground: #121212;
+  --popover: #ffffff;
+  --glass-bar: rgba(244, 244, 245, 0.78);
+  --glass-panel: rgba(255, 255, 255, 0.82);
+  --glass-popover: rgba(255, 255, 255, 0.94);
+  --glass-control: rgba(255, 255, 255, 0.60);
+  --glass-edge: rgba(255, 255, 255, 0.70);
+  --glass-outline: rgba(0, 0, 0, 0.12);
+  --glass-solid: #f4f4f5;
+  --glass-shadow: 0 8px 24px rgba(0, 0, 0, 0.10);
+  --glass-blur-bar: 20px;
+  --glass-blur-panel: 24px;
   --primary: #1e96eb;
   --primary-foreground: #ffffff;
   --secondary: #eaeaec;
@@ -71,6 +85,17 @@
   --foreground: #eaeaea;
   --card: #1e1e1e;
   --card-foreground: #eaeaea;
+  --popover: #1e1e1e;
+  --glass-bar: rgba(20, 20, 20, 0.76);
+  --glass-panel: rgba(30, 30, 30, 0.82);
+  --glass-popover: rgba(30, 30, 30, 0.94);
+  --glass-control: rgba(255, 255, 255, 0.08);
+  --glass-edge: rgba(255, 255, 255, 0.12);
+  --glass-outline: rgba(255, 255, 255, 0.16);
+  --glass-solid: #1e1e1e;
+  --glass-shadow: 0 8px 28px rgba(0, 0, 0, 0.40);
+  --glass-blur-bar: 20px;
+  --glass-blur-panel: 24px;
   --primary: #1e96eb;
   --primary-foreground: #ffffff;
   --secondary: #242424;
@@ -114,6 +139,35 @@
 }
 
 /* ── Reset ────────────────────────────────────── */
+.glass-bar, .glass-panel, .glass-popover {
+  border-color: var(--glass-edge);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: saturate(135%) blur(var(--glass-blur-bar));
+  -webkit-backdrop-filter: saturate(135%) blur(var(--glass-blur-bar));
+}
+.glass-bar { background-color: var(--glass-bar); }
+.glass-panel { background-color: var(--glass-panel); backdrop-filter: saturate(135%) blur(var(--glass-blur-panel)); -webkit-backdrop-filter: saturate(135%) blur(var(--glass-blur-panel)); }
+.glass-popover { background-color: var(--glass-popover); }
+.glass-control { background-color: var(--glass-control); border: 1px solid var(--glass-outline); border-radius: 9999px; }
+.glass-action { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 44px; height: 44px; border: 1px solid var(--glass-outline); border-radius: 9999px; background: var(--glass-control); transition: background-color 150ms, box-shadow 150ms; }
+.glass-action:hover:not(:disabled) { background: var(--accent); }
+.glass-action:focus-visible, .glass-control:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.glass-action:disabled { opacity: .4; cursor: not-allowed; }
+.glass-send { background: var(--primary); color: #061b2c; border-color: transparent; }
+.glass-send:hover:not(:disabled) { background: color-mix(in srgb, var(--primary) 85%, white); }
+.glass-send:disabled { background: var(--accent); color: var(--muted-foreground); opacity: .65; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-bar, .glass-panel, .glass-popover { background-color: var(--glass-solid); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .glass-bar, .glass-panel, .glass-popover { background-color: var(--glass-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .glass-control, .glass-action { background-color: var(--glass-solid); }
+  .glass-send { background-color: var(--primary); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glass-bar, .glass-panel, .glass-popover, .glass-control, .glass-action { transition: none; animation: none; }
+}
+
 @layer base {
   * {
     box-sizing: border-box;

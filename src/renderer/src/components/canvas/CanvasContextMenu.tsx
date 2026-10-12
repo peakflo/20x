@@ -115,7 +115,7 @@ export function CanvasContextMenu({ position, onClose }: CanvasContextMenuProps)
   return (
     <div
       ref={menuRef}
-      className="fixed z-[9999] min-w-[220px] max-w-[280px] bg-popover border border-border/50 rounded-xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100"
+      className="fixed z-[9999] min-w-[220px] max-w-[280px] glass-popover border rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-100"
       style={{ left: position.clientX, top: position.clientY }}
     >
       {/* Header */}

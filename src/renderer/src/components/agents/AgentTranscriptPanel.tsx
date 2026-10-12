@@ -849,6 +849,7 @@ export function AgentTranscriptPanel({
   const scrollRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const [inputHasValue, setInputHasValue] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -1161,6 +1162,7 @@ export function AgentTranscriptPanel({
       const attachmentsAtSend = pendingAttachments
       const sent = onSend(value, attachmentsAtSend.length > 0 ? { attachments: attachmentsAtSend } : undefined)
       inputRef.current!.value = ''
+      setInputHasValue(false)
       // Reset textarea height back to single row
       inputRef.current!.style.height = 'auto'
       setPendingAttachments([])
@@ -1169,7 +1171,10 @@ export function AgentTranscriptPanel({
       // The text goes back into the box and the failure is announced.
       void Promise.resolve(sent).catch((error: unknown) => {
         console.error('[AgentTranscriptPanel] Message send failed:', error)
-        if (inputRef.current && !inputRef.current.value) inputRef.current.value = value
+        if (inputRef.current && !inputRef.current.value) {
+          inputRef.current.value = value
+          setInputHasValue(true)
+        }
         setPendingAttachments(attachmentsAtSend)
         const detail = error instanceof Error && error.message ? error.message.trim() : String(error ?? '').trim()
         // Surface the real failure (e.g. provider "name must be at most 64
@@ -1243,7 +1248,7 @@ export function AgentTranscriptPanel({
       )}
       {/* Header — windows-titlebar-safe adds right padding on Windows to avoid title bar overlay */}
       <div
-        className="flex items-center justify-between px-4 py-3 border-b border-border/60 shrink-0 windows-titlebar-safe"
+        className={cn('glass-bar relative z-10 flex items-center justify-between px-4 py-3 border-b shrink-0 windows-titlebar-safe', !isSearchOpen && !showErrorBanner && !systemStatus && !latestTodos && '-mb-12')}
         onContextMenu={handleHeaderContextMenu}
         title="Right-click to copy debug info"
       >
@@ -1272,7 +1277,7 @@ export function AgentTranscriptPanel({
                   return nextOpen
                 })
               }}
-              className="h-7 px-2"
+              className="h-8 w-8 rounded-full p-0"
               title="Search transcript"
             >
               <Search className="h-3.5 w-3.5" />
@@ -1282,14 +1287,14 @@ export function AgentTranscriptPanel({
                 variant="ghost"
                 size="sm"
                 onClick={onRestart}
-                className="h-7 px-2"
+                className="h-8 w-8 rounded-full p-0"
                 title="Restart session"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
               </Button>
             )}
             {(status === SessionStatus.WORKING || status === SessionStatus.WAITING_APPROVAL) && (
-              <Button variant="ghost" size="sm" onClick={onStop} className="h-7 px-2" title="Stop session">
+              <Button variant="ghost" size="sm" onClick={onStop} className="h-8 w-8 rounded-full p-0" title="Stop session">
                 <StopCircle className="h-3.5 w-3.5" />
               </Button>
             )}
@@ -1314,7 +1319,7 @@ export function AgentTranscriptPanel({
                 }
               }}
               placeholder="Search transcript..."
-              className="h-8 w-full rounded-md border border-input bg-transparent pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/30"
+              className="glass-control h-8 w-full pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
             />
           </div>
           <span className="w-16 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
@@ -1372,7 +1377,7 @@ export function AgentTranscriptPanel({
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className="h-full overflow-y-auto p-4 text-sm"
+          className={cn('h-full overflow-y-auto p-4 pb-28 text-sm', !isSearchOpen && !showErrorBanner && !systemStatus && !latestTodos && 'pt-16')}
         >
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground text-xs">
@@ -1451,7 +1456,7 @@ export function AgentTranscriptPanel({
       </div>
 
       {/* Input + Footer */}
-      <div className="border-t border-border shrink-0">
+      <div className={cn('glass-bar relative z-10 border-t shrink-0', onSend && '-mt-20')}>
         {onSend && (
           <div
             data-testid="transcript-composer"
@@ -1496,30 +1501,31 @@ export function AgentTranscriptPanel({
                 rows={1}
                 disabled={isStarting}
                 placeholder={isStarting ? 'Starting agent…' : 'Write a message...'}
-                className="flex-1 bg-input border border-border rounded-lg px-3 py-1.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[32px] disabled:opacity-60"
+                className="glass-control flex-1 px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/30 resize-none overflow-hidden max-h-32 min-h-[40px] disabled:opacity-60"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
                     handleSend()
                   }
                 }}
-                onInput={autoResize}
+                onInput={(event) => { autoResize(); setInputHasValue(!!event.currentTarget.value.trim()) }}
+                onChange={(event) => setInputHasValue(!!event.currentTarget.value.trim())}
               />
-              <VoiceMicButton mode="dictation" onSubmit={handleSend} />
+              <VoiceMicButton mode="dictation" onSubmit={handleSend} className="!h-10 !w-10 !rounded-full" />
               {onPickAttachments && (
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
                 onClick={handleAddAttachments}
-                className="h-[32px] w-[32px] shrink-0 rounded-lg"
+                className="glass-action !h-10 !w-10"
                 title="Attach files"
                 aria-label="Attach files"
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
             )}
-              <Button variant="default" size="icon" onClick={handleSend} className="h-[32px] w-[32px] shrink-0 rounded-lg" aria-label="Send message">
+              <Button variant="default" size="icon" onClick={handleSend} disabled={isStarting || !inputHasValue} className="glass-action glass-send !h-10 !w-10" aria-label="Send message">
                 <Send className="h-4 w-4" />
               </Button>
             </div>
