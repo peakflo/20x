@@ -40,9 +40,9 @@ describe('AgentTranscriptPanel drag and drop attachments', () => {
       />
     )
 
-    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 80, paddingEnd: 76, scrollPaddingEnd: 76 })
+    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 80, paddingEnd: 64, scrollPaddingEnd: 64 })
     fireEvent.click(screen.getByRole('button', { name: 'Search transcript' }))
-    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 144, paddingEnd: 76 })
+    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 144, paddingEnd: 64 })
   })
 
   it('uses the task header without duplicating the transcript title, and opens search from it', async () => {
@@ -52,13 +52,13 @@ describe('AgentTranscriptPanel drag and drop attachments', () => {
 
     expect(screen.queryByText('Agent transcript')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Search transcript' })).not.toBeInTheDocument()
-    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 16, paddingEnd: 76 })
+    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 16, paddingEnd: 64 })
 
     rerender(
       <AgentTranscriptPanel embeddedHeader searchRequest={1} messages={[]} status={SessionStatus.IDLE} onStop={() => undefined} onSend={() => undefined} />
     )
     expect(await screen.findByPlaceholderText('Search transcript...')).toBeInTheDocument()
-    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 80, paddingEnd: 76 })
+    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 80, paddingEnd: 64 })
   })
 
   it('adds dropped files as pending attachments and sends them with the message', async () => {

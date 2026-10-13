@@ -1061,8 +1061,8 @@ export function AgentTranscriptPanel({
     paddingStart: !showErrorBanner && !systemStatus && !latestTodos
       ? embeddedHeader ? (isSearchOpen ? 80 : 16) : (isSearchOpen ? 144 : 80)
       : 16,
-    paddingEnd: onSend ? 76 : 16,
-    scrollPaddingEnd: onSend ? 76 : 16,
+    paddingEnd: onSend ? 64 : 16,
+    scrollPaddingEnd: onSend ? 64 : 16,
     // Transcript rows can change indexes when adjacent tool/reasoning parts are
     // grouped. Keep measured heights attached to the message/group itself,
     // rather than allowing an index to inherit the previous row's height.
@@ -1296,7 +1296,7 @@ export function AgentTranscriptPanel({
                   return nextOpen
                 })
               }}
-              className="glass-action !h-[44px] !w-[44px] p-0"
+              className="glass-action !h-[24px] !w-[24px] p-0"
               title="Search transcript"
               aria-label="Search transcript"
             >
@@ -1307,7 +1307,7 @@ export function AgentTranscriptPanel({
                 variant="ghost"
                 size="sm"
                 onClick={onRestart}
-                className="glass-action !h-[44px] !w-[44px] p-0"
+                className="glass-action !h-[24px] !w-[24px] p-0"
                 title="Restart session"
                 aria-label="Restart session"
               >
@@ -1315,7 +1315,7 @@ export function AgentTranscriptPanel({
               </Button>
             )}
             {(status === SessionStatus.WORKING || status === SessionStatus.WAITING_APPROVAL) && (
-              <Button variant="ghost" size="sm" onClick={onStop} className="glass-action !h-[44px] !w-[44px] p-0" title="Stop session" aria-label="Stop session">
+              <Button variant="ghost" size="sm" onClick={onStop} className="glass-action !h-[24px] !w-[24px] p-0" title="Stop session" aria-label="Stop session">
                 <StopCircle className="h-3.5 w-3.5" />
               </Button>
             )}
@@ -1341,7 +1341,7 @@ export function AgentTranscriptPanel({
                 }
               }}
               placeholder="Search transcript..."
-              className={cn('glass-control w-full pl-10 pr-16 text-sm text-foreground placeholder:text-[var(--glass-placeholder)] focus:outline-none focus:ring-2 focus:ring-ring/30', embeddedHeader ? 'h-[40px]' : 'h-[48px]')}
+              className="glass-control h-[36px] w-full pl-10 pr-16 text-sm text-foreground placeholder:text-[var(--glass-placeholder)] focus:outline-none focus:ring-2 focus:ring-ring/30"
             />
             <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[11px] tabular-nums text-muted-foreground">
               {normalizedSearchQuery ? `${searchResultIndexes.length ? activeSearchResult + 1 : 0}/${searchResultIndexes.length}` : '0/0'}
@@ -1353,7 +1353,7 @@ export function AgentTranscriptPanel({
             size="icon"
             onClick={() => goToSearchResult(-1)}
             disabled={searchResultIndexes.length === 0}
-            className={cn('glass-action', embeddedHeader ? '!h-[36px] !w-[36px]' : '!h-[40px] !w-[40px]')}
+            className="glass-action !h-[28px] !w-[28px]"
             title="Previous result"
             aria-label="Previous result"
           >
@@ -1365,13 +1365,13 @@ export function AgentTranscriptPanel({
             size="icon"
             onClick={() => goToSearchResult(1)}
             disabled={searchResultIndexes.length === 0}
-            className={cn('glass-action', embeddedHeader ? '!h-[36px] !w-[36px]' : '!h-[40px] !w-[40px]')}
+            className="glass-action !h-[28px] !w-[28px]"
             title="Next result"
             aria-label="Next result"
           >
             <ArrowDown className="h-3.5 w-3.5" />
           </Button>
-          <Button type="button" variant="ghost" size="icon" onClick={closeSearch} className={cn('glass-action', embeddedHeader ? '!h-[36px] !w-[36px]' : '!h-[40px] !w-[40px]')} title="Close search" aria-label="Close search">
+          <Button type="button" variant="ghost" size="icon" onClick={closeSearch} className="glass-action !h-[28px] !w-[28px]" title="Close search" aria-label="Close search">
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -1475,7 +1475,7 @@ export function AgentTranscriptPanel({
         {showScrollToBottom && messages.length > 0 && (
           <button
             onClick={scrollToBottom}
-            className={cn('glass-action absolute bottom-28 right-4 z-20 text-muted-foreground hover:text-foreground', embeddedHeader ? '!h-[36px] !w-[36px]' : '!h-[40px] !w-[40px]')}
+            className="glass-action absolute bottom-24 right-4 z-20 !h-[28px] !w-[28px] text-muted-foreground hover:text-foreground"
             title="Scroll to bottom"
             aria-label="Scroll to bottom"
           >
@@ -1485,7 +1485,7 @@ export function AgentTranscriptPanel({
       </div>
 
       {/* Input + Footer */}
-      <div className={cn('glass-bar glass-composer-rail pointer-events-none relative z-10 shrink-0', onSend && '-mt-[76px]')}>
+      <div className={cn('glass-bar glass-composer-rail pointer-events-none relative z-10 shrink-0', onSend && '-mt-[64px]')}>
         {onSend && (
           <div
             data-testid="transcript-composer"
@@ -1526,7 +1526,7 @@ export function AgentTranscriptPanel({
             )}
             <div className="flex items-end gap-2">
               {onPickAttachments && (
-                <Button type="button" variant="ghost" size="icon" onClick={handleAddAttachments} className={cn('glass-action', embeddedHeader ? '!h-[40px] !w-[40px]' : '!h-[44px] !w-[44px]')} title="Attach files" aria-label="Attach files">
+                <Button type="button" variant="ghost" size="icon" onClick={handleAddAttachments} className="glass-action !h-[32px] !w-[32px]" title="Attach files" aria-label="Attach files">
                   <Paperclip className="h-4 w-4" />
                 </Button>
               )}
@@ -1536,7 +1536,7 @@ export function AgentTranscriptPanel({
                   rows={1}
                   disabled={isStarting}
                   placeholder={isStarting ? 'Starting agent…' : 'Write a message...'}
-                  className={cn('w-full bg-transparent px-5 leading-[22px] text-sm text-foreground placeholder:text-[var(--glass-placeholder)] focus:outline-none resize-none overflow-hidden max-h-32 disabled:opacity-60', embeddedHeader ? 'min-h-[40px] py-[9px]' : 'min-h-[44px] py-[11px]')}
+                  className="w-full min-h-[32px] bg-transparent px-5 py-[5px] leading-[22px] text-sm text-foreground placeholder:text-[var(--glass-placeholder)] focus:outline-none resize-none overflow-hidden max-h-32 disabled:opacity-60"
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()
@@ -1547,8 +1547,8 @@ export function AgentTranscriptPanel({
                   onChange={(event) => setInputHasValue(!!event.currentTarget.value.trim())}
                 />
               </div>
-              <VoiceMicButton mode="dictation" onSubmit={handleSend} className={cn('glass-action !rounded-full', embeddedHeader ? '!h-[40px] !w-[40px]' : '!h-[44px] !w-[44px]')} />
-              <Button variant="default" size="icon" onClick={handleSend} disabled={isStarting || !inputHasValue} className={cn('glass-action glass-send disabled:!bg-[var(--glass-control)] disabled:!text-muted-foreground', embeddedHeader ? '!h-[40px] !w-[40px]' : '!h-[44px] !w-[44px]')} aria-label="Send message">
+              <VoiceMicButton mode="dictation" onSubmit={handleSend} className="glass-action !h-[32px] !w-[32px] !rounded-full" />
+              <Button variant="default" size="icon" onClick={handleSend} disabled={isStarting || !inputHasValue} className="glass-action glass-send !h-[32px] !w-[32px] disabled:!bg-[var(--glass-control)] disabled:!text-muted-foreground" aria-label="Send message">
                 <Send className="h-4 w-4" />
               </Button>
             </div>

@@ -156,7 +156,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
         {/* Separator */}
         {/* Attach file */}
         <button
-          className="glass-action !h-10 !w-10 text-foreground/60 hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+          className="glass-action !h-8 !w-8 text-foreground/60 hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
           title="Attach file"
           aria-label="Attach file"
         >
@@ -164,7 +164,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
         </button>
 
         {/* Dictate. With "Keep talking" on, each pause sends to Mastermind. */}
-        <VoiceMicButton mode="dictation" onSubmit={submitField} className="!h-10 !w-10 !rounded-full" />
+        <VoiceMicButton mode="dictation" onSubmit={submitField} className="!h-8 !w-8 !rounded-full" />
 
         {/* Spacer */}
         <div className="flex-1" />
@@ -182,7 +182,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
         <button
           onClick={handleSend}
           disabled={!text.trim()}
-          className={`glass-action !h-10 !w-10 transition-all duration-150 cursor-pointer ${
+          className={`glass-action !h-8 !w-8 transition-all duration-150 cursor-pointer ${
             text.trim()
               ? 'glass-send shadow-sm'
               : 'bg-accent text-muted-foreground cursor-not-allowed'

@@ -194,7 +194,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
             </div>
             <div className="flex items-center gap-1">
               {sources.length > 0 && (
-                <Button size="icon" variant="ghost" onClick={handleSyncAll} disabled={isSyncingAll || syncingIds.size > 0} title="Sync all sources" className="glass-action !h-[40px] !w-[40px]">
+                <Button size="icon" variant="ghost" onClick={handleSyncAll} disabled={isSyncingAll || syncingIds.size > 0} title="Sync all sources" className="glass-action !h-[32px] !w-[32px]">
                   {isSyncingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                 </Button>
               )}
@@ -203,11 +203,11 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 variant={isAutoStartEnabled ? 'default' : 'ghost'}
                 onClick={toggleAutoStart}
                 title={isAutoStartEnabled ? 'Disable auto-run' : 'Enable auto-run'}
-                className={cn('glass-action !h-[40px] !w-[40px]', isAutoStartEnabled && 'text-[#061b2c]')}
+                className={cn('glass-action !h-[32px] !w-[32px]', isAutoStartEnabled && 'text-[#061b2c]')}
               >
                 {isAutoStartEnabled ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
               </Button>
-              <Button size="icon" variant="ghost" onClick={onCreateTask} className="glass-action !h-[40px] !w-[40px]" title="Create task" aria-label="Create task">
+              <Button size="icon" variant="ghost" onClick={onCreateTask} className="glass-action !h-[32px] !w-[32px]" title="Create task" aria-label="Create task">
                 <Plus className="h-4 w-4" />
               </Button>
             </div>

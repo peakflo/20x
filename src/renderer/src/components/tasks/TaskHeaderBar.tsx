@@ -311,12 +311,12 @@ export function TaskHeaderBar({
         </Button>
       )}
       {onSearchTranscript && (
-        <Button variant="ghost" size="icon" onClick={onSearchTranscript} className="glass-action !h-[32px] !w-[32px]" title="Search transcript" aria-label="Search transcript">
+        <Button variant="ghost" size="icon" onClick={onSearchTranscript} className="glass-action !h-[24px] !w-[24px]" title="Search transcript" aria-label="Search transcript">
           <Search className="h-4 w-4" />
         </Button>
       )}
       {onStopSession && (
-        <Button variant="ghost" size="icon" onClick={onStopSession} className="glass-action !h-[32px] !w-[32px]" title="Stop session" aria-label="Stop session">
+        <Button variant="ghost" size="icon" onClick={onStopSession} className="glass-action !h-[24px] !w-[24px]" title="Stop session" aria-label="Stop session">
           <StopCircle className="h-4 w-4" />
         </Button>
       )}
