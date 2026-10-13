@@ -156,8 +156,9 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
         {/* Separator */}
         {/* Attach file */}
         <button
-          className="glass-action text-foreground/60 hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
+          className="glass-action !h-10 !w-10 text-foreground/60 hover:text-foreground hover:bg-accent transition-colors cursor-pointer"
           title="Attach file"
+          aria-label="Attach file"
         >
           <Paperclip className="h-4 w-4" />
         </button>

@@ -125,6 +125,7 @@ function TaskWorkspaceComponent({
 
   const [changesSummary, setChangesSummary] = useState<{ files: number; additions: number; deletions: number } | null>(null)
   const [kickoffMessage, setKickoffMessage] = useState('')
+  const [transcriptSearchRequest, setTranscriptSearchRequest] = useState(0)
   const [showGhSetup, setShowGhSetup] = useState(false)
   const [showOrgPicker, setShowOrgPicker] = useState(false)
   const [showRepoSelector, setShowRepoSelector] = useState(false)
@@ -1097,6 +1098,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
       <AgentApprovalBanner request={session.pendingApproval} onApprove={handleApprove} onReject={handleReject} />
       <UsageLimitRecoveryBanner taskId={task.id} />
       <AgentTranscriptPanel
+        embeddedHeader
+        searchRequest={transcriptSearchRequest}
         messages={session.messages}
         status={session.status}
         systemStatus={session.systemStatus}
@@ -1131,6 +1134,9 @@ Update existing skills that were helpful or create new ones for patterns worth r
           action={primaryAction}
           onAction={handlePrimaryAction}
           onComplete={() => void handleCompleteTask()}
+          onSearchTranscript={hasSession && panelLayout !== 'task-only' ? () => setTranscriptSearchRequest((request) => request + 1) : undefined}
+          onRestartSession={hasSession && session.messages.length > 0 ? handleStartFreshSession : undefined}
+          onStopSession={hasSession && (session.status === SessionStatus.WORKING || session.status === SessionStatus.WAITING_APPROVAL) ? handleAbort : undefined}
           onStatusChange={handleStatusChange}
           onBack={onBack}
           onRename={handleRename}

@@ -1,7 +1,7 @@
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Bot, Check, ChevronDown, ExternalLink, FolderOpen, Layers, Menu, MoreHorizontal, Pencil, Play, RotateCcw, Sparkles, Terminal, Trash2 } from 'lucide-react'
+import { ArrowLeft, Bot, Check, ChevronDown, ExternalLink, FolderOpen, Layers, Menu, MoreHorizontal, Pencil, Play, RotateCcw, Search, Sparkles, StopCircle, Terminal, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { AnthropicLogo, OpenAILogo, OpenCodeLogo, PiLogo } from '@/components/icons/AgentLogos'
 import { AgentHoverCard } from '@/components/usage/AgentHoverCard'
@@ -52,6 +52,9 @@ interface TaskHeaderBarProps {
   action?: TaskPrimaryAction | null
   onAction?: () => void
   onComplete?: () => void
+  onSearchTranscript?: () => void
+  onRestartSession?: () => void
+  onStopSession?: () => void
   onStatusChange?: (status: TaskStatus) => void | Promise<void>
   onBack?: () => void
   onRename: (title: string) => void | Promise<void>
@@ -74,6 +77,9 @@ export function TaskHeaderBar({
   action,
   onAction,
   onComplete,
+  onSearchTranscript,
+  onRestartSession,
+  onStopSession,
   onStatusChange,
   onBack,
   onRename,
@@ -304,6 +310,16 @@ export function TaskHeaderBar({
           <span className="hidden sm:inline">Complete</span>
         </Button>
       )}
+      {onSearchTranscript && (
+        <Button variant="ghost" size="icon" onClick={onSearchTranscript} className="glass-action !h-[32px] !w-[32px]" title="Search transcript" aria-label="Search transcript">
+          <Search className="h-4 w-4" />
+        </Button>
+      )}
+      {onStopSession && (
+        <Button variant="ghost" size="icon" onClick={onStopSession} className="glass-action !h-[32px] !w-[32px]" title="Stop session" aria-label="Stop session">
+          <StopCircle className="h-4 w-4" />
+        </Button>
+      )}
       {showDetailsToggle && (
         <Button variant={detailsOpen ? 'secondary' : 'ghost'} size="sm" onClick={onToggleDetails} className="h-8 gap-1.5">
           <Menu className="h-3.5 w-3.5" />
@@ -317,6 +333,7 @@ export function TaskHeaderBar({
         {menuOpen && (
           <div className="absolute right-0 top-9 z-50 w-44 overflow-hidden rounded-lg glass-popover border p-1 shadow-xl">
             {[
+              { label: 'Restart session', icon: RotateCcw, action: onRestartSession },
               { label: 'Send to Workflo', icon: ExternalLink, action: enterpriseConnected && !task.source_id ? () => uploadToWorkflo(false) : undefined },
               { label: 'Run agent in Workflo', icon: HarnessIcon, action: enterpriseConnected && !task.source_id && task.agent_id ? () => uploadToWorkflo(true) : undefined },
               { label: 'Edit task', icon: Pencil, action: onEdit },

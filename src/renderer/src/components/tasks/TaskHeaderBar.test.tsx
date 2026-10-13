@@ -67,6 +67,22 @@ function makeAgent(codingAgent?: CodingAgentType): Agent {
 afterEach(cleanup)
 
 describe('TaskHeaderBar', () => {
+  it('keeps transcript search and stop in the single task header', () => {
+    const onSearchTranscript = vi.fn()
+    const onStopSession = vi.fn()
+    const onRestartSession = vi.fn()
+    render(<TaskHeaderBar {...requiredProps} task={makeTask()} onSearchTranscript={onSearchTranscript} onStopSession={onStopSession} onRestartSession={onRestartSession} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search transcript' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop session' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Task actions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Restart session' }))
+
+    expect(onSearchTranscript).toHaveBeenCalledOnce()
+    expect(onStopSession).toHaveBeenCalledOnce()
+    expect(onRestartSession).toHaveBeenCalledOnce()
+  })
+
   it('keeps Complete visible alongside the current agent action', () => {
     const onComplete = vi.fn()
     render(
