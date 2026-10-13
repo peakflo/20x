@@ -182,7 +182,6 @@
   -webkit-backdrop-filter: blur(var(--glass-composer-blur)) saturate(var(--glass-saturation));
 }
 .glass-composer:focus-within::before { border-color: color-mix(in srgb, var(--ring) 28%, var(--glass-outline)); }
-.glass-composer-rail::before { content: ""; position: absolute; inset: -64px 0 0; z-index: -1; pointer-events: none; background: linear-gradient(to bottom, transparent 0%, color-mix(in srgb, var(--background) 88%, transparent) 45%, var(--background) 72%); backdrop-filter: blur(var(--glass-composer-blur)); -webkit-backdrop-filter: blur(var(--glass-composer-blur)); mask-image: linear-gradient(to bottom, transparent 0%, black 45%); -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 45%); }
 .glass-action { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 48px; height: 48px; border: 1px solid var(--glass-outline); border-radius: 9999px; background: var(--glass-control); box-shadow: var(--glass-rim), var(--glass-shadow-control); transition: transform 150ms, background-color 150ms, box-shadow 150ms; }
 .glass-action:hover:not(:disabled) { background: color-mix(in srgb, var(--glass-control) 94%, white); box-shadow: var(--glass-rim), var(--glass-shadow-control), 0 0 0 1px var(--glass-edge); }
 .glass-action:active:not(:disabled) { transform: scale(.96); }
@@ -199,12 +198,10 @@
 .glass-solid-mode .glass-panel, .glass-solid-mode .glass-popover, .glass-solid-mode .glass-control, .glass-solid-mode .glass-action, .glass-solid-mode .glass-composer::before { background: var(--glass-solid); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .glass-solid-mode .scroll-edge-overlay { background: var(--glass-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .glass-solid-mode .glass-send:not(:disabled) { background: var(--primary); }
-.glass-solid-mode .glass-composer-rail::before { background: var(--background); backdrop-filter: none; -webkit-backdrop-filter: none; }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass-panel, .glass-popover, .glass-control, .glass-action { background-color: var(--glass-solid); box-shadow: none; }
   .glass-composer::before { background: var(--glass-solid); box-shadow: none; }
   .scroll-edge-overlay { background: var(--glass-solid); }
-  .glass-composer-rail::before { background: var(--background); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .glass-filter-active { background: color-mix(in srgb, var(--primary) 18%, var(--glass-solid)); }
 }
 @media (prefers-reduced-transparency: reduce) {
@@ -213,7 +210,6 @@
   .scroll-edge-overlay { background: var(--glass-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .glass-send { background-color: var(--primary); }
   .glass-send:disabled { background: var(--glass-solid); }
-  .glass-composer-rail::before { background: var(--background); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .glass-filter-active { background: color-mix(in srgb, var(--primary) 18%, var(--glass-solid)); }
 }
 @media (prefers-reduced-motion: reduce) {
