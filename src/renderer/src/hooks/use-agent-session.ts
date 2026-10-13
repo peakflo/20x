@@ -80,7 +80,18 @@ export function useAgentSession(taskId: string | undefined) {
     async (agentId: string, tId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => {
       // Pre-register so events arriving during start() are captured via taskId fallback
       initSession(tId, '', agentId)
-      const { sessionId } = await agentSessionApi.start(agentId, tId, workspaceDir, skipInitialPrompt)
+      let sessionId: string
+      try {
+        ;({ sessionId } = await agentSessionApi.start(agentId, tId, workspaceDir, skipInitialPrompt))
+      } catch (error) {
+        useAgentStore.getState().removeSession(tId)
+        if (String(error).includes('CURSOR_CLI_MISSING')) {
+          window.dispatchEvent(new CustomEvent('cursor-cli-missing', {
+            detail: { retry: () => start(agentId, tId, workspaceDir, skipInitialPrompt) }
+          }))
+        }
+        throw error
+      }
       // Update with the real sessionId (preserves any messages that arrived early)
       initSession(tId, sessionId, agentId)
       captureAnalyticsEvent('agent_session_started', {

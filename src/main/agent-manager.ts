@@ -4087,7 +4087,14 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         updates: { status: TaskStatus.Triaging }
       })
 
-      const sessionId = await this.startSession(defaultAgentId, taskId)
+      let sessionId: string
+      try {
+        sessionId = await this.startSession(defaultAgentId, taskId)
+      } catch (error) {
+        this.updateTaskFromLocalAgent(taskId, { status: TaskStatus.NotStarted })
+        this.sendToRenderer('task:updated', { taskId, updates: { status: TaskStatus.NotStarted } })
+        throw error
+      }
       return {
         action: 'triage_started',
         sessionId,

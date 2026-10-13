@@ -8,6 +8,26 @@ import { unregisterSecretSession } from './secret-broker'
 import { sendMobilePush } from './mobile-push'
 import { MAX_OVERLOAD_RETRY_ATTEMPTS, OVERLOAD_RETRY_BASE_DELAY_MS } from './overload-retry'
 
+describe('startTask startup failure', () => {
+  it('restores triage task status when the CLI cannot start', async () => {
+    const task = { id: 'task-1', status: TaskStatus.NotStarted, agent_id: null, parent_task_id: null }
+    const manager = Object.create(AgentManager.prototype) as any
+    manager.assertLocalHelpAllowed = vi.fn()
+    manager.db = { getTask: vi.fn(() => task), getSubtasks: vi.fn(() => []) }
+    manager.resolveDefaultAgentId = vi.fn(() => 'cursor-agent-id')
+    manager.findSessionByTaskId = vi.fn(() => null)
+    manager.updateTaskFromLocalAgent = vi.fn()
+    manager.sendToRenderer = vi.fn()
+    manager.startSession = vi.fn().mockRejectedValue(new Error('CURSOR_CLI_MISSING: cursor-agent'))
+
+    await expect(manager.startTask('task-1', { preferSubtasks: false })).rejects.toThrow('CURSOR_CLI_MISSING')
+    expect(manager.updateTaskFromLocalAgent).toHaveBeenLastCalledWith('task-1', { status: TaskStatus.NotStarted })
+    expect(manager.sendToRenderer).toHaveBeenLastCalledWith('task:updated', {
+      taskId: 'task-1', updates: { status: TaskStatus.NotStarted }
+    })
+  })
+})
+
 vi.mock('./mobile-push', () => ({ sendMobilePush: vi.fn(async () => ({ sent: 1, failed: 0 })) }))
 
 /** Path join that matches production `path.join` on this platform. */

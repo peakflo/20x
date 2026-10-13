@@ -29,7 +29,8 @@
 import { spawn, ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
 import { realpath as realpathAsync } from 'fs/promises'
-import { isAbsolute, relative, resolve as resolvePath } from 'path'
+import { accessSync, constants, existsSync } from 'fs'
+import { delimiter, isAbsolute, relative, resolve as resolvePath } from 'path'
 import { guardChildStreams } from '../child-stream-guards'
 import type {
   CodingAgentAdapter,
@@ -279,6 +280,12 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       this.processConfig = await this.resolveProcessConfig()
       this.processConfigResolved = true
     }
+    if (this.processConfig.command === 'cursor-agent') {
+      const env = { ...process.env, ...this.processConfig.env }
+      if (!this.commandExists('cursor-agent', process.cwd(), env)) {
+        throw new Error('CURSOR_CLI_MISSING: Cursor CLI (cursor-agent) is not installed or is not in 20x\'s PATH. Install it from https://cursor.com/docs/cli/installation, then retry.')
+      }
+    }
     const health = await this.checkHealth()
     if (!health.available) {
       throw new Error(health.reason || 'ACP agent not available')
@@ -295,8 +302,8 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     console.log(`[AcpAgentAdapter] Creating session ${sessionId}`)
 
     const env = this.buildEnv(config)
-    const acpProcess = this.spawnAgentProcess(config, env)
-    const session = this.initSessionState(sessionId, acpProcess, config, true)
+    const session = this.spawnAgentProcess(sessionId, config, env, true)
+    const acpProcess = session.process
     this.sessions.set(sessionId, session)
     this.wireProcess(acpProcess, session)
 
@@ -339,8 +346,8 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     console.log(`[AcpAgentAdapter] Resuming session ${sessionId}`)
 
     const env = this.buildEnv(config)
-    const acpProcess = this.spawnAgentProcess(config, env)
-    const session = this.initSessionState(sessionId, acpProcess, config, false)
+    const session = this.spawnAgentProcess(sessionId, config, env, false)
+    const acpProcess = session.process
     session.acpSessionId = sessionId
     this.sessions.set(sessionId, session)
     this.wireProcess(acpProcess, session)
@@ -392,7 +399,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     return env
   }
 
-  private spawnAgentProcess(config: SessionConfig, env: Record<string, string | undefined>): ChildProcess {
+  private spawnAgentProcess(sessionId: string, config: SessionConfig, env: Record<string, string | undefined>, createdInApp: boolean): AcpSession {
     const needsShell = process.platform === 'win32' && /\.(cmd|bat)$/i.test(this.processConfig.command)
     const acpProcess = spawn(this.processConfig.command, this.processConfig.args, {
       cwd: config.workspaceDir,
@@ -400,8 +407,42 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       stdio: ['pipe', 'pipe', 'pipe'],
       ...(needsShell ? { shell: true } : {})
     })
+    const session = this.initSessionState(sessionId, acpProcess, config, createdInApp)
+    acpProcess.on('error', (error: NodeJS.ErrnoException) => {
+      const message = this.describeSpawnError(error, config.workspaceDir, env)
+      session.status = SessionStatusType.ERROR
+      session.lastError = message
+      for (const pending of session.pendingRequests.values()) pending.reject(new Error(message))
+      session.pendingRequests.clear()
+      if (this.sessions.get(session.sessionId) === session) this.sessions.delete(session.sessionId)
+      if (session.acpSessionId && this.sessions.get(session.acpSessionId) === session) this.sessions.delete(session.acpSessionId)
+      console.error(`[AcpAgentAdapter] ${message}`)
+    })
     guardChildStreams(acpProcess, '[AcpAgentAdapter]')
-    return acpProcess
+    return session
+  }
+
+  private describeSpawnError(error: NodeJS.ErrnoException, cwd: string, env: Record<string, string | undefined>): string {
+    const command = this.processConfig.command
+    if (error.code !== 'ENOENT') return `Could not start ${command}: ${error.message}`
+    if (!existsSync(cwd)) return `Could not start ${command}: working directory does not exist: ${cwd}`
+    if (!this.commandExists(command, cwd, env)) {
+      if (command === 'cursor-agent') {
+        return 'CURSOR_CLI_MISSING: Cursor CLI (cursor-agent) is not installed or is not in 20x\'s PATH. Install it from https://cursor.com/docs/cli/installation, then retry.'
+      }
+      return `Could not start ${command}: command was not found in PATH.`
+    }
+    return `Could not start ${command} in ${cwd}: ${error.message}`
+  }
+
+  private commandExists(command: string, cwd: string, env: Record<string, string | undefined>): boolean {
+    const candidates = command.includes('/') || command.includes('\\')
+      ? [resolvePath(cwd, command)]
+      : (env.PATH || '').split(delimiter).map((dir) => resolvePath(dir || cwd, command))
+    const extensions = process.platform === 'win32' ? (env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';') : ['']
+    return candidates.some((candidate) => extensions.some((extension) => {
+      try { accessSync(candidate + extension, constants.X_OK); return true } catch { return false }
+    }))
   }
 
   private initSessionState(
@@ -720,6 +761,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       env: { ...process.env, ...this.processConfig.env },
       stdio: ['pipe', 'pipe', 'pipe']
     })
+    probeProcess.on('error', () => { /* handled by the health result listener below */ })
     guardChildStreams(probeProcess, '[AcpAgentAdapter/health]')
 
     return new Promise((resolve) => {
@@ -1302,8 +1344,13 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         const cwd = typeof params?.cwd === 'string' ? params.cwd : session.config.workspaceDir
         const terminalId = randomUUID()
         const child = spawn(command, args, { cwd, env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] })
-        guardChildStreams(child, '[AcpAgentAdapter/terminal]')
         const entry: AcpTerminalProcess = { process: child, stdout: '', stderr: '', exitCode: null, exitSignal: null, exited: false }
+        child.on('error', (error) => {
+          entry.exited = true
+          entry.exitCode = 1
+          entry.stderr += `Could not start ${command}: ${error.message}`
+        })
+        guardChildStreams(child, '[AcpAgentAdapter/terminal]')
         child.stdout?.on('data', (chunk: Buffer) => { entry.stdout += chunk.toString() })
         child.stderr?.on('data', (chunk: Buffer) => { entry.stderr += chunk.toString() })
         child.on('exit', (code, signal) => { entry.exited = true; entry.exitCode = code; entry.exitSignal = signal })
@@ -1325,9 +1372,16 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         if (entry.exited) {
           this.sendRpcResponse(session, request.id, { result: { exitCode: entry.exitCode, signal: entry.exitSignal } })
         } else {
-          entry.process.once('exit', (code, signal) => {
+          const onError = () => {
+            entry.process.off('exit', onExit)
+            this.sendRpcResponse(session, request.id, { result: { exitCode: entry.exitCode, signal: null } })
+          }
+          const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+            entry.process.off('error', onError)
             this.sendRpcResponse(session, request.id, { result: { exitCode: code, signal } })
-          })
+          }
+          entry.process.once('error', onError)
+          entry.process.once('exit', onExit)
         }
         return
       }
