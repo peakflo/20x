@@ -70,7 +70,7 @@ export function AppLayout() {
   const sidebarView = useUIStore((s) => s.sidebarView)
   const setSidebarView = useUIStore((s) => s.setSidebarView)
   const activeModal = useUIStore((s) => s.activeModal)
-  const canvasDesktopBackdrop = useThemeStore((s) => s.canvasDesktopBackdrop)
+  const desktopBackdrop = useThemeStore((s) => s.desktopBackdrop)
   const glassOpacity = useThemeStore((s) => s.glassOpacity)
   const editingTaskId = useUIStore((s) => s.editingTaskId)
   const deletingTaskId = useUIStore((s) => s.deletingTaskId)
@@ -713,27 +713,28 @@ export function AppLayout() {
     return () => window.removeEventListener('keydown', listener)
   }, [])
 
+  const backdropEnabled = desktopBackdrop && glassOpacity < 100
   useEffect(() => {
-    const setBackdrop = window.electronAPI?.app?.setCanvasBackdrop
+    const setBackdrop = window.electronAPI?.app?.setDesktopBackdrop
     if (!isMac || !setBackdrop) return
     const reducedTransparency = window.matchMedia('(prefers-reduced-transparency: reduce)')
     let cancelled = false
     const update = (): void => {
-      const enabled = canvasDesktopBackdrop && sidebarView === 'canvas' && activeModal !== 'settings' && glassOpacity < 100 && !reducedTransparency.matches
-      document.documentElement.classList.remove('native-canvas-backdrop')
+      const enabled = backdropEnabled && !reducedTransparency.matches
+      document.documentElement.classList.remove('native-desktop-backdrop')
       void setBackdrop(enabled).then((active) => {
-        if (!cancelled && enabled && active) document.documentElement.classList.add('native-canvas-backdrop')
-      }).catch(() => { /* Keep the solid canvas if native vibrancy is unavailable. */ })
+        if (!cancelled && enabled && active) document.documentElement.classList.add('native-desktop-backdrop')
+      }).catch(() => { /* Keep solid page backgrounds if native vibrancy is unavailable. */ })
     }
     update()
     reducedTransparency.addEventListener('change', update)
     return () => {
       cancelled = true
       reducedTransparency.removeEventListener('change', update)
-      document.documentElement.classList.remove('native-canvas-backdrop')
+      document.documentElement.classList.remove('native-desktop-backdrop')
       void setBackdrop(false)
     }
-  }, [activeModal, canvasDesktopBackdrop, glassOpacity, sidebarView])
+  }, [backdropEnabled])
   return (
     <>
       {completionDialog}

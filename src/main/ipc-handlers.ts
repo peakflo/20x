@@ -1170,7 +1170,7 @@ export function registerIpcHandlers(
     return app.getVersion()
   })
 
-  ipcMain.handle('app:setCanvasBackdrop', (event, enabled: boolean) => {
+  ipcMain.handle('app:setDesktopBackdrop', (event, enabled: boolean) => {
     if (process.platform !== 'darwin') return false
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) return false

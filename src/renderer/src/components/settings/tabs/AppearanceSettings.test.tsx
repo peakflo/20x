@@ -14,18 +14,18 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   useThemeStore.getState().setGlassOpacity(55)
-  useThemeStore.getState().setCanvasDesktopBackdrop(false)
+  useThemeStore.getState().setDesktopBackdrop(false)
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
-it('offers and persists the optional macOS Canvas backdrop', () => {
+it('offers and persists the optional macOS desktop backdrop across pages', () => {
   vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
   render(<AppearanceSettings />)
-  fireEvent.click(screen.getByLabelText(/Blur desktop behind Canvas/))
+  fireEvent.click(screen.getByLabelText(/Blur desktop behind app/))
 
-  expect(localStorage.getItem('ui-canvas-desktop-backdrop')).toBe('true')
-  expect(screen.getByLabelText(/Blur desktop behind Canvas/)).toBeChecked()
+  expect(localStorage.getItem('ui-desktop-backdrop')).toBe('true')
+  expect(screen.getByLabelText(/Blur desktop behind app/)).toBeChecked()
 })
 
 it('persists the opacity chosen in Appearance settings', () => {

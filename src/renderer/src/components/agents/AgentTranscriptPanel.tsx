@@ -1277,7 +1277,7 @@ export function AgentTranscriptPanel({
   }
 
   return (
-    <div ref={panelRef} tabIndex={-1} className={cn('flex flex-col min-h-0 bg-background border-l border-border relative', className)}>
+    <div ref={panelRef} tabIndex={-1} className={cn('native-backdrop-page flex flex-col min-h-0 bg-background border-l border-border relative', className)}>
       {/* Debug copy toast — only visible briefly after copy */}
       {debugCopyToast && (
         <div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-card border border-border rounded-md px-3 py-1.5 text-xs text-foreground shadow-lg animate-in fade-in duration-150">

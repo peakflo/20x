@@ -318,8 +318,8 @@ function createWindow(): void {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    // The macOS canvas can expose the system material through transparent
-    // renderer pixels. Other views paint their usual opaque surfaces.
+    // Opt-in macOS pages expose the system material through transparent
+    // renderer pixels while reading surfaces remain opaque.
     backgroundColor: isMac ? '#00000000' : '#1E2127',
     // Electron 44 native window-state persistence: remember position, size and
     // display mode across launches instead of always reopening at 1400x900.

@@ -1094,7 +1094,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
   )
 
   const transcriptView = (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="native-backdrop-page flex h-full min-h-0 flex-col bg-background">
       <AgentApprovalBanner request={session.pendingApproval} onApprove={handleApprove} onReject={handleReject} />
       <UsageLimitRecoveryBanner taskId={task.id} floatingHeader={hasSession && panelLayout !== 'task-only'} />
       <AgentTranscriptPanel
@@ -1114,7 +1114,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
         agentId={task.agent_id ?? undefined}
         pendingApproval={session.pendingApproval ?? undefined}
         pendingSend={session.pendingSend}
-        className="h-full min-h-0 border-0 bg-background"
+        className="native-backdrop-page h-full min-h-0 border-0 bg-background"
       />
     </div>
   )
@@ -1126,7 +1126,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
 
   return (
     <>
-      <div className="relative flex h-full min-h-0 flex-col bg-background">
+      <div className="native-backdrop-page relative flex h-full min-h-0 flex-col bg-background">
         <TaskHeaderBar
           floating={hasSession && panelLayout !== 'task-only'}
           task={task}
@@ -1154,7 +1154,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
         />
         <div ref={workspaceBodyRef} className="relative flex min-h-0 flex-1 overflow-hidden">
           {panelLayout === 'task-only' || (!hasSession && panelLayout === 'both') ? (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+            <div className="native-backdrop-page flex min-h-0 min-w-0 flex-1 flex-col bg-background">
               <div className="min-h-0 flex-1">{detailsView}</div>
               {!hasSession && panelLayout === 'both' && !isTaskClosed(task.status) && (
                 <div className="sticky bottom-0 z-10 mx-auto w-full max-w-[780px] shrink-0 px-6 py-4">

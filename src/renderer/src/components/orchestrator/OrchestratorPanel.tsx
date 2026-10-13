@@ -179,7 +179,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     // Floats as a card, like the workspace and the sidebar: same radius,
     // hairline, fill and shadow. It was the one panel still sitting flush and
     // square against the work.
-    <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-card">
+    <div className="native-backdrop-panel flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-card">
       {/* Chat interface */}
       {selectedAgentId && (
         <AgentTranscriptPanel

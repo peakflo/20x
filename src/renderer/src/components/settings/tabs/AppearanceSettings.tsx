@@ -6,8 +6,8 @@ export function AppearanceSettings() {
   const setMode = useThemeStore((state) => state.setMode)
   const glassOpacity = useThemeStore((state) => state.glassOpacity)
   const setGlassOpacity = useThemeStore((state) => state.setGlassOpacity)
-  const canvasDesktopBackdrop = useThemeStore((state) => state.canvasDesktopBackdrop)
-  const setCanvasDesktopBackdrop = useThemeStore((state) => state.setCanvasDesktopBackdrop)
+  const desktopBackdrop = useThemeStore((state) => state.desktopBackdrop)
+  const setDesktopBackdrop = useThemeStore((state) => state.setDesktopBackdrop)
   const isMac = navigator.platform.toLowerCase().includes('mac')
 
   return (
@@ -50,13 +50,13 @@ export function AppearanceSettings() {
           <label className="flex items-start gap-3 rounded-xl border border-border p-3">
             <input
               type="checkbox"
-              checked={canvasDesktopBackdrop}
-              onChange={(event) => setCanvasDesktopBackdrop(event.target.checked)}
+              checked={desktopBackdrop}
+              onChange={(event) => setDesktopBackdrop(event.target.checked)}
               className="mt-0.5 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             />
             <span>
-              <span className="block text-sm font-medium text-foreground">Blur desktop behind Canvas</span>
-              <span className="block text-xs text-muted-foreground">Show the macOS backdrop through the Canvas background. Turns off at 100% glass opacity or when reduced transparency is enabled.</span>
+              <span className="block text-sm font-medium text-foreground">Blur desktop behind app</span>
+              <span className="block text-xs text-muted-foreground">Show the macOS backdrop through page backgrounds. Reading surfaces stay solid. Turns off at 100% glass opacity or when reduced transparency is enabled.</span>
             </span>
           </label>
         )}

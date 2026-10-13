@@ -121,6 +121,7 @@
   --overlay: rgba(18, 18, 18, 0.40);
 
   /* Infinite-canvas surfaces */
+  --desktop-backdrop-wash: rgba(244, 244, 245, .28);
   --canvas-bg: #ededee;
   --canvas-panel: #ffffff;
   --canvas-chrome: #f4f4f5;
@@ -196,6 +197,7 @@
   --overlay: rgba(0, 0, 0, 0.50);
 
   /* Infinite-canvas surfaces (true-gray, matching the dark theme) */
+  --desktop-backdrop-wash: rgba(15, 15, 15, .28);
   --canvas-bg: #0f0f0f;
   --canvas-panel: #1e1e1e;
   --canvas-chrome: #242424;
@@ -301,26 +303,40 @@ html, body, #root {
   flex-direction: column;
 }
 
-/* Native macOS material is visible only while the optional Canvas backdrop is
-   active. The system performs the behind-window blur; canvas panels stay solid. */
-html.native-canvas-backdrop,
-html.native-canvas-backdrop body,
-html.native-canvas-backdrop #root,
-html.native-canvas-backdrop .app-chrome-field,
-html.native-canvas-backdrop .canvas-workspace-surface {
+/* The system blurs the desktop once behind the window. Only page shells expose
+   it; message bodies, editors, forms, dialogs, and canvas panels keep their fill. */
+html.native-desktop-backdrop,
+html.native-desktop-backdrop body,
+html.native-desktop-backdrop #root,
+html.native-desktop-backdrop .app-chrome-field,
+html.native-desktop-backdrop .native-backdrop-page,
+html.native-desktop-backdrop [data-canvas-root] {
   background: transparent;
 }
 
-html.native-canvas-backdrop [data-canvas-root] {
-  background: rgba(244, 244, 245, .28);
+html.native-desktop-backdrop .canvas-workspace-surface,
+html.native-desktop-backdrop .native-backdrop-panel {
+  background: var(--desktop-backdrop-wash);
 }
 
-html.dark.native-canvas-backdrop [data-canvas-root] {
-  background: rgba(15, 15, 15, .28);
-}
+html.glass-solid-mode.native-desktop-backdrop,
+html.glass-solid-mode.native-desktop-backdrop body,
+html.glass-solid-mode.native-desktop-backdrop #root,
+html.glass-solid-mode.native-desktop-backdrop .app-chrome-field,
+html.glass-solid-mode.native-desktop-backdrop .native-backdrop-page { background: var(--background); }
+html.glass-solid-mode.native-desktop-backdrop .canvas-workspace-surface,
+html.glass-solid-mode.native-desktop-backdrop .native-backdrop-panel { background: var(--card); }
+html.glass-solid-mode.native-desktop-backdrop [data-canvas-root] { background: var(--canvas-bg); }
 
 @media (prefers-reduced-transparency: reduce) {
-  html.native-canvas-backdrop [data-canvas-root] { background: var(--canvas-bg); }
+  html.native-desktop-backdrop,
+  html.native-desktop-backdrop body,
+  html.native-desktop-backdrop #root,
+  html.native-desktop-backdrop .app-chrome-field,
+  html.native-desktop-backdrop .native-backdrop-page { background: var(--background); }
+  html.native-desktop-backdrop .canvas-workspace-surface,
+  html.native-desktop-backdrop .native-backdrop-panel { background: var(--card); }
+  html.native-desktop-backdrop [data-canvas-root] { background: var(--canvas-bg); }
 }
 
 /* Smooth theme transitions on surfaces (not on transforms/opacity) */
