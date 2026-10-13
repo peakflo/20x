@@ -258,6 +258,53 @@ function extractFailedTurnError(params: Record<string, unknown>): AppServerError
   return summarizeAppServerError({ error: turn.error })
 }
 
+/**
+ * The model occasionally free-texts a pseudo tool-call — e.g.
+ * `visualize{"path":"/abs/file.html","title":"..."}` — instead of calling a
+ * real tool. There is no native Codex "visualize" tool: Codex's own built-ins
+ * are `exec_command`/`apply_patch`/`multi_tool_use.parallel`/`view_image`, so
+ * nothing in the app-server protocol ever parses or executes this; it just
+ * streams through as ordinary assistant text and would otherwise show up in
+ * the transcript as raw JSON. Strip a leading `word{...balanced JSON...}`
+ * prefix once it actually parses as an object, so a slip doesn't leak as
+ * garbage. This is a display filter only — it never reads the JSON's `path`
+ * (which can point anywhere, including a different task's workspace) or
+ * otherwise acts on it.
+ */
+function stripStrayPseudoToolCall(text: string): string {
+  const match = /^\s*[A-Za-z_][\w.]*\{/.exec(text)
+  if (!match) return text
+  const braceStart = match[0].length - 1
+  let depth = 0
+  let inString = false
+  let escaped = false
+  let end = -1
+  for (let i = braceStart; i < text.length; i++) {
+    const ch = text[i]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') { inString = true; continue }
+    if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) { end = i; break }
+    }
+  }
+  if (end === -1) return text // incomplete JSON (still streaming) — leave as-is for now
+  const candidate = text.slice(braceStart, end + 1)
+  try {
+    const parsed: unknown = JSON.parse(candidate)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return text
+  } catch {
+    return text
+  }
+  return text.slice(end + 1).trim()
+}
+
 function extractRole(item: Record<string, unknown>): string {
   return (asString(item.role) || asString(item.author) || asString(item.sender) || '').toLowerCase()
 }
@@ -1750,7 +1797,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     if (role === 'assistant' || type.includes('agent') || type.includes('assistant') || (!type && text)) {
       const partId = `agent-${itemId}`
       if (seenPartIds.has(partId) && method !== 'item/completed') return []
-      const finalText = text || session.streamedTextByItemId.get(itemId) || ''
+      const finalText = stripStrayPseudoToolCall(text || session.streamedTextByItemId.get(itemId) || '')
       const alreadySeen = seenPartIds.has(partId)
       if (!alreadySeen && method === 'item/completed' && this.hasSeenAssistantTextForTurn(session, params, item, finalText)) {
         return []

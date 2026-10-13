@@ -194,6 +194,74 @@ describe('CodexAppServerAdapter', () => {
     expect(parts[0].tool).toBeUndefined()
   })
 
+  // There is no native Codex "visualize" tool (Codex's real built-ins are
+  // exec_command/apply_patch/multi_tool_use.parallel/view_image). The model
+  // occasionally free-texts a pseudo tool-call shaped like one anyway, which
+  // would otherwise leak into the transcript as raw JSON.
+  it('strips a stray visualize{...} pseudo tool-call from assistant text', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+
+    const parts = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'final-2',
+          type: 'message',
+          role: 'assistant',
+          content: 'visualize{"path":"/Users/x/workspaces/other-task/visualizations/report.html","title":"Daily HITL Performance"}'
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, new Set<string>(), new Set<string>(), new Map<string, string>(), session)
+
+    expect(parts).toHaveLength(1)
+    expect(parts[0].text).toBe('')
+  })
+
+  it('strips a leading stray pseudo tool-call but keeps real trailing prose', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+
+    const parts = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'final-3',
+          type: 'message',
+          role: 'assistant',
+          content: 'visualize{"path":"/abs/report.html","title":"Report"}\n\nHITL throughput held steady this week.'
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, new Set<string>(), new Set<string>(), new Map<string, string>(), session)
+
+    expect(parts[0].text).toBe('HITL throughput held steady this week.')
+  })
+
+  it('leaves ordinary assistant text alone, even if it mentions braces', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const session = createSession()
+
+    const parts = adapter.convertEventToMessageParts({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'final-4',
+          type: 'message',
+          role: 'assistant',
+          content: 'config{not valid json, just prose that happens to look tool-call-shaped'
+        },
+        threadId: 'thread-1',
+        turnId: 'turn-1'
+      }
+    }, new Set<string>(), new Set<string>(), new Map<string, string>(), session)
+
+    expect(parts[0].text).toBe('config{not valid json, just prose that happens to look tool-call-shaped')
+  })
+
   it('deduplicates identical assistant final messages from different item ids in the same turn', () => {
     const adapter = adapterPrivate(new CodexAppServerAdapter())
     const session = createSession()
