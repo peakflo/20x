@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useMemo, useCallback } from 'react'
+import React, { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, ListTodo, FileText, ArrowDown, ArrowUp, Paperclip, Search, X, Image as ImageIcon, GitPullRequest, MonitorPlay } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -249,6 +249,8 @@ interface AgentTranscriptPanelProps {
   headerTrailing?: React.ReactNode
   /** TaskWorkspace already has a task header; show only the search row here. */
   embeddedHeader?: boolean
+  /** Height of the task header floating over this transcript. */
+  externalHeaderHeight?: number
   /** Increment to open search from the containing task header. */
   searchRequest?: number
   messages: AgentMessage[]
@@ -779,10 +781,10 @@ function TodoSummary({ todos }: { todos: NonNullable<AgentMessage['tool']>['todo
   }
 
   return (
-    <div className="border-b border-border/50 shrink-0">
+    <div className="glass-todo-summary pointer-events-auto mx-3 mb-2 shrink-0 overflow-hidden rounded-xl">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-white/5 transition-colors"
+        className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-accent/30 transition-colors"
       >
         {expanded
           ? <ChevronDown className="h-3 w-3 text-muted-foreground shrink-0" />
@@ -839,6 +841,7 @@ export function AgentTranscriptPanel({
   headerLeading,
   headerTrailing,
   embeddedHeader = false,
+  externalHeaderHeight = 0,
   searchRequest = 0,
   messages,
   status,
@@ -858,6 +861,8 @@ export function AgentTranscriptPanel({
   // The user sent and the backend is still resuming — status still reads idle.
   const isStarting = !!pendingSend && status !== SessionStatus.WORKING && status !== SessionStatus.WAITING_APPROVAL
   const scrollRef = useRef<HTMLDivElement>(null)
+  const topOverlayRef = useRef<HTMLDivElement>(null)
+  const [topOverlayHeight, setTopOverlayHeight] = useState(0)
   const panelRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [inputHasValue, setInputHasValue] = useState(false)
@@ -1006,6 +1011,18 @@ export function AgentTranscriptPanel({
     return null
   }, [messages, status])
   const showErrorBanner = !!lastErrorMessage && lastErrorMessage.partType !== 'error'
+  const floatingTop = !showErrorBanner && !systemStatus
+
+  useLayoutEffect(() => {
+    const element = topOverlayRef.current
+    if (!element) { setTopOverlayHeight(0); return }
+    const measure = () => setTopOverlayHeight(Math.ceil(element.getBoundingClientRect().height))
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [embeddedHeader, externalHeaderHeight, isSearchOpen, latestTodos])
 
   const atBottomRef = useRef(true)
   const scrollRafRef = useRef<number | null>(null)
@@ -1063,8 +1080,8 @@ export function AgentTranscriptPanel({
   const virtualizer = useVirtualizer({
     count: transcriptItems.length,
     getScrollElement: () => scrollRef.current,
-    paddingStart: !showErrorBanner && !systemStatus && !latestTodos
-      ? embeddedHeader ? (isSearchOpen ? 80 : 16) : (isSearchOpen ? 96 : 48)
+    paddingStart: floatingTop
+      ? topOverlayHeight > 0 ? topOverlayHeight + 12 : externalHeaderHeight + (embeddedHeader ? (isSearchOpen ? 80 : 16) : (isSearchOpen ? 96 : 48))
       : 16,
     paddingEnd: onSend ? 64 : 16,
     scrollPaddingEnd: onSend ? 64 : 16,
@@ -1268,8 +1285,9 @@ export function AgentTranscriptPanel({
         </div>
       )}
       {/* TaskWorkspace supplies the shared task header; standalone panels keep their own. */}
-      {(!embeddedHeader || isSearchOpen) && (
-        <div className={cn('glass-bar pointer-events-none relative z-10 shrink-0', !showErrorBanner && !systemStatus && !latestTodos && (embeddedHeader ? '-mb-[64px]' : isSearchOpen ? '-mb-[84px]' : '-mb-[36px]'))}>
+      {(!embeddedHeader || externalHeaderHeight > 0 || isSearchOpen || latestTodos) && (
+        <div ref={topOverlayRef} className="glass-bar pointer-events-none relative z-10 shrink-0" style={floatingTop && topOverlayHeight > 0 ? { marginBottom: -topOverlayHeight } : undefined}>
+      {externalHeaderHeight > 0 && <div aria-hidden="true" style={{ height: externalHeaderHeight }} />}
       {!embeddedHeader && (
       <div
         className="windows-titlebar-safe pointer-events-auto flex h-[36px] items-center justify-between gap-3 px-3"
@@ -1383,6 +1401,7 @@ export function AgentTranscriptPanel({
           </Button>
         </div>
       )}
+      {floatingTop && latestTodos && <TodoSummary todos={latestTodos} />}
         </div>
       )}
 
@@ -1403,7 +1422,7 @@ export function AgentTranscriptPanel({
       )}
 
       {/* Pinned todo summary */}
-      {latestTodos && <TodoSummary todos={latestTodos} />}
+      {!floatingTop && latestTodos && <TodoSummary todos={latestTodos} />}
 
       {/* Messages */}
       <div className="relative flex-1 min-h-0">
@@ -1474,8 +1493,8 @@ export function AgentTranscriptPanel({
             </>
           )}
         </div>
-        {!showErrorBanner && !systemStatus && !latestTodos && (!embeddedHeader || isSearchOpen) && (
-          <div aria-hidden="true" className={cn('scroll-edge-overlay', embeddedHeader ? 'h-[96px]' : isSearchOpen ? 'h-[128px]' : 'h-[96px]')} />
+        {floatingTop && topOverlayHeight > 0 && (
+          <div aria-hidden="true" className="scroll-edge-overlay" style={{ height: topOverlayHeight + 56 }} />
         )}
 
         {/* Scroll to bottom button */}

@@ -45,6 +45,7 @@ function getHarnessLogo(agent?: Agent | null): React.FC<{ className?: string }> 
 }
 
 interface TaskHeaderBarProps {
+  floating?: boolean
   task: WorkfloTask
   agent?: Agent | null
   agents?: Agent[]
@@ -70,6 +71,7 @@ interface TaskHeaderBarProps {
 }
 
 export function TaskHeaderBar({
+  floating = false,
   task,
   agent,
   agents,
@@ -158,7 +160,7 @@ export function TaskHeaderBar({
     && (action !== TaskPrimaryAction.COMPLETE || !onAction)
 
   return (
-    <header className="glass-bar relative z-20 flex h-12 shrink-0 items-center gap-2 border-b px-3">
+    <header className={`glass-bar relative z-20 flex h-12 shrink-0 items-center gap-2 border-b px-3 ${floating ? '-mb-12 pointer-events-none [&>*]:pointer-events-auto' : ''}`}>
       {onBack && (
         <Button variant="ghost" size="icon" onClick={onBack} title="Back">
           <ArrowLeft className="h-4 w-4" />

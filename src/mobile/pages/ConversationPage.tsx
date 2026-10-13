@@ -1,5 +1,5 @@
 import { UsageLimitRecoveryNotice } from '../components/UsageLimitRecoveryNotice'
-import { memo, useRef, useEffect, useCallback, useMemo, useState } from 'react'
+import { memo, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useTaskStore } from '../stores/task-store'
 import { useAgentStore, SessionStatus, type AgentMessage } from '../stores/agent-store'
@@ -130,6 +130,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   }, [hydrateArtifacts, taskId])
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  const topOverlayRef = useRef<HTMLDivElement>(null)
+  const [topOverlayHeight, setTopOverlayHeight] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const isAtBottomRef = useRef(true)
   const scrollRafRef = useRef<number | null>(null)
@@ -225,6 +227,17 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     }
     return null
   }, [messages])
+
+  useLayoutEffect(() => {
+    const element = topOverlayRef.current
+    if (!element) { setTopOverlayHeight(0); return }
+    const measure = () => setTopOverlayHeight(Math.ceil(element.getBoundingClientRect().height))
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [isSearchOpen, latestTodos, normalizedSearchQuery, todosExpanded])
 
   // Input placeholder — matches desktop AgentTranscriptPanel
   const placeholder = useMemo(() => {
@@ -359,7 +372,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     if (task?.agent_id && session?.sessionId) _restartSession(task.agent_id, session.sessionId)
   }, [task?.agent_id, session?.sessionId, _restartSession])
 
-  const headerClearance = latestTodos ? 16 : isSearchOpen ? (normalizedSearchQuery ? 192 : 144) : 80
+  const headerClearance = topOverlayHeight > 0 ? topOverlayHeight + 12 : isSearchOpen ? (normalizedSearchQuery ? 192 : 144) : 80
   const hasLeadingContent = Boolean(session?.systemStatus || artifacts.length)
   const virtualizer = useVirtualizer({
     count: transcriptItems.length,
@@ -451,7 +464,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header — matches desktop AgentTranscriptPanel header */}
-      <div className={cn('glass-bar pointer-events-none relative z-10 shrink-0', !latestTodos && (isSearchOpen ? (normalizedSearchQuery ? '-mb-[184px]' : '-mb-[132px]') : '-mb-[68px]'))}>
+      <div ref={topOverlayRef} className="glass-bar pointer-events-none relative z-10 shrink-0" style={topOverlayHeight > 0 ? { marginBottom: -topOverlayHeight } : undefined}>
       <div className="pointer-events-auto flex min-h-[68px] items-center justify-between gap-2 px-3 py-3">
         <div className="flex items-center gap-2 min-w-0">
           <button onClick={() => onNavigate({ page: 'detail', taskId })} className="glass-action !h-[44px] !w-[44px] shrink-0" aria-label="Back to task">
@@ -584,14 +597,12 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           </button>
         </div>
       )}
-      </div>
-
       {/* Pinned todo summary — matches desktop TodoSummary subheader */}
       {latestTodos && (
-        <div className="border-b border-border/50 shrink-0">
+        <div className="glass-todo-summary pointer-events-auto mx-3 mb-2 shrink-0 overflow-hidden rounded-xl">
           <button
             onClick={() => setTodosExpanded(!todosExpanded)}
-            className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-white/5 transition-colors"
+            className="w-full flex items-center gap-2 px-4 py-2 text-xs hover:bg-accent/30 transition-colors"
           >
             {/* Chevron */}
             <svg className={cn('h-3 w-3 text-muted-foreground shrink-0 transition-transform', todosExpanded && 'rotate-90')} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -646,6 +657,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
           )}
         </div>
       )}
+      </div>
 
       {/* Messages area — matches desktop transcript panel */}
       <div className="relative flex-1 min-h-0">
@@ -757,9 +769,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             </div>
           )}
         </div>
-        {!latestTodos && (
-          <div aria-hidden="true" className={cn('scroll-edge-overlay', isSearchOpen ? (normalizedSearchQuery ? 'h-[228px]' : 'h-[176px]') : 'h-[120px]')} />
-        )}
+        {topOverlayHeight > 0 && <div aria-hidden="true" className="scroll-edge-overlay" style={{ height: topOverlayHeight + 56 }} />}
 
         {/* Scroll to bottom button */}
         {showScrollToBottom && messages.length > 0 && (

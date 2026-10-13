@@ -20,7 +20,7 @@ function formatClockTime(iso: string): string {
  * usage limit: when it will continue (or why it will not), with a toggle for
  * the scheduled continuation.
  */
-export function UsageLimitRecoveryBanner({ taskId }: { taskId: string }) {
+export function UsageLimitRecoveryBanner({ taskId, floatingHeader = false }: { taskId: string; floatingHeader?: boolean }) {
   const [recovery, setRecovery] = useState<UsageLimitRecovery | null>(null)
   const [pending, setPending] = useState(false)
   const [, setTick] = useState(0)
@@ -79,7 +79,7 @@ export function UsageLimitRecoveryBanner({ taskId }: { taskId: string }) {
 
   return (
     <div
-      className="mx-3 mt-2 flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5"
+      className={`mx-3 ${floatingHeader ? 'mt-14' : 'mt-2'} flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5`}
       role="status"
       data-testid="usage-limit-recovery-banner"
     >

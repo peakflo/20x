@@ -1096,9 +1096,10 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const transcriptView = (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <AgentApprovalBanner request={session.pendingApproval} onApprove={handleApprove} onReject={handleReject} />
-      <UsageLimitRecoveryBanner taskId={task.id} />
+      <UsageLimitRecoveryBanner taskId={task.id} floatingHeader={hasSession && panelLayout !== 'task-only'} />
       <AgentTranscriptPanel
         embeddedHeader
+        externalHeaderHeight={hasSession && panelLayout !== 'task-only' ? 48 : 0}
         searchRequest={transcriptSearchRequest}
         messages={session.messages}
         status={session.status}
@@ -1127,6 +1128,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
     <>
       <div className="relative flex h-full min-h-0 flex-col bg-background">
         <TaskHeaderBar
+          floating={hasSession && panelLayout !== 'task-only'}
           task={task}
           agent={assignedAgent}
           agents={agents}
@@ -1209,11 +1211,12 @@ Update existing skills that were helpful or create new ones for patterns worth r
                     details={detailsView}
                     changes={<ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} onPullRequests={handlePullRequests} />}
                     output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={!isTaskClosed(task.status)} onComplete={handleCompleteTask} taskUpdatedAt={task.updated_at} />}
-                    className="min-w-[320px] flex-1 border-l border-border/50"
+                    className="min-w-[320px] flex-1 border-l border-border/50 pt-12"
                   />
                 </>
               ) : (
                 <ArtifactRail
+                  className="pt-12"
                   artifacts={artifacts}
                   expanded={artifactUI.railExpanded}
                   activeTabId={artifactUI.activeTabId}

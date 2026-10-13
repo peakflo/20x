@@ -67,6 +67,11 @@ function makeAgent(codingAgent?: CodingAgentType): Agent {
 afterEach(cleanup)
 
 describe('TaskHeaderBar', () => {
+  it('floats over the transcript without a filled header strip', () => {
+    const { container } = render(<TaskHeaderBar {...requiredProps} task={makeTask()} floating />)
+    expect(container.querySelector('header')).toHaveClass('glass-bar', '-mb-12', 'pointer-events-none')
+  })
+
   it('keeps transcript search and stop in the single task header', () => {
     const onSearchTranscript = vi.fn()
     const onStopSession = vi.fn()

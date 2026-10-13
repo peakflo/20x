@@ -61,6 +61,35 @@ describe('AgentTranscriptPanel drag and drop attachments', () => {
     expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 80, paddingEnd: 64 })
   })
 
+  it('keeps the floating task header and pinned todos in the virtualized scroll clearance', () => {
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { height: this.classList.contains('glass-bar') ? 88 : 0 } as DOMRect
+    })
+
+    try {
+      const { container } = render(
+        <AgentTranscriptPanel
+          embeddedHeader
+          externalHeaderHeight={48}
+          messages={[{
+            id: 'todo', role: 'assistant', content: '', timestamp: new Date(), partType: 'todowrite',
+            tool: { name: 'todowrite', status: 'completed', todos: [{ id: 'one', content: 'Draft plan', status: 'in_progress' }] }
+          }]}
+          status={SessionStatus.IDLE}
+          onStop={() => undefined}
+          onSend={() => undefined}
+        />
+      )
+
+      expect(container.querySelector('.glass-todo-summary')).toHaveTextContent('Tasks')
+      expect(container.querySelector('.glass-todo-summary')?.closest('.glass-bar')).toBeTruthy()
+      expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 100, paddingEnd: 64 })
+      expect(container.querySelector('.scroll-edge-overlay')).toHaveStyle({ height: '144px' })
+    } finally {
+      rect.mockRestore()
+    }
+  })
+
   it('adds dropped files as pending attachments and sends them with the message', async () => {
     const onSend = vi.fn()
     const onAddAttachmentPaths = vi.fn().mockResolvedValue([
