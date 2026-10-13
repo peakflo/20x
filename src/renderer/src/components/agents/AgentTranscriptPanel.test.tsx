@@ -40,9 +40,9 @@ describe('AgentTranscriptPanel drag and drop attachments', () => {
       />
     )
 
-    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 80, paddingEnd: 64, scrollPaddingEnd: 64 })
+    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 48, paddingEnd: 64, scrollPaddingEnd: 64 })
     fireEvent.click(screen.getByRole('button', { name: 'Search transcript' }))
-    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 144, paddingEnd: 64 })
+    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 96, paddingEnd: 64 })
   })
 
   it('uses the task header without duplicating the transcript title, and opens search from it', async () => {

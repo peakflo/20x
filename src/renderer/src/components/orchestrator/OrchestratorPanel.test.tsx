@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import type { ReactNode } from 'react'
 
 const agentSessionApi = vi.hoisted(() => ({
   start: vi.fn(),
@@ -32,9 +33,9 @@ vi.mock('@/lib/ipc-client', async (importOriginal) => ({
  */
 const composer = vi.hoisted(() => ({ send: null as ((text: string) => void) | null }))
 vi.mock('@/components/agents/AgentTranscriptPanel', () => ({
-  AgentTranscriptPanel: ({ onSend }: { onSend?: (text: string) => void }) => {
+  AgentTranscriptPanel: ({ onSend, headerLeading, headerTrailing }: { onSend?: (text: string) => void; headerLeading?: ReactNode; headerTrailing?: ReactNode }) => {
     composer.send = onSend ?? null
-    return null
+    return <div>{headerLeading}{headerTrailing}</div>
   },
 }))
 

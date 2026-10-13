@@ -244,6 +244,9 @@ function HighlightedText({ text, query }: { text: string; query?: string }) {
 
 interface AgentTranscriptPanelProps {
   title?: string
+  /** Controls supplied by a containing panel for the single standalone header. */
+  headerLeading?: React.ReactNode
+  headerTrailing?: React.ReactNode
   /** TaskWorkspace already has a task header; show only the search row here. */
   embeddedHeader?: boolean
   /** Increment to open search from the containing task header. */
@@ -833,6 +836,8 @@ function mergeAttachments(current: ComposerAttachment[], added: ComposerAttachme
 
 export function AgentTranscriptPanel({
   title = 'Agent transcript',
+  headerLeading,
+  headerTrailing,
   embeddedHeader = false,
   searchRequest = 0,
   messages,
@@ -1059,7 +1064,7 @@ export function AgentTranscriptPanel({
     count: transcriptItems.length,
     getScrollElement: () => scrollRef.current,
     paddingStart: !showErrorBanner && !systemStatus && !latestTodos
-      ? embeddedHeader ? (isSearchOpen ? 80 : 16) : (isSearchOpen ? 144 : 80)
+      ? embeddedHeader ? (isSearchOpen ? 80 : 16) : (isSearchOpen ? 96 : 48)
       : 16,
     paddingEnd: onSend ? 64 : 16,
     scrollPaddingEnd: onSend ? 64 : 16,
@@ -1264,23 +1269,24 @@ export function AgentTranscriptPanel({
       )}
       {/* TaskWorkspace supplies the shared task header; standalone panels keep their own. */}
       {(!embeddedHeader || isSearchOpen) && (
-        <div className={cn('glass-bar pointer-events-none relative z-10 shrink-0', !showErrorBanner && !systemStatus && !latestTodos && (embeddedHeader ? '-mb-[64px]' : isSearchOpen ? '-mb-[132px]' : '-mb-[68px]'))}>
+        <div className={cn('glass-bar pointer-events-none relative z-10 shrink-0', !showErrorBanner && !systemStatus && !latestTodos && (embeddedHeader ? '-mb-[64px]' : isSearchOpen ? '-mb-[84px]' : '-mb-[36px]'))}>
       {!embeddedHeader && (
       <div
-        className="windows-titlebar-safe pointer-events-auto flex min-h-[68px] items-center justify-between gap-3 px-4 py-3"
+        className="windows-titlebar-safe pointer-events-auto flex h-[36px] items-center justify-between gap-3 px-3"
         onContextMenu={handleHeaderContextMenu}
         title="Right-click to copy debug info"
       >
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <Terminal className="h-4 w-4 text-muted-foreground" />
-          <span className="text-sm font-medium">
+          <span className="truncate text-sm font-medium">
             {title}
             <span className="ml-2 text-xs font-mono text-muted-foreground">
               ({messages.length})
             </span>
           </span>
+          {headerLeading}
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           <span className={`text-xs flex items-center gap-1 ${getStatusColor()}`}>
             {(isStarting || status === SessionStatus.WORKING) && <Loader2 className="h-3 w-3 animate-spin" />}
             {getStatusLabel()}
@@ -1320,6 +1326,7 @@ export function AgentTranscriptPanel({
               </Button>
             )}
           </div>
+          {headerTrailing}
         </div>
       </div>
       )}
@@ -1468,7 +1475,7 @@ export function AgentTranscriptPanel({
           )}
         </div>
         {!showErrorBanner && !systemStatus && !latestTodos && (!embeddedHeader || isSearchOpen) && (
-          <div aria-hidden="true" className={cn('scroll-edge-overlay', embeddedHeader ? 'h-[96px]' : isSearchOpen ? 'h-[176px]' : 'h-[128px]')} />
+          <div aria-hidden="true" className={cn('scroll-edge-overlay', embeddedHeader ? 'h-[96px]' : isSearchOpen ? 'h-[128px]' : 'h-[96px]')} />
         )}
 
         {/* Scroll to bottom button */}

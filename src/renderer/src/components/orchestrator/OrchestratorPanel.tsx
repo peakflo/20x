@@ -154,37 +154,38 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     return () => window.removeEventListener('mastermind-prefill', handlePrefill)
   }, [handleSendMessage])
 
+  const agentSelector = (
+    <select
+      value={selectedAgentId || ''}
+      onChange={(e) => handleAgentChange(e.target.value)}
+      className="glass-control h-[24px] max-w-[140px] cursor-pointer px-2 text-xs transition-colors hover:border-primary/50"
+      disabled={(currentSession?.messages?.length ?? 0) > 0}
+      aria-label="Mastermind agent"
+    >
+      {agents.map((agent) => (
+        <option key={agent.id} value={agent.id}>
+          {agent.name}
+        </option>
+      ))}
+    </select>
+  )
+  const closeButton = (
+    <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close Mastermind den">
+      <X className="h-4 w-4" />
+    </Button>
+  )
+
   return (
     // Floats as a card, like the workspace and the sidebar: same radius,
     // hairline, fill and shadow. It was the one panel still sitting flush and
     // square against the work.
     <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-card">
-      {/* Header with agent selector */}
-      <div className="glass-bar relative z-10 flex items-center justify-between px-4 py-3 border-b shrink-0">
-        {/* A warm session is not a conversation: the choice stays open until
-            something has actually been said. */}
-        <select
-          value={selectedAgentId || ''}
-          onChange={(e) => handleAgentChange(e.target.value)}
-          className="glass-control text-xs px-3 py-1 cursor-pointer hover:border-primary/50 transition-colors"
-          disabled={(currentSession?.messages?.length ?? 0) > 0}
-        >
-          {agents.map((agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.name}
-            </option>
-          ))}
-        </select>
-
-        <Button variant="ghost" size="sm" onClick={onClose}>
-          <X className="h-4 w-4" />
-        </Button>
-      </div>
-
       {/* Chat interface */}
       {selectedAgentId && (
         <AgentTranscriptPanel
           title="Mastermind den"
+          headerLeading={agentSelector}
+          headerTrailing={closeButton}
           messages={currentSession?.messages || []}
           status={currentSession?.status || SessionStatus.IDLE}
           systemStatus={currentSession?.systemStatus}
@@ -198,8 +199,14 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       )}
 
       {!selectedAgentId && (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
-          No agent selected
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="glass-bar flex h-[36px] shrink-0 items-center justify-between gap-2 px-3">
+            <span className="text-sm font-medium">Mastermind den</span>
+            <div className="flex items-center gap-2">{agentSelector}{closeButton}</div>
+          </div>
+          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+            No agent selected
+          </div>
         </div>
       )}
     </div>
