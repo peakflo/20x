@@ -4,6 +4,7 @@ import { applyGlassOpacity, GLASS_OPACITY_STORAGE_KEY, readGlassOpacity } from '
 export type ThemeMode = 'light' | 'dark' | 'system'
 
 const STORAGE_KEY = 'ui-theme'
+const CANVAS_BACKDROP_STORAGE_KEY = 'ui-canvas-desktop-backdrop'
 
 function systemPrefersDark(): boolean {
   return typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches
@@ -27,8 +28,10 @@ interface ThemeState {
   /** The concrete theme currently painted. */
   resolved: 'light' | 'dark'
   glassOpacity: number
+  canvasDesktopBackdrop: boolean
   setMode: (mode: ThemeMode) => void
   setGlassOpacity: (value: number) => void
+  setCanvasDesktopBackdrop: (enabled: boolean) => void
   /** Flip between light and dark, pinning an explicit preference. */
   toggle: () => void
 }
@@ -41,6 +44,9 @@ const initialMode: ThemeMode = (() => {
   }
 })()
 const initialGlassOpacity = readGlassOpacity()
+const initialCanvasDesktopBackdrop = (() => {
+  try { return localStorage.getItem(CANVAS_BACKDROP_STORAGE_KEY) === 'true' } catch { return false }
+})()
 
 export const useThemeStore = create<ThemeState>((set, get) => {
   // Apply immediately (the index.html pre-paint script already set the class to
@@ -61,6 +67,11 @@ export const useThemeStore = create<ThemeState>((set, get) => {
     mode: initialMode,
     resolved,
     glassOpacity: initialGlassOpacity,
+    canvasDesktopBackdrop: initialCanvasDesktopBackdrop,
+    setCanvasDesktopBackdrop: (enabled) => {
+      try { localStorage.setItem(CANVAS_BACKDROP_STORAGE_KEY, String(enabled)) } catch { /* ignore */ }
+      set({ canvasDesktopBackdrop: enabled })
+    },
     setGlassOpacity: (value) => {
       const next = applyGlassOpacity(value)
       try { localStorage.setItem(GLASS_OPACITY_STORAGE_KEY, String(next)) } catch { /* ignore */ }

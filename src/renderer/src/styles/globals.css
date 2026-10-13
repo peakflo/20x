@@ -301,6 +301,28 @@ html, body, #root {
   flex-direction: column;
 }
 
+/* Native macOS material is visible only while the optional Canvas backdrop is
+   active. The system performs the behind-window blur; canvas panels stay solid. */
+html.native-canvas-backdrop,
+html.native-canvas-backdrop body,
+html.native-canvas-backdrop #root,
+html.native-canvas-backdrop .app-chrome-field,
+html.native-canvas-backdrop .canvas-workspace-surface {
+  background: transparent;
+}
+
+html.native-canvas-backdrop [data-canvas-root] {
+  background: rgba(244, 244, 245, .28);
+}
+
+html.dark.native-canvas-backdrop [data-canvas-root] {
+  background: rgba(15, 15, 15, .28);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  html.native-canvas-backdrop [data-canvas-root] { background: var(--canvas-bg); }
+}
+
 /* Smooth theme transitions on surfaces (not on transforms/opacity) */
 body, .theme-transition {
   transition: background-color 0.25s ease, color 0.25s ease, border-color 0.25s ease;
@@ -519,7 +541,7 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
  * made the tinted strips look like a stripe laid over the window rather than
  * the frame of it — the gutters read as a seam.
  */
-[data-voice-recording="true"] .app-chrome-field {
+html[data-voice-recording="true"] .app-chrome-field {
   background-color: color-mix(in oklab, var(--destructive) 16%, var(--background));
   background-image:
     linear-gradient(

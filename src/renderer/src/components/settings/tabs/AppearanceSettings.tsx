@@ -6,6 +6,9 @@ export function AppearanceSettings() {
   const setMode = useThemeStore((state) => state.setMode)
   const glassOpacity = useThemeStore((state) => state.glassOpacity)
   const setGlassOpacity = useThemeStore((state) => state.setGlassOpacity)
+  const canvasDesktopBackdrop = useThemeStore((state) => state.canvasDesktopBackdrop)
+  const setCanvasDesktopBackdrop = useThemeStore((state) => state.setCanvasDesktopBackdrop)
+  const isMac = navigator.platform.toLowerCase().includes('mac')
 
   return (
     <SettingsSection title="Appearance" description="Choose the app theme and the clarity of floating controls">
@@ -43,6 +46,20 @@ export function AppearanceSettings() {
           />
           <p className="text-xs text-muted-foreground">Lower values reveal more content behind floating controls. At 100%, blur turns off.</p>
         </div>
+        {isMac && (
+          <label className="flex items-start gap-3 rounded-xl border border-border p-3">
+            <input
+              type="checkbox"
+              checked={canvasDesktopBackdrop}
+              onChange={(event) => setCanvasDesktopBackdrop(event.target.checked)}
+              className="mt-0.5 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            />
+            <span>
+              <span className="block text-sm font-medium text-foreground">Blur desktop behind Canvas</span>
+              <span className="block text-xs text-muted-foreground">Show the macOS backdrop through the Canvas background. Turns off at 100% glass opacity or when reduced transparency is enabled.</span>
+            </span>
+          </label>
+        )}
       </div>
     </SettingsSection>
   )

@@ -25,6 +25,7 @@ const OrchestratorPanel = lazy(() => import('@/components/orchestrator/Orchestra
 import { useTasks } from '@/hooks/use-tasks'
 import { useUIStore } from '@/stores/ui-store'
 import { useCanvasStore } from '@/stores/canvas-store'
+import { useThemeStore } from '@/stores/theme-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useAgentAutoStart } from '@/hooks/use-agent-auto-start'
 import { useOverdueNotifications } from '@/hooks/use-overdue-notifications'
@@ -69,6 +70,8 @@ export function AppLayout() {
   const sidebarView = useUIStore((s) => s.sidebarView)
   const setSidebarView = useUIStore((s) => s.setSidebarView)
   const activeModal = useUIStore((s) => s.activeModal)
+  const canvasDesktopBackdrop = useThemeStore((s) => s.canvasDesktopBackdrop)
+  const glassOpacity = useThemeStore((s) => s.glassOpacity)
   const editingTaskId = useUIStore((s) => s.editingTaskId)
   const deletingTaskId = useUIStore((s) => s.deletingTaskId)
   const openCreateModal = useUIStore((s) => s.openCreateModal)
@@ -709,6 +712,28 @@ export function AppLayout() {
     window.addEventListener('keydown', listener)
     return () => window.removeEventListener('keydown', listener)
   }, [])
+
+  useEffect(() => {
+    const setBackdrop = window.electronAPI?.app?.setCanvasBackdrop
+    if (!isMac || !setBackdrop) return
+    const reducedTransparency = window.matchMedia('(prefers-reduced-transparency: reduce)')
+    let cancelled = false
+    const update = (): void => {
+      const enabled = canvasDesktopBackdrop && sidebarView === 'canvas' && activeModal !== 'settings' && glassOpacity < 100 && !reducedTransparency.matches
+      document.documentElement.classList.remove('native-canvas-backdrop')
+      void setBackdrop(enabled).then((active) => {
+        if (!cancelled && enabled && active) document.documentElement.classList.add('native-canvas-backdrop')
+      }).catch(() => { /* Keep the solid canvas if native vibrancy is unavailable. */ })
+    }
+    update()
+    reducedTransparency.addEventListener('change', update)
+    return () => {
+      cancelled = true
+      reducedTransparency.removeEventListener('change', update)
+      document.documentElement.classList.remove('native-canvas-backdrop')
+      void setBackdrop(false)
+    }
+  }, [activeModal, canvasDesktopBackdrop, glassOpacity, sidebarView])
   return (
     <>
       {completionDialog}
@@ -857,7 +882,7 @@ export function AppLayout() {
         )}
 
         {/* Workspace — floats as a rounded card, shrinks when orchestrator is open */}
-        <main className="flex flex-col flex-1 min-w-0 overflow-hidden rounded-2xl border border-border bg-card shadow-card m-2 transition-all duration-200">
+        <main className="canvas-workspace-surface flex flex-col flex-1 min-w-0 overflow-hidden rounded-2xl border border-border bg-card shadow-card m-2 transition-all duration-200">
           <div className="flex-1 h-0 overflow-hidden relative">
             {/* Canvas — always mounted so iframes/terminals survive navigation */}
             <div

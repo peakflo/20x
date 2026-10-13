@@ -318,13 +318,15 @@ function createWindow(): void {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    backgroundColor: '#1E2127',
+    // The macOS canvas can expose the system material through transparent
+    // renderer pixels. Other views paint their usual opaque surfaces.
+    backgroundColor: isMac ? '#00000000' : '#1E2127',
     // Electron 44 native window-state persistence: remember position, size and
     // display mode across launches instead of always reopening at 1400x900.
     windowStatePersistence: true,
     name: 'main',
     ...(isMac
-      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 12, y: 8 } }
+      ? { titleBarStyle: 'hiddenInset' as const, trafficLightPosition: { x: 12, y: 8 }, vibrancy: 'under-window' as const }
       : {
           titleBarStyle: 'hidden' as const,
           titleBarOverlay: { color: '#1E2127', symbolColor: '#535D71', height: 36 },

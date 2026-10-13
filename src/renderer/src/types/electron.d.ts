@@ -434,6 +434,7 @@ interface ElectronAPI {
   }
   app: {
     getVersion: () => Promise<string>
+    setCanvasBackdrop: (enabled: boolean) => Promise<boolean>
     getLoginItemSettings: () => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
     setLoginItemSettings: (openAtLogin: boolean) => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
     getNotificationPermission: () => Promise<'granted' | 'denied'>

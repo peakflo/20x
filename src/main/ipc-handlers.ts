@@ -1,5 +1,5 @@
 import { updateTaskFromUser } from './session-feedback'
-import { ipcMain, dialog, shell, Notification, app, session, clipboard as electronClipboard, ClipboardItem } from 'electron'
+import { ipcMain, dialog, shell, Notification, app, session, BrowserWindow, clipboard as electronClipboard, ClipboardItem } from 'electron'
 import * as childProcess from 'child_process'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join, basename, extname } from 'path'
@@ -1168,6 +1168,14 @@ export function registerIpcHandlers(
   // App version
   ipcMain.handle('app:getVersion', () => {
     return app.getVersion()
+  })
+
+  ipcMain.handle('app:setCanvasBackdrop', (event, enabled: boolean) => {
+    if (process.platform !== 'darwin') return false
+    const window = BrowserWindow.fromWebContents(event.sender)
+    if (!window) return false
+    window.setVibrancy(enabled === true ? 'under-window' : null)
+    return enabled === true
   })
 
   // Crash log path
