@@ -70,10 +70,13 @@ export function SettingsWorkspace() {
         value={settingsTab}
         onValueChange={(value) => setSettingsTab(value as typeof settingsTab)}
         className="flex-1 flex min-h-0"
-        orientation="horizontal"
+        orientation="vertical"
       >
         {/* Left Navigation Sidebar */}
-        <Tabs.List className="glass-panel shrink-0 w-60 border-r border-border py-4 space-y-1 px-3">
+        <Tabs.List
+          aria-label="Settings sections"
+          className="glass-panel m-3 mr-0 w-60 shrink-0 self-stretch overflow-y-auto rounded-2xl border border-border/60 p-2 shadow-sm"
+        >
           {tabs.map(({ value, label, iconName }) => {
             const Icon = ICON_MAP[iconName as keyof typeof ICON_MAP]
             return (
@@ -81,11 +84,11 @@ export function SettingsWorkspace() {
                 key={value}
                 value={value}
                 className={cn(
-                  'w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors',
-                  'hover:bg-accent hover:text-accent-foreground',
+                  'w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-colors',
+                  'hover:bg-accent/70 hover:text-foreground',
                   'data-[state=active]:bg-accent data-[state=active]:text-foreground',
-                  'data-[state=inactive]:text-muted-foreground',
-                  'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/40'
+                  'data-[state=inactive]:text-foreground/70',
+                  'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-ring'
                 )}
               >
                 <Icon className="h-4 w-4 shrink-0" />
