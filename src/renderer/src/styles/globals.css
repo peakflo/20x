@@ -96,18 +96,18 @@
   --sidebar-muted: #eeeeef;
 
   /* Frosted chrome surfaces (top bar / sidebar translucency) */
-  --glass-panel: color-mix(in srgb, color-mix(in srgb, rgba(255, 255, 255, .69) var(--glass-opacity), transparent) calc(100% - var(--glass-solid-mix)), var(--glass-solid) var(--glass-solid-mix));
+  --glass-panel: color-mix(in srgb, color-mix(in srgb, rgba(255, 255, 255, .90) var(--glass-opacity), transparent) calc(100% - var(--glass-solid-mix)), var(--glass-solid) var(--glass-solid-mix));
   --glass-popover: color-mix(in srgb, rgba(255, 255, 255, var(--glass-popover-alpha)) calc(100% - var(--glass-solid-mix)), var(--glass-solid) var(--glass-solid-mix));
   --glass-opacity: 55%;
   --glass-solid-mix: 0%;
   --glass-blur-factor: 1;
   --glass-popover-alpha: .84;
-  --glass-blur: calc(12px * var(--glass-blur-factor));
+  --glass-blur: calc(18px * var(--glass-blur-factor));
   --glass-saturation: 1.1;
   --glass-control: color-mix(in srgb, color-mix(in srgb, rgba(255, 255, 255, .82) var(--glass-opacity), transparent) calc(100% - var(--glass-solid-mix)), var(--glass-solid) var(--glass-solid-mix));
   --glass-composer-fill: color-mix(in srgb, rgba(255, 255, 255, .62) calc(100% - var(--glass-solid-mix)), var(--glass-solid) var(--glass-solid-mix));
   --glass-composer-blur: calc(24px * var(--glass-blur-factor));
-  --glass-inset: rgba(0, 0, 0, .045);
+  --glass-inset: var(--glass-control);
   --glass-placeholder: #62636a;
   --glass-edge: rgba(0, 0, 0, 0.08);
   --glass-outline: rgba(0, 0, 0, 0.11);
@@ -366,6 +366,7 @@ body, .theme-transition {
 .dark .glass-todo-summary { --muted-foreground: #a4a4a8; }
 /* Keep scrolling rows available to the controls' backdrop filters. */
 .glass-scroll-panel { -webkit-backdrop-filter: none; backdrop-filter: none; }
+:root:not(.dark) .glass-scroll-panel { background: var(--sidebar); }
 .glass-popover { background: var(--glass-popover); border-color: color-mix(in srgb, var(--foreground) 10%, transparent); border-radius: 16px !important; box-shadow: var(--glass-rim), 0 24px 64px -24px rgba(0, 0, 0, .55), 0 4px 16px rgba(0, 0, 0, .18); }
 .glass-control { background: var(--glass-control); border: 1px solid var(--glass-outline); border-radius: 9999px; box-shadow: var(--glass-rim), var(--glass-shadow-control); }
 .glass-composer { position: relative; isolation: isolate; border-radius: 9999px; }

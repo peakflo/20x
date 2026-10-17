@@ -442,7 +442,7 @@ interface ElectronAPI {
   }
   app: {
     getVersion: () => Promise<string>
-    setDesktopBackdrop: (enabled: boolean) => Promise<boolean>
+    setDesktopBackdrop: (enabled: boolean, themeMode: 'light' | 'dark' | 'system') => Promise<boolean>
     getLoginItemSettings: () => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
     setLoginItemSettings: (openAtLogin: boolean) => Promise<{ openAtLogin: boolean; openAsHidden: boolean }>
     getNotificationPermission: () => Promise<'granted' | 'denied'>

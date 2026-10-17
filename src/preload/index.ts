@@ -488,8 +488,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   app: {
     getVersion: (): Promise<string> =>
       ipcRenderer.invoke('app:getVersion'),
-    setDesktopBackdrop: (enabled: boolean): Promise<boolean> =>
-      ipcRenderer.invoke('app:setDesktopBackdrop', enabled),
+    setDesktopBackdrop: (enabled: boolean, themeMode: 'light' | 'dark' | 'system'): Promise<boolean> =>
+      ipcRenderer.invoke('app:setDesktopBackdrop', enabled, themeMode),
     getLoginItemSettings: (): Promise<{ openAtLogin: boolean; openAsHidden: boolean }> =>
       ipcRenderer.invoke('app:getLoginItemSettings'),
     setLoginItemSettings: (openAtLogin: boolean): Promise<{ openAtLogin: boolean; openAsHidden: boolean }> =>

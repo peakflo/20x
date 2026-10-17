@@ -1,5 +1,5 @@
 import { updateTaskFromUser } from './session-feedback'
-import { ipcMain, dialog, shell, Notification, app, session, BrowserWindow, clipboard as electronClipboard, ClipboardItem } from 'electron'
+import { ipcMain, dialog, shell, Notification, app, session, BrowserWindow, nativeTheme, clipboard as electronClipboard, ClipboardItem } from 'electron'
 import * as childProcess from 'child_process'
 import { copyFileSync, existsSync, unlinkSync, readdirSync, statSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join, basename, extname } from 'path'
@@ -1174,10 +1174,13 @@ export function registerIpcHandlers(
     return app.getVersion()
   })
 
-  ipcMain.handle('app:setDesktopBackdrop', (event, enabled: boolean) => {
+  ipcMain.handle('app:setDesktopBackdrop', (event, enabled: boolean, themeMode: 'light' | 'dark' | 'system') => {
     if (process.platform !== 'darwin') return false
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) return false
+    if (themeMode === 'light' || themeMode === 'dark' || themeMode === 'system') {
+      nativeTheme.themeSource = themeMode
+    }
     window.setVibrancy(enabled === true ? 'under-window' : null)
     return enabled === true
   })
