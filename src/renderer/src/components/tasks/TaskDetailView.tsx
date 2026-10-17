@@ -99,6 +99,7 @@ const subtaskStatusDotColor: Record<TaskStatus, string> = {
   [TaskStatus.AgentWorking]: 'bg-amber-400 animate-pulse',
   [TaskStatus.ReadyForReview]: 'bg-pink-400',
   [TaskStatus.AgentLearning]: 'bg-blue-400 animate-pulse',
+  [TaskStatus.ModelError]: 'bg-red-400',
   [TaskStatus.Completed]: 'bg-emerald-400',
   [TaskStatus.Cancelled]: 'bg-muted-foreground',
   [TaskStatus.Expired]: 'bg-muted-foreground'

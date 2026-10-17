@@ -8,7 +8,7 @@ import { mkdir, writeFile } from 'fs/promises'
 import { app, Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord, AgentRunIntervalRecord } from './database'
-import { TaskStatus, SessionStatus } from '../shared/constants'
+import { TaskStatus, SessionStatus, isTaskClosed } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
 import type { GitLabManager } from './gitlab-manager'
@@ -3315,6 +3315,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         } else {
           // A continuation that failed for another reason shows as failed, not resumed.
           this.limitRecovery?.markFailedIfRecent(config.taskId, status.message)
+          // Terminal model/provider error (not a usage limit, which keeps its
+          // own status/recovery flow) — surface it on the task.
+          this.markTaskModelError(config.taskId)
         }
 
         // Regular error (e.g., rate limit). If the same poll already delivered
@@ -3997,6 +4000,43 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     return this.db.updateTask(taskId, fields)
   }
 
+  /**
+   * Surfaces a terminal model/provider error on the task — set when polling
+   * observes a session error that is NOT a transient/retryable one the
+   * adapter already recovers from (see `isOverloadError`/overload retry) and
+   * NOT a usage-limit stop (that has its own dedicated recovery banner/flow —
+   * see `recordUsageLimitStop` — and deliberately keeps whatever status it
+   * already had). Users then see at a glance that the task stopped because
+   * of the model, not because the work is done.
+   *
+   * The status clears back to `AgentWorking` automatically the next time the
+   * user sends a message or restarts the agent (see the "Allow recovery from
+   * non-fatal errors" / fresh-session paths in this file) — no extra code
+   * needed there since those paths already set AgentWorking unconditionally.
+   *
+   * No-ops for:
+   *  - pseudo-task sessions (`mastermind-session`, `heartbeat-*`): these have
+   *    no DB row, so `getTask` returns undefined.
+   *  - tasks already closed (completed/cancelled/expired) or already flagged.
+   *  - server-managed tasks: `updateTaskFromLocalAgent` already drops a local
+   *    status write for those (Workflo owns their status).
+   *
+   * Also wakes a live, idle parent coordinator immediately — mirroring the
+   * ready_for_review/completed wake-up path — so a coordinator doesn't sit
+   * waiting forever on a subtask that stopped for good without "completing".
+   */
+  private markTaskModelError(taskId: string): void {
+    const task = this.db.getTask(taskId)
+    if (!task || isTaskClosed(task.status) || task.status === TaskStatus.ModelError) return
+    this.updateTaskFromLocalAgent(taskId, { status: TaskStatus.ModelError })
+    this.sendToRenderer('task:updated', { taskId, updates: { status: TaskStatus.ModelError } })
+    if (task.parent_task_id) {
+      this.notifyParentOfSubtaskCompletion(task.parent_task_id, taskId).catch((err) => {
+        console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${taskId} errored:`, err)
+      })
+    }
+  }
+
   async startSession(agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean): Promise<string> {
     this.assertLocalHelpAllowed(taskId)
     const agent = this.db.getAgent(agentId)
@@ -4285,8 +4325,11 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       const summary = subtasks
         .map((s) => `- "${s.title}" (id: ${s.id}) → ${s.status}`)
         .join('\n')
+      // A subtask stuck in model_error will never move itself to
+      // ready_for_review/completed — it needs the coordinator's attention,
+      // not more waiting — so it counts as terminal here too.
       const allTerminal = subtasks.every(
-        (s) => s.status === TaskStatus.ReadyForReview || s.status === TaskStatus.Completed
+        (s) => s.status === TaskStatus.ReadyForReview || s.status === TaskStatus.Completed || s.status === TaskStatus.ModelError
       )
       const instructions = allTerminal
         ? `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +

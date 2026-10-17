@@ -70,6 +70,7 @@ const statusDotColor: Record<TaskStatus, string> = {
   [TaskStatus.AgentWorking]: 'bg-amber-400',
   [TaskStatus.ReadyForReview]: 'bg-pink-400',
   [TaskStatus.AgentLearning]: 'bg-blue-400',
+  [TaskStatus.ModelError]: 'bg-red-400',
   [TaskStatus.Completed]: 'bg-emerald-400',
   [TaskStatus.Cancelled]: 'bg-muted-foreground',
   [TaskStatus.Expired]: 'bg-muted-foreground'
@@ -102,12 +103,18 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
     if (hasPendingApproval) {
       return 'bg-blue-400 animate-pulse' // Waiting for user input
     }
-    // Check task status first - AgentLearning/Triaging takes priority over session status
+    // Check task status first - AgentLearning/Triaging/ModelError takes priority over session status.
+    // A session that just stopped on a model error still reports a non-idle
+    // SessionStatus (ERROR), which would otherwise make hasActiveAgent true
+    // and wrongly show the "working" dot.
     if (task.status === TaskStatus.AgentLearning) {
       return 'bg-blue-400 animate-pulse' // Agent learning
     }
     if (task.status === TaskStatus.Triaging) {
       return 'bg-muted-foreground animate-pulse' // Triaging
+    }
+    if (task.status === TaskStatus.ModelError) {
+      return 'bg-red-400' // Model/provider error stopped the session
     }
     if (hasActiveAgent) {
       return 'bg-amber-400 animate-pulse' // Agent working
@@ -148,7 +155,7 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
           </div>
           <div className="flex items-center gap-2 mt-1">
             <TaskPriorityBadge priority={task.priority} />
-            {(task.status === TaskStatus.Cancelled || task.status === TaskStatus.Expired) && <TaskStatusBadge status={task.status} />}
+            {(task.status === TaskStatus.Cancelled || task.status === TaskStatus.Expired || task.status === TaskStatus.ModelError) && <TaskStatusBadge status={task.status} />}
             {task.due_date && (
               <span className={cn('flex items-center gap-1 text-xs', overdue ? 'text-destructive' : dueSoon ? 'text-amber-400' : 'text-muted-foreground')}>
                 <Calendar className="h-3 w-3" />

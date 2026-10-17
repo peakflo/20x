@@ -27,6 +27,7 @@ const COLUMNS: StatusColumn[] = [
   { key: TaskStatus.NotStarted, label: 'Not Started', color: 'text-gray-400', dotColor: 'bg-gray-400', headerBg: 'bg-gray-500/8', columnBg: 'bg-gray-500/[0.03]' },
   { key: TaskStatus.Triaging, label: 'Triaging', color: 'text-slate-300', dotColor: 'bg-slate-400', headerBg: 'bg-slate-500/8', columnBg: 'bg-slate-500/[0.03]' },
   { key: TaskStatus.AgentWorking, label: 'Agent Working', color: 'text-amber-400', dotColor: 'bg-amber-400', headerBg: 'bg-amber-500/8', columnBg: 'bg-amber-500/[0.03]' },
+  { key: TaskStatus.ModelError, label: 'Model Error', color: 'text-red-400', dotColor: 'bg-red-400', headerBg: 'bg-red-500/8', columnBg: 'bg-red-500/[0.03]' },
   { key: TaskStatus.ReadyForReview, label: 'Ready for Review', color: 'text-pink-400', dotColor: 'bg-pink-400', headerBg: 'bg-pink-500/8', columnBg: 'bg-pink-500/[0.03]' },
   { key: TaskStatus.AgentLearning, label: 'Agent Learning', color: 'text-blue-400', dotColor: 'bg-blue-400', headerBg: 'bg-blue-500/8', columnBg: 'bg-blue-500/[0.03]' }
 ]

@@ -3836,6 +3836,22 @@ describe('AgentManager event-driven parent wake-up', () => {
     expect(wakeSpy).not.toHaveBeenCalled()
   })
 
+  it('treats a model_error subtask as terminal — wakes the parent and reports "terminal state", not the mixed/agent_working wording', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.ReadyForReview },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.ModelError },
+    ])
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-2')
+
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    const [taskId, message] = wakeSpy.mock.calls[0]
+    expect(taskId).toBe('parent-1')
+    expect(message).toContain('Child B')
+    expect(message).toContain('model_error')
+    expect(message).toContain('terminal state')
+  })
+
   it('does not wake a completed parent task', async () => {
     const { mgr, wakeSpy } = buildManager(
       { 'parent-1': { ...parentTask, status: TaskStatus.Completed } },
@@ -4922,6 +4938,94 @@ describe('AgentManager serverOverloaded automatic retry', () => {
     await (mgr as any).retryOverloadedSession('session-1')
     expect(handleErrorSpy).toHaveBeenCalledOnce()
     expect((mgr as any).overloadRetryTracker.getAttempts('session-1')).toBe(MAX_OVERLOAD_RETRY_ATTEMPTS)
+  })
+})
+
+describe('AgentManager model_error status on terminal session errors', () => {
+  function buildManager(taskOverrides: Record<string, unknown> = {}) {
+    const mockDb = createMockDb({})
+    const task: Record<string, unknown> = { id: 'task-1', title: 'Test Task', status: TaskStatus.AgentWorking, parent_task_id: null, ...taskOverrides }
+    Object.assign(mockDb as any, {
+      getTask: vi.fn((id: string) => (id === 'task-1' ? task : undefined)),
+    })
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'ensurePollingCoordinator').mockImplementation(() => undefined)
+    return { mgr, mockDb, task }
+  }
+
+  function buildSession(overrides: Record<string, unknown> = {}) {
+    return {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working' as const,
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      pollingStarted: true,
+      lastPromptText: 'Please fix the flaky checkout test',
+      ...overrides
+    }
+  }
+
+  it('sets the task status to model_error when a terminal (non-retryable, non-usage-limit) provider error stops the session', async () => {
+    const { mgr, mockDb } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.ERROR, message: 'Authentication failed: invalid API key' }))
+    }
+    const session = buildSession({ adapter })
+    ;(mgr as any).sessions.set('session-1', session)
+    ;(mgr as any).startAdapterPolling(
+      'session-1', adapter, { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }, undefined, session
+    )
+    const entry = (mgr as any).pollingEntries.get('session-1')
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ModelError })
+  })
+
+  it('does not set model_error for a usage-limit stop — that keeps its own dedicated recovery status/flow', async () => {
+    const { mgr, mockDb } = buildManager()
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({
+        type: SessionStatusType.ERROR,
+        message: 'Weekly limit reached',
+        usageLimit: { resetAt: new Date(Date.now() + 3600_000).toISOString() }
+      }))
+    }
+    const session = buildSession({ adapter })
+    ;(mgr as any).sessions.set('session-1', session)
+    ;(mgr as any).startAdapterPolling(
+      'session-1', adapter, { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }, undefined, session
+    )
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    vi.spyOn(mgr as any, 'getLimitRecovery').mockReturnValue({ recordStop: vi.fn(() => null) })
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ModelError })
+  })
+
+  it('does not downgrade a task that is already closed (e.g. completed) back to model_error', async () => {
+    const { mgr, mockDb } = buildManager({ status: TaskStatus.Completed })
+    const adapter = {
+      pollMessages: vi.fn(async () => []),
+      getStatus: vi.fn(async () => ({ type: SessionStatusType.ERROR, message: 'Some late background error' }))
+    }
+    const session = buildSession({ adapter })
+    ;(mgr as any).sessions.set('session-1', session)
+    ;(mgr as any).startAdapterPolling(
+      'session-1', adapter, { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }, undefined, session
+    )
+    const entry = (mgr as any).pollingEntries.get('session-1')
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ModelError })
   })
 })
 

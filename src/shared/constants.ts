@@ -13,20 +13,38 @@ export enum TaskStatus {
   AgentLearning = 'agent_learning',
   Completed = 'completed',
   Cancelled = 'cancelled',
-  Expired = 'expired'
+  Expired = 'expired',
+  /**
+   * The agent session for this task stopped because of a model/provider
+   * error (API error, rate limit, overloaded, auth failure, context
+   * overflow, quota exhausted, ...) rather than because the work is done.
+   * Set automatically by AgentManager when polling observes a terminal
+   * session error (see `markTaskModelError`); cleared automatically back to
+   * `AgentWorking` the moment the user sends a new message or restarts the
+   * agent. Deliberately NOT a closed/terminal status (see `isTaskClosed`) —
+   * the task still needs attention and can resume normally.
+   */
+  ModelError = 'model_error'
 }
 
 export function isTaskClosed(status: string): boolean {
   return status === TaskStatus.Completed || status === TaskStatus.Cancelled || status === TaskStatus.Expired
 }
 
-/** Statuses a person can choose locally. Workflo owns cancelled and expired states. */
+/**
+ * Statuses a person can choose locally. Workflo owns cancelled and expired
+ * states. `ModelError` is normally set automatically (see its enum doc) but
+ * is included here too so a person can manually flag/clear it, consistent
+ * with the other normally-automatic statuses in this list (AgentWorking,
+ * ReadyForReview, AgentLearning).
+ */
 export const TASK_STATUSES: { value: TaskStatus; label: string }[] = [
   { value: TaskStatus.NotStarted, label: 'Not Started' },
   { value: TaskStatus.Triaging, label: 'Triaging' },
   { value: TaskStatus.AgentWorking, label: 'Agent Working' },
   { value: TaskStatus.ReadyForReview, label: 'Ready for Review' },
   { value: TaskStatus.AgentLearning, label: 'Agent Learning' },
+  { value: TaskStatus.ModelError, label: 'Model Error' },
   { value: TaskStatus.Completed, label: 'Completed' }
 ]
 
