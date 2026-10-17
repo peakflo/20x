@@ -316,6 +316,13 @@ html.native-desktop-backdrop .native-backdrop-panel {
   background: var(--desktop-backdrop-wash);
 }
 
+/* A native fullscreen Space has no desktop behind the window. Keep a themed
+   backdrop under the app so the system material never exposes black pixels. */
+html.native-desktop-backdrop.native-fullscreen-backdrop {
+  background: radial-gradient(circle at 18% 8%, color-mix(in srgb, var(--primary) 8%, transparent), transparent 56%),
+    color-mix(in srgb, var(--background) 94%, transparent);
+}
+
 html.glass-solid-mode.native-desktop-backdrop,
 html.glass-solid-mode.native-desktop-backdrop body,
 html.glass-solid-mode.native-desktop-backdrop #root,

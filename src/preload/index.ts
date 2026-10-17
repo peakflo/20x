@@ -488,8 +488,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   app: {
     getVersion: (): Promise<string> =>
       ipcRenderer.invoke('app:getVersion'),
-    setDesktopBackdrop: (enabled: boolean, themeMode: 'light' | 'dark' | 'system'): Promise<boolean> =>
+    setDesktopBackdrop: (enabled: boolean, themeMode: 'light' | 'dark' | 'system'): Promise<{ active: boolean; fullScreen: boolean }> =>
       ipcRenderer.invoke('app:setDesktopBackdrop', enabled, themeMode),
+    onFullScreenChanged: (callback: (fullScreen: boolean) => void): (() => void) => {
+      const handler = (_: unknown, fullScreen: boolean): void => callback(fullScreen)
+      ipcRenderer.on('app:fullscreen-changed', handler)
+      return () => ipcRenderer.removeListener('app:fullscreen-changed', handler)
+    },
     getLoginItemSettings: (): Promise<{ openAtLogin: boolean; openAsHidden: boolean }> =>
       ipcRenderer.invoke('app:getLoginItemSettings'),
     setLoginItemSettings: (openAtLogin: boolean): Promise<{ openAtLogin: boolean; openAsHidden: boolean }> =>
