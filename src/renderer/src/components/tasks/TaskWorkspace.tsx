@@ -1169,7 +1169,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
               <div className="min-h-0 flex-1">{detailsView}</div>
               {!hasSession && panelLayout === 'both' && !isTaskClosed(task.status) && (
                 <div className="sticky bottom-0 z-10 mx-auto w-full max-w-[780px] shrink-0 px-6 py-4">
-                  <div className="flex items-end gap-2 glass-composer rounded-full p-2">
+                  <div className="flex items-end gap-2 glass-composer rounded-[28px] p-2">
                     <textarea
                       value={kickoffMessage}
                       onChange={(event) => setKickoffMessage(event.target.value)}

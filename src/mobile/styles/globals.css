@@ -168,7 +168,7 @@
 .glass-popover { background: var(--glass-popover); border-color: color-mix(in srgb, var(--foreground) 10%, transparent); border-radius: 16px !important; box-shadow: var(--glass-rim), 0 24px 64px -24px rgba(0, 0, 0, .55), 0 4px 16px rgba(0, 0, 0, .18); }
 .glass-control { background: var(--glass-control); border: 1px solid var(--glass-outline); border-radius: 9999px; box-shadow: var(--glass-rim), var(--glass-shadow-control); }
 .glass-filter-active { background: color-mix(in srgb, var(--primary) 22%, var(--glass-control)); border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent); color: var(--glass-active-text); }
-.glass-composer { position: relative; isolation: isolate; border-radius: 9999px; }
+.glass-composer { position: relative; isolation: isolate; border-radius: 24px; }
 .glass-composer::before {
   content: ""; position: absolute; inset: 0; z-index: -1; border: 1px solid var(--glass-outline); border-radius: inherit;
   background: var(--glass-composer-fill); box-shadow: var(--glass-rim), var(--glass-shadow-control);

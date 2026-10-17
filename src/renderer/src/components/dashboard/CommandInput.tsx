@@ -106,7 +106,7 @@ export function CommandInput({ onSendToMastermind, onCreateTask }: CommandInputP
       data-voice-composer={VOICE_COMPOSER_KEY}
     >
       {/* Text area */}
-      <div className="glass-composer px-5 py-3">
+      <div className="glass-composer rounded-[28px] px-5 py-3">
         <textarea
           ref={textareaRef}
           value={text}
