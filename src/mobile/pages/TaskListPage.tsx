@@ -10,6 +10,7 @@ import type { Route } from '../App'
 const FILTER_OPTIONS = [
   { value: 'all', label: 'All' },
   { value: TaskStatus.AgentWorking, label: 'Working' },
+  { value: TaskStatus.ModelError, label: 'Model Error' },
   { value: TaskStatus.ReadyForReview, label: 'Review' },
   { value: TaskStatus.NotStarted, label: 'Not Started' },
   { value: TaskStatus.Completed, label: 'Done' }

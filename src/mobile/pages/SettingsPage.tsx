@@ -4,6 +4,7 @@ import type { Route } from '../App'
 import { SubscriptionUsageSection } from '../components/SubscriptionUsageSection'
 import { UsageHeroSection } from '../components/UsageHeroSection'
 import { AcpAgentsSection } from '../components/AcpAgentsSection'
+import { HarnessMaintenanceSection } from '../components/HarnessMaintenanceSection'
 import { PushSettings } from '../components/PushSettings'
 
 interface TaskSource {
@@ -111,6 +112,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
         <UsageHeroSection />
         <SubscriptionUsageSection />
         <AcpAgentsSection />
+        <HarnessMaintenanceSection />
         <PushSettings />
 
         <div className="rounded-md border border-border/30 p-3">

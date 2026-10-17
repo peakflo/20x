@@ -7,6 +7,7 @@ import { UpdateDialog } from '@/components/update/UpdateDialog'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle } from '@/components/ui/Dialog'
 import { OnboardingWizard, shouldShowOnboarding } from '@/components/onboarding/OnboardingWizard'
 import { ProgressToastStack } from '@/components/ui/ProgressToastStack'
+import { HarnessUpdateNotice } from './HarnessUpdateNotice'
 import { VoiceOverlay } from '@/components/voice/VoiceOverlay'
 import { useVoiceControl } from '@/hooks/use-voice-control'
 import { useUiRemoteControl } from '@/hooks/use-ui-remote-control'
@@ -1073,6 +1074,9 @@ export function AppLayout() {
 
       {/* Background progress toasts (setup, task progress, etc.) */}
       <ProgressToastStack />
+
+      {/* A harness CLI (Claude Code, Codex, OpenCode, Pi) is outdated or unsupported — visible from any screen, not just Settings. */}
+      <HarnessUpdateNotice />
 
       {/* Voice transcript bubble, audio state, and confirmation cards */}
       <VoiceOverlay />

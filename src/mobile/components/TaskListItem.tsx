@@ -25,6 +25,10 @@ export function TaskListItem({ task, onSelect, sessionStatus, isSubtask, subtask
   const statusDotColor = (() => {
     if (task.status === TaskStatus.AgentLearning) return 'bg-blue-400 animate-pulse'
     if (task.status === TaskStatus.Triaging) return 'bg-muted-foreground animate-pulse'
+    // Checked before hasActiveAgent: a session that just stopped on a model
+    // error still reports a non-idle SessionStatus (ERROR), which would
+    // otherwise make hasActiveAgent true and wrongly show the "working" dot.
+    if (task.status === TaskStatus.ModelError) return 'bg-red-400'
     if (hasActiveAgent) return 'bg-amber-400 animate-pulse'
     const map: Record<string, string> = {
       [TaskStatus.NotStarted]: 'bg-muted-foreground',

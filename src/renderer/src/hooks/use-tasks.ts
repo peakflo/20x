@@ -12,6 +12,7 @@ const PRIORITY_ORDER: Record<TaskPriority, number> = {
 }
 
 const STATUS_ORDER: Record<TaskStatus, number> = {
+  [TaskStatus.ModelError]: 6,
   [TaskStatus.AgentWorking]: 5,
   [TaskStatus.AgentLearning]: 4,
   [TaskStatus.Triaging]: 3,

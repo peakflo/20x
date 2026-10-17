@@ -112,13 +112,16 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
           return
         }
 
-        // If any subtask is currently active (working/review/triaging/learning), wait
+        // If any subtask is currently active (working/review/triaging/learning), wait.
+        // A subtask stopped on a model/provider error also blocks the chain —
+        // it needs attention, not a silent skip to the next sibling.
         const hasActive = sorted.some(
           (s: WorkfloTask) =>
             s.status === TaskStatus.AgentWorking ||
             s.status === TaskStatus.ReadyForReview ||
             s.status === TaskStatus.Triaging ||
-            s.status === TaskStatus.AgentLearning
+            s.status === TaskStatus.AgentLearning ||
+            s.status === TaskStatus.ModelError
         )
         if (hasActive) {
           console.log(`[AutoStart] A subtask is still active for parent ${parentId}, waiting`)
@@ -266,14 +269,17 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
             .filter((t) => t.parent_task_id === task.parent_task_id)
             .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
 
-          // Don't start if any sibling is actively being worked on or awaiting review
+          // Don't start if any sibling is actively being worked on, awaiting
+          // review, or stopped on a model/provider error (needs attention,
+          // not a silent skip to the next sibling).
           const hasActiveSibling = siblings.some(
             (s) =>
               s.id !== task.id &&
               (s.status === TaskStatus.AgentWorking ||
                 s.status === TaskStatus.ReadyForReview ||
                 s.status === TaskStatus.Triaging ||
-                s.status === TaskStatus.AgentLearning)
+                s.status === TaskStatus.AgentLearning ||
+                s.status === TaskStatus.ModelError)
           )
           if (hasActiveSibling) {
             console.log(`[AutoStart] Subtask "${task.title}" skipped: sibling is still active`)
@@ -419,7 +425,8 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
             (s.status === TaskStatus.AgentWorking ||
               s.status === TaskStatus.ReadyForReview ||
               s.status === TaskStatus.Triaging ||
-              s.status === TaskStatus.AgentLearning)
+              s.status === TaskStatus.AgentLearning ||
+              s.status === TaskStatus.ModelError)
         )
         if (hasActiveSibling) {
           // Keep in queue — will be started when sibling completes

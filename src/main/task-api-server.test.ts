@@ -560,6 +560,31 @@ describe('/wait_for_subtasks', () => {
     expect((result.subtasks as Array<Record<string, unknown>>)[0].id).toBe(subtask.id)
     expect((result.subtasks as Array<Record<string, unknown>>)[0].status).toBe(TaskStatus.ReadyForReview)
   })
+
+  it('treats model_error as terminal by default, so an orchestrator does not block forever on a failed subtask', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Subtask Agent' }))!
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const subtask = db.createTask(makeTask({
+      title: 'Errored subtask',
+      parent_task_id: parent.id,
+      status: TaskStatus.ModelError
+    }))!
+    db.updateTask(subtask.id, { agent_id: agent.id })
+
+    const port = await startTaskApiServer(db)
+    const response = await fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // No terminal_statuses override — exercises the default list.
+      body: JSON.stringify({ parent_task_id: parent.id, subtask_ids: [subtask.id], timeout_ms: 5_000 })
+    })
+    const result = await response.json() as Record<string, unknown>
+
+    expect(result.success).toBe(true)
+    expect(result.timed_out).toBe(false)
+    expect(result.terminal_statuses).toContain(TaskStatus.ModelError)
+    expect((result.subtasks as Array<Record<string, unknown>>)[0].status).toBe(TaskStatus.ModelError)
+  })
 })
 
 describe('/reorder_subtasks', () => {

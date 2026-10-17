@@ -219,7 +219,11 @@ export class TaskAutomationScheduler {
       (subtask) =>
         subtask.status === TaskStatus.AgentWorking ||
         subtask.status === TaskStatus.Triaging ||
-        subtask.status === TaskStatus.AgentLearning
+        subtask.status === TaskStatus.AgentLearning ||
+        // A subtask that stopped on a model/provider error needs attention,
+        // not a silent skip to the next one — treat it like "still running"
+        // so autorun pauses the chain instead of blindly starting past it.
+        subtask.status === TaskStatus.ModelError
     )
     if (active) return null
 
