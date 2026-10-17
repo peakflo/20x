@@ -4,6 +4,7 @@ import type { McpToolCaller } from './mcp-tool-caller'
 import { readTaskArtifact } from './artifacts'
 import { ArtifactContentKind } from '../shared/artifacts'
 import { artifactManifestAllows, artifactToolsFromHtml, isArtifactCallableTool, isArtifactWriteTool, type ArtifactMcpCall } from '../shared/artifact-mcp'
+import { organisationWorkspaceName } from './brand'
 
 const LIMITS = { total: 30, writes: 5, active: 3 }
 const counters = new Map<string, { minute: number; total: number; writes: number; active: number }>()
@@ -83,7 +84,9 @@ export async function callArtifactMcp(
     }
     const write = isArtifactWriteTool(toolName)
     if (!input.consented || (write && !input.approved)) deny('approval-missing', 'Viewer approval required')
-    const server = db.getMcpServers().find((item) => item.name === '[Workflo] Organisation Workspace' && item.source === 'enterprise')
+    const enterpriseServers = db.getMcpServers().filter((item) => item.source === 'enterprise')
+    const server = enterpriseServers.find((item) => item.name === organisationWorkspaceName()) ??
+      enterpriseServers.find((item) => item.name === '[Workflo] Organisation Workspace' || item.name === '[Spaces] Organisation Workspace')
     if (!server) deny('workspace-not-connected', 'Organisation Workspace is not connected')
     // The arguments may hold tenant data, so the log keeps a hash only.
     audit.argumentsHash = createHash('sha256').update(JSON.stringify(input.arguments)).digest('hex')

@@ -6,6 +6,7 @@ import { join, basename, extname } from 'path'
 import { networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { callArtifactMcp } from './artifact-mcp'
+import { desktopBrandName, organisationWorkspaceName } from './brand'
 import type { ArtifactMcpCall } from '../shared/artifact-mcp'
 import WebSocket from 'ws'
 import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
@@ -139,7 +140,7 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('db:createTask', async (event, data: CreateTaskData) => {
-    if (data.status === TaskStatus.Completed) throw new Error('Workflo must confirm completion.')
+    if (data.status === TaskStatus.Completed) throw new Error(`${desktopBrandName()} must confirm completion.`)
     const task = db.createTask(data)
     // Initialize recurring task if it has a recurrence pattern
     if (task && !task.server_managed && task.is_recurring && recurrenceScheduler) {
@@ -1494,14 +1495,16 @@ export function registerIpcHandlers(
         // workflows-as-tools, integrations, datastores, and data tables).
         // Uses the enterprise JWT for authentication — no separate API key needed.
         try {
-          const mcpDevServerName = '[Workflo] Organisation Workspace'
+          const mcpDevServerName = organisationWorkspaceName()
           const legacyMcpDevServerName = '[Workflo] MCP Dev Server'
           const apiUrl = enterpriseAuth!.getApiUrl()
           const mcpDevUrl = `${apiUrl}/api/mcp/dev/mcp`
 
           const localServers = db.getMcpServers()
           const existingMcpDev =
-            localServers.find((s) => s.name === mcpDevServerName) ??
+            localServers.find((s) => s.name === mcpDevServerName && s.source === 'enterprise') ??
+            localServers.find((s) => s.name === '[Workflo] Organisation Workspace' && s.source === 'enterprise') ??
+            localServers.find((s) => s.name === '[Spaces] Organisation Workspace' && s.source === 'enterprise') ??
             localServers.find(
               (s) =>
                 s.name === legacyMcpDevServerName &&
@@ -1545,7 +1548,8 @@ export function registerIpcHandlers(
         // immediately available without manual configuration
         try {
           const allServers = db.getMcpServers()
-          const workfloServers = allServers.filter((s) => s.name.startsWith('[Workflo]'))
+          const workfloServers = allServers.filter((s) =>
+            s.name.startsWith('[Workflo]') || s.name.startsWith('[Spaces]'))
 
           const defaultAgent = db.getAgents().find((a) => a.is_default)
           if (defaultAgent && workfloServers.length > 0) {
@@ -1582,7 +1586,7 @@ export function registerIpcHandlers(
           console.log('[enterprise] Auto-creating Peakflo task source...')
           db.createTaskSource({
             mcp_server_id: null,
-            name: `Workflo (${result.tenant.name})`,
+            name: `${desktopBrandName()} (${result.tenant.name})`,
             plugin_id: 'peakflo',
             config: {
               enterprise_mode: true,

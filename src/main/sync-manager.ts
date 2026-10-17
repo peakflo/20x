@@ -10,6 +10,7 @@ import type { WorkfloApiClient } from './workflo-api-client'
 import type { EnterpriseSyncManager } from './enterprise-sync'
 import type { SourceUser, ReassignResult } from '../shared/types'
 import { TaskStatus } from '../shared/constants'
+import { desktopBrandName } from './brand'
 
 export interface SyncResult {
   source_id: string
@@ -58,7 +59,7 @@ export class SyncManager {
     if (scope) this.db.setSetting('workflo-sync-scope', scope)
     let source = this.db.getTaskSources().find(s => s.plugin_id === 'peakflo' && s.config?.unified_scope === scope)
     if (!source && scope) source = this.db.createTaskSource({
-      name: '[Workflo] My tasks', plugin_id: 'peakflo', mcp_server_id: null,
+      name: `[${desktopBrandName()}] My tasks`, plugin_id: 'peakflo', mcp_server_id: null,
       config: { enterprise_mode: true, unified_scope: scope },
       list_tool: '', list_tool_args: {}, update_tool: '', update_tool_args: {}
     })
@@ -106,7 +107,7 @@ export class SyncManager {
     }
 
     if (source.config?.unified_scope && source.config.unified_scope !== this.taskUploadScope()) {
-      result.errors.push('This task source belongs to a different Workflo account or organization.')
+      result.errors.push(`This task source belongs to a different ${desktopBrandName()} account or organization.`)
       return result
     }
     const plugin = this.pluginRegistry.get(source.plugin_id)
@@ -158,7 +159,7 @@ export class SyncManager {
   /** A durable command, retried on reconnect and on each task sync. */
   async uploadTask(taskId: string, autonomous = false): Promise<{ queued: boolean }> {
     const task = this.db.getTask(taskId)
-    if (!task || task.source_id || task.external_id) throw new Error('Only a local task can be sent to Workflo.')
+    if (!task || task.source_id || task.external_id) throw new Error(`Only a local task can be sent to ${desktopBrandName()}.`)
     // A finished local agent run remains resumable for review, so
     // ready_for_review tasks may legitimately retain their session_id. The
     // status transition is the execution boundary; only an untouched task
@@ -167,20 +168,20 @@ export class SyncManager {
       (task.status === TaskStatus.NotStarted && task.session_id)
       || (task.status !== TaskStatus.NotStarted && task.status !== TaskStatus.ReadyForReview)
     ) {
-      throw new Error('Stop the local session before sending this task to Workflo.')
+      throw new Error(`Stop the local session before sending this task to ${desktopBrandName()}.`)
     }
     const scope = this.taskUploadScope()
-    if (!scope) throw new Error('Connect to Workflo and select an organization first.')
+    if (!scope) throw new Error(`Connect to ${desktopBrandName()} and select an organization first.`)
     const key = `workflo-upload:${taskId}`
     if (!this.db.getSetting(key)) {
       const agent = task.agent_id ? this.db.getAgent(task.agent_id) : undefined
       const agentId = (agent?.config as Record<string, unknown> | undefined)?.enterprise_agent_id as string | undefined
-      if (autonomous && !agentId) throw new Error('Select an agent from Workflo for autonomous work.')
-      if (task.agent_id && !agentId) throw new Error('Select an agent from Workflo before sending this task.')
+      if (autonomous && !agentId) throw new Error(`Select an agent from ${desktopBrandName()} for autonomous work.`)
+      if (task.agent_id && !agentId) throw new Error(`Select an agent from ${desktopBrandName()} before sending this task.`)
       const skills = (task.skill_ids ?? []).map(id => this.db.getSkill(id)?.enterprise_skill_id)
-      if (skills.some(id => !id)) throw new Error('Sync the selected skills to Workflo first.')
+      if (skills.some(id => !id)) throw new Error(`Sync the selected skills to ${desktopBrandName()} first.`)
       if (task.recurrence_pattern && typeof task.recurrence_pattern !== 'string') {
-        throw new Error('Use a cron expression before sending this recurring task to Workflo.')
+        throw new Error(`Use a cron expression before sending this recurring task to ${desktopBrandName()}.`)
       }
       this.db.setSetting(key, JSON.stringify({ scope, taskId, data: {
         clientRequestId: `20x:${randomUUID()}`,
@@ -223,11 +224,11 @@ export class SyncManager {
           const remote = await this.workfloApiClient.createTask(command.data)
           let source = this.db.getTaskSources().find(s => s.plugin_id === 'peakflo' && s.config?.unified_scope === scope)
           if (!source) source = this.db.createTaskSource({
-            name: '[Workflo] My tasks', plugin_id: 'peakflo', mcp_server_id: null,
+            name: `[${desktopBrandName()}] My tasks`, plugin_id: 'peakflo', mcp_server_id: null,
             config: { enterprise_mode: true, unified_scope: scope },
             list_tool: '', list_tool_args: {}, update_tool: '', update_tool_args: {}
           })
-          if (!source) throw new Error('Could not create the Workflo task source.')
+          if (!source) throw new Error(`Could not create the ${desktopBrandName()} task source.`)
           saveServerTaskSnapshot(this.db, local.id, remote)
           this.db.updateTask(local.id, { ...serverTaskFields(this.db, remote),
             title: remote.title, description: remote.description ?? '', external_id: remote.id, source_id: source.id, source: source.name
@@ -278,7 +279,7 @@ export class SyncManager {
       const edits = Object.fromEntries(Object.entries(fields).filter(([key]) => allowed.includes(key)))
       if (Object.keys(edits).length === 0) return
       const scope = this.taskUploadScope()
-      if (!scope) throw new Error('Select a Workflo organization before editing this task.')
+      if (!scope) throw new Error(`Select a ${desktopBrandName()} organization before editing this task.`)
       const key = `workflo-update:${taskId}`
       const pending = this.db.getSetting(key)
       const previous = pending ? JSON.parse(pending) : undefined
@@ -365,7 +366,7 @@ export class SyncManager {
     if (source.plugin_id === 'peakflo') {
       const scope = this.taskUploadScope()
       const snapshot = serverTaskSnapshot(this.db, task.id)
-      if (!scope || !snapshot?.version) return {success:false,error:'Sync this task with Workflo before completing it.'}
+      if (!scope || !snapshot?.version) return {success:false,error:`Sync this task with ${desktopBrandName()} before completing it.`}
       const key = `workflo-completion:${task.id}`
       if (!this.db.getSetting(key)) {
         const outputs: Record<string, unknown> = Object.fromEntries((task.output_fields ?? [])
@@ -377,7 +378,7 @@ export class SyncManager {
       }
       await this.flushTaskCompletions()
       return this.db.getSetting(key)
-        ? {success:false,error:this.db.getSetting(`${key}:error`) || 'Completion is pending. Workflo must confirm it.'}
+        ? {success:false,error:this.db.getSetting(`${key}:error`) || `Completion is pending. ${desktopBrandName()} must confirm it.`}
         : {success:true}
     }
 

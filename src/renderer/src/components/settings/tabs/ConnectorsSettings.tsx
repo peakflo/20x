@@ -24,6 +24,7 @@ import { Badge } from '@/components/ui/Badge'
 import { SettingsSection } from '../SettingsSection'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { enterpriseApi } from '@/lib/ipc-client'
+import { desktopBrandName } from '@/lib/brand'
 
 // ── Connector catalog ──────────────────────────────────────────────────
 
@@ -245,7 +246,7 @@ export function ConnectorsSettings() {
               : `${totalConnected} connection${totalConnected !== 1 ? 's' : ''} across ${connectedTypes} service${connectedTypes !== 1 ? 's' : ''}`}
           </p>
           <Button size="sm" variant="secondary" onClick={handleManageIntegrations}>
-            Manage in Workflo
+            Manage in {desktopBrandName()}
             <ExternalLink className="h-3 w-3 ml-1.5" />
           </Button>
         </div>

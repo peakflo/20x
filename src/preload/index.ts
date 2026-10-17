@@ -486,6 +486,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('gitlab:deviceCode', handler)
   },
   app: {
+    brandSpacesEnabled: (): boolean => process.env.BRAND_SPACES === 'true',
     getVersion: (): Promise<string> =>
       ipcRenderer.invoke('app:getVersion'),
     setDesktopBackdrop: (enabled: boolean, themeMode: 'light' | 'dark' | 'system'): Promise<{ active: boolean; fullScreen: boolean }> =>

@@ -1528,7 +1528,7 @@ describe('AgentManager MCP server routing', () => {
     expect(mcpServers['task-management']).toBeUndefined()
   })
 
-  it('canonicalizes Workflo MCP dev server URLs to the active enterprise API URL for enterprise-sourced servers', async () => {
+  it('keeps the workflo tool namespace after the enterprise MCP label becomes Spaces', async () => {
     const mockDb = {
       getAgent: vi.fn(() => ({
         id: 'agent-1',
@@ -1539,7 +1539,7 @@ describe('AgentManager MCP server routing', () => {
       })),
       getMcpServer: vi.fn(() => ({
         id: 'workflo-stage-server',
-        name: '[Workflo] Organisation Workspace',
+        name: '[Spaces] Organisation Workspace',
         type: 'remote',
         url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
         headers: {},
@@ -1561,6 +1561,7 @@ describe('AgentManager MCP server routing', () => {
       url: 'https://api.peakflo.ai/api/mcp/dev/mcp',
       headers: { Authorization: 'Bearer fresh-prod-jwt' },
     })
+    expect(mcpServers['[Spaces] Organisation Workspace']).toBeUndefined()
   })
 
   it('does NOT auto-manage a user-sourced MCP, even when name and URL look like the enterprise one (provenance check)', async () => {

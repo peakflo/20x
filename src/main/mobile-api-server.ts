@@ -1,4 +1,5 @@
 import { updateTaskFromUser } from './session-feedback'
+import { desktopBrandName } from './brand'
 import { getTaskCompletionAction } from '../shared/task-completion'
 /**
  * Mobile API server — HTTP + WebSocket for controlling 20x from a mobile device.
@@ -863,7 +864,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
 
   // POST /api/tasks — create task (must be checked before the :id update route)
   if (pathname === '/api/tasks') {
-    if (params.status === TaskStatus.Completed) throw Object.assign(new Error('Workflo must confirm completion.'), { status: 409 })
+    if (params.status === TaskStatus.Completed) throw Object.assign(new Error(`${desktopBrandName()} must confirm completion.`), { status: 409 })
     const { title } = params as { title?: string }
     if (!title) throw Object.assign(new Error('title is required'), { status: 400 })
     const task = db.createTask(params as unknown as Parameters<DatabaseManager['createTask']>[0])
@@ -903,7 +904,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
       return { completed: true, status: fresh?.status }
     }
     if (!syncManagerRef) {
-      throw Object.assign(new Error('Sync this task with Workflo before completing it.'), { status: 409 })
+      throw Object.assign(new Error(`Sync this task with ${desktopBrandName()} before completing it.`), { status: 409 })
     }
     db.updateTask(taskId, { complete_at_source: true })
     const result = await syncManagerRef.executeAction(getTaskCompletionAction(task.output_fields), task, undefined, task.source_id)
