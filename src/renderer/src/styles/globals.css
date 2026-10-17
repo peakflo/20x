@@ -357,7 +357,11 @@ body, .theme-transition {
 /* The overlay follows the scroll content in paint order and sits below its
    controls, allowing the backdrop filter to sample the actual scrolling rows. */
 @layer components {
-.glass-bar { background: transparent; border-color: transparent; box-shadow: none; }
+.glass-bar {
+  background: transparent; border-color: transparent; box-shadow: none;
+  backdrop-filter: blur(var(--glass-edge-blur)) saturate(var(--glass-saturation));
+  -webkit-backdrop-filter: blur(var(--glass-edge-blur)) saturate(var(--glass-saturation));
+}
 .scroll-edge-overlay {
   position: absolute; inset-inline: 0; top: 0; z-index: 9; pointer-events: none;
   background: var(--glass-edge-wash);
@@ -399,14 +403,17 @@ body, .theme-transition {
 .glass-panel .glass-popover { background: var(--glass-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .glass-panel .glass-action:hover:not(:disabled) { background: color-mix(in srgb, var(--glass-inset) 94%, white); box-shadow: none; }
 .glass-solid-mode .glass-panel, .glass-solid-mode .glass-popover, .glass-solid-mode .glass-control, .glass-solid-mode .glass-action, .glass-solid-mode .glass-todo-summary, .glass-solid-mode .glass-composer::before { background: var(--glass-solid); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.glass-solid-mode .glass-bar { background: var(--glass-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .glass-solid-mode .scroll-edge-overlay { background: var(--glass-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .glass-solid-mode .glass-send:not(:disabled) { background: var(--primary); }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-bar { background: var(--glass-solid); }
   .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-todo-summary { background-color: var(--glass-solid); box-shadow: none; }
   .glass-composer::before { background: var(--glass-solid); box-shadow: none; }
   .scroll-edge-overlay { background: var(--glass-solid); }
 }
 @media (prefers-reduced-transparency: reduce) {
+  .glass-bar { background: var(--glass-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
   .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-todo-summary { background-color: var(--glass-solid); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
   .glass-composer::before { background: var(--glass-solid); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
   .scroll-edge-overlay { background: var(--glass-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
