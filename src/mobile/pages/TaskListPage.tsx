@@ -204,10 +204,10 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
             <button
               key={opt.value}
               onClick={() => setFilter(opt.value)}
-              className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors min-h-[28px] ${
+              className={`glass-filter-block shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors min-h-[28px] ${
                 filter === opt.value
                   ? 'glass-filter-active'
-                  : 'bg-muted text-muted-foreground active:bg-accent'
+                  : 'text-muted-foreground active:bg-accent'
               }`}
             >
               {opt.label}

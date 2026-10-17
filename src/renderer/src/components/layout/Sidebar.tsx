@@ -236,7 +236,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           </div>
 
           <div className="no-drag px-3 pb-3">
-            <div className="flex min-h-10 items-center gap-1 rounded-xl border border-[var(--glass-outline)] bg-[var(--glass-inset)] px-2">
+            <div className="glass-filter-block flex min-h-10 items-center gap-1 rounded-xl border border-[var(--glass-outline)] px-2">
             <button
               onClick={() => setFiltersOpen(!filtersOpen)}
               className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-foreground hover:bg-accent/40 cursor-pointer"
@@ -263,7 +263,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           </div>
 
           {filtersOpen && (
-            <div className="no-drag px-3 pb-2 space-y-2">
+            <div className="glass-filter-block no-drag mx-3 mb-2 space-y-2 rounded-xl border border-[var(--glass-outline)] p-2">
               <div className="grid grid-cols-2 gap-2">
                 <select
                   value={statusFilter}

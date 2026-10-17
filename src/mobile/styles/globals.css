@@ -154,14 +154,16 @@
 /* ── Reset ────────────────────────────────────── */
 @layer components {
 .glass-bar { background: transparent; border-color: transparent; box-shadow: none; }
-.glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action {
+/* Keep the prefixed filter first so the CSS build keeps the standard filter. */
+.glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-filter-block {
   border-color: var(--glass-outline);
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
 }
 .glass-panel { background: var(--glass-panel); box-shadow: var(--glass-rim), var(--glass-shadow); }
 .glass-task-detail-bar { background: var(--glass-panel); }
-.glass-todo-summary { --muted-foreground: #62636a; background: var(--glass-panel); border: 1px solid var(--glass-outline); box-shadow: var(--glass-rim), var(--glass-shadow-control); backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)); -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)); }
+.glass-filter-block { background: var(--glass-inset); border: 1px solid var(--glass-outline); }
+.glass-todo-summary { --muted-foreground: #62636a; background: var(--glass-panel); border: 1px solid var(--glass-outline); box-shadow: var(--glass-rim), var(--glass-shadow-control); -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)); backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)); }
 .dark .glass-todo-summary { --muted-foreground: #a4a4a8; }
 .glass-popover { background: var(--glass-popover); border-color: color-mix(in srgb, var(--foreground) 10%, transparent); border-radius: 16px !important; box-shadow: var(--glass-rim), 0 24px 64px -24px rgba(0, 0, 0, .55), 0 4px 16px rgba(0, 0, 0, .18); }
 .glass-control { background: var(--glass-control); border: 1px solid var(--glass-outline); border-radius: 9999px; box-shadow: var(--glass-rim), var(--glass-shadow-control); }
@@ -170,8 +172,8 @@
 .glass-composer::before {
   content: ""; position: absolute; inset: 0; z-index: -1; border: 1px solid var(--glass-outline); border-radius: inherit;
   background: var(--glass-composer-fill); box-shadow: var(--glass-rim), var(--glass-shadow-control);
-  backdrop-filter: blur(var(--glass-composer-blur)) saturate(var(--glass-saturation));
   -webkit-backdrop-filter: blur(var(--glass-composer-blur)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-composer-blur)) saturate(var(--glass-saturation));
 }
 .glass-composer:focus-within::before { border-color: color-mix(in srgb, var(--ring) 28%, var(--glass-outline)); }
 .glass-action { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 48px; height: 48px; border: 1px solid var(--glass-outline); border-radius: 9999px; background: var(--glass-control); box-shadow: var(--glass-rim), var(--glass-shadow-control); transition: transform 150ms, background-color 150ms, box-shadow 150ms; }
@@ -184,19 +186,19 @@
 .glass-send:disabled { background: var(--glass-control); color: var(--muted-foreground); opacity: .72; }
 .glass-panel .glass-control, .glass-panel .glass-action { background: var(--glass-inset); border-color: var(--glass-outline); box-shadow: none; }
 .glass-panel .glass-composer::before { background: var(--glass-inset); box-shadow: none; }
-.glass-panel .glass-popover { background: var(--glass-solid); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.glass-panel .glass-popover { background: var(--glass-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
 .glass-panel .glass-action:hover:not(:disabled) { background: color-mix(in srgb, var(--glass-inset) 94%, white); box-shadow: none; }
+.glass-solid-mode .glass-task-detail-bar, .glass-solid-mode .glass-panel, .glass-solid-mode .glass-popover, .glass-solid-mode .glass-control, .glass-solid-mode .glass-action, .glass-solid-mode .glass-filter-block, .glass-solid-mode .glass-todo-summary, .glass-solid-mode .glass-composer::before { background: var(--glass-solid); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .glass-solid-mode .glass-filter-active { background: color-mix(in srgb, var(--primary) 18%, var(--glass-solid)); }
-.glass-solid-mode .glass-task-detail-bar, .glass-solid-mode .glass-panel, .glass-solid-mode .glass-popover, .glass-solid-mode .glass-control, .glass-solid-mode .glass-action, .glass-solid-mode .glass-todo-summary, .glass-solid-mode .glass-composer::before { background: var(--glass-solid); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .glass-solid-mode .glass-send:not(:disabled) { background: var(--primary); }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-todo-summary { background-color: var(--glass-solid); box-shadow: none; }
+  .glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-filter-block, .glass-todo-summary { background-color: var(--glass-solid); box-shadow: none; }
   .glass-composer::before { background: var(--glass-solid); box-shadow: none; }
   .glass-filter-active { background: color-mix(in srgb, var(--primary) 18%, var(--glass-solid)); }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-todo-summary { background-color: var(--glass-solid); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
-  .glass-composer::before { background: var(--glass-solid); box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-filter-block, .glass-todo-summary { background-color: var(--glass-solid); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .glass-composer::before { background: var(--glass-solid); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .glass-send { background-color: var(--primary); }
   .glass-send:disabled { background: var(--glass-solid); }
   .glass-filter-active { background: color-mix(in srgb, var(--primary) 18%, var(--glass-solid)); }
