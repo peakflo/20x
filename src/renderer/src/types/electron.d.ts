@@ -441,6 +441,7 @@ interface ElectronAPI {
     writeFile: (taskId: string, content: string) => Promise<boolean>
   }
   app: {
+    brandSpacesEnabled: () => boolean
     getVersion: () => Promise<string>
     setDesktopBackdrop: (enabled: boolean, themeMode: 'light' | 'dark' | 'system') => Promise<{ active: boolean; fullScreen: boolean }>
     onFullScreenChanged: (callback: (fullScreen: boolean) => void) => () => void

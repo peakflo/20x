@@ -550,6 +550,11 @@ describe('PiAdapter', () => {
     }
     expect(document.settings.directTools).toBe(false)
     expect(Object.keys(document.mcpServers)).toEqual(['workflo'])
+    const spacesDocument = buildPiMcpConfigDocument({
+      '[Spaces] Organisation Workspace': { type: 'http', url: 'https://example.com/mcp' }
+    }) as { mcpServers: Record<string, unknown> }
+    expect(Object.keys(spacesDocument.mcpServers)).toEqual(['workflo'])
+    expect(`mcp__${Object.keys(spacesDocument.mcpServers)[0]}`).toBe('mcp__workflo')
     // With direct tools disabled, this is the only server-specific tool name
     // registered with the provider; the 50-character suffix stays in MCP.
     expect('mcp__workflo').toHaveLength(12)

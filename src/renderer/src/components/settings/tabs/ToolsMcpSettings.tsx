@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { SettingsSection } from '../SettingsSection'
 import { McpServerFormDialog } from '../forms/McpServerFormDialog'
 import { useMcpStore } from '@/stores/mcp-store'
+import { displayMcpServerName } from '@/lib/brand'
 import type { McpServer, CreateMcpServerDTO } from '@/types'
 
 interface McpConnectionInfo {
@@ -179,7 +180,7 @@ export function ToolsMcpSettings() {
                     }`} />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium text-sm truncate">{server.name}</span>
+                        <span className="font-medium text-sm truncate">{displayMcpServerName(server)}</span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                           server.type === 'remote'
                             ? 'bg-blue-500/10 text-blue-300'

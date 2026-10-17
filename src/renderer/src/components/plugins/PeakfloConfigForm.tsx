@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { desktopBrandName } from '@/lib/brand'
 import type { PluginFormProps } from './PluginFormProps'
 
 export function PeakfloConfigForm({ value, onChange }: PluginFormProps) {
@@ -40,7 +41,7 @@ export function PeakfloConfigForm({ value, onChange }: PluginFormProps) {
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Tasks are synced from your Workflo organization via REST API. No MCP
+          Tasks are synced from your {desktopBrandName()} organization via REST API. No MCP
           server or API key required. Agents, skills, and MCP servers are
           automatically synced from your organization hierarchy.
         </p>

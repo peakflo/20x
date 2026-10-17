@@ -1,4 +1,5 @@
 import { saveServerTaskSnapshot, serverTaskFields, serverTaskSnapshot, serverTaskStatus } from '../workflo-task-sync'
+import { brandSpacesEnabled, desktopBrandName } from '../brand'
 import {
   PluginActionId,
   type TaskSourcePlugin,
@@ -192,8 +193,12 @@ interface MappedTask {
 
 export class PeakfloPlugin implements TaskSourcePlugin {
   id = 'peakflo'
-  displayName = 'Peakflo Workflo'
-  description = 'Import and manage tasks from Peakflo Workflo platform'
+  get displayName(): string { return desktopBrandName('Peakflo Workflo') }
+  get description(): string {
+    return brandSpacesEnabled()
+      ? 'Import and manage tasks from Spaces'
+      : 'Import and manage tasks from Peakflo Workflo platform'
+  }
   icon = 'Zap'
   requiresMcpServer = false // No longer required — enterprise mode uses REST API
 
@@ -653,13 +658,13 @@ export class PeakfloPlugin implements TaskSourcePlugin {
       if (changedFields.agent_id !== undefined) {
         const agent = changedFields.agent_id ? ctx.db.getAgent(String(changedFields.agent_id)) : undefined
         const agentId = (agent?.config as Record<string, unknown> | undefined)?.enterprise_agent_id
-        if (changedFields.agent_id && !agentId) throw new Error('Select an agent from Workflo.')
+        if (changedFields.agent_id && !agentId) throw new Error(`Select an agent from ${desktopBrandName()}.`)
         updateData.agentId = agentId ?? null
       }
       if (changedFields.skill_ids !== undefined) {
         const ids = (changedFields.skill_ids as string[] | null) ?? []
         const skills = ids.map(id => ctx.db.getSkill(id)?.enterprise_skill_id)
-        if (skills.some(id => !id)) throw new Error('Sync the selected skills to Workflo first.')
+        if (skills.some(id => !id)) throw new Error(`Sync the selected skills to ${desktopBrandName()} first.`)
         updateData.skillIds = skills
       }
       const snapshot = serverTaskSnapshot(ctx.db, task.id)
@@ -674,7 +679,7 @@ export class PeakfloPlugin implements TaskSourcePlugin {
       return
     }
 
-    throw new Error('Task writes require a Workflo connection with task contract v2. Use 20x 0.0.146 or later.')
+    throw new Error(`Task writes require a ${desktopBrandName()} connection with task contract v2. Use 20x 0.0.146 or later.`)
   }
 
   async executeAction(
@@ -712,13 +717,13 @@ export class PeakfloPlugin implements TaskSourcePlugin {
       saveServerTaskSnapshot(ctx.db, task.id, confirmed)
       if (serverTaskStatus(confirmed.status) !== TaskStatus.Completed) {
         ctx.db.updateTask(task.id, serverTaskFields(ctx.db, confirmed), 'workflo-server')
-        return { success: false, error: 'Workflo has not completed this task. Review its current status.' }
+        return { success: false, error: `${desktopBrandName()} has not completed this task. Review its current status.` }
       }
       ctx.db.updateTask(task.id, serverTaskFields(ctx.db, confirmed), 'workflo-server')
       return { success: true, taskUpdate: { status: TaskStatus.Completed } }
     }
 
-    return { success: false, error: 'Task writes require a Workflo connection with task contract v2. Reconnect using 20x 0.0.146 or later.' }
+    return { success: false, error: `Task writes require a ${desktopBrandName()} connection with task contract v2. Reconnect using 20x 0.0.146 or later.` }
 
   }
 
@@ -877,7 +882,7 @@ Before creating a Peakflo task source, you need an MCP server that can communica
 
 ### Step 3: Create the Task Source
 
-1. Select **Peakflo Workflo** as the plugin
+1. Select **${desktopBrandName('Peakflo Workflo')}** as the plugin
 2. Choose the MCP server you configured in Step 1
 3. Give your source a name (e.g., "Peakflo Approvals")
 

@@ -56,6 +56,7 @@ export const MAX_PI_MCP_SERVER_SLUG_LENGTH = 24
  */
 export const PI_MCP_SERVER_ALIASES: Record<string, string> = {
   '[Workflo] Organisation Workspace': 'workflo',
+  '[Spaces] Organisation Workspace': 'workflo',
   '[Workflo] MCP Dev Server': 'workflo-dev',
 }
 

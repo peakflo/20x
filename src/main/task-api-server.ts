@@ -18,6 +18,7 @@ import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager } from './database'
 import { TASK_MCP_PATH, handleTaskMcpRequest } from './task-mcp-endpoint'
 import { TaskStatus } from '../shared/constants'
+import { desktopBrandName } from './brand'
 import { ArtifactType } from '../shared/artifacts'
 import type { AgentManager } from './agent-manager'
 import {
@@ -422,7 +423,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     case '/create_task': {
-      if (params.status === 'completed') return { error: 'Create the task in Workflo before completing it.' }
+      if (params.status === 'completed') return { error: `Create the task in ${desktopBrandName()} before completing it.` }
       if (!params.title) return { error: 'Title is required' }
 
       const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`

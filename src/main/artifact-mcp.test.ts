@@ -43,6 +43,19 @@ describe('artifact MCP main-process gate', () => {
     expect(caller.callTool).toHaveBeenCalledWith(expect.objectContaining({ name: '[Workflo] Organisation Workspace' }), 'workflow_list', {})
   })
 
+  it('finds the renamed enterprise server for an artifact call', async () => {
+    const spacesDb = {
+      ...db,
+      getMcpServers: () => [{ name: '[Spaces] Organisation Workspace', source: 'enterprise' }]
+    } as unknown as DatabaseManager
+    await callArtifactMcp(spacesDb, caller, input, 'desktop')
+    expect(caller.callTool).toHaveBeenCalledWith(
+      expect.objectContaining({ name: '[Spaces] Organisation Workspace' }),
+      'workflow_list',
+      {}
+    )
+  })
+
   it('logs every refusal with a reason and counts it toward the limit', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const probe = { ...input, path: 'probe.html', name: 'workflow_get' }

@@ -10,6 +10,7 @@ import { TaskStatusBadge } from './TaskStatusBadge'
 import { CodingAgentType, TASK_STATUSES, TaskStatus } from '@/types'
 import type { Agent, WorkfloTask } from '@/types'
 import { isTaskClosed } from '@shared/constants'
+import { desktopBrandName } from '@/lib/brand'
 
 export enum TaskPrimaryAction {
   START = 'start',
@@ -103,7 +104,7 @@ export function TaskHeaderBar({
   const uploadToWorkflo = async (autonomous = false) => {
     try {
       const result = await window.electronAPI.taskSources.upload(task.id, autonomous)
-      setUploadMessage(result.queued ? 'Waiting for Workflo. Retry is saved.' : 'Task sent to Workflo.')
+      setUploadMessage(result.queued ? `Waiting for ${desktopBrandName()}. Retry is saved.` : `Task sent to ${desktopBrandName()}.`)
       await useTaskStore.getState().fetchTasks()
     } catch (error) {
       setUploadMessage(error instanceof Error ? error.message : String(error))
@@ -336,8 +337,8 @@ export function TaskHeaderBar({
           <div className="absolute right-0 top-9 z-50 w-44 overflow-hidden rounded-lg glass-popover border p-1 shadow-xl">
             {[
               { label: 'Restart session', icon: RotateCcw, action: onRestartSession },
-              { label: 'Send to Workflo', icon: ExternalLink, action: enterpriseConnected && !task.source_id ? () => uploadToWorkflo(false) : undefined },
-              { label: 'Run agent in Workflo', icon: HarnessIcon, action: enterpriseConnected && !task.source_id && task.agent_id ? () => uploadToWorkflo(true) : undefined },
+              { label: `Send to ${desktopBrandName()}`, icon: ExternalLink, action: enterpriseConnected && !task.source_id ? () => uploadToWorkflo(false) : undefined },
+              { label: `Run agent in ${desktopBrandName()}`, icon: HarnessIcon, action: enterpriseConnected && !task.source_id && task.agent_id ? () => uploadToWorkflo(true) : undefined },
               { label: 'Edit task', icon: Pencil, action: onEdit },
               { label: 'Snooze', icon: ChevronDown, action: onSnooze },
               { label: 'Open in canvas', icon: Layers, action: onOpenCanvas },
@@ -355,10 +356,10 @@ export function TaskHeaderBar({
           </div>
         )}
       </div>
-      {task.server_execution_mode === 'autonomous' && <span className="text-xs">Agent runs in Workflo</span>}
-      {task.server_cron && <span className="text-xs">Workflo schedule: {task.server_cron}</span>}
+      {task.server_execution_mode === 'autonomous' && <span className="text-xs">Agent runs in {desktopBrandName()}</span>}
+      {task.server_cron && <span className="text-xs">{desktopBrandName()} schedule: {task.server_cron}</span>}
       {task.server_pending_edits && <details className="text-xs"><summary>Unsaved edits</summary><pre className="whitespace-pre-wrap">{JSON.stringify(task.server_pending_edits, null, 2)}</pre></details>}
-      {task.server_sync_pending && <span role="status" className="text-xs">{task.server_sync_error ? `Edits not saved in Workflo: ${task.server_sync_error}` : 'Waiting to sync with Workflo'}</span>}
+      {task.server_sync_pending && <span role="status" className="text-xs">{task.server_sync_error ? `Edits not saved in ${desktopBrandName()}: ${task.server_sync_error}` : `Waiting to sync with ${desktopBrandName()}`}</span>}
       {uploadMessage && <span role="status" className="text-xs">{uploadMessage}</span>}
     </header>
   )

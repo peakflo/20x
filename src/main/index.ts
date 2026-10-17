@@ -20,6 +20,7 @@ import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
 import { NotionPlugin } from './plugins/notion-plugin'
 import { YouTrackPlugin } from './plugins/youtrack-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
+import { onBrandSpacesChanged, setSelectedCompanyBrand } from './brand'
 import { panelBrowserBroker } from './panel-browser-broker'
 import { getAgentBrowserSession } from './agent-browser-session'
 import { VoiceSessionManager } from './voice/voice-session-manager'
@@ -1027,6 +1028,13 @@ app.whenReady().then(async () => {
 
   db = new DatabaseManager()
   db.initialize()
+  const savedBrand = db.getSetting('enterprise_brand_spaces')
+  setSelectedCompanyBrand(savedBrand === 'true' ? true : savedBrand === 'false' ? false : null)
+  onBrandSpacesChanged((enabled) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.send('app:brandSpacesChanged', enabled)
+    }
+  })
 
   // "My multiplier" denominator: close any app-focus interval left open by a
   // crash, before anything else (including window creation below, which is

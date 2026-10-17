@@ -60,6 +60,9 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export const api = {
+  brand: {
+    get: () => get<{ spaces: boolean }>('/api/brand')
+  },
   push: {
     config: () => get<{ publicKey: string; preferences: PushPreferences }>('/api/push/config'),
     subscription: () => get<{ subscription: PushSubscriptionJSON | null }>('/api/push/subscription'),

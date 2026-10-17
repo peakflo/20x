@@ -12,6 +12,7 @@ import { TASK_WRITE_HEADERS, taskCompletionCommand } from '../shared/task-write-
  *   - Base URL resolution
  */
 import type { EnterpriseAuth } from './enterprise-auth'
+import { desktopBrandName } from './brand'
 
 // ── Response types ──────────────────────────────────────────────────────
 
@@ -261,7 +262,7 @@ export class WorkfloApiClient {
     expectedVersion?: number
   ): Promise<void> {
     const version = expectedVersion ?? (await this.getTask(taskId)).version
-    if (version === undefined) throw new Error('Sync this task with Workflo contract v2 before completing it.')
+    if (version === undefined) throw new Error(`Sync this task with ${desktopBrandName()} contract v2 before completing it.`)
     const command = taskCompletionCommand(taskId, outputs, version)
     await this.auth.apiRequest(command.method, command.path, command.body, command.headers)
   }

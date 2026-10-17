@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { EnterpriseAuth } from './enterprise-auth'
+import { brandSpacesEnabled, setSelectedCompanyBrand } from './brand'
 import { readEnterpriseAiGatewayConfig, storeEnterpriseAiGatewayConfig } from './enterprise-ai-gateway'
 
 const authMock = {
@@ -55,6 +56,7 @@ describe('EnterpriseAuth logging', () => {
   })
 
   afterEach(() => {
+    setSelectedCompanyBrand(null)
     warnSpy.mockRestore()
     vi.unstubAllGlobals()
     vi.clearAllMocks()
@@ -108,6 +110,7 @@ describe('EnterpriseAuth logging', () => {
     // Seed a stored refresh token so refreshToken() gets past the guard
     db.setSetting('enterprise_supabase_refresh_token', Buffer.from('refresh-tok', 'utf8').toString('base64'))
     db.setSetting('enterprise_tenant_id', 'tenant-1')
+    db.setSetting('enterprise_brand_spaces', 'true')
 
     let resolveRefresh: ((v: { data: unknown; error: null }) => void) | null = null
     authMock.refreshSession.mockImplementation(
@@ -117,7 +120,7 @@ describe('EnterpriseAuth logging', () => {
     const fetchFn = vi.fn(async () => ({
       ok: true,
       status: 200,
-      json: async () => ({ token: 'jwt-new', expiresIn: 3600 })
+      json: async () => ({ token: 'jwt-new', expiresIn: 3600, brandSpaces: false })
     }))
     vi.stubGlobal('fetch', fetchFn)
 
@@ -144,6 +147,8 @@ describe('EnterpriseAuth logging', () => {
     const [r1, r2] = await Promise.all([p1, p2])
     expect(r1.token).toBe('jwt-new')
     expect(r2.token).toBe('jwt-new')
+    expect(db.getSetting('enterprise_brand_spaces')).toBe('false')
+    expect(brandSpacesEnabled()).toBe(false)
 
     // Still only one Supabase call
     expect(authMock.refreshSession).toHaveBeenCalledTimes(1)
@@ -225,7 +230,7 @@ describe('EnterpriseAuth logging', () => {
           json: async () => ({
             token: 'jwt-token',
             expiresIn: 3600,
-            tenant: { id: 'tenant-1', name: 'Peakflo' }
+            tenant: { id: 'tenant-1', name: 'Peakflo', brandSpaces: true }
           })
         }
       }
@@ -265,8 +270,10 @@ describe('EnterpriseAuth logging', () => {
 
     expect(result).toEqual({
       token: 'jwt-token',
-      tenant: { id: 'tenant-1', name: 'Peakflo' }
+      tenant: { id: 'tenant-1', name: 'Peakflo', brandSpaces: true }
     })
+    expect(db.getSetting('enterprise_brand_spaces')).toBe('true')
+    expect(brandSpacesEnabled()).toBe(true)
     const virtualKeyCall = (
       fetchFn.mock.calls as Array<[RequestInfo | URL, RequestInit?]>
     ).find(([input]) => String(input).includes('/api/20x/ai-gateway/virtual-key'))

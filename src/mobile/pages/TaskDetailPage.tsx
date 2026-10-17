@@ -8,6 +8,7 @@ import { useTaskStore, type Task, type TaskAttachment } from '../stores/task-sto
 import { ScadAttachmentEditor } from '@/components/artifacts/viewers/ScadAttachmentEditor'
 import { useAgentStore, SessionStatus } from '../stores/agent-store'
 import { api } from '../api/client'
+import { desktopBrandName } from '@/lib/brand'
 import { useSessionControls } from '../hooks/useSessionControls'
 import { Badge } from '../components/Badge'
 import { PriorityBadge } from '../components/PriorityBadge'
@@ -202,7 +203,8 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     try {
       await api.tasks.complete(t.id, completeAtSource)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Workflo has not confirmed completion.')
+      const brand = await api.brand.get().catch(() => ({ spaces: false }))
+      window.alert(error instanceof Error ? error.message : `${desktopBrandName('Workflo', brand.spaces)} has not confirmed completion.`)
     }
   }, [])
 

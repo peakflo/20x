@@ -730,6 +730,25 @@ describe('AgentManager skill file paths', () => {
         expect(md).toContain('`workflow_list`')
         expect(md).toContain('`report_schema`')
       }
+      const priorBrand = process.env.BRAND_SPACES
+      process.env.BRAND_SPACES = 'true'
+      try {
+        const brandedMd: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', injected)
+        expect(brandedMd).toContain(
+          '### [Spaces] Organisation Workspace (runtime: [Workflo] Organisation Workspace; tool prefix: workflo)'
+        )
+        mockDb.getMcpServer = vi.fn(() => ({
+          ...workflo,
+          tools: [{ name: 'workflow_list' }]
+        }))
+        const brandedClaudeMd: string = (manager as any).generateClaudeMd([], [], '/tmp/ws', 'agent-1', injected)
+        expect(brandedClaudeMd).toContain(
+          '### [Spaces] Organisation Workspace (runtime: [Workflo] Organisation Workspace; Pi prefix: workflo; Claude Code prefix: mcp___Workflo__Organisation_Workspace__) (1 tools)'
+        )
+      } finally {
+        if (priorBrand === undefined) delete process.env.BRAND_SPACES
+        else process.env.BRAND_SPACES = priorBrand
+      }
     })
 
     it('does not add Workflo discovery guidance for unrelated MCP servers', () => {
@@ -1528,7 +1547,38 @@ describe('AgentManager MCP server routing', () => {
     expect(mcpServers['task-management']).toBeUndefined()
   })
 
-  it('canonicalizes Workflo MCP dev server URLs to the active enterprise API URL for enterprise-sourced servers', async () => {
+  it('canonicalizes [Workflo] server URLs with the flag off', async () => {
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS L2',
+        config: { mcp_servers: ['workflo-stage-server'] }
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'workflo-stage-server',
+        name: '[Workflo] Organisation Workspace',
+        type: 'remote',
+        url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
+        headers: {},
+        oauth_metadata: {},
+        source: 'enterprise'
+      }))
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+    const manager = new AgentManager(mockDb)
+    manager.setEnterpriseAuth({
+      getApiUrl: vi.fn(() => 'https://api.peakflo.ai'),
+      getJwt: vi.fn(async () => 'fresh-prod-jwt')
+    } as any)
+
+    const servers = await (manager as any).buildMcpServersForAdapter('agent-1')
+    expect(servers['[Workflo] Organisation Workspace']).toMatchObject({
+      type: 'http',
+      url: 'https://api.peakflo.ai/api/mcp/dev/mcp',
+      headers: { Authorization: 'Bearer fresh-prod-jwt' }
+    })
+  })
+
+  it('keeps the workflo tool namespace after the enterprise MCP label becomes Spaces', async () => {
     const mockDb = {
       getAgent: vi.fn(() => ({
         id: 'agent-1',
@@ -1539,7 +1589,7 @@ describe('AgentManager MCP server routing', () => {
       })),
       getMcpServer: vi.fn(() => ({
         id: 'workflo-stage-server',
-        name: '[Workflo] Organisation Workspace',
+        name: '[Spaces] Organisation Workspace',
         type: 'remote',
         url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
         headers: {},
@@ -1561,6 +1611,7 @@ describe('AgentManager MCP server routing', () => {
       url: 'https://api.peakflo.ai/api/mcp/dev/mcp',
       headers: { Authorization: 'Bearer fresh-prod-jwt' },
     })
+    expect(mcpServers['[Spaces] Organisation Workspace']).toBeUndefined()
   })
 
   it('does NOT auto-manage a user-sourced MCP, even when name and URL look like the enterprise one (provenance check)', async () => {

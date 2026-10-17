@@ -1,6 +1,7 @@
 import type { BrowserRecordingManifest } from '../shared/browser-recording'
 import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '../shared/browser-session-import'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { createBrandFlagCache } from './brand-cache'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
 import type { TaskRunDuration } from '../shared/task-run-duration'
@@ -25,6 +26,9 @@ import {
   type HarnessUpdateAllResult,
   type HarnessUpdateResult
 } from '../shared/harness-maintenance'
+
+const brandFlagCache = createBrandFlagCache(() => ipcRenderer.sendSync('app:brandSpacesEnabled'))
+ipcRenderer.on('app:brandSpacesChanged', (_event, enabled: boolean) => brandFlagCache.update(enabled))
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -486,6 +490,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('gitlab:deviceCode', handler)
   },
   app: {
+    brandSpacesEnabled: brandFlagCache.get,
     getVersion: (): Promise<string> =>
       ipcRenderer.invoke('app:getVersion'),
     setDesktopBackdrop: (enabled: boolean, themeMode: 'light' | 'dark' | 'system'): Promise<{ active: boolean; fullScreen: boolean }> =>
