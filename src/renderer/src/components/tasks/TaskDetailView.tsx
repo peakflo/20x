@@ -395,13 +395,15 @@ interface TaskDetailViewProps {
   onReorderSubtasks?: (orderedIds: string[]) => void
   /** Presentation-only mode used by the task workspace redesign. */
   displayMode?: 'full' | 'prestart' | 'panel'
+  /** Let detail rows scroll behind the floating task header. */
+  underFloatingHeader?: boolean
   /** Output fields live in their own pinned artifact tab in panel mode. */
   showOutputFields?: boolean
   /** The workspace header owns the primary action once a session exists. */
   showPrimaryActions?: boolean
 }
 
-function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks, displayMode = 'full', showOutputFields = true, showPrimaryActions = true }: TaskDetailViewProps) {
+function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks, displayMode = 'full', underFloatingHeader = false, showOutputFields = true, showPrimaryActions = true }: TaskDetailViewProps) {
   // Per-field selectors — a selector-less useSkillStore() re-renders this
   // large view on every skill-store mutation.
   const skills = useSkillStore((s) => s.skills)
@@ -461,7 +463,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
       </div>
       )}
 
-      <div className="flex-1 overflow-y-auto">
+      <div className={`flex-1 overflow-y-auto ${underFloatingHeader ? 'pt-12' : ''}`}>
         <div className={`${displayMode === 'prestart' ? 'max-w-[780px] px-6 py-6' : displayMode === 'panel' ? 'max-w-none px-5 py-5' : 'max-w-2xl px-8 py-8'} mx-auto space-y-6`}>
           {parentTask && onNavigateToTask && (
             <ParentTaskContext parentTask={parentTask} onNavigateToTask={onNavigateToTask} />

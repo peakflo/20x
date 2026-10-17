@@ -1098,6 +1098,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
       onAddSubtask={handleAddSubtask}
       onReorderSubtasks={handleReorderSubtasks}
       displayMode={hasSession ? 'panel' : 'prestart'}
+      underFloatingHeader
       showOutputFields={!hasSession || panelLayout === 'task-only'}
       showPrimaryActions={!hasSession || panelLayout === 'task-only'}
     />
@@ -1138,7 +1139,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
     <>
       <div className="native-backdrop-page relative flex h-full min-h-0 flex-col bg-background">
         <TaskHeaderBar
-          floating={hasSession && panelLayout !== 'task-only'}
+          floating
           task={task}
           agent={assignedAgent}
           agents={agents}
