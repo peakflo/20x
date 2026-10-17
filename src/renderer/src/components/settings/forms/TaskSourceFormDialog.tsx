@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/Label'
 import { getPluginForm } from '@/components/plugins'
 import { PluginSetupDocumentation } from '@/components/plugins/PluginSetupDocumentation'
 import { pluginApi } from '@/lib/ipc-client'
+import { displayMcpServerName } from '@/lib/brand'
 import type { McpServer, TaskSource, CreateTaskSourceDTO, PluginMeta } from '@/types'
 
 interface TaskSourceFormDialogProps {
@@ -124,7 +125,7 @@ export function TaskSourceFormDialog({
                       ) : (
                         mcpServers.map((s) => (
                           <option key={s.id} value={s.id}>
-                            {s.name}
+                            {displayMcpServerName(s)}
                           </option>
                         ))
                       )}

@@ -6,7 +6,7 @@ import { join, basename, extname } from 'path'
 import { networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { callArtifactMcp } from './artifact-mcp'
-import { desktopBrandName, organisationWorkspaceName } from './brand'
+import { brandSpacesEnabled, desktopBrandName, findStoredWorkspaceServer, STORED_ORGANISATION_WORKSPACE_NAME } from './brand'
 import type { ArtifactMcpCall } from '../shared/artifact-mcp'
 import WebSocket from 'ws'
 import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
@@ -1173,6 +1173,10 @@ export function registerIpcHandlers(
   })
 
   // App version
+  ipcMain.on('app:brandSpacesEnabled', (event) => {
+    event.returnValue = brandSpacesEnabled()
+  })
+
   ipcMain.handle('app:getVersion', () => {
     return app.getVersion()
   })
@@ -1495,21 +1499,12 @@ export function registerIpcHandlers(
         // workflows-as-tools, integrations, datastores, and data tables).
         // Uses the enterprise JWT for authentication — no separate API key needed.
         try {
-          const mcpDevServerName = organisationWorkspaceName()
-          const legacyMcpDevServerName = '[Workflo] MCP Dev Server'
+          const mcpDevServerName = STORED_ORGANISATION_WORKSPACE_NAME
           const apiUrl = enterpriseAuth!.getApiUrl()
           const mcpDevUrl = `${apiUrl}/api/mcp/dev/mcp`
 
           const localServers = db.getMcpServers()
-          const existingMcpDev =
-            localServers.find((s) => s.name === mcpDevServerName && s.source === 'enterprise') ??
-            localServers.find((s) => s.name === '[Workflo] Organisation Workspace' && s.source === 'enterprise') ??
-            localServers.find((s) => s.name === '[Spaces] Organisation Workspace' && s.source === 'enterprise') ??
-            localServers.find(
-              (s) =>
-                s.name === legacyMcpDevServerName &&
-                s.source === 'enterprise'
-            )
+          const existingMcpDev = findStoredWorkspaceServer(localServers)
 
           if (existingMcpDev) {
             // Update URL and ensure source is 'enterprise' (may be missing on

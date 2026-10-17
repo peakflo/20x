@@ -1,6 +1,6 @@
 import { finishSessionFeedback, updateTaskFromUser } from './session-feedback'
 import { serverTaskSnapshot } from './workflo-task-sync'
-import { desktopBrandName, mcpRuntimeName } from './brand'
+import { desktopBrandName, displayMcpServerName, mcpRuntimeName } from './brand'
 import { EventEmitter } from 'events'
 import { spawn } from 'child_process'
 import { join } from 'path'
@@ -2155,7 +2155,8 @@ export class AgentManager extends EventEmitter {
         for (const entry of documentedServers) {
           const { server: mcpServer, enabledTools } = entry
           const transport = AgentManager.describeMcpTransport(entry)
-          md += `### ${mcpServer.name}\n\n`
+          const displayName = displayMcpServerName(mcpServer)
+          md += `### ${displayName}${displayName === mcpServer.name ? '' : ` (runtime: ${mcpServer.name}; tool prefix: workflo)`}\n\n`
           md += `**Type:** ${transport.type}\n\n`
           md += `${transport.detail}\n\n`
 
@@ -2256,7 +2257,8 @@ export class AgentManager extends EventEmitter {
               ? mcpServer.tools.filter(t => enabledTools.includes(t.name))
               : mcpServer.tools
 
-            md += `### ${mcpServer.name} (${toolsToShow.length} tools)\n\n`
+            const displayName = displayMcpServerName(mcpServer)
+            md += `### ${displayName}${displayName === mcpServer.name ? '' : ` (runtime: ${mcpServer.name}; tool prefix: workflo)`} (${toolsToShow.length} tools)\n\n`
             md += `${toolsToShow.map((tool) => `\`${tool.name}\``).join(', ')}\n\n`
           }
         }

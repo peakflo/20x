@@ -1,7 +1,7 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest'
 
 vi.mock('electron', () => ({
-  ipcMain: { handle: vi.fn() },
+  ipcMain: { handle: vi.fn(), on: vi.fn() },
   dialog: { showOpenDialog: vi.fn() },
   shell: { openPath: vi.fn(), showItemInFolder: vi.fn() },
   clipboard: { write: vi.fn(async () => undefined), writeText: vi.fn(async () => undefined) },
@@ -72,6 +72,13 @@ describe('registerIpcHandlers', () => {
     expect(channels).toContain('voice:pushAudio')
     expect(channels).toContain('voice:confirm')
     expect(channels).toContain('voice:selectModel')
+    const brandHandler = (ipcMain.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call: unknown[]) => call[0] === 'app:brandSpacesEnabled'
+    )?.[1]
+    expect(brandHandler).toBeTypeOf('function')
+    const event = { returnValue: undefined as boolean | undefined }
+    brandHandler(event)
+    expect(event.returnValue).toBeTypeOf('boolean')
   })
 
   it('does not expose the private push key through settings reads', () => {

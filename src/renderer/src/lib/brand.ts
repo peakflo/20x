@@ -5,3 +5,9 @@ export function desktopBrandName(
 ): string {
   return enabled ? 'Spaces' : legacyName
 }
+
+export function displayMcpServerName(server: { name: string; source?: string }): string {
+  return server.source === 'enterprise' && server.name === '[Workflo] Organisation Workspace'
+    ? `[${desktopBrandName()}] Organisation Workspace`
+    : server.name
+}

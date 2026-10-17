@@ -1,5 +1,5 @@
 import { updateTaskFromUser } from './session-feedback'
-import { desktopBrandName } from './brand'
+import { brandSpacesEnabled, desktopBrandName } from './brand'
 import { getTaskCompletionAction } from '../shared/task-completion'
 /**
  * Mobile API server — HTTP + WebSocket for controlling 20x from a mobile device.
@@ -340,6 +340,8 @@ async function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathnam
 
 async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Promise<unknown> {
   const db = dbRef!
+
+  if (pathname === '/api/brand') return { spaces: brandSpacesEnabled() }
 
   // GET /api/tasks
   if (pathname === '/api/tasks') {

@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/Label'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
 import { agentConfigApi } from '@/lib/ipc-client'
+import { displayMcpServerName } from '@/lib/brand'
 import { useHarnessInstanceStore } from '@/stores/harness-instance-store'
 import { useAcpInstanceStore } from '@/stores/acp-instance-store'
 import { useMcpStore } from '@/stores/mcp-store'
@@ -753,7 +754,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
                       onCheckedChange={() => toggleMcpServer(server.id)}
                     />
                     <div className="min-w-0 flex-1 flex items-center gap-2">
-                      <span className="text-sm">{server.name}</span>
+                      <span className="text-sm">{displayMcpServerName(server)}</span>
                       <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                         server.type === 'remote' ? 'bg-blue-500/20 text-blue-400' : 'bg-muted text-muted-foreground'
                       }`}>

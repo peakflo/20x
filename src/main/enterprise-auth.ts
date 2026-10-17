@@ -1,6 +1,7 @@
 import { app, safeStorage, Notification } from 'electron'
 import { createClient, SupabaseClient, Session } from '@supabase/supabase-js'
 import type { DatabaseManager } from './database'
+import { setSelectedCompanyBrand } from './brand'
 import {
   clearEnterpriseAiGatewayConfig,
   storeEnterpriseAiGatewayConfig
@@ -54,7 +55,8 @@ const KEYS = {
   USER_EMAIL: 'enterprise_user_email',
   USER_ID: 'enterprise_user_id',
   TENANT_ID: 'enterprise_tenant_id',
-  TENANT_NAME: 'enterprise_tenant_name'
+  TENANT_NAME: 'enterprise_tenant_name',
+  BRAND_SPACES: 'enterprise_brand_spaces'
 } as const
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -73,7 +75,7 @@ export interface EnterpriseLoginResult {
 
 export interface EnterpriseSelectTenantResult {
   token: string
-  tenant: { id: string; name: string }
+  tenant: { id: string; name: string; brandSpaces?: boolean }
   /** Non-fatal warnings from post-auth setup (e.g. AI gateway key fetch failure). */
   warnings?: string[]
 }
@@ -154,6 +156,8 @@ export class EnterpriseAuth {
 
   constructor(db: DatabaseManager) {
     this.db = db
+    const savedBrand = db.getSetting(KEYS.BRAND_SPACES)
+    setSelectedCompanyBrand(savedBrand === 'true' ? true : savedBrand === 'false' ? false : null)
 
     this.config = getEnterpriseConfig()
     this.apiUrl = this.config.apiUrl
@@ -322,6 +326,7 @@ export class EnterpriseAuth {
     this.storeJwt(result.token, result.expiresIn)
     this.db.setSetting(KEYS.TENANT_ID, result.tenant.id)
     this.db.setSetting(KEYS.TENANT_NAME, result.tenant.name)
+    this.saveCompanyBrand(result.tenant.brandSpaces, true)
     this.logAuthEvent('auth_select_tenant_success', {
       tenantId: result.tenant.id,
       tenantName: result.tenant.name
@@ -447,6 +452,7 @@ export class EnterpriseAuth {
 
     const result = await response.json()
     this.storeJwt(result.token, result.expiresIn)
+    this.saveCompanyBrand(result.brandSpaces)
 
     return { token: result.token }
   }
@@ -948,11 +954,22 @@ export class EnterpriseAuth {
       .filter((model): model is { id: string; name: string } => model !== null)
   }
 
+  private saveCompanyBrand(value: unknown, clearMissing = false): void {
+    if (typeof value === 'boolean') {
+      this.db.setSetting(KEYS.BRAND_SPACES, String(value))
+      setSelectedCompanyBrand(value)
+    } else if (clearMissing) {
+      this.db.deleteSetting(KEYS.BRAND_SPACES)
+      setSelectedCompanyBrand(null)
+    }
+  }
+
   private clearStoredData(): void {
     this.logAuthEvent('auth_state_cleared')
     this.cachedJwt = null
     this.cachedJwtExpiresAt = 0
     clearEnterpriseAiGatewayConfig(this.db)
+    setSelectedCompanyBrand(null)
 
     for (const key of Object.values(KEYS)) {
       this.db.deleteSetting(key)

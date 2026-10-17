@@ -193,10 +193,12 @@ interface MappedTask {
 
 export class PeakfloPlugin implements TaskSourcePlugin {
   id = 'peakflo'
-  displayName = desktopBrandName('Peakflo Workflo')
-  description = brandSpacesEnabled()
-    ? 'Import and manage tasks from Spaces'
-    : 'Import and manage tasks from Peakflo Workflo platform'
+  get displayName(): string { return desktopBrandName('Peakflo Workflo') }
+  get description(): string {
+    return brandSpacesEnabled()
+      ? 'Import and manage tasks from Spaces'
+      : 'Import and manage tasks from Peakflo Workflo platform'
+  }
   icon = 'Zap'
   requiresMcpServer = false // No longer required — enterprise mode uses REST API
 
