@@ -769,8 +769,6 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             </div>
           )}
         </div>
-        {topOverlayHeight > 0 && <div aria-hidden="true" className="scroll-edge-overlay" style={{ height: topOverlayHeight + 56 }} />}
-
         {/* Scroll to bottom button */}
         {showScrollToBottom && messages.length > 0 && (
           <button

@@ -243,9 +243,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
             )}
           </>
         )}
-
       </div>
-      <div aria-hidden="true" className="scroll-edge-overlay h-[188px]" />
     </div>
   )
 }

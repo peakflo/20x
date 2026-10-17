@@ -329,8 +329,6 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
               onLoadMoreCompleted={loadMoreCompleted}
             />
           </div>
-          <div aria-hidden="true" className={cn('scroll-edge-overlay', filtersOpen ? 'h-[278px]' : 'h-[176px]')} />
-
           <div className="px-4 py-2.5 border-t text-xs text-muted-foreground tabular-nums">
             {activeCount} active
             {hiddenCount > 0 && (

@@ -84,7 +84,6 @@ describe('AgentTranscriptPanel drag and drop attachments', () => {
       expect(container.querySelector('.glass-todo-summary')).toHaveTextContent('Tasks')
       expect(container.querySelector('.glass-todo-summary')?.closest('.glass-bar')).toBeTruthy()
       expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingStart: 100, paddingEnd: 64 })
-      expect(container.querySelector('.scroll-edge-overlay')).toHaveStyle({ height: '144px' })
     } finally {
       rect.mockRestore()
     }

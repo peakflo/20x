@@ -1493,10 +1493,6 @@ export function AgentTranscriptPanel({
             </>
           )}
         </div>
-        {floatingTop && topOverlayHeight > 0 && (
-          <div aria-hidden="true" className="scroll-edge-overlay" style={{ height: topOverlayHeight + 56 }} />
-        )}
-
         {/* Scroll to bottom button */}
         {showScrollToBottom && messages.length > 0 && (
           <button
