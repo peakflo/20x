@@ -743,7 +743,7 @@ describe('AgentManager skill file paths', () => {
         }))
         const brandedClaudeMd: string = (manager as any).generateClaudeMd([], [], '/tmp/ws', 'agent-1', injected)
         expect(brandedClaudeMd).toContain(
-          '### [Spaces] Organisation Workspace (runtime: [Workflo] Organisation Workspace; tool prefix: workflo) (1 tools)'
+          '### [Spaces] Organisation Workspace (runtime: [Workflo] Organisation Workspace; Pi prefix: workflo; Claude Code prefix: mcp___Workflo__Organisation_Workspace__) (1 tools)'
         )
       } finally {
         if (priorBrand === undefined) delete process.env.BRAND_SPACES

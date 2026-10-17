@@ -5,6 +5,7 @@ import {
   displayMcpServerName,
   findStoredWorkspaceServer,
   mcpRuntimeName,
+  onBrandSpacesChanged,
   organisationWorkspaceName,
   setSelectedCompanyBrand,
   STORED_ORGANISATION_WORKSPACE_NAME
@@ -53,5 +54,18 @@ describe('desktop brand flag and stable MCP identity', () => {
     const userRow = { id: 'saved', name: STORED_ORGANISATION_WORKSPACE_NAME, source: 'user' }
     const oldEnterpriseRow = { id: 'old', name: '[Workflo] MCP Dev Server', source: 'enterprise' }
     expect(findStoredWorkspaceServer([oldEnterpriseRow, userRow])).toBe(userRow)
+  })
+
+  it('reports an effective company brand change once and stops after unsubscribe', () => {
+    delete process.env.BRAND_SPACES
+    setSelectedCompanyBrand(false)
+    const changes: boolean[] = []
+    const unsubscribe = onBrandSpacesChanged((enabled) => changes.push(enabled))
+    setSelectedCompanyBrand(true)
+    setSelectedCompanyBrand(true)
+    setSelectedCompanyBrand(false)
+    unsubscribe()
+    setSelectedCompanyBrand(true)
+    expect(changes).toEqual([true, false])
   })
 })

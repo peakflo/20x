@@ -2258,7 +2258,7 @@ export class AgentManager extends EventEmitter {
               : mcpServer.tools
 
             const displayName = displayMcpServerName(mcpServer)
-            md += `### ${displayName}${displayName === mcpServer.name ? '' : ` (runtime: ${mcpServer.name}; tool prefix: workflo)`} (${toolsToShow.length} tools)\n\n`
+            md += `### ${displayName}${displayName === mcpServer.name ? '' : ` (runtime: ${mcpServer.name}; Pi prefix: workflo; Claude Code prefix: mcp___Workflo__Organisation_Workspace__)`} (${toolsToShow.length} tools)\n\n`
             md += `${toolsToShow.map((tool) => `\`${tool.name}\``).join(', ')}\n\n`
           }
         }

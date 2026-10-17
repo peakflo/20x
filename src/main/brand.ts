@@ -1,10 +1,21 @@
 export const STORED_ORGANISATION_WORKSPACE_NAME = '[Workflo] Organisation Workspace'
 
 let selectedCompanyBrand: boolean | null = null
+const brandChangedListeners = new Set<(enabled: boolean) => void>()
+
+export function onBrandSpacesChanged(listener: (enabled: boolean) => void): () => void {
+  brandChangedListeners.add(listener)
+  return () => brandChangedListeners.delete(listener)
+}
 
 /** The authenticated company value is saved by EnterpriseAuth. */
 export function setSelectedCompanyBrand(value: boolean | null): void {
+  const previous = brandSpacesEnabled()
   selectedCompanyBrand = value
+  const current = brandSpacesEnabled()
+  if (current !== previous) {
+    for (const listener of brandChangedListeners) listener(current)
+  }
 }
 
 /** An explicit environment value can override the selected company for rollout. */
