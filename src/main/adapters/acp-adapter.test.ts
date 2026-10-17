@@ -793,3 +793,49 @@ describe('AcpAgentAdapter - sign-in flow', () => {
     expect(sendResponseSpy).toHaveBeenCalledWith(session, 'elicit-1', { result: { action: 'accept' } })
   })
 })
+
+describe('AcpAgentAdapter spawn failures', () => {
+  const config = { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp' } as SessionConfig
+  const missing = Object.assign(new Error('spawn cursor-agent ENOENT'), { code: 'ENOENT' })
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('preflights cursor-agent before starting a task', async () => {
+    vi.stubEnv('PATH', '/nonexistent')
+    const adapter = new AcpAgentAdapter({ command: 'cursor-agent', args: ['acp'] })
+    await expect(adapter.initialize()).rejects.toThrow(/CURSOR_CLI_MISSING.*cursor-agent/)
+  })
+
+  it.each(['create', 'resume'])('handles %s spawn errors, rejects requests, and clears state for retry', async (operation) => {
+    vi.stubEnv('PATH', '/nonexistent')
+    const cp = await import('child_process')
+    const spawnMock = cp.spawn as unknown as ReturnType<typeof vi.fn>
+    const { proc } = createFakeProcess()
+    spawnMock.mockReturnValue(proc)
+    const adapter = new AcpAgentAdapter({ command: 'cursor-agent', args: ['acp'] })
+    const priv = adapter as unknown as { sessions: Map<string, AcpSessionForTest> }
+    const result = operation === 'create'
+      ? adapter.createSession(config)
+      : adapter.resumeSession('task-1', config)
+    expect(proc.listenerCount('error')).toBeGreaterThan(0)
+    expect(priv.sessions.get('task-1')?.pendingRequests.size).toBe(1)
+    expect(() => proc.emit('error', missing)).not.toThrow()
+    await expect(result).rejects.toThrow(/CURSOR_CLI_MISSING.*cursor-agent/)
+    expect(priv.sessions.size).toBe(0)
+
+    const recovered = createFakeProcess({ initialize: () => v1InitResponse, 'session/new': () => ({ sessionId: 'recovered' }) })
+    spawnMock.mockReturnValue(recovered.proc)
+    await expect(adapter.createSession(config)).resolves.toBe('recovered')
+  })
+
+  it('does not suggest installing Cursor when the working directory is missing', async () => {
+    vi.stubEnv('PATH', '/nonexistent')
+    const cp = await import('child_process')
+    const { proc } = createFakeProcess()
+    ;(cp.spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(proc)
+    const adapter = new AcpAgentAdapter({ command: 'cursor-agent', args: ['acp'] })
+    const result = adapter.createSession({ ...config, workspaceDir: '/tmp/20x-missing-cursor-cwd-test' })
+    proc.emit('error', missing)
+    await expect(result).rejects.toThrow(/working directory does not exist/)
+    await expect(result).rejects.not.toThrow(/CURSOR_CLI_MISSING/)
+  })
+})

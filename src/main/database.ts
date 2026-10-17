@@ -11,6 +11,7 @@ import { UsageStore } from './usage/usage-store'
 import { contextHandoffSettingKey, parseContextHandoffMarker, type ContextHandoffMarker } from './context-handoff'
 import { harnessTypeOf, type HarnessInstance, type HarnessType } from '../shared/harness-instances'
 import { normalizeHomePath } from './harness-instances'
+import type { TaskRunDuration } from '../shared/task-run-duration'
 
 export interface AgentRow {
   id: string
@@ -2945,6 +2946,29 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (!this.ensureDbOpen()) return []
     const rows = this.db.prepare(`SELECT * FROM agent_run_intervals WHERE ended_at_ms IS NULL`).all() as AgentRunIntervalRow[]
     return rows.map(deserializeAgentRunInterval)
+  }
+
+  /** Sum the active work periods for each requested task, including open periods. */
+  getTaskRunDurations(taskIds: string[], nowMs: number = Date.now()): Record<string, TaskRunDuration> {
+    if (!this.ensureDbOpen() || taskIds.length === 0) return {}
+    const durations: Record<string, TaskRunDuration> = {}
+    // Keep each query below SQLite's bound-parameter limit.
+    for (let offset = 0; offset < taskIds.length; offset += 500) {
+      const ids = taskIds.slice(offset, offset + 500)
+      const placeholders = ids.map(() => '?').join(', ')
+      const rows = this.db.prepare(`
+        SELECT task_id,
+          SUM(MAX(0, COALESCE(ended_at_ms, ?) - started_at_ms)) AS duration_ms,
+          MAX(CASE WHEN ended_at_ms IS NULL THEN 1 ELSE 0 END) AS is_running
+        FROM agent_run_intervals
+        WHERE task_id IN (${placeholders})
+        GROUP BY task_id
+      `).all(nowMs, ...ids) as Array<{ task_id: string; duration_ms: number; is_running: number }>
+      for (const row of rows) {
+        durations[row.task_id] = { durationMs: row.duration_ms, isRunning: row.is_running === 1 }
+      }
+    }
+    return durations
   }
 
   /**

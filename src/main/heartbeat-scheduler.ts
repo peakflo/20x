@@ -215,7 +215,12 @@ export class HeartbeatScheduler {
 
   private canRunHeartbeat(taskId: string): boolean {
     const task = this.dbManager.getTask(taskId)
-    if (!task?.heartbeat_enabled || task.status === TaskStatus.Completed) return false
+    // A task sitting in model_error already has a stopped session. Pinging it
+    // would spawn a fresh mastermind/task session against a broken run —
+    // effectively an automatic retry the agent manager deliberately does not
+    // do on its own. heartbeat_enabled is left untouched (unlike Completed)
+    // so checks resume by themselves once the task is working again.
+    if (!task?.heartbeat_enabled || task.status === TaskStatus.Completed || task.status === TaskStatus.ModelError) return false
     return !task.parent_task_id || this.dbManager.getTask(task.parent_task_id)?.status !== TaskStatus.Completed
   }
 

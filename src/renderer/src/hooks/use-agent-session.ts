@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react'
 import { agentSessionApi } from '@/lib/ipc-client'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
+import { useTaskStore } from '@/stores/task-store'
 import { captureAnalyticsEvent } from '@/lib/analytics'
 import type { AgentApprovalRequest } from '@/types/electron'
 
@@ -31,6 +32,26 @@ const EMPTY_SESSION: AgentSessionState = {
   status: SessionStatus.IDLE,
   messages: [],
   pendingApproval: null
+}
+
+function handleSessionLaunchFailure(
+  taskId: string,
+  error: unknown,
+  operation: 'start' | 'resume',
+  retry: () => Promise<string>
+): void {
+  const store = useAgentStore.getState()
+  // A failed resume must release the placeholder without clearing the durable
+  // transcript projection; the user can still read the previous conversation.
+  if (operation === 'resume') store.endSession(taskId)
+  else store.removeSession(taskId)
+
+  if (String(error).includes('CURSOR_CLI_MISSING')) {
+    const taskTitle = useTaskStore.getState().tasks.find((task) => task.id === taskId)?.title || taskId
+    window.dispatchEvent(new CustomEvent('cursor-cli-missing', {
+      detail: { taskId, taskTitle, operation, retry }
+    }))
+  }
 }
 
 export function useAgentSession(taskId: string | undefined) {
@@ -80,7 +101,13 @@ export function useAgentSession(taskId: string | undefined) {
     async (agentId: string, tId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => {
       // Pre-register so events arriving during start() are captured via taskId fallback
       initSession(tId, '', agentId)
-      const { sessionId } = await agentSessionApi.start(agentId, tId, workspaceDir, skipInitialPrompt)
+      let sessionId: string
+      try {
+        ;({ sessionId } = await agentSessionApi.start(agentId, tId, workspaceDir, skipInitialPrompt))
+      } catch (error) {
+        handleSessionLaunchFailure(tId, error, 'start', () => start(agentId, tId, workspaceDir, skipInitialPrompt))
+        throw error
+      }
       // Update with the real sessionId (preserves any messages that arrived early)
       initSession(tId, sessionId, agentId)
       captureAnalyticsEvent('agent_session_started', {
@@ -105,7 +132,13 @@ export function useAgentSession(taskId: string | undefined) {
       // The replay batch dedups against the hydrated messages (shared part ids),
       // so nothing is lost or duplicated by leaving them in place.
       initSession(tId, '', agentId)
-      const result = await agentSessionApi.resume(agentId, tId, ocSessionId)
+      let result: { sessionId: string; ended?: boolean }
+      try {
+        result = await agentSessionApi.resume(agentId, tId, ocSessionId)
+      } catch (error) {
+        handleSessionLaunchFailure(tId, error, 'resume', () => resume(agentId, tId, ocSessionId))
+        throw error
+      }
       if (result.ended) {
         // Session ended normally (task completed) — clean up the pre-registered session
         removeSession(tId)

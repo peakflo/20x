@@ -22,6 +22,7 @@ import { HeartbeatSection } from './HeartbeatSection'
 import { useUIStore } from '@/stores/ui-store'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 import { isTaskClosed } from '@shared/constants'
+import { formatTaskRunDuration, useTaskRunDurations } from '@/hooks/use-task-run-durations'
 
 function ordinal(n: number): string {
   if (n >= 11 && n <= 13) return `${n}th`
@@ -99,6 +100,7 @@ const subtaskStatusDotColor: Record<TaskStatus, string> = {
   [TaskStatus.AgentWorking]: 'bg-amber-400 animate-pulse',
   [TaskStatus.ReadyForReview]: 'bg-pink-400',
   [TaskStatus.AgentLearning]: 'bg-blue-400 animate-pulse',
+  [TaskStatus.ModelError]: 'bg-red-400',
   [TaskStatus.Completed]: 'bg-emerald-400',
   [TaskStatus.Cancelled]: 'bg-muted-foreground',
   [TaskStatus.Expired]: 'bg-muted-foreground'
@@ -405,6 +407,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
   const skills = useSkillStore((s) => s.skills)
   const fetchSkills = useSkillStore((s) => s.fetchSkills)
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
+  const runDuration = useTaskRunDurations([task.id])[task.id]
   const isActive = !isTaskClosed(task.status)
 
   // Ensure skills are loaded for badge display
@@ -746,6 +749,12 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
             <span className="text-muted-foreground">{formatRelativeDate(task.created_at)}</span>
             <span className="text-muted-foreground flex items-center gap-2"><Clock className="h-3.5 w-3.5" /> Updated</span>
             <span className="text-muted-foreground">{formatRelativeDate(task.updated_at)}</span>
+            {runDuration && (
+              <>
+                <span className="text-muted-foreground flex items-center gap-2"><Clock className="h-3.5 w-3.5" /> Agent run time</span>
+                <span className="text-muted-foreground">{formatTaskRunDuration(runDuration.durationMs)}{runDuration.isRunning ? ' (running)' : ''}</span>
+              </>
+            )}
             {task.status !== TaskStatus.Completed && (task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
               <HeartbeatSection task={task} />
             )}

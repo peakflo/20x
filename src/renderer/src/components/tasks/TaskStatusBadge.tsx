@@ -7,6 +7,7 @@ const statusConfig: Record<TaskStatus, { label: string; variant: BadgeVariant }>
   [TaskStatus.AgentWorking]: { label: 'Agent Working', variant: 'yellow' },
   [TaskStatus.ReadyForReview]: { label: 'Ready for Review', variant: 'pink' },
   [TaskStatus.AgentLearning]: { label: 'Agent Learning', variant: 'blue' },
+  [TaskStatus.ModelError]: { label: 'Model Error', variant: 'red' },
   [TaskStatus.Completed]: { label: 'Completed', variant: 'green' },
   [TaskStatus.Cancelled]: { label: 'Cancelled', variant: 'default' },
   [TaskStatus.Expired]: { label: 'Expired', variant: 'default' }

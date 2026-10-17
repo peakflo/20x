@@ -7,6 +7,7 @@ import { useSnoozeTick } from '@/hooks/use-snooze-tick'
 import { isTaskClosed } from '@shared/constants'
 import type { WorkfloTask } from '@/types'
 import { COMPLETED_PAGE_SIZE } from '@/stores/task-store'
+import { useTaskRunDurations } from '@/hooks/use-task-run-durations'
 
 interface TaskListProps {
   tasks: WorkfloTask[]
@@ -38,6 +39,7 @@ export function TaskList({
   const [hiddenOpen, setHiddenOpen] = useState(false)
   const [recurringOpen, setRecurringOpen] = useState(false)
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set())
+  const runDurations = useTaskRunDurations(tasks.map(task => task.id))
 
   // Periodically re-evaluate snooze state so tasks move from Hidden → Active
   // when their snooze time expires (not only when the tasks array changes)
@@ -143,6 +145,7 @@ export function TaskList({
         <TaskListItem
           key={task.id}
           task={task}
+          runDuration={runDurations[task.id]}
           isSelected={task.id === selectedTaskId}
           onSelect={getSelectHandler(task.id)}
         />
@@ -155,6 +158,7 @@ export function TaskList({
       <div key={task.id}>
         <TaskListItem
           task={task}
+          runDuration={runDurations[task.id]}
           isSelected={task.id === selectedTaskId}
           onSelect={getSelectHandler(task.id)}
           subtaskCount={subtasks.length}
@@ -167,6 +171,7 @@ export function TaskList({
               <TaskListItem
                 key={subtask.id}
                 task={subtask}
+                runDuration={runDurations[subtask.id]}
                 isSelected={subtask.id === selectedTaskId}
                 onSelect={getSelectHandler(subtask.id)}
                 isSubtask

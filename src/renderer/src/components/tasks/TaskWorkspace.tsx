@@ -370,10 +370,15 @@ function TaskWorkspaceComponent({
       await start(task.agent_id, task.id)
     } catch (err) {
       console.error('Failed to start session:', err)
+      if (!String(err).includes('CURSOR_CLI_MISSING')) {
+        const toastId = `session-start-${task.id}`
+        showProgressToast(toastId, 'Session could not start')
+        failProgressToast(toastId, err instanceof Error ? err.message : String(err))
+      }
     } finally {
       startingRef.current = false
     }
-  }, [task?.agent_id, task?.id, session.sessionId, start])
+  }, [task?.agent_id, task?.id, session.sessionId, start, showProgressToast, failProgressToast])
 
   const handleResumeSession = useCallback(async () => {
     if (!task?.agent_id || !task?.session_id || startingRef.current || session.sessionId) return
@@ -382,12 +387,17 @@ function TaskWorkspaceComponent({
       await resume(task.agent_id, task.id, task.session_id)
     } catch (err) {
       console.error('Failed to resume session:', err)
+      if (!String(err).includes('CURSOR_CLI_MISSING')) {
+        const toastId = `session-resume-${task.id}`
+        showProgressToast(toastId, 'Session could not resume')
+        failProgressToast(toastId, err instanceof Error ? err.message : String(err))
+      }
       // Session expired — refresh tasks to clear session_id in UI
       fetchTasks()
     } finally {
       startingRef.current = false
     }
-  }, [task?.agent_id, task?.id, task?.session_id, session.sessionId, resume, fetchTasks])
+  }, [task?.agent_id, task?.id, task?.session_id, session.sessionId, resume, fetchTasks, showProgressToast, failProgressToast])
 
   const handleGhSetupComplete = useCallback(() => {
     setShowGhSetup(false)

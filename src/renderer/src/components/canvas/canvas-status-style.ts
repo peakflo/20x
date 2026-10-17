@@ -57,6 +57,15 @@ export const CANVAS_TASK_STATUS_STYLES: Record<TaskStatus, CanvasTaskStatusStyle
     miniFill: 'rgba(59,130,246,0.86)',
     rgb: '59,130,246',
   },
+  [TaskStatus.ModelError]: {
+    label: 'Model Error',
+    color: 'bg-red-500/20 text-red-300',
+    border: 'border-red-500/55',
+    outline: 'outline-red-500/55',
+    bg: 'bg-red-500/10',
+    miniFill: 'rgba(239,68,68,0.86)',
+    rgb: '239,68,68',
+  },
   [TaskStatus.Completed]: {
     label: 'Completed',
     color: 'bg-emerald-500/20 text-emerald-300',
@@ -83,6 +92,7 @@ export function getCanvasTaskStatusStyle(status: TaskStatus | undefined): Canvas
 export function shouldPulseCanvasTaskStatusTransition(previous: TaskStatus | undefined, next: TaskStatus | undefined): boolean {
   return (
     (previous === TaskStatus.Triaging && next === TaskStatus.NotStarted) ||
-    (previous === TaskStatus.AgentWorking && next === TaskStatus.ReadyForReview)
+    (previous === TaskStatus.AgentWorking && next === TaskStatus.ReadyForReview) ||
+    (previous === TaskStatus.AgentWorking && next === TaskStatus.ModelError)
   )
 }

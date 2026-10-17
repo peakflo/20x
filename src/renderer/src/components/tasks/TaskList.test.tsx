@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
 import { TaskList } from './TaskList'
@@ -18,7 +18,11 @@ function makeTask(i: number, status: TaskStatus = TaskStatus.NotStarted): Workfl
   } as unknown as WorkfloTask
 }
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  const api = window.electronAPI as unknown as { tasks?: Record<string, unknown> }
+  if (api.tasks) delete api.tasks.getRunDurations
+})
 
 describe('TaskList', () => {
   it('renders every open task and selects on click', () => {
@@ -86,5 +90,17 @@ describe('TaskList', () => {
     fireEvent.click(screen.getByText('Closed'))
     expect(screen.getByText('Cancelled')).toBeTruthy()
     expect(screen.getByText('Expired')).toBeTruthy()
+  })
+
+  it('shows recorded agent time on the matching task', async () => {
+    const api = window.electronAPI as unknown as { tasks?: Record<string, unknown> }
+    api.tasks ??= {}
+    api.tasks.getRunDurations = vi.fn().mockResolvedValue({ t1: { durationMs: 125_000, isRunning: false } })
+
+    render(<TaskList tasks={[makeTask(1), makeTask(2)]} selectedTaskId={null} onSelectTask={vi.fn()} />)
+
+    await waitFor(() => expect(screen.getByText('2m')).toBeTruthy())
+    expect(api.tasks.getRunDurations).toHaveBeenCalledWith(['t1', 't2'])
+    expect(screen.getAllByTitle('Agent run time')).toHaveLength(1)
   })
 })

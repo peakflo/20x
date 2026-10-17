@@ -377,6 +377,26 @@ describe('TaskAutomationScheduler — parents and subtasks', () => {
     expect(agentManager.startTask).toHaveBeenCalledWith(childIds[1])
   })
 
+  it('does not blindly start the next child while a sibling is stuck in model_error', async () => {
+    const { parentId, childIds } = parentWithChildren(
+      { auto_start_agent: true },
+      [{ title: 'child 1' }, { title: 'child 2' }]
+    )
+    db.updateTask(parentId, { status: TaskStatus.ReadyForReview })
+    const agentManager = mockAgentManager()
+    const scheduler = new TaskAutomationScheduler(db, agentManager)
+
+    db.updateTask(childIds[0], { status: TaskStatus.ModelError })
+    await scheduler.runNow()
+    // A failed subtask needs attention, not a silent skip to the next one.
+    expect(agentManager.startTask).not.toHaveBeenCalled()
+
+    // Once resumed/resolved it can complete and the chain continues normally.
+    db.updateTask(childIds[0], { status: TaskStatus.Completed }, 'workflo-server')
+    await scheduler.runNow()
+    expect(agentManager.startTask).toHaveBeenCalledWith(childIds[1])
+  })
+
   it('keeps the chain moving when a child stops at ready_for_review', async () => {
     // The renderer blocked here, which deadlocked an unattended chain.
     const { parentId, childIds } = parentWithChildren(

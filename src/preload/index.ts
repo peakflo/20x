@@ -3,6 +3,7 @@ import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } f
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
+import type { TaskRunDuration } from '../shared/task-run-duration'
 import {
   USAGE_LIMITS_UPDATED_CHANNEL,
   USAGE_MODEL_PRICES_UPDATED_CHANNEL,
@@ -16,6 +17,14 @@ import {
   type UsageSummaryQuery
 } from '../shared/usage'
 import { USAGE_LIMIT_RECOVERY_UPDATED_CHANNEL, type UsageLimitRecovery } from '../shared/usage-limit-recovery'
+import {
+  HARNESS_MAINTENANCE_PROGRESS_CHANNEL,
+  HARNESS_MAINTENANCE_UPDATED_CHANNEL,
+  type HarnessKey,
+  type HarnessMaintenanceStatus,
+  type HarnessUpdateAllResult,
+  type HarnessUpdateResult
+} from '../shared/harness-maintenance'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -36,7 +45,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   tasks: {
     getWorkspaceDir: (taskId: string): Promise<string> =>
-      ipcRenderer.invoke('tasks:getWorkspaceDir', taskId)
+      ipcRenderer.invoke('tasks:getWorkspaceDir', taskId),
+    getRunDurations: (taskIds: string[]): Promise<Record<string, TaskRunDuration>> =>
+      ipcRenderer.invoke('tasks:getRunDurations', taskIds)
   },
   artifacts: {
     scan: (taskId: string): Promise<ArtifactFileEntry[]> =>
@@ -614,6 +625,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_: unknown, data: { agentName: string; stage: string; output: string; percent: number }): void => callback(data)
       ipcRenderer.on('agent-installer:progress', handler)
       return () => ipcRenderer.removeListener('agent-installer:progress', handler)
+    }
+  },
+  harnessMaintenance: {
+    get: (): Promise<HarnessMaintenanceStatus[]> => ipcRenderer.invoke('harness-maintenance:get'),
+    refresh: (fresh?: boolean): Promise<HarnessMaintenanceStatus[]> => ipcRenderer.invoke('harness-maintenance:refresh', { fresh }),
+    update: (harness: HarnessKey): Promise<HarnessUpdateResult> => ipcRenderer.invoke('harness-maintenance:update', { harness }),
+    updateAll: (): Promise<HarnessUpdateAllResult> => ipcRenderer.invoke('harness-maintenance:update-all'),
+    onUpdated: (callback: (statuses: HarnessMaintenanceStatus[]) => void): (() => void) => {
+      const handler = (_: unknown, data: HarnessMaintenanceStatus[]): void => callback(data)
+      ipcRenderer.on(HARNESS_MAINTENANCE_UPDATED_CHANNEL, handler)
+      return () => ipcRenderer.removeListener(HARNESS_MAINTENANCE_UPDATED_CHANNEL, handler)
+    },
+    onProgress: (callback: (data: { harness: HarnessKey; chunk: string }) => void): (() => void) => {
+      const handler = (_: unknown, data: { harness: HarnessKey; chunk: string }): void => callback(data)
+      ipcRenderer.on(HARNESS_MAINTENANCE_PROGRESS_CHANNEL, handler)
+      return () => ipcRenderer.removeListener(HARNESS_MAINTENANCE_PROGRESS_CHANNEL, handler)
     }
   },
   webUtils: {

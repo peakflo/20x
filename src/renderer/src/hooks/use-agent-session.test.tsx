@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useAgentSession } from './use-agent-session'
 import { useAgentStore } from '@/stores/agent-store'
+import { useTaskStore } from '@/stores/task-store'
+import type { WorkfloTask } from '@/types'
 
 const mockElectronAPI = window.electronAPI
 
@@ -12,6 +14,7 @@ beforeEach(() => {
     error: null,
     sessions: new Map()
   })
+  useTaskStore.setState({ tasks: [] })
   vi.clearAllMocks()
 })
 
@@ -32,6 +35,26 @@ describe('useAgentSession', () => {
   })
 
   describe('start', () => {
+    it('opens Cursor install setup on a missing CLI and leaves the task retryable', async () => {
+      ;(mockElectronAPI.agentSession.start as unknown as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('CURSOR_CLI_MISSING: cursor-agent is not installed'))
+        .mockResolvedValueOnce({ sessionId: 'retry-session' })
+      const onMissing = vi.fn()
+      window.addEventListener('cursor-cli-missing', onMissing)
+      const { result } = renderHook(() => useAgentSession('task-1'))
+      try {
+        await act(async () => {
+          await expect(result.current.start('agent-1', 'task-1')).rejects.toThrow('CURSOR_CLI_MISSING')
+        })
+        expect(useAgentStore.getState().sessions.has('task-1')).toBe(false)
+        expect(onMissing).toHaveBeenCalledOnce()
+        const retry = (onMissing.mock.calls[0][0] as CustomEvent<{ retry: () => Promise<string> }>).detail.retry
+        await act(async () => { await expect(retry()).resolves.toBe('retry-session') })
+      } finally {
+        window.removeEventListener('cursor-cli-missing', onMissing)
+      }
+    })
+
     it('pre-registers then updates with real sessionId', async () => {
       ;(mockElectronAPI.agentSession.start as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
         sessionId: 'real-session-id'
@@ -51,6 +74,56 @@ describe('useAgentSession', () => {
       const session = useAgentStore.getState().sessions.get('task-1')
       expect(session).toBeDefined()
       expect(session!.sessionId).toBe('real-session-id')
+    })
+  })
+
+  describe('resume', () => {
+    it('opens Cursor install setup, clears the failed binding, preserves messages, and retries resume', async () => {
+      useTaskStore.setState({ tasks: [{ id: 'task-1', title: 'Review crash' } as WorkfloTask] })
+      useAgentStore.getState().initSession('task-1', 'persisted-session', 'agent-1')
+      const existing = useAgentStore.getState().sessions.get('task-1')!
+      const previousMessages = [{ id: 'old', role: 'assistant' as const, content: 'Previous answer', timestamp: new Date() }]
+      useAgentStore.setState({ sessions: new Map([['task-1', { ...existing, messages: previousMessages }]]) })
+      ;(mockElectronAPI.agentSession.resume as unknown as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('CURSOR_CLI_MISSING: cursor-agent is not installed'))
+        .mockResolvedValueOnce({ sessionId: 'resumed-session' })
+      const onMissing = vi.fn()
+      window.addEventListener('cursor-cli-missing', onMissing)
+      const { result } = renderHook(() => useAgentSession('task-1'))
+      try {
+        await act(async () => {
+          await expect(result.current.resume('agent-1', 'task-1', 'persisted-session')).rejects.toThrow('CURSOR_CLI_MISSING')
+        })
+        expect(onMissing).toHaveBeenCalledOnce()
+        const failed = useAgentStore.getState().sessions.get('task-1')
+        expect(failed?.sessionId).toBeNull()
+        expect(failed?.messages).toEqual(previousMessages)
+        const detail = (onMissing.mock.calls[0][0] as CustomEvent<{
+          taskId: string; taskTitle: string; operation: string; retry: () => Promise<string>
+        }>).detail
+        expect(detail).toMatchObject({ taskId: 'task-1', taskTitle: 'Review crash', operation: 'resume' })
+        await act(async () => { await expect(detail.retry()).resolves.toBe('resumed-session') })
+        expect(mockElectronAPI.agentSession.resume).toHaveBeenLastCalledWith('agent-1', 'task-1', 'persisted-session')
+      } finally {
+        window.removeEventListener('cursor-cli-missing', onMissing)
+      }
+    })
+
+    it('clears a failed binding without opening Cursor setup for other resume errors', async () => {
+      ;(mockElectronAPI.agentSession.resume as unknown as ReturnType<typeof vi.fn>)
+        .mockRejectedValueOnce(new Error('Provider unavailable'))
+      const onMissing = vi.fn()
+      window.addEventListener('cursor-cli-missing', onMissing)
+      const { result } = renderHook(() => useAgentSession('task-1'))
+      try {
+        await act(async () => {
+          await expect(result.current.resume('agent-1', 'task-1', 'persisted-session')).rejects.toThrow('Provider unavailable')
+        })
+        expect(useAgentStore.getState().sessions.get('task-1')?.sessionId).toBeNull()
+        expect(onMissing).not.toHaveBeenCalled()
+      } finally {
+        window.removeEventListener('cursor-cli-missing', onMissing)
+      }
     })
   })
 

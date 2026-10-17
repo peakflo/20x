@@ -552,11 +552,32 @@ describe('InfiniteCanvas', () => {
   // the gesture ends.
 
   describe('imperative gesture transforms', () => {
+    // These tests assert exact timing boundaries around WHEEL_IDLE_MS (150ms)
+    // and LAYER_RELEASE_MS (300ms) — e.g. "the store is NOT written until the
+    // wheel goes idle". With real timers that's a race: anything that delays
+    // the event loop (CI contention, GC) can let the real idle timer fire
+    // before the test's own real-time wait finishes, making the assertion
+    // flaky in exactly the direction seen in CI (store already committed
+    // where the test expected it to still be pending). Fake timers make the
+    // virtual clock the only clock, so the ordering is deterministic.
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
     const flushFrames = async () => {
-      // rAF + the queued microtasks React uses to commit
+      // One rAF tick + the queued microtasks React uses to commit.
       await act(async () => {
-        await new Promise((resolve) => requestAnimationFrame(() => resolve(null)))
-        await new Promise((resolve) => setTimeout(resolve, 0))
+        await vi.advanceTimersByTimeAsync(16)
+      })
+    }
+
+    const advanceTime = async (ms: number) => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms)
       })
     }
 
@@ -575,22 +596,16 @@ describe('InfiniteCanvas', () => {
       expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
 
       // Wheel idle → single commit.
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 200))
-      })
+      await advanceTime(200)
       expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -40, zoom: 1 })
       expect(layer.style.willChange).toBe('transform')
       // A second wheel event inside the release window keeps the same layer.
       fireEvent.wheel(canvas, { deltaY: 10 })
       await flushFrames()
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 250))
-      })
+      await advanceTime(250)
       expect(layer.style.willChange).toBe('transform')
       expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -50, zoom: 1 })
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 250))
-      })
+      await advanceTime(250)
       expect(layer.style.willChange).toBe('')
     })
 
@@ -633,9 +648,7 @@ describe('InfiniteCanvas', () => {
       fireEvent.click(screen.getByTitle('Reset view (Ctrl+0)'))
       await flushFrames()
       expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 200))
-      })
+      await advanceTime(200)
       expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
       expect(layer.style.transform).toBe('translate(0px, 0px) scale(1)')
     })
@@ -658,9 +671,7 @@ describe('InfiniteCanvas', () => {
       const requestedViewport = useCanvasStore.getState().viewport
 
       await flushFrames()
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 200))
-      })
+      await advanceTime(200)
       expect(useCanvasStore.getState().viewport).toEqual(requestedViewport)
     })
 
@@ -671,9 +682,7 @@ describe('InfiniteCanvas', () => {
       fireEvent.wheel(canvas, { deltaX: 30, deltaY: 40 })
       await act(async () => useCanvasStore.getState().requestViewCommand({ kind: 'reset' }))
       await flushFrames()
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 200))
-      })
+      await advanceTime(200)
       expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
     })
 

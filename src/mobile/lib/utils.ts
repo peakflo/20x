@@ -70,6 +70,7 @@ export const STATUS_DOT_COLORS: Record<string, string> = {
   [TaskStatus.AgentWorking]: 'bg-amber-400',
   [TaskStatus.ReadyForReview]: 'bg-pink-400',
   [TaskStatus.AgentLearning]: 'bg-blue-400',
+  [TaskStatus.ModelError]: 'bg-red-400',
   [TaskStatus.Completed]: 'bg-emerald-400'
 }
 
@@ -79,6 +80,7 @@ export const STATUS_LABELS: Record<string, string> = {
   [TaskStatus.AgentWorking]: 'Agent Working',
   [TaskStatus.ReadyForReview]: 'Ready for Review',
   [TaskStatus.AgentLearning]: 'Agent Learning',
+  [TaskStatus.ModelError]: 'Model Error',
   [TaskStatus.Completed]: 'Completed'
 }
 
@@ -110,5 +112,6 @@ export const STATUS_VARIANT: Record<string, { label: string; variant: BadgeVaria
   [TaskStatus.AgentWorking]: { label: 'Agent Working', variant: 'yellow' },
   [TaskStatus.ReadyForReview]: { label: 'Ready for Review', variant: 'pink' },
   [TaskStatus.AgentLearning]: { label: 'Agent Learning', variant: 'blue' },
+  [TaskStatus.ModelError]: { label: 'Model Error', variant: 'red' },
   [TaskStatus.Completed]: { label: 'Completed', variant: 'green' }
 }

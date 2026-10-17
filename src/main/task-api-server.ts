@@ -1209,9 +1209,14 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const timeoutMs = typeof params.timeout_ms === 'number' ? Math.max(1_000, params.timeout_ms) : 300_000
       const pollMs = 2_000
       const returnWhen = params.return_when === 'any_terminal' ? 'any_terminal' : 'all_terminal'
+      // model_error is terminal-for-waiting by default: a subtask whose
+      // session stopped on a model/provider error will not move itself to
+      // ready_for_review/completed on its own, so an orchestrator waiting on
+      // it must not block forever — it needs to see the failure and decide
+      // what to do next (retry, reassign, escalate).
       const terminalStatuses = Array.isArray(params.terminal_statuses) && params.terminal_statuses.length > 0
         ? (params.terminal_statuses as string[])
-        : [TaskStatus.ReadyForReview, TaskStatus.Completed]
+        : [TaskStatus.ReadyForReview, TaskStatus.Completed, TaskStatus.ModelError]
       const targetIds = Array.isArray(params.subtask_ids) && params.subtask_ids.length > 0
         ? new Set((params.subtask_ids as string[]).map(String))
         : null

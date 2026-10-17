@@ -254,7 +254,7 @@ const mastermindTools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        status: { type: 'string', enum: ['not_started', 'triaging', 'agent_working', 'ready_for_review', 'agent_learning', 'completed'], description: 'Filter by task status' },
+        status: { type: 'string', enum: ['not_started', 'triaging', 'agent_working', 'ready_for_review', 'agent_learning', 'model_error', 'completed'], description: 'Filter by task status' },
         priority: { type: 'string', enum: ['critical', 'high', 'medium', 'low'], description: 'Filter by priority level' },
         has_agent: { type: 'boolean', description: 'Filter tasks with/without assigned agent' },
         labels: { type: 'array', items: { type: 'string' }, description: 'Filter by labels (tasks matching any of these labels)' },
@@ -421,7 +421,7 @@ const mastermindTools: Tool[] = [
   },
   {
     name: 'wait_for_subtasks',
-    description: 'Wait until subtasks under a parent task reach ready_for_review or completed. Useful for orchestration loops.',
+    description: 'Wait until subtasks under a parent task reach ready_for_review, completed, or model_error. Useful for orchestration loops.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -898,7 +898,7 @@ const subtaskTools: Tool[] = [
   },
   {
     name: 'wait_for_sibling_subtasks',
-    description: 'Wait until sibling subtasks under the same parent reach ready_for_review or completed.',
+    description: 'Wait until sibling subtasks under the same parent reach ready_for_review, completed, or model_error.',
     inputSchema: {
       type: 'object',
       properties: {

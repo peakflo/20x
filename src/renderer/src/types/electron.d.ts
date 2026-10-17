@@ -1,6 +1,7 @@
 import type { BrowserRecordingManifest } from '@shared/browser-recording'
 import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '@shared/browser-session-import'
 import type { UiCommand } from '@shared/ui-commands'
+import type { TaskRunDuration } from '@shared/task-run-duration'
 import type {
   WorkfloTask,
   CreateTaskDTO,
@@ -47,6 +48,12 @@ import type {
   UpdateAcpAgentInstanceDTO
 } from '@shared/acp-registry'
 import type { ArtifactApi } from '@shared/artifacts'
+import type {
+  HarnessKey,
+  HarnessMaintenanceStatus,
+  HarnessUpdateAllResult,
+  HarnessUpdateResult
+} from '@shared/harness-maintenance'
 import type {
   VoiceActionOutcome,
   VoiceModelState,
@@ -248,6 +255,7 @@ interface ElectronAPI {
   }
   tasks: {
     getWorkspaceDir: (taskId: string) => Promise<string>
+    getRunDurations: (taskIds: string[]) => Promise<Record<string, TaskRunDuration>>
   }
   /** The preload bridge always exposes every artifact capability, including
    * the desktop-only file clipboard action. */
@@ -522,6 +530,14 @@ interface ElectronAPI {
     install: (agentName: string) => Promise<{ success: boolean; error: string | null; newStatus: Record<string, { installed: boolean; version: string | null }> }>
     getCommand: (agentName: string) => Promise<string>
     onProgress: (callback: (data: { agentName: string; stage: string; output: string; percent: number }) => void) => () => void
+  }
+  harnessMaintenance: {
+    get: () => Promise<HarnessMaintenanceStatus[]>
+    refresh: (fresh?: boolean) => Promise<HarnessMaintenanceStatus[]>
+    update: (harness: HarnessKey) => Promise<HarnessUpdateResult>
+    updateAll: () => Promise<HarnessUpdateAllResult>
+    onUpdated: (callback: (statuses: HarnessMaintenanceStatus[]) => void) => () => void
+    onProgress: (callback: (data: { harness: HarnessKey; chunk: string }) => void) => () => void
   }
   webUtils: {
     getPathForFile: (file: File) => string

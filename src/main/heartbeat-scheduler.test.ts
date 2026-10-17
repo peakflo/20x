@@ -492,6 +492,16 @@ describe('HeartbeatScheduler', () => {
       expect(agent.sendHeartbeatViaMastermind).not.toHaveBeenCalled()
     })
 
+    it('does not run a check for a task stopped on a model/provider error — pinging it would spawn a fresh session against a broken run', async () => {
+      ;(db.getTask as ReturnType<typeof vi.fn>).mockReturnValue(makeTask({ status: TaskStatus.ModelError }))
+
+      expect(await scheduler.runNow('task-1')).toBe('inactive')
+      expect(agent.sendHeartbeatViaMastermind).not.toHaveBeenCalled()
+      // Unlike completed, heartbeat_enabled itself is left untouched so checks
+      // resume automatically once the task is working again.
+      expect(db.updateTask).not.toHaveBeenCalledWith('task-1', expect.objectContaining({ heartbeat_enabled: false }))
+    })
+
     it('changes the interval without enabling heartbeat', () => {
       ;(db.getTask as ReturnType<typeof vi.fn>).mockReturnValue(makeTask({ heartbeat_enabled: false }))
 

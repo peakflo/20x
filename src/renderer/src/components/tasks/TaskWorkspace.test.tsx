@@ -212,6 +212,18 @@ describe('TaskWorkspace keyboard actions', () => {
     expect(window.electronAPI.agentSession.start).not.toHaveBeenCalled()
   })
 
+  it('shows a visible error when a non-Cursor resume fails', async () => {
+    const task = makeRendererTask({ agent_id: 'agent-1', session_id: 'persisted-session' })
+    vi.mocked(window.electronAPI.agentSession.resume).mockRejectedValueOnce(new Error('Provider unavailable'))
+    renderWorkspace(task, [makeAgent({ config: { coding_agent: CodingAgentType.CODEX, model: 'gpt-6' } })])
+
+    act(() => dispatchTaskShortcut({ action: TaskShortcutAction.RUN, taskId: task.id }))
+
+    await waitFor(() => expect(useProgressToastStore.getState().toasts.get(`session-resume-${task.id}`))
+      .toMatchObject({ status: 'error', message: 'Provider unavailable' }))
+    expect(useAgentStore.getState().sessions.get(task.id)?.sessionId).toBeNull()
+  })
+
   it('sends continue to a failed live session through R', async () => {
     const task = makeRendererTask({
       agent_id: 'agent-1',

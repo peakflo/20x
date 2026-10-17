@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { TaskStatus, TASK_STATUSES } from './constants'
+import { TaskStatus, TASK_STATUSES, isTaskClosed } from './constants'
 
 describe('TaskStatus enum', () => {
-  it('has exactly 8 statuses', () => {
+  it('has exactly 9 statuses', () => {
     const values = Object.values(TaskStatus)
-    expect(values).toHaveLength(8)
+    expect(values).toHaveLength(9)
   })
 
   it('has expected string values', () => {
@@ -16,6 +16,7 @@ describe('TaskStatus enum', () => {
     expect(TaskStatus.Completed).toBe('completed')
     expect(TaskStatus.Cancelled).toBe('cancelled')
     expect(TaskStatus.Expired).toBe('expired')
+    expect(TaskStatus.ModelError).toBe('model_error')
   })
 })
 
@@ -27,6 +28,7 @@ describe('TASK_STATUSES array', () => {
     expect(values).toContain(TaskStatus.AgentWorking)
     expect(values).toContain(TaskStatus.ReadyForReview)
     expect(values).toContain(TaskStatus.AgentLearning)
+    expect(values).toContain(TaskStatus.ModelError)
     expect(values).toContain(TaskStatus.Completed)
   })
 
@@ -40,8 +42,20 @@ describe('TASK_STATUSES array', () => {
   })
 
   it('keeps server-owned closed states out of the local status picker', () => {
-    expect(TASK_STATUSES).toHaveLength(6)
+    expect(TASK_STATUSES).toHaveLength(7)
     expect(TASK_STATUSES.map((status) => status.value)).not.toContain(TaskStatus.Cancelled)
     expect(TASK_STATUSES.map((status) => status.value)).not.toContain(TaskStatus.Expired)
+  })
+})
+
+describe('isTaskClosed', () => {
+  it('treats model_error as still open — the task needs attention and can still resume, not a closed/final state', () => {
+    expect(isTaskClosed(TaskStatus.ModelError)).toBe(false)
+  })
+
+  it('still treats completed/cancelled/expired as closed', () => {
+    expect(isTaskClosed(TaskStatus.Completed)).toBe(true)
+    expect(isTaskClosed(TaskStatus.Cancelled)).toBe(true)
+    expect(isTaskClosed(TaskStatus.Expired)).toBe(true)
   })
 })
