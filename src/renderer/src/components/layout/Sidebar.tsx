@@ -222,7 +222,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search tasks..."
-                className="glass-control h-[44px] w-full pl-10 pr-8 text-sm placeholder:text-[var(--glass-placeholder)] focus:ring-2 focus:ring-ring/20 transition-all"
+                className="glass-control h-10 w-full pl-10 pr-8 text-sm placeholder:text-[var(--glass-placeholder)] focus:ring-2 focus:ring-ring/20 transition-all"
               />
               {searchQuery && (
                 <button

@@ -195,7 +195,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search tasks..."
-          className="glass-control pointer-events-auto w-full px-5 h-[48px] text-sm text-foreground placeholder:text-[var(--glass-placeholder)] focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 mb-2"
+          className="glass-control pointer-events-auto w-full px-5 h-[44px] text-sm text-foreground placeholder:text-[var(--glass-placeholder)] focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 mb-2"
         />
 
         {/* Filter pills */}
