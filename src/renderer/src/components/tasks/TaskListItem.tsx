@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react'
-import { Calendar, AlarmClockOff, Repeat, HeartPulse, ListTree, ChevronRight } from 'lucide-react'
+import { Calendar, AlarmClockOff, Repeat, HeartPulse, ListTree, ChevronRight, Clock3 } from 'lucide-react'
 import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '@/lib/utils'
 import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { TaskStatusBadge } from './TaskStatusBadge'
@@ -7,6 +7,8 @@ import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { TaskStatus } from '@/types'
 import { isTaskClosed } from '@shared/constants'
 import type { WorkfloTask, RecurrencePattern, RecurrencePatternObject } from '@/types'
+import type { TaskRunDuration } from '@shared/task-run-duration'
+import { formatTaskRunDuration } from '@/hooks/use-task-run-durations'
 
 function ordinal(n: number): string {
   if (n >= 11 && n <= 13) return `${n}th`
@@ -77,6 +79,7 @@ const statusDotColor: Record<TaskStatus, string> = {
 
 interface TaskListItemProps {
   task: WorkfloTask
+  runDuration?: TaskRunDuration
   isSelected: boolean
   onSelect: () => void
   subtaskCount?: number
@@ -85,7 +88,7 @@ interface TaskListItemProps {
   onToggleExpand?: () => void
 }
 
-export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSelect, subtaskCount, isSubtask, isExpanded, onToggleExpand }: TaskListItemProps) {
+export const TaskListItem = memo(function TaskListItem({ task, runDuration, isSelected, onSelect, subtaskCount, isSubtask, isExpanded, onToggleExpand }: TaskListItemProps) {
   const isActive = !isTaskClosed(task.status)
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
@@ -148,6 +151,12 @@ export const TaskListItem = memo(function TaskListItem({ task, isSelected, onSel
           </div>
           <div className="flex items-center gap-2 mt-1">
             <TaskPriorityBadge priority={task.priority} />
+            {runDuration && (
+              <span className="flex items-center gap-1 text-xs text-muted-foreground shrink-0" title={`Agent run time${runDuration.isRunning ? ' (running)' : ''}`}>
+                <Clock3 className="h-3 w-3" />
+                {formatTaskRunDuration(runDuration.durationMs)}
+              </span>
+            )}
             {(task.status === TaskStatus.Cancelled || task.status === TaskStatus.Expired) && <TaskStatusBadge status={task.status} />}
             {task.due_date && (
               <span className={cn('flex items-center gap-1 text-xs', overdue ? 'text-destructive' : dueSoon ? 'text-amber-400' : 'text-muted-foreground')}>

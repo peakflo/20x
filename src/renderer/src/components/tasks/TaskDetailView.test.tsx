@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { TaskDetailView } from './TaskDetailView'
 import { CodingAgentType, TaskStatus } from '@/types'
 import type { Agent, WorkfloTask } from '@/types'
@@ -142,10 +142,22 @@ function renderDetailView(overrides: {
 
 afterEach(() => {
   cleanup()
+  delete (api.tasks as Record<string, unknown>).getRunDurations
 })
 
 beforeEach(() => {
   vi.clearAllMocks()
+})
+
+it('shows the agent run time in the task view', async () => {
+  const tasksApi = api.tasks as Record<string, unknown>
+  tasksApi.getRunDurations = vi.fn().mockResolvedValue({ 'task-1': { durationMs: 3_750_000, isRunning: true } })
+
+  renderDetailView()
+
+  await waitFor(() => expect(screen.getByText('1h 2m (running)')).toBeInTheDocument())
+  expect(tasksApi.getRunDurations).toHaveBeenCalledWith(['task-1'])
+  expect(screen.getByText('Agent run time')).toBeInTheDocument()
 })
 
 describe('TaskDetailView – parent task context panel', () => {

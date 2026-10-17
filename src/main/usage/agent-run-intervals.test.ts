@@ -69,6 +69,19 @@ describe('isAgentSessionStatus', () => {
   })
 })
 
+describe('task run duration', () => {
+  it('adds closed and open work periods for each task', () => {
+    db.insertClosedAgentRunInterval({ taskId: 'task-1', agentId: 'agent-1', sessionId: 'first', provider: 'codex', harnessInstanceId: null, startedAtMs: BASE, endedAtMs: BASE + 2 * MINUTE, endReason: 'idle' })
+    db.openAgentRunInterval({ taskId: 'task-1', agentId: 'agent-1', sessionId: 'second', provider: 'codex', harnessInstanceId: null, startedAtMs: BASE + 10 * MINUTE })
+    db.insertClosedAgentRunInterval({ taskId: 'task-2', agentId: 'agent-2', sessionId: 'other', provider: 'codex', harnessInstanceId: null, startedAtMs: BASE, endedAtMs: BASE + MINUTE, endReason: 'idle' })
+
+    expect(db.getTaskRunDurations(['task-1', 'task-2', 'no-run'], BASE + 11 * MINUTE)).toEqual({
+      'task-1': { durationMs: 3 * MINUTE, isRunning: true },
+      'task-2': { durationMs: MINUTE, isRunning: false }
+    })
+  })
+})
+
 describe('recordAgentStatusTransition', () => {
   it('opens an interval when a brand-new session becomes working (prevStatus undefined)', () => {
     recordAgentStatusTransition(db, ctx(), undefined, 'working', BASE)

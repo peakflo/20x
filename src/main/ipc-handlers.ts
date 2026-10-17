@@ -345,6 +345,10 @@ export function registerIpcHandlers(
     return db.getWorkspaceDir(taskId)
   })
 
+  ipcMain.handle('tasks:getRunDurations', (_, taskIds: string[]) => {
+    return db.getTaskRunDurations(taskIds)
+  })
+
   ipcMain.handle('artifacts:scan', async (_, taskId: string) => {
     return listTaskArtifactEntries(db.getWorkspaceDir(taskId), taskId)
   })

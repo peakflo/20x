@@ -3,6 +3,7 @@ import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } f
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
+import type { TaskRunDuration } from '../shared/task-run-duration'
 import {
   USAGE_LIMITS_UPDATED_CHANNEL,
   USAGE_MODEL_PRICES_UPDATED_CHANNEL,
@@ -36,7 +37,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   tasks: {
     getWorkspaceDir: (taskId: string): Promise<string> =>
-      ipcRenderer.invoke('tasks:getWorkspaceDir', taskId)
+      ipcRenderer.invoke('tasks:getWorkspaceDir', taskId),
+    getRunDurations: (taskIds: string[]): Promise<Record<string, TaskRunDuration>> =>
+      ipcRenderer.invoke('tasks:getRunDurations', taskIds)
   },
   artifacts: {
     scan: (taskId: string): Promise<ArtifactFileEntry[]> =>
