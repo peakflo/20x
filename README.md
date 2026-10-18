@@ -65,15 +65,16 @@ Start with the task instead of choosing an agent and writing a new prompt from s
   <img src="docs/screenshots/readme-dashboard-light.png" alt="20x light mode dashboard showing tasks moving from triage through agent work to review" width="960" />
 </p>
 
-### 🤖 Five coding harnesses, one task workflow
+### 🤖 Built-in harnesses and ACP agents, one task workflow
 
-20x supports **Claude Code, OpenCode, Codex, Cursor, and Pi**. Choose the harness that fits the task while keeping its context and result in the same place.
+20x includes **Claude Code, OpenCode, Codex, Cursor, and Pi**. You can also add compatible coding agents from the [ACP agent registry](https://github.com/agentclientprotocol/registry) or point 20x at a local ACP command in **Settings → Harnesses**. Each configured ACP agent becomes a harness choice for your tasks. Available agents depend on their distribution and your platform.
 
 - **Claude Code** — Anthropic's coding harness
 - **OpenCode** — Open-source coding harness
 - **Codex** — OpenAI's coding harness
 - **Cursor** — Coding harness through the Agent Client Protocol
 - **Pi** — Open-source coding harness
+- **ACP agents** — Add compatible agents from the registry or a local command
 - **Live transcripts** — Watch agents think and work in real time with message counts
 - **Human-in-the-loop** — Approve risky actions before execution
 - **Task progress tracking** — Real-time progress events during agent execution
@@ -91,7 +92,7 @@ Open a parent task and its subtasks as linked panels. Keep an embedded browser b
 ### 🔗 Smart Integrations
 
 <p align="center">
-  <img src="docs/diagrams/task-ecosystem.svg" alt="Logos for Linear, GitHub Issues, HubSpot, Notion, GitLab, YouTrack, Peakflo, and manual entry feed tasks into 20x. Logos for Claude Code, OpenCode, Codex, Cursor, and Pi show the supported coding harnesses." width="960" />
+  <img src="docs/diagrams/task-ecosystem.svg" alt="Task source logos feed work into 20x. Five built-in harness logos and the ACP logo show how coding agents run tasks, including compatible agents added through ACP." width="960" />
 </p>
 
 - **Linear** — Pull issues, update status, post comments
@@ -247,7 +248,7 @@ See [AGENTS.md](./AGENTS.md) for detailed architecture.
 | Icons | Lucide React |
 | Font | Geist |
 | Database | SQLite (better-sqlite3, WAL mode) |
-| Agent backends | OpenCode SDK, Claude Agent SDK, Codex app server, Cursor ACP |
+| Agent backends | OpenCode SDK, Claude Agent SDK, Codex app server, Cursor ACP, Pi, configurable ACP agents |
 | Testing | Vitest + happy-dom |
 
 ## Contributing
