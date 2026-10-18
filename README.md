@@ -19,13 +19,13 @@
 
 **No cloud. No subscriptions. Everything runs on your machine.**
 
-<p align="center">
-  <img src="resources/product-demo.gif" alt="20x product demo" />
-</p>
-
 ## Fewer small decisions. Less handholding.
 
 Hand off the work once. Mastermind helps plan and coordinate subtasks. Triage proposes a priority, harness, skills, and repository. Canvas keeps related tasks and an embedded browser visible together. You step in for approvals and review the result on the task, without rebuilding context across chats and tabs.
+
+<p align="center">
+  <img src="docs/screenshots/readme-canvas-light.png" alt="20x canvas in light mode with a parent task linked to research and implementation subtasks and an embedded browser" width="960" />
+</p>
 
 1. **Bring in the task.** Connect a task source or create a task in 20x. Its brief stays attached.
 2. **Let 20x set up the work.** Ask Mastermind to break down the task; triage proposes the setup and the agent works from that context.
@@ -38,10 +38,6 @@ Hand off the work once. Mastermind helps plan and coordinate subtasks. Triage pr
 
 ## How It Works
 
-<p align="center">
-  <img src="resources/process.png" alt="20x process: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → triage agent → Agent (Claude Code, Opencode, OpenAI Codex, Cursor, Pi) → HITL review → Feedback" />
-</p>
-
 1. **Tasks flow in** — from Linear, YouTrack, HubSpot, GitHub Issues, Notion, Peakflo Workflo, or created manually
 2. **Mastermind and triage** — Break down work and propose priority, coding harness, relevant skills, and git repos
 3. **Agent works the task** — reads skills, git worktrees, and MCP servers; streams output in real time
@@ -50,11 +46,7 @@ Hand off the work once. Mastermind helps plan and coordinate subtasks. Triage pr
 
 ## Features
 
-<p align="center">
-  <img src="resources/integrations.png" alt="20x integrations: Hubspot, YouTrack, Linear, Github issues, Peakflo Workflo → 20x ↔ GitLab, Github, MCP → Claude Code, Opencode, OpenAI Codex, Cursor, Pi; Skills automatically improved" />
-</p>
-
-Light mode screenshots below show the app with sample tasks, skills, and browser content.
+Light mode screenshots show the app with sample tasks, skills, and browser content.
 
 ### 🧭 Mastermind and triage
 
@@ -87,16 +79,12 @@ Start with the task instead of choosing an agent and writing a new prompt from s
 The task brief, repository, skills, and agent work log stay in the same view.
 
 <p align="center">
-  <img src="docs/screenshots/readme-agent-work-light.png" alt="20x light mode task showing an agent work log beside the task brief, repository, and skill" width="960" />
+  <img src="docs/screenshots/readme-agent-work-light.png" alt="20x light mode task showing an agent work log beside task details and linked subtasks" width="960" />
 </p>
 
 ### 🕸️ Canvas Workspace
 
 Open a parent task and its subtasks as linked panels. Keep an embedded browser beside them so the agent can work with the same reference page you see. Canvas reduces the small decisions of which chat, tab, or task to open next: the brief, related work, and browser remain in view as you move between steps.
-
-<p align="center">
-  <img src="docs/screenshots/readme-canvas-light.png" alt="20x light mode canvas with a parent task linked to two subtasks and an embedded browser linked to the implementation subtask" width="960" />
-</p>
 
 ### 🔗 Smart Integrations
 - **Linear** — Pull issues, update status, post comments
