@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, rmSync } from 'fs'
 import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
 import type { ReasoningEffort } from '../shared/reasoning-effort'
+import type { SpeedMode } from '../shared/ultrafast'
 import { startTaskApiServer } from './task-api-server'
 import { UsageStore } from './usage/usage-store'
 import { contextHandoffSettingKey, parseContextHandoffMarker, type ContextHandoffMarker } from './context-handoff'
@@ -52,6 +53,7 @@ export interface AgentConfigRecord {
   acp_instance_id?: string
   model?: string
   reasoning_effort?: ReasoningEffort
+  speed_mode?: SpeedMode
   auth_method?: 'subscription' | 'api_key'
   permission_mode?: 'ask' | 'allow'
   sandbox_mode?: 'read-only' | 'workspace-write' | 'danger-full-access'

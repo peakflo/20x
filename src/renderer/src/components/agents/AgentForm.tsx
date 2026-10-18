@@ -16,10 +16,12 @@ import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { SecretSelector } from '@/components/secrets/SecretSelector'
 import { HarnessVersionWarning } from './HarnessVersionWarning'
 import { CLAUDE_REASONING_EFFORT_VALUES, CODEX_REASONING_EFFORT_VALUES } from '@shared/reasoning-effort'
+import { supportsUltrafast } from '@shared/ultrafast'
 import { HARNESS_INSTANCE_PREFIX, harnessDropdownOptions } from '@shared/harness-instances'
 import { ACP_INSTANCE_PREFIX, acpInstanceDropdownOptions, parseAcpInstanceDropdownValue } from '@shared/harness-instances'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO, AgentMcpServerEntry, ClaudeAuthMethod, AgentPermissionMode, AgentSandboxMode } from '@/types'
 import type { ReasoningEffort } from '@/types'
+import type { SpeedMode } from '@/types'
 import { CodingAgentType, CODING_AGENTS, CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS } from '@/types'
 
 interface AgentFormProps {
@@ -68,6 +70,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   useEffect(() => { void loadAcpInstances() }, [loadAcpInstances])
   const [model, setModel] = useState(agent?.config.model ?? '')
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | ''>(agent?.config.reasoning_effort ?? '')
+  const [speedMode, setSpeedMode] = useState<SpeedMode | ''>(agent?.config.speed_mode ?? '')
   const [systemPrompt, setSystemPrompt] = useState(agent?.config.system_prompt ?? '')
   const [maxParallelSessions, setMaxParallelSessions] = useState(agent?.config.max_parallel_sessions ?? 1)
   const [skillIds, setSkillIds] = useState<string[] | undefined>(agent?.config.skill_ids)
@@ -102,6 +105,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const { servers: globalMcpServers, fetchServers: fetchMcpServers } = useMcpStore()
   const { skills, fetchSkills } = useSkillStore()
   const supportsReasoningEffort = codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX
+  const ultrafastAvailable = supportsUltrafast(codingAgent || undefined, model.trim())
   const reasoningEffortValues = codingAgent === CodingAgentType.CLAUDE_CODE
     ? CLAUDE_REASONING_EFFORT_VALUES
     : CODEX_REASONING_EFFORT_VALUES
@@ -174,6 +178,10 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       setReasoningEffort('')
     }
   }, [codingAgent, reasoningEffort])
+
+  useEffect(() => {
+    if (!ultrafastAvailable) setSpeedMode('')
+  }, [ultrafastAvailable])
 
   const fetchModels = async () => {
     setIsLoadingModels(true)
@@ -275,6 +283,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         reasoning_effort: supportsReasoningEffort && supportedReasoningEfforts.has(reasoningEffort)
           ? reasoningEffort || undefined
           : undefined,
+        speed_mode: ultrafastAvailable ? speedMode || undefined : undefined,
         auth_method: (codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX || codingAgent === CodingAgentType.CURSOR)
           ? authMethod
           : undefined,
@@ -532,6 +541,27 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
                   <option key={effort} value={effort}>{effort}</option>
                 ))}
               </select>
+            </div>
+          )}
+          {supportsReasoningEffort && (
+            <div className="space-y-1.5">
+              <Label htmlFor="agent-speed-mode">Speed</Label>
+              <select
+                id="agent-speed-mode"
+                value={ultrafastAvailable ? speedMode : ''}
+                onChange={(e) => setSpeedMode(e.target.value as SpeedMode | '')}
+                className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+              >
+                <option value="">Default</option>
+                <option value="ultrafast" disabled={!ultrafastAvailable}>Ultrafast</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {ultrafastAvailable
+                  ? codingAgent === CodingAgentType.CLAUDE_CODE
+                    ? 'Uses Claude fast mode for this Opus model. Premium usage rates apply.'
+                    : 'Uses the Codex ultrafast service tier for this model. Premium usage rates apply.'
+                  : 'Ultrafast is available for Claude Opus 5.5, 5 and 4.8, and Codex GPT-6 Astra and GPT-6.1 Sol.'}
+              </p>
             </div>
           )}
         </>

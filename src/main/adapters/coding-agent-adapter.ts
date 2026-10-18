@@ -4,6 +4,7 @@
  */
 
 import type { ReasoningEffort } from '../../shared/reasoning-effort'
+import type { SpeedMode } from '../../shared/ultrafast'
 import type { ProviderUsageLimits, ProviderUsageLimitsUpdate, UsageProvider } from '../../shared/usage'
 import type { UsageBucket } from '../usage/usage-normalize'
 import type { DiscreteUsageItem } from '../usage/usage-store'
@@ -51,6 +52,7 @@ export interface SessionConfig {
   serverUrl?: string
   model?: string
   reasoningEffort?: ReasoningEffort
+  speedMode?: SpeedMode
   systemPrompt?: string
   tools?: Record<string, boolean>
   promptAbort?: AbortController

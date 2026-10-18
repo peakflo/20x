@@ -86,7 +86,7 @@ export function TaskListItem({ task, onSelect, sessionStatus, isSubtask, subtask
       onTouchCancel={onLongPress ? cancelPress : undefined}
       data-review-seen={task.status === TaskStatus.ReadyForReview ? (reviewUnseen ? 'unseen' : 'seen') : undefined}
       className={cn(
-        'w-full text-left px-3 py-2.5 rounded-md transition-[background-color,opacity] cursor-pointer group hover:bg-accent/50 active:bg-accent',
+        'w-full text-left px-4 py-2.5 rounded-md transition-[background-color,opacity] cursor-pointer group hover:bg-accent/50 active:bg-accent',
         reviewSeen && 'opacity-[0.55]'
       )}
     >

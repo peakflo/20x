@@ -181,7 +181,9 @@ export interface AgentMcpServerEntry {
 }
 
 import type { ReasoningEffort } from '@shared/reasoning-effort'
+import type { SpeedMode } from '@shared/ultrafast'
 export type { ReasoningEffort }
+export type { SpeedMode }
 
 export interface CreateMcpServerDTO {
   name: string
@@ -207,6 +209,7 @@ export interface AgentConfig {
   coding_agent?: CodingAgentType
   model?: string
   reasoning_effort?: ReasoningEffort
+  speed_mode?: SpeedMode
   auth_method?: ClaudeAuthMethod
   /** Harness instance (subscription login) the agent runs under. Unset means the harness default. */
   harness_instance_id?: string

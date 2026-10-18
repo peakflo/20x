@@ -22,6 +22,7 @@ import { pickWindowsWhichMatch, resolveWindowsClaudeShim } from './claude-execut
 import { realHomeFor } from '../harness-instances'
 import { homedir } from 'os'
 import type { ProviderUsageLimits } from '../../shared/usage'
+import { supportsUltrafast } from '../../shared/ultrafast'
 import {
   claudeRateLimitInfoToUpdate,
   claudeUsageResponseToLimits,
@@ -819,6 +820,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       mcpServers: config.mcpServers as Record<string, McpServerConfig> | undefined,
       model: config.model,
       effort,
+      ...(config.speedMode === 'ultrafast' && supportsUltrafast('claude-code', config.model)
+        ? { settings: { fastMode: true } }
+        : {}),
       systemPrompt: config.systemPrompt,
       abortController,
       permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)

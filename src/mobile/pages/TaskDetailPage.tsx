@@ -1,6 +1,7 @@
 import { getSourceCompletionDescription, getTaskSourceName } from '@shared/task-completion'
 import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
-import { TaskStatus } from '@shared/constants'
+import { TASK_STATUSES, TaskStatus } from '@shared/constants'
+import { filterSubtasks, SUBTASK_FILTERS, type SubtaskFilter } from '@shared/subtask-filter'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 import { harnessInstanceDisplayName, type HarnessInstanceView } from '@shared/harness-instances'
 import { CollapsibleDescription } from '../components/CollapsibleDescription'
@@ -107,7 +108,9 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
 
   // Session feedback is collected before the completion request.
   const [completeModal, setCompleteModal] = useState<{ withFeedback: boolean } | null>(null)
-  const [activeSection, setActiveSection] = useState<'details' | 'artifacts'>('details')
+  const [activeSection, setActiveSection] = useState<'details' | 'artifacts' | 'subtasks'>('details')
+  const [subtaskFilter, setSubtaskFilter] = useState<SubtaskFilter>('all')
+  const [subtaskQuery, setSubtaskQuery] = useState('')
   const [openScad, setOpenScad] = useState<TaskAttachment | null>(null)
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
   const agentMenuRef = useRef<HTMLDivElement>(null)
@@ -270,6 +273,17 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         }),
     [allTasks, taskId]
   )
+  const workingSubtaskCount = subtasks.filter((subtask) => subtask.status === TaskStatus.AgentWorking).length
+  const reviewSubtaskCount = subtasks.filter((subtask) => subtask.status === TaskStatus.ReadyForReview).length
+  const subtaskCountLabels = [
+    workingSubtaskCount > 0 ? `${workingSubtaskCount} in progress` : null,
+    reviewSubtaskCount > 0 ? `${reviewSubtaskCount} in review` : null
+  ].filter((label): label is string => label !== null)
+  const visibleSubtasks = filterSubtasks(subtasks, subtaskFilter, subtaskQuery)
+
+  useEffect(() => {
+    if (activeSection === 'subtasks' && subtasks.length === 0) setActiveSection('details')
+  }, [activeSection, subtasks.length])
 
   const parentTask = useMemo(() => {
     if (!task?.parent_task_id) return null
@@ -308,15 +322,14 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
 
   return (
     <div className="flex flex-col h-full">
-      {/* Title (3.5rem), agent (3rem), and tabs (3rem) overlap the scroll area. */}
-      <div className="relative z-10 shrink-0 -mb-[9.5rem]">
+      <div className="relative z-10 -mb-[9.5rem] shrink-0">
       <Header
         onBack={() => parentTask ? onNavigate({ page: 'detail', taskId: parentTask.id }) : onNavigate({ page: 'list' })}
         title={task.title}
         rightAction={
           <button
             onClick={() => onNavigate({ page: 'edit', taskId })}
-            className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors"
+            className="glass-action !h-10 !w-10"
             aria-label="Edit task"
           >
             <svg className="w-4 h-4 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -327,13 +340,16 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       />
 
       {/* Top-bar agent switcher — mirrors desktop TaskHeaderBar, always visible without opening Details */}
-      <div className="glass-bar relative z-10 flex h-12 items-center gap-2 border-b bg-background px-4 py-2">
-        <span className="text-xs text-muted-foreground shrink-0">Agent</span>
-        <div ref={agentMenuRef} className="relative">
+      <div className="glass-bar glass-task-detail-bar relative z-10 flex h-12 items-center justify-between gap-2 border-b px-4 py-2">
+        <Badge variant={STATUS_VARIANT[task.status]?.variant || 'default'} className="shrink-0 gap-1.5 rounded-full whitespace-nowrap">
+          <TaskStatusDot status={task.status} className="!h-1.5 !w-1.5" />
+          {STATUS_VARIANT[task.status]?.label || task.status}
+        </Badge>
+        <div ref={agentMenuRef} className="relative min-w-0">
           <button
             type="button"
             onClick={() => setAgentMenuOpen((o) => !o)}
-            className="inline-flex max-w-40 items-center gap-1.5 rounded-full border border-border/50 bg-card px-2.5 py-1 text-xs text-muted-foreground"
+            className="glass-control inline-flex h-8 max-w-[45vw] items-center gap-1.5 px-2.5 text-xs text-muted-foreground"
             aria-label="Change agent"
             aria-haspopup="menu"
             aria-expanded={agentMenuOpen}
@@ -378,14 +394,10 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             </div>
           )}
         </div>
-        <span className="ml-auto text-[11px] text-muted-foreground flex items-center gap-1">
-          <span className={`h-1.5 w-1.5 rounded-full ${task.status === 'completed' ? 'bg-emerald-400' : task.status === 'agent_working' ? 'bg-amber-400' : 'bg-muted-foreground'}`} />
-          {task.status}
-        </span>
       </div>
 
-      <div className="glass-bar flex h-12 items-center border-b bg-background px-4 py-2">
-        <div className="grid grid-cols-2 rounded-md bg-muted/40 p-0.5 text-xs">
+      <div className="glass-bar glass-task-detail-bar flex h-12 items-center overflow-x-auto border-b px-4 py-2">
+        <div className="flex shrink-0 rounded-md bg-muted/40 p-0.5 text-xs">
           <button
             type="button"
             onClick={() => setActiveSection('details')}
@@ -400,6 +412,11 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           >
             Artifacts{artifacts.length > 0 ? ` (${artifacts.length})` : ''}
           </button>
+          {subtasks.length > 0 && <button type="button" onClick={() => setActiveSection('subtasks')} aria-label={subtaskCountLabels.length > 0 ? `Subtasks: ${subtaskCountLabels.join(', ')}` : 'Subtasks'} className={cn('inline-flex shrink-0 items-center gap-1.5 rounded px-3 py-1.5 transition-colors', activeSection === 'subtasks' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}>
+            <span>Subtasks</span>
+            {workingSubtaskCount > 0 && <span className="tabular-nums text-amber-400">{workingSubtaskCount} in progress</span>}
+            {reviewSubtaskCount > 0 && <span className="tabular-nums text-violet-400">{reviewSubtaskCount} in review</span>}
+          </button>}
         </div>
       </div>
       </div>
@@ -410,12 +427,8 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           <ParentTaskContextMobile parentTask={parentTask} onNavigate={onNavigate} />
         )}
 
-        {/* Badges bar — matches desktop TaskDetailView header */}
+        {/* Priority and type stay in the details; status stays in the pinned header. */}
         <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border flex-wrap">
-          <TaskStatusDot status={task.status} />
-          {STATUS_VARIANT[task.status] && (
-            <Badge variant={STATUS_VARIANT[task.status].variant}>{STATUS_VARIANT[task.status].label}</Badge>
-          )}
           <PriorityBadge priority={task.priority} />
           {task.type !== 'general' && (
             <Badge variant={task.type === 'coding' ? 'blue' : task.type === 'review' ? 'teal' : 'default'}>
@@ -872,6 +885,24 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         )}
       </div>
 
+      {subtasks.length > 0 && <div className={cn('flex-1 overflow-y-auto px-4 pb-4 pt-[10.5rem]', activeSection !== 'subtasks' && 'hidden')} data-testid="mobile-subtasks-tab">
+        <div className="space-y-3 pb-3">
+          <input type="search" aria-label="Search subtasks" placeholder="Search subtasks" value={subtaskQuery} onChange={(event) => setSubtaskQuery(event.target.value)} className="glass-control h-10 w-full px-3 text-sm text-foreground outline-none placeholder:text-[var(--glass-placeholder)] focus:border-ring" />
+          <div className="flex flex-wrap gap-1.5" aria-label="Filter subtasks">
+            {SUBTASK_FILTERS.map(({ id, label }) => <button key={id} type="button" aria-pressed={subtaskFilter === id} onClick={() => setSubtaskFilter(id)} className={cn('glass-filter-block rounded-full px-2.5 py-1.5 text-xs', subtaskFilter === id ? 'glass-filter-active' : 'text-muted-foreground')}>{label}</button>)}
+          </div>
+          <p className="text-xs text-muted-foreground">{visibleSubtasks.length} of {subtasks.length}</p>
+        </div>
+        {visibleSubtasks.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">No subtasks match this search.</p> : (
+          <div className="divide-y divide-border/50">
+            {visibleSubtasks.map((subtask) => <button key={subtask.id} type="button" onClick={() => onNavigate({ page: 'detail', taskId: subtask.id })} className="flex w-full items-center justify-between gap-3 py-3 text-left active:bg-accent/30">
+              <span className="min-w-0 break-words text-sm text-foreground">{subtask.title}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">{TASK_STATUSES.find((entry) => entry.value === subtask.status)?.label || subtask.status}</span>
+            </button>)}
+          </div>
+        )}
+      </div>}
+
       {openScad && <div role="dialog" aria-label={`Edit ${openScad.filename}`} className="fixed inset-0 z-50 flex flex-col bg-background">
         <div className="glass-bar flex shrink-0 items-center justify-between border-b px-4 py-3">
           <span className="truncate text-sm font-medium">{openScad.filename}</span>
@@ -1053,8 +1084,8 @@ function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sour
 
 function Header({ onBack, title, rightAction }: { onBack: () => void; title: string; rightAction?: React.ReactNode }) {
   return (
-    <div className="glass-bar glass-task-detail-bar flex h-14 shrink-0 items-center gap-2 border-b px-2 py-3">
-      <button onClick={onBack} className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors">
+    <div className="glass-bar glass-task-detail-bar relative z-20 flex h-14 shrink-0 items-center gap-2 border-b px-2 py-3">
+      <button onClick={onBack} className="glass-action !h-10 !w-10" aria-label="Back">
         <svg className="w-5 h-5 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="m15 18-6-6 6-6" />
         </svg>

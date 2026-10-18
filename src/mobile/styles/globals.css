@@ -163,6 +163,12 @@
 .glass-panel { background: var(--glass-panel); box-shadow: var(--glass-rim), var(--glass-shadow); }
 .glass-task-detail-bar { background: var(--glass-panel); }
 .glass-filter-block { background: var(--glass-inset); border: 1px solid var(--glass-outline); }
+.glass-filter-rail {
+  background: var(--glass-panel); border: 1px solid var(--glass-outline);
+  box-shadow: var(--glass-rim), var(--glass-shadow-control);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+}
 .glass-todo-summary { --muted-foreground: #62636a; background: var(--glass-panel); border: 1px solid var(--glass-outline); box-shadow: var(--glass-rim), var(--glass-shadow-control); -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)); backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation)); }
 .dark .glass-todo-summary { --muted-foreground: #a4a4a8; }
 .glass-popover { background: var(--glass-popover); border-color: color-mix(in srgb, var(--foreground) 10%, transparent); border-radius: 16px !important; box-shadow: var(--glass-rim), 0 24px 64px -24px rgba(0, 0, 0, .55), 0 4px 16px rgba(0, 0, 0, .18); }
@@ -188,16 +194,16 @@
 .glass-panel .glass-composer::before { background: var(--glass-inset); box-shadow: none; }
 .glass-panel .glass-popover { background: var(--glass-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
 .glass-panel .glass-action:hover:not(:disabled) { background: color-mix(in srgb, var(--glass-inset) 94%, white); box-shadow: none; }
-.glass-solid-mode .glass-task-detail-bar, .glass-solid-mode .glass-panel, .glass-solid-mode .glass-popover, .glass-solid-mode .glass-control, .glass-solid-mode .glass-action, .glass-solid-mode .glass-filter-block, .glass-solid-mode .glass-todo-summary, .glass-solid-mode .glass-composer::before { background: var(--glass-solid); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.glass-solid-mode .glass-task-detail-bar, .glass-solid-mode .glass-panel, .glass-solid-mode .glass-popover, .glass-solid-mode .glass-control, .glass-solid-mode .glass-action, .glass-solid-mode .glass-filter-block, .glass-solid-mode .glass-filter-rail, .glass-solid-mode .glass-todo-summary, .glass-solid-mode .glass-composer::before { background: var(--glass-solid); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .glass-solid-mode .glass-filter-active { background: color-mix(in srgb, var(--primary) 18%, var(--glass-solid)); }
 .glass-solid-mode .glass-send:not(:disabled) { background: var(--primary); }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-filter-block, .glass-todo-summary { background-color: var(--glass-solid); box-shadow: none; }
+  .glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-filter-block, .glass-filter-rail, .glass-todo-summary { background-color: var(--glass-solid); box-shadow: none; }
   .glass-composer::before { background: var(--glass-solid); box-shadow: none; }
   .glass-filter-active { background: color-mix(in srgb, var(--primary) 18%, var(--glass-solid)); }
 }
 @media (prefers-reduced-transparency: reduce) {
-  .glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-filter-block, .glass-todo-summary { background-color: var(--glass-solid); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-filter-block, .glass-filter-rail, .glass-todo-summary { background-color: var(--glass-solid); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .glass-composer::before { background: var(--glass-solid); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
   .glass-send { background-color: var(--primary); }
   .glass-send:disabled { background: var(--glass-solid); }

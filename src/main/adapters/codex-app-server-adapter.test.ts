@@ -864,6 +864,22 @@ describe('CodexAppServerAdapter', () => {
     }))
   })
 
+  it('requests ultrafast only for supported Codex models', async () => {
+    const adapterInstance = new CodexAppServerAdapter()
+    const adapter = adapterPrivate(adapterInstance)
+    const session = createSession()
+    adapter.sessions.set('thread-1', session)
+    const sendRpcRequest = vi.fn().mockResolvedValue({ turnId: 'turn-1' })
+    adapter.sendRpcRequest = sendRpcRequest
+
+    const base = { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/workspace', speedMode: 'ultrafast' as const }
+    await adapterInstance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'hello' }], { ...base, model: 'gpt-6-astra' })
+    expect(sendRpcRequest).toHaveBeenLastCalledWith(session, 'turn/start', expect.objectContaining({ serviceTier: 'ultrafast' }))
+
+    await adapterInstance.sendPrompt('thread-1', [{ type: MessagePartType.TEXT, text: 'hello' }], { ...base, model: 'gpt-6-luna' })
+    expect(sendRpcRequest).toHaveBeenLastCalledWith(session, 'turn/start', expect.objectContaining({ serviceTier: null }))
+  })
+
   it('defaults missing codex sandbox mode to danger full access', async () => {
     const adapterInstance = new CodexAppServerAdapter()
     const adapter = adapterPrivate(adapterInstance)

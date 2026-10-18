@@ -158,7 +158,6 @@ export function TaskHeaderBar({
   const showStandaloneComplete = !isTaskClosed(task.status)
     && !!onComplete
     && (action !== TaskPrimaryAction.COMPLETE || !onAction)
-
   return (
     <header className={`glass-bar glass-task-detail-bar relative z-20 flex h-12 shrink-0 items-center gap-2 border-b px-3 ${floating ? '-mb-12 pointer-events-none [&>*]:pointer-events-auto' : ''}`}>
       {onBack && (

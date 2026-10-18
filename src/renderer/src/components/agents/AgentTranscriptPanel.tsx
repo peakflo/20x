@@ -22,6 +22,11 @@ import { htmlRenderFileName } from '@shared/html-render'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
+// Approximate rendered height (px) of the "Agent is working..." row — a single
+// text-xs line with a small icon, plus its bottom padding. Used to grow the
+// virtualizer's end padding so that row still clears the floating composer.
+const WORKING_INDICATOR_HEIGHT = 28
+
 function formatStepMeta(meta: NonNullable<AgentMessage['stepMeta']>): string {
   const parts: string[] = []
   if (meta.durationMs != null) {
@@ -1083,8 +1088,11 @@ export function AgentTranscriptPanel({
     paddingStart: floatingTop
       ? topOverlayHeight > 0 ? topOverlayHeight + 12 : externalHeaderHeight + (embeddedHeader ? (isSearchOpen ? 80 : 16) : (isSearchOpen ? 96 : 48))
       : 16,
-    paddingEnd: onSend ? 64 : 16,
-    scrollPaddingEnd: onSend ? 64 : 16,
+    // Reserve extra room for the "Agent is working" row rendered as the last
+    // transcript item below, so it still clears the floating composer instead
+    // of landing inside its own clearance gap.
+    paddingEnd: onSend ? (status === SessionStatus.WORKING ? 64 + WORKING_INDICATOR_HEIGHT : 64) : 16,
+    scrollPaddingEnd: onSend ? (status === SessionStatus.WORKING ? 64 + WORKING_INDICATOR_HEIGHT : 64) : 16,
     // Transcript rows can change indexes when adjacent tool/reasoning parts are
     // grouped. Keep measured heights attached to the message/group itself,
     // rather than allowing an index to inherit the previous row's height.
@@ -1482,14 +1490,19 @@ export function AgentTranscriptPanel({
                       </div>
                     )
                   })}
+                  {/* Rendered as the last row inside the translated window (not as a
+                      sibling after the fixed-height virtual-size div) so it lands
+                      directly after the last message and before the virtualizer's
+                      paddingEnd clearance — otherwise it falls inside that reserved
+                      gap and ends up hidden behind the floating composer. */}
+                  {status === SessionStatus.WORKING && (
+                    <div className="flex items-center gap-2 pb-2 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Agent is working...
+                    </div>
+                  )}
                 </div>
               </div>
-              {status === SessionStatus.WORKING && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Agent is working...
-                </div>
-              )}
             </>
           )}
         </div>

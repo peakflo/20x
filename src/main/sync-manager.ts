@@ -364,8 +364,18 @@ export class SyncManager {
 
     if (source.plugin_id === 'peakflo') {
       const scope = this.taskUploadScope()
-      const snapshot = serverTaskSnapshot(this.db, task.id)
-      if (!scope || !snapshot?.version) return {success:false,error:'Sync this task with Workflo before completing it.'}
+      if (!scope) return { success: false, error: 'Connect to Workflo and select an organization before completing this task.' }
+      if (!task.external_id) return { success: false, error: 'This task has no Workflo task ID. Sync it before completing at source.' }
+      let snapshot = serverTaskSnapshot(this.db, task.id)
+      if (typeof snapshot?.version !== 'number') {
+        try {
+          snapshot = await this.workfloApiClient!.getTask(task.external_id)
+          if (typeof snapshot.version === 'number') saveServerTaskSnapshot(this.db, task.id, snapshot)
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : String(error) }
+        }
+      }
+      if (typeof snapshot?.version !== 'number') return { success: false, error: 'Workflo did not return the task version needed for completion. Ask your Workflo administrator to update the server.' }
       const key = `workflo-completion:${task.id}`
       if (!this.db.getSetting(key)) {
         const outputs: Record<string, unknown> = Object.fromEntries((task.output_fields ?? [])

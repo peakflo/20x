@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync, statSync, existsSync } from 'node:fs'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname, basename } from 'node:path'
+import { join } from 'node:path'
 import {
   activeStatusWorkspaceIds,
   findTopLevelNodeModules,
@@ -9,6 +9,13 @@ import {
   isInactive,
   pruneStaleNodeModules
 } from './workspace-node-modules-gc'
+
+vi.mock('./workspace-process-cleanup', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./workspace-process-cleanup')>()
+  return { ...actual, canReadProcessCwd: vi.fn(), readProcessSnapshot: vi.fn() }
+})
+
+import { canReadProcessCwd, readProcessSnapshot } from './workspace-process-cleanup'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -203,26 +210,42 @@ describe('activeStatusWorkspaceIds', () => {
 })
 
 describe('findWorkspacesWithLiveProcesses', () => {
-  it('returns an empty set when there is nothing to check', () => {
-    expect(findWorkspacesWithLiveProcesses('/nonexistent-root', [])).toEqual(new Set())
+  beforeEach(() => {
+    vi.mocked(canReadProcessCwd).mockReturnValue(true)
+    vi.mocked(readProcessSnapshot).mockReset()
   })
 
-  it('sees the current process when it runs inside a workspace dir', () => {
-    if (process.platform === 'win32') return
-    // process.cwd() is the repo checkout, not a workspace — use a fake root that
-    // cannot match, and assert the shape (a Set) rather than membership.
-    const result = findWorkspacesWithLiveProcesses('/nonexistent-root', ['task-1'])
-    expect(result === null || result instanceof Set).toBe(true)
+  it('returns an empty set without scanning when there is nothing to check', () => {
+    expect(findWorkspacesWithLiveProcesses('/workspaces', [])).toEqual(new Set())
+    expect(readProcessSnapshot).not.toHaveBeenCalled()
   })
 
-  it('marks the real cwd workspace as active', () => {
-    if (process.platform === 'win32') return
-    const cwd = process.cwd()
-    // Derive a fake workspaces root one level above cwd so cwd looks like a workspace.
-    void statSync(cwd)
-    const result = findWorkspacesWithLiveProcesses(dirname(cwd), [basename(cwd)])
-    // The current process (vitest/electron) has cwd inside it, so it must be active —
-    // unless the platform cannot report cwds, in which case null is the honest answer.
-    if (result !== null) expect(result.has(basename(cwd))).toBe(true)
+  it('selects only requested workspaces with a live process inside them', () => {
+    vi.mocked(readProcessSnapshot).mockReturnValue({
+      rows: [],
+      cwdRows: [
+        { pid: process.pid, cwd: '/workspaces/task-1/repo' },
+        { pid: 123, cwd: '/workspaces/task-3' },
+        { pid: 124, cwd: '/workspaces-backup/task-2' }
+      ]
+    })
+    expect(findWorkspacesWithLiveProcesses('/workspaces', ['task-1', 'task-2']))
+      .toEqual(new Set(['task-1']))
+  })
+
+  it('returns unknown when the platform cannot report process directories', () => {
+    vi.mocked(canReadProcessCwd).mockReturnValue(false)
+    expect(findWorkspacesWithLiveProcesses('/workspaces', ['task-1'])).toBeNull()
+    expect(readProcessSnapshot).not.toHaveBeenCalled()
+  })
+
+  it('returns unknown when the process scan fails', () => {
+    vi.mocked(readProcessSnapshot).mockImplementation(() => { throw new Error('scan failed') })
+    expect(findWorkspacesWithLiveProcesses('/workspaces', ['task-1'])).toBeNull()
+  })
+
+  it('returns unknown when no process directories could be read', () => {
+    vi.mocked(readProcessSnapshot).mockReturnValue({ rows: [], cwdRows: [] })
+    expect(findWorkspacesWithLiveProcesses('/workspaces', ['task-1'])).toBeNull()
   })
 })
