@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, FileCheck2, GitCompareArrows, List } from 'lucide-react'
+import { ChevronLeft, ChevronRight, FileCheck2, GitCompareArrows, List, ListTree } from 'lucide-react'
 import type { Artifact } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
@@ -10,6 +10,7 @@ export interface ArtifactRailProps {
   activeTabId?: string | null
   agentActive?: boolean
   hasChanges?: boolean
+  hasSubtasks?: boolean
   hasOutput?: boolean
   changesCount?: number
   onSelectTab: (tabId: string) => void
@@ -17,7 +18,7 @@ export interface ArtifactRailProps {
   className?: string
 }
 
-export function ArtifactRail({ artifacts, expanded, activeTabId, agentActive, hasChanges, hasOutput, changesCount, onSelectTab, onToggleExpanded, className }: ArtifactRailProps) {
+export function ArtifactRail({ artifacts, expanded, activeTabId, agentActive, hasChanges, hasSubtasks, hasOutput, changesCount, onSelectTab, onToggleExpanded, className }: ArtifactRailProps) {
   return (
     <aside className={cn('flex h-full shrink-0 flex-col glass-panel border-l transition-[width] duration-200', expanded ? 'w-[220px]' : 'w-12', className)}>
       <div className="flex h-10 items-center border-b border-border/50 px-1.5">
@@ -28,6 +29,7 @@ export function ArtifactRail({ artifacts, expanded, activeTabId, agentActive, ha
       </div>
       <div className="flex-1 space-y-1 overflow-y-auto p-1.5">
         <RailItem icon={List} label="Details" expanded={expanded} active={activeTabId === PinnedArtifactTabId.DETAILS} onClick={() => onSelectTab(PinnedArtifactTabId.DETAILS)} />
+        {hasSubtasks && <RailItem icon={ListTree} label="Subtasks" expanded={expanded} active={activeTabId === PinnedArtifactTabId.SUBTASKS} onClick={() => onSelectTab(PinnedArtifactTabId.SUBTASKS)} />}
         {hasChanges && <RailItem icon={GitCompareArrows} label={`Changes${changesCount ? ` · ${changesCount}` : ''}`} expanded={expanded} active={activeTabId === PinnedArtifactTabId.CHANGES} onClick={() => onSelectTab(PinnedArtifactTabId.CHANGES)} />}
         {hasOutput && <RailItem icon={FileCheck2} label="Output" expanded={expanded} active={activeTabId === PinnedArtifactTabId.OUTPUT} onClick={() => onSelectTab(PinnedArtifactTabId.OUTPUT)} />}
         {artifacts.map((artifact) => (

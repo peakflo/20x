@@ -85,7 +85,7 @@ export function ChatInput({
           {attachments.map((attachment) => (
             <span
               key={attachment.id}
-              className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border/60 bg-muted/40 px-2 py-1 text-[11px] text-foreground"
+              className="glass-attachment-chip inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-foreground"
               title={`${attachment.filename} (${formatFileSize(attachment.size)})`}
             >
               <svg className="h-3 w-3 shrink-0 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

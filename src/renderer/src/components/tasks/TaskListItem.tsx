@@ -6,6 +6,7 @@ import { TaskStatusBadge } from './TaskStatusBadge'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { TaskStatus } from '@/types'
 import { isTaskClosed } from '@shared/constants'
+import { isReviewSeen, isReviewUnseen } from '@shared/review-seen'
 import type { WorkfloTask, RecurrencePattern, RecurrencePatternObject } from '@/types'
 import type { TaskRunDuration } from '@shared/task-run-duration'
 import { formatTaskRunDuration } from '@/hooks/use-task-run-durations'
@@ -87,9 +88,15 @@ interface TaskListItemProps {
   isSubtask?: boolean
   isExpanded?: boolean
   onToggleExpand?: () => void
+  onContextMenu?: (e: React.MouseEvent) => void
 }
 
-export const TaskListItem = memo(function TaskListItem({ task, runDuration, isSelected, onSelect, subtaskCount, isSubtask, isExpanded, onToggleExpand }: TaskListItemProps) {
+/** Soft pink halo on the status dot of a review task the user has not seen yet. */
+export const UNSEEN_REVIEW_HALO_CLASS = 'shadow-[0_0_0_3px_rgba(244,114,182,0.22)]'
+/** Seen review rows step back so new ones stand out. */
+export const SEEN_REVIEW_DIM_CLASS = 'opacity-[0.55]'
+
+export const TaskListItem = memo(function TaskListItem({ task, runDuration, isSelected, onSelect, subtaskCount, isSubtask, isExpanded, onToggleExpand, onContextMenu }: TaskListItemProps) {
   const isActive = !isTaskClosed(task.status)
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
@@ -125,22 +132,30 @@ export const TaskListItem = memo(function TaskListItem({ task, runDuration, isSe
     return statusDotColor[task.status] // Task status
   }, [hasPendingApproval, task.status, hasActiveAgent])
 
+  const reviewUnseen = isReviewUnseen(task)
+  // The open row stays at full strength so it is readable while being reviewed.
+  const reviewSeenDimmed = !isSelected && isReviewSeen(task)
+
   return (
     <button
       data-keyboard-task-id={task.id}
       onClick={onSelect}
+      onContextMenu={onContextMenu}
       aria-current={isSelected ? 'true' : undefined}
+      data-review-seen={task.status === TaskStatus.ReadyForReview ? (reviewUnseen ? 'unseen' : 'seen') : undefined}
       className={cn(
-        'w-full text-left px-3 py-2.5 rounded-md transition-colors cursor-pointer group',
+        'w-full text-left px-3 py-2.5 rounded-md transition-[background-color,opacity] cursor-pointer group',
         isSelected ? 'bg-accent' : 'hover:bg-accent/50',
-        isSubtask && 'py-2'
+        isSubtask && 'py-2',
+        reviewSeenDimmed && SEEN_REVIEW_DIM_CLASS
       )}
     >
       <div className="flex items-start gap-3">
         <div className={cn(
           'mt-[7px] h-2 w-2 rounded-full shrink-0',
           isSubtask && 'mt-[5px] h-1.5 w-1.5',
-          statusColor
+          statusColor,
+          reviewUnseen && statusColor === statusDotColor[TaskStatus.ReadyForReview] && UNSEEN_REVIEW_HALO_CLASS
         )} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">

@@ -7,6 +7,36 @@ import { makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
 import { startMobileApiServer, stopMobileApiServer } from './mobile-api-server'
 import webpush from 'web-push'
+import { TaskStatus } from '../shared/constants'
+
+describe('mobile task history endpoints', () => {
+  it('serves the open set, a count, and completed pages with their subtasks', async () => {
+    const { db } = createTestDb()
+    const token = 'task-history-token'
+    db.createMobileSession('task-history-phone', createHash('sha256').update(token).digest('hex'), 'Phone')
+    const open = db.createTask(makeTask({ title: 'Open task' }))!
+    const closed = db.createTask(makeTask({ title: 'Closed task' }))!
+    db.updateTask(closed.id, { status: TaskStatus.Completed })
+    const child = db.createTask(makeTask({ title: 'Closed child', parent_task_id: closed.id }))!
+    db.updateTask(child.id, { status: TaskStatus.Completed })
+    const port = await startMobileApiServer(db, {} as never, {} as never, 21000 + Math.floor(Math.random() * 40000))
+    const headers = { Authorization: `Bearer ${token}` }
+    try {
+      const base = `http://127.0.0.1:${port}`
+      const openResponse = await fetch(`${base}/api/tasks/open`, { headers })
+      expect(openResponse.status).toBe(200)
+      expect((await openResponse.json()).map((task: { id: string }) => task.id)).toEqual([open.id])
+
+      const countResponse = await fetch(`${base}/api/tasks/completed?offset=0&limit=0`, { headers })
+      expect(await countResponse.json()).toEqual({ tasks: [], total: 1 })
+
+      const pageResponse = await fetch(`${base}/api/tasks/completed?offset=0&limit=1`, { headers })
+      const page = await pageResponse.json()
+      expect(page.total).toBe(1)
+      expect(page.tasks.map((task: { id: string }) => task.id)).toEqual([closed.id, child.id])
+    } finally { stopMobileApiServer(); db.close() }
+  })
+})
 
 describe('mobile push subscription endpoint', () => {
   it('requires a paired session and stores the subscription against it', async () => {
@@ -302,6 +332,8 @@ describe('mobile-api-server: source completion action', () => {
     })
     expect(response.status).toBe(200)
     expect(executeAction).toHaveBeenCalledWith(action || 'complete', expect.objectContaining({ id: task.id }), undefined, source.id)
+    expect(await response.json()).toMatchObject({ completed: true, status: 'completed', task: { id: task.id, status: 'completed' } })
+    expect(db.getTask(task.id)?.status).toBe('completed')
     db.close()
   })
 

@@ -181,7 +181,9 @@ export interface AgentMcpServerEntry {
 }
 
 import type { ReasoningEffort } from '@shared/reasoning-effort'
+import type { SpeedMode } from '@shared/ultrafast'
 export type { ReasoningEffort }
+export type { SpeedMode }
 
 export interface CreateMcpServerDTO {
   name: string
@@ -207,6 +209,7 @@ export interface AgentConfig {
   coding_agent?: CodingAgentType
   model?: string
   reasoning_effort?: ReasoningEffort
+  speed_mode?: SpeedMode
   auth_method?: ClaudeAuthMethod
   /** Harness instance (subscription login) the agent runs under. Unset means the harness default. */
   harness_instance_id?: string
@@ -365,6 +368,10 @@ export interface WorkfloTask {
   auto_complete_without_review: boolean
   /** null = the user has not been asked yet; true = close it at the source; false = manual. */
   complete_at_source: boolean | null
+  /** When the task last moved into ready_for_review (main process owned). */
+  review_entered_at?: string | null
+  /** When the user last looked at it in review; null = unseen. See @shared/review-seen. */
+  review_seen_at?: string | null
   parent_task_id: string | null
   sort_order: number
   created_at: string

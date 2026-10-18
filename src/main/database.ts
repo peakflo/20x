@@ -7,6 +7,7 @@ import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
 import { desktopBrandName } from './brand'
 import type { ReasoningEffort } from '../shared/reasoning-effort'
+import type { SpeedMode } from '../shared/ultrafast'
 import { startTaskApiServer } from './task-api-server'
 import { UsageStore } from './usage/usage-store'
 import { contextHandoffSettingKey, parseContextHandoffMarker, type ContextHandoffMarker } from './context-handoff'
@@ -53,6 +54,7 @@ export interface AgentConfigRecord {
   acp_instance_id?: string
   model?: string
   reasoning_effort?: ReasoningEffort
+  speed_mode?: SpeedMode
   auth_method?: 'subscription' | 'api_key'
   permission_mode?: 'ask' | 'allow'
   sandbox_mode?: 'read-only' | 'workspace-write' | 'danger-full-access'
@@ -378,6 +380,8 @@ export interface TaskRow {
   auto_start_agent: number
   auto_complete_without_review: number
   complete_at_source: number | null
+  review_entered_at: string | null
+  review_seen_at: string | null
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -537,6 +541,10 @@ export interface TaskRecord {
    * updates the source themselves.
    */
   complete_at_source: boolean | null
+  /** When the task last moved INTO ready_for_review (set by updateTask/createTask). */
+  review_entered_at: string | null
+  /** When the user last looked at the task while it was in review. null = never / marked unseen. */
+  review_seen_at: string | null
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -701,7 +709,9 @@ function deserializeTask(row: TaskRow): TaskRecord {
     heartbeat_next_check_at: row.heartbeat_next_check_at ?? null,
     auto_start_agent: (row.auto_start_agent ?? 0) === 1,
     auto_complete_without_review: (row.auto_complete_without_review ?? 0) === 1,
-    complete_at_source: row.complete_at_source == null ? null : row.complete_at_source === 1
+    complete_at_source: row.complete_at_source == null ? null : row.complete_at_source === 1,
+    review_entered_at: row.review_entered_at ?? null,
+    review_seen_at: row.review_seen_at ?? null
   }
 }
 
@@ -1189,8 +1199,9 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  *
  * 8 → 9: tasks.complete_at_source
  * 9 → 10: harness_instances table; agent config account_home → harness_instance_id
+ * 10 → 11: tasks.review_entered_at + tasks.review_seen_at (review seen/unseen)
  */
-const SCHEMA_VERSION = 10
+const SCHEMA_VERSION = 11
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -1348,6 +1359,8 @@ export class DatabaseManager {
         auto_start_agent INTEGER NOT NULL DEFAULT 0,
         auto_complete_without_review INTEGER NOT NULL DEFAULT 0,
         complete_at_source INTEGER DEFAULT NULL,
+        review_entered_at TEXT DEFAULT NULL,
+        review_seen_at TEXT DEFAULT NULL,
         parent_task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
         sort_order INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -1663,6 +1676,8 @@ export class DatabaseManager {
         auto_start_agent INTEGER NOT NULL DEFAULT 0,
         auto_complete_without_review INTEGER NOT NULL DEFAULT 0,
         complete_at_source INTEGER DEFAULT NULL,
+        review_entered_at TEXT DEFAULT NULL,
+        review_seen_at TEXT DEFAULT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
@@ -1695,9 +1710,36 @@ export class DatabaseManager {
     for (const col of newCols) columnNames.add(col)
   }
 
+  /**
+   * Adds the review seen/unseen columns. Existing tasks that are already in
+   * review are backfilled as seen (entered == seen) so nothing lights up as
+   * "new" right after the upgrade.
+   */
+  private migrateReviewSeenColumns(columnNames: Set<string>, backfill: boolean): void {
+    if (!columnNames.has('review_entered_at')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN review_entered_at TEXT DEFAULT NULL`)
+      columnNames.add('review_entered_at')
+    }
+    if (!columnNames.has('review_seen_at')) {
+      this.db.exec(`ALTER TABLE tasks ADD COLUMN review_seen_at TEXT DEFAULT NULL`)
+      columnNames.add('review_seen_at')
+    }
+    if (backfill) {
+      this.db.prepare(`
+        UPDATE tasks
+        SET review_entered_at = COALESCE(review_entered_at, updated_at, @now),
+            review_seen_at = COALESCE(review_entered_at, updated_at, @now)
+        WHERE status = @status
+      `).run({ now: new Date().toISOString(), status: TaskStatus.ReadyForReview })
+    }
+  }
+
   private runMigrations(): void {
     const columns = this.db.pragma('table_info(tasks)') as { name: string }[]
     const columnNames = new Set(columns.map((c) => c.name))
+    // Captured before any table rebuild below, which would add the columns
+    // empty and hide that the backfill is still needed.
+    const needsReviewSeenBackfill = !columnNames.has('review_entered_at') || !columnNames.has('review_seen_at')
 
     if (!columnNames.has('attachments')) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]'`)
@@ -2023,6 +2065,7 @@ export class DatabaseManager {
     if (!columnNames.has('auto_complete_without_review')) {
       this.db.exec(`ALTER TABLE tasks ADD COLUMN auto_complete_without_review INTEGER NOT NULL DEFAULT 0`)
     }
+    this.migrateReviewSeenColumns(columnNames, needsReviewSeenBackfill)
 
     // Create heartbeat_logs table
     const heartbeatLogsTable = this.db.prepare(
@@ -3188,10 +3231,10 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         labels, attachments, repos, output_fields, external_id, source_id, source,
         is_recurring, recurrence_pattern, recurrence_parent_id,
         auto_start_agent, auto_complete_without_review,
-        parent_task_id, sort_order,
+        parent_task_id, sort_order, review_entered_at,
         created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.title,
@@ -3215,6 +3258,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       data.auto_complete_without_review ? 1 : 0,
       data.parent_task_id ?? null,
       sortOrder,
+      data.status === TaskStatus.ReadyForReview ? now : null,
       now,
       now
     )
@@ -3232,6 +3276,48 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         )
       )
     `).run(TaskStatus.Completed, TaskStatus.Completed)
+  }
+
+  /**
+   * Ids of tasks in review that the user has not looked at since they last
+   * entered review. Mirrors `isReviewUnseen` in src/shared/review-seen.ts.
+   */
+  getUnseenReviewTaskIds(): string[] {
+    const rows = this.db.prepare(`
+      SELECT id FROM tasks
+      WHERE status = ?
+        AND (review_seen_at IS NULL OR (review_entered_at IS NOT NULL AND review_seen_at < review_entered_at))
+    `).all(TaskStatus.ReadyForReview) as { id: string }[]
+    return rows.map((row) => row.id)
+  }
+
+  /**
+   * Marks a task in review as seen. Does not touch updated_at, so viewing a
+   * task never reorders a "Last Updated" list. No-op outside review.
+   */
+  markReviewSeen(id: string): TaskRecord | undefined {
+    this.db.prepare(`UPDATE tasks SET review_seen_at = ? WHERE id = ? AND status = ?`)
+      .run(new Date().toISOString(), id, TaskStatus.ReadyForReview)
+    return this.getTask(id)
+  }
+
+  /** Marks a task in review as unseen again. No-op outside review. */
+  markReviewUnseen(id: string): TaskRecord | undefined {
+    this.db.prepare(`UPDATE tasks SET review_seen_at = NULL WHERE id = ? AND status = ?`)
+      .run(id, TaskStatus.ReadyForReview)
+    return this.getTask(id)
+  }
+
+  /** Marks every unseen task in review as seen. Returns the tasks that changed. */
+  markAllReviewSeen(): TaskRecord[] {
+    const ids = this.getUnseenReviewTaskIds()
+    if (ids.length === 0) return []
+    const now = new Date().toISOString()
+    const stmt = this.db.prepare(`UPDATE tasks SET review_seen_at = ? WHERE id = ?`)
+    this.db.transaction(() => {
+      for (const id of ids) stmt.run(now, id)
+    })()
+    return ids.map((id) => this.getTask(id)).filter((task): task is TaskRecord => !!task)
   }
 
   updateTask(id: string, data: UpdateTaskData, origin?: 'workflo-server' | 'session-feedback' | 'task-source' | 'heartbeat-auto'): TaskRecord | undefined {
@@ -3300,6 +3386,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       } else {
         values.push(value as string | number | null)
       }
+    }
+
+    // Entering review (from any other status) starts a new review round: the
+    // task counts as unseen until review_seen_at catches up. Every status
+    // writer (IPC, mobile API, MCP, agent-manager, sync) goes through here.
+    if (data.status === TaskStatus.ReadyForReview && currentTask && currentTask.status !== TaskStatus.ReadyForReview) {
+      setClauses.push('review_entered_at = ?')
+      values.push(new Date().toISOString())
     }
 
     // Auto-set heartbeat_next_check_at when enabling heartbeat without explicit next check time

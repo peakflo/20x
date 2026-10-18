@@ -10,6 +10,7 @@ import { useUserStore } from '@/stores/user-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { useAgentSchedulerStore } from '@/stores/agent-scheduler-store'
 import { cn, isSnoozed } from '@/lib/utils'
+import { countUnseenReviewTasks } from '@/hooks/use-tasks'
 import { TaskStatus, TASK_STATUSES, TASK_PRIORITIES } from '@/types'
 import type { WorkfloTask, TaskPriority } from '@/types'
 
@@ -46,6 +47,11 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   const setStatusFilter = useUIStore((s) => s.setStatusFilter)
   const setPriorityFilter = useUIStore((s) => s.setPriorityFilter)
   const setSourceFilter = useUIStore((s) => s.setSourceFilter)
+  const reviewUnseenOnly = useUIStore((s) => s.reviewUnseenOnly)
+  const toggleReviewUnseenOnly = useUIStore((s) => s.toggleReviewUnseenOnly)
+  // Counted over the whole working set, not the filtered list, so the badge
+  // does not change with other filters.
+  const unseenReviewCount = useTaskStore((s) => countUnseenReviewTasks(s.tasks))
   const setSortField = useUIStore((s) => s.setSortField)
   const setSearchQuery = useUIStore((s) => s.setSearchQuery)
   const skillSearchQuery = useUIStore((s) => s.skillSearchQuery)
@@ -118,7 +124,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
   const completedLoading = useTaskStore((s) => s.completedLoading)
   const loadMoreCompleted = useTaskStore((s) => s.loadMoreCompleted)
   const searchCompleted = useTaskStore((s) => s.searchCompleted)
-  const isNarrowed = hasActiveFilters || searchQuery.trim() !== ''
+  const isNarrowed = hasActiveFilters || reviewUnseenOnly || searchQuery.trim() !== ''
 
   // Search also looks in completed history that has not been paged in.
   useEffect(() => {
@@ -182,7 +188,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
     >
       {sidebarView === 'tasks' ? (
         <>
-          <div className={cn('relative z-10 shrink-0', filtersOpen ? '-mb-[278px]' : '-mb-[176px]')}>
+          <div className={cn('relative z-10 shrink-0', filtersOpen ? '-mb-[310px]' : '-mb-[208px]')}>
           <div className="no-drag flex items-center justify-between px-4 pt-4 pb-3">
             <div className="flex items-center gap-2">
               <h2 className="text-[13px] font-semibold uppercase tracking-wider text-muted-foreground">Tasks</h2>
@@ -236,7 +242,8 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           </div>
 
           <div className="no-drag px-3 pb-3">
-            <div className="glass-filter-block flex min-h-10 items-center gap-1 rounded-xl border border-[var(--glass-outline)] px-2">
+            <div className="glass-filter-block rounded-xl border border-[var(--glass-outline)] px-2">
+            <div className="flex min-h-10 items-center gap-1">
             <button
               onClick={() => setFiltersOpen(!filtersOpen)}
               className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-foreground hover:bg-accent/40 cursor-pointer"
@@ -259,6 +266,29 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
+            </div>
+            <div className="flex items-center gap-1.5 pb-2">
+              <button
+                type="button"
+                onClick={toggleReviewUnseenOnly}
+                aria-pressed={reviewUnseenOnly}
+                title="Show only tasks in review you have not opened yet"
+                className={cn(
+                  'flex h-6 items-center gap-1.5 rounded-full border px-2.5 text-[11.5px] cursor-pointer transition-colors whitespace-nowrap',
+                  reviewUnseenOnly
+                    ? 'border-primary/35 bg-primary/15 text-primary'
+                    : 'border-[var(--glass-outline)] text-muted-foreground hover:bg-accent/40 hover:text-foreground'
+                )}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-pink-400" />
+                Review · Unseen
+                {unseenReviewCount > 0 && (
+                  <span data-testid="review-unseen-count" className="bg-primary/20 text-primary rounded-full px-1.5 text-[10px] tabular-nums">
+                    {unseenReviewCount}
+                  </span>
+                )}
+              </button>
+            </div>
             </div>
           </div>
 
@@ -318,7 +348,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
           )}
           </div>
 
-          <div className={cn('flex-1 overflow-y-auto', filtersOpen ? 'pt-[286px]' : 'pt-[184px]')}>
+          <div className={cn('flex-1 overflow-y-auto', filtersOpen ? 'pt-[318px]' : 'pt-[216px]')}>
             <TaskList
               tasks={tasks}
               selectedTaskId={selectedTaskId}
@@ -327,6 +357,7 @@ export function Sidebar({ tasks, selectedTaskId, overdueCount, onSelectTask, onC
               hasMoreCompleted={completedLoaded < completedTotal}
               completedLoading={completedLoading}
               onLoadMoreCompleted={loadMoreCompleted}
+              reviewUnseenOnly={reviewUnseenOnly}
             />
           </div>
           <div className="px-4 py-2.5 border-t text-xs text-muted-foreground tabular-nums">

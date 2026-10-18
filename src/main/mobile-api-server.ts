@@ -1,5 +1,5 @@
 import { updateTaskFromUser } from './session-feedback'
-import { brandSpacesEnabled, desktopBrandName } from './brand'
+import { desktopBrandName } from './brand'
 import { getTaskCompletionAction } from '../shared/task-completion'
 /**
  * Mobile API server — HTTP + WebSocket for controlling 20x from a mobile device.
@@ -210,6 +210,13 @@ export function broadcastToMobileClients(channel: string, data: unknown): void {
   }
 }
 
+/** Pushes a review seen/unseen change to every mobile client and the desktop. */
+function broadcastReviewSeen(task: { id: string; review_entered_at: string | null; review_seen_at: string | null }): void {
+  const payload = { taskId: task.id, updates: { review_entered_at: task.review_entered_at, review_seen_at: task.review_seen_at } }
+  broadcastToMobileClients('task:updated', payload)
+  if (notifyDesktop) notifyDesktop('task:updated', payload)
+}
+
 // ── MIME types for static file serving ───────────────────────
 const MIME: Record<string, string> = {
   '.html': 'text/html',
@@ -341,7 +348,15 @@ async function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathnam
 async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Promise<unknown> {
   const db = dbRef!
 
-  if (pathname === '/api/brand') return { spaces: brandSpacesEnabled() }
+  if (pathname === '/api/tasks/open') return db.getOpenTasks()
+
+  if (pathname === '/api/tasks/completed') {
+    return db.getCompletedTasksPage(
+      Number(url.searchParams.get('offset') ?? 0),
+      Number(url.searchParams.get('limit') ?? 50),
+      url.searchParams.get('query') ?? undefined
+    )
+  }
 
   // GET /api/tasks
   if (pathname === '/api/tasks') {
@@ -864,6 +879,24 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     return { success: true }
   }
 
+  // POST /api/tasks/review-seen-all — mark every unseen review task as seen
+  // (must be checked before the :id update route)
+  if (pathname === '/api/tasks/review-seen-all') {
+    const changed = db.markAllReviewSeen()
+    for (const task of changed) broadcastReviewSeen(task)
+    return changed
+  }
+
+  // POST /api/tasks/:id/review-seen | review-unseen — review seen state
+  const reviewSeenMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/review-(seen|unseen)$/)
+  if (reviewSeenMatch) {
+    const taskId = decodeURIComponent(reviewSeenMatch[1])
+    if (!db.getTask(taskId)) throw Object.assign(new Error('Task not found'), { status: 404 })
+    const task = reviewSeenMatch[2] === 'seen' ? db.markReviewSeen(taskId) : db.markReviewUnseen(taskId)
+    if (task) broadcastReviewSeen(task)
+    return task
+  }
+
   // POST /api/tasks — create task (must be checked before the :id update route)
   if (pathname === '/api/tasks') {
     if (params.status === TaskStatus.Completed) throw Object.assign(new Error(`${desktopBrandName()} must confirm completion.`), { status: 409 })
@@ -903,7 +936,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
           })
         }
       }
-      return { completed: true, status: fresh?.status }
+      return { completed: fresh?.status === TaskStatus.Completed, status: fresh?.status, task: fresh }
     }
     if (!syncManagerRef) {
       throw Object.assign(new Error(`Sync this task with ${desktopBrandName()} before completing it.`), { status: 409 })
@@ -911,12 +944,25 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     db.updateTask(taskId, { complete_at_source: true })
     const result = await syncManagerRef.executeAction(getTaskCompletionAction(task.output_fields), task, undefined, task.source_id)
     if (!result.success) throw Object.assign(new Error(result.error || 'Completion is pending.'), { status: 409 })
-    const completed = true
-    const fresh = db.getTask(taskId)
+    // Some plugins confirm the source action without returning a taskUpdate.
+    // Persist the confirmed completion so the next mobile fetch cannot reopen it.
+    let fresh = db.getTask(taskId)
+    if (fresh && fresh.status !== TaskStatus.Completed) {
+      fresh = db.updateTask(taskId, { status: TaskStatus.Completed }, 'task-source')
+    }
     if (fresh) {
       broadcastToMobileClients('task:updated', { taskId, updates: fresh })
+      if (notifyDesktop) notifyDesktop('task:updated', { taskId, updates: fresh })
+      if (fresh.status === TaskStatus.Completed && task.status !== TaskStatus.Completed) {
+        triggerTaskAutomation()
+        if (fresh.parent_task_id) {
+          agent.notifyParentOfSubtaskCompletion(fresh.parent_task_id, taskId).catch(err => {
+            console.error('[MobileAPI] Failed to wake parent after source completion:', err)
+          })
+        }
+      }
     }
-    return { completed, status: fresh?.status }
+    return { completed: fresh?.status === TaskStatus.Completed, status: fresh?.status, task: fresh }
   }
 
   // POST /api/tasks/:id — update task

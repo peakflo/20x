@@ -120,6 +120,8 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       auto_start_agent INTEGER NOT NULL DEFAULT 0,
       auto_complete_without_review INTEGER NOT NULL DEFAULT 0,
       complete_at_source INTEGER DEFAULT NULL,
+      review_entered_at TEXT DEFAULT NULL,
+      review_seen_at TEXT DEFAULT NULL,
       parent_task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
       sort_order INTEGER NOT NULL DEFAULT 0,
       heartbeat_enabled INTEGER NOT NULL DEFAULT 0,

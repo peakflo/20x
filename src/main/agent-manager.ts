@@ -1704,6 +1704,7 @@ export class AgentManager extends EventEmitter {
       workspaceDir: workspaceDir || this.db.getWorkspaceDir(taskId),
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
+      speedMode: agent.config?.speed_mode,
       systemPrompt: baseSystemPrompt,
       mcpServers,
       authMethod: agent.config?.auth_method,
@@ -2376,6 +2377,7 @@ export class AgentManager extends EventEmitter {
       workspaceDir,
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
+      speedMode: agent.config?.speed_mode,
       systemPrompt: agent.config?.system_prompt,
       mcpServers,
       authMethod: agent.config?.auth_method,
@@ -3751,6 +3753,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       workspaceDir,
       model: agent.config?.model,
       reasoningEffort: agent.config?.reasoning_effort,
+      speedMode: agent.config?.speed_mode,
       systemPrompt: baseSystemPrompt,
       mcpServers,
       authMethod: agent.config?.auth_method,
@@ -6990,6 +6993,23 @@ Important:
         delete updates.status
         if (Object.keys(updates).length === 0) return
         data = { ...event, updates }
+      }
+    }
+    // Status pushes here are often partial ({ status }). The database stamps
+    // review_entered_at when a task enters review, so carry the review seen
+    // fields along — otherwise clients would keep the previous round's
+    // timestamps and show a fresh review as already seen.
+    if (channel === 'task:updated' && data && typeof data === 'object') {
+      const event = data as { taskId?: string; updates?: Record<string, unknown> }
+      if (event.taskId && event.updates && 'status' in event.updates && !('review_entered_at' in event.updates)) {
+        let current: TaskRecord | undefined
+        try { current = this.db?.getTask?.(event.taskId) } catch { current = undefined }
+        if (current && current.review_entered_at !== undefined) {
+          data = {
+            ...event,
+            updates: { ...event.updates, review_entered_at: current.review_entered_at, review_seen_at: current.review_seen_at }
+          }
+        }
       }
     }
     // Durable transcript projection: persist every transcript part BEFORE any

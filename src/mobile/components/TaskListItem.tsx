@@ -1,4 +1,6 @@
-import { TaskStatus } from '@shared/constants'
+import { useRef } from 'react'
+import { isTaskClosed, TaskStatus } from '@shared/constants'
+import { isReviewSeen, isReviewUnseen } from '@shared/review-seen'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
 import type { TaskPriority } from '@/types'
 import { cn, formatDate, isOverdue, isDueSoon, isSnoozed } from '../lib/utils'
@@ -13,10 +15,25 @@ interface TaskListItemProps {
   subtaskCount?: number
   isExpanded?: boolean
   onToggleExpand?: () => void
+  /** Long-press / context menu on the row (used for review seen/unseen actions). */
+  onLongPress?: () => void
 }
 
-export function TaskListItem({ task, onSelect, sessionStatus, isSubtask, subtaskCount, isExpanded, onToggleExpand }: TaskListItemProps) {
-  const isActive = task.status !== TaskStatus.Completed
+const LONG_PRESS_MS = 500
+const LONG_PRESS_MOVE_TOLERANCE_PX = 10
+
+export function TaskListItem({ task, onSelect, sessionStatus, isSubtask, subtaskCount, isExpanded, onToggleExpand, onLongPress }: TaskListItemProps) {
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pressStart = useRef<{ x: number; y: number } | null>(null)
+  const longPressFired = useRef(false)
+  const cancelPress = () => {
+    if (pressTimer.current) clearTimeout(pressTimer.current)
+    pressTimer.current = null
+    pressStart.current = null
+  }
+  const reviewUnseen = isReviewUnseen(task)
+  const reviewSeen = isReviewSeen(task)
+  const isActive = !isTaskClosed(task.status)
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
   const hasActiveAgent = sessionStatus && sessionStatus !== SessionStatus.IDLE
@@ -41,14 +58,44 @@ export function TaskListItem({ task, onSelect, sessionStatus, isSubtask, subtask
 
   return (
     <button
-      onClick={onSelect}
-      className="w-full text-left px-3 py-2.5 rounded-md transition-colors cursor-pointer group hover:bg-accent/50 active:bg-accent"
+      onClick={() => {
+        // A long-press already opened the menu; swallow the trailing click.
+        if (longPressFired.current) {
+          longPressFired.current = false
+          return
+        }
+        onSelect()
+      }}
+      onContextMenu={onLongPress ? (e) => { e.preventDefault(); cancelPress(); onLongPress() } : undefined}
+      onTouchStart={onLongPress ? (e) => {
+        longPressFired.current = false
+        const touch = e.touches[0]
+        pressStart.current = { x: touch.clientX, y: touch.clientY }
+        pressTimer.current = setTimeout(() => {
+          pressTimer.current = null
+          longPressFired.current = true
+          onLongPress()
+        }, LONG_PRESS_MS)
+      } : undefined}
+      onTouchMove={onLongPress ? (e) => {
+        const start = pressStart.current
+        const touch = e.touches[0]
+        if (start && (Math.abs(touch.clientX - start.x) > LONG_PRESS_MOVE_TOLERANCE_PX || Math.abs(touch.clientY - start.y) > LONG_PRESS_MOVE_TOLERANCE_PX)) cancelPress()
+      } : undefined}
+      onTouchEnd={onLongPress ? cancelPress : undefined}
+      onTouchCancel={onLongPress ? cancelPress : undefined}
+      data-review-seen={task.status === TaskStatus.ReadyForReview ? (reviewUnseen ? 'unseen' : 'seen') : undefined}
+      className={cn(
+        'w-full text-left px-4 py-2.5 rounded-md transition-[background-color,opacity] cursor-pointer group hover:bg-accent/50 active:bg-accent',
+        reviewSeen && 'opacity-[0.55]'
+      )}
     >
       <div className="flex items-start gap-3">
         <div className={cn(
           'rounded-full shrink-0',
           isSubtask ? 'mt-[8px] h-1.5 w-1.5' : 'mt-[7px] h-2 w-2',
-          statusDotColor
+          statusDotColor,
+          reviewUnseen && statusDotColor === 'bg-pink-400' && 'shadow-[0_0_0_3px_rgba(244,114,182,0.22)]'
         )} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">

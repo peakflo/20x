@@ -252,6 +252,9 @@ interface ElectronAPI {
     deleteTask: (id: string) => Promise<boolean>
     getSubtasks: (parentId: string) => Promise<WorkfloTask[]>
     reorderSubtasks: (parentId: string, orderedIds: string[]) => Promise<boolean>
+    markReviewSeen: (id: string) => Promise<WorkfloTask | undefined>
+    markReviewUnseen: (id: string) => Promise<WorkfloTask | undefined>
+    markAllReviewSeen: () => Promise<WorkfloTask[]>
   }
   tasks: {
     getWorkspaceDir: (taskId: string) => Promise<string>

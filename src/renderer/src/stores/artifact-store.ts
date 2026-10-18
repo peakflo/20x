@@ -12,6 +12,7 @@ import { onArtifactUpdated } from '@/lib/ipc-client'
 
 export enum PinnedArtifactTabId {
   DETAILS = 'details',
+  SUBTASKS = 'subtasks',
   CHANGES = 'changes',
   OUTPUT = 'output'
 }

@@ -1,5 +1,6 @@
 import { UsageLimitRecoveryNotice } from '../components/UsageLimitRecoveryNotice'
 import { memo, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState } from 'react'
+import { isTaskClosed } from '@shared/constants'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useTaskStore } from '../stores/task-store'
 import { useAgentStore, SessionStatus, type AgentMessage } from '../stores/agent-store'
@@ -33,6 +34,11 @@ function collectSearchableText(value: unknown, output: string[]): void {
 // effect keyed on `messages` while no session exists.
 const EMPTY_MESSAGES: AgentMessage[] = []
 const EMPTY_ARTIFACTS: Artifact[] = []
+
+// Approximate rendered height (px) of the "Agent is working..." row (dots +
+// label, with its vertical padding). Used to grow the virtualizer's end
+// padding so the row still clears the floating composer overlap below it.
+const WORKING_INDICATOR_HEIGHT = 36
 
 // Cache per message object: search runs over the whole transcript on every
 // keystroke AND every streamed delta. Message objects are identity-stable per
@@ -372,14 +378,20 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     if (task?.agent_id && session?.sessionId) _restartSession(task.agent_id, session.sessionId)
   }, [task?.agent_id, session?.sessionId, _restartSession])
 
-  const headerClearance = topOverlayHeight > 0 ? topOverlayHeight + 12 : isSearchOpen ? (normalizedSearchQuery ? 192 : 144) : 80
+  // Keep messages below the clear title row. They can still pass behind the
+  // search controls and the diffused todo summary below it.
+  const topOverlayOverlap = Math.max(0, topOverlayHeight - 68)
+  const headerClearance = topOverlayHeight > 0 ? topOverlayOverlap + 12 : isSearchOpen ? (normalizedSearchQuery ? 124 : 76) : 12
   const hasLeadingContent = Boolean(session?.systemStatus || artifacts.length)
   const virtualizer = useVirtualizer({
     count: transcriptItems.length,
     getScrollElement: () => scrollRef.current,
     paddingStart: hasLeadingContent ? 0 : headerClearance,
-    paddingEnd: 80,
-    scrollPaddingEnd: 80,
+    // Reserve extra room for the "Agent is working" row rendered as the last
+    // transcript item below, so it still clears the floating composer instead
+    // of landing inside its own clearance gap.
+    paddingEnd: isWorking ? 80 + WORKING_INDICATOR_HEIGHT : 80,
+    scrollPaddingEnd: isWorking ? 80 + WORKING_INDICATOR_HEIGHT : 80,
     estimateSize: () => 120,
     overscan: 8
   })
@@ -457,14 +469,14 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
 
   // Session state flags — matches TaskDetailPage logic
   const isSessionRunning = session?.sessionId && (session.status === SessionStatus.WORKING || session.status === SessionStatus.WAITING_APPROVAL)
-  const canStart = task?.agent_id && !task.session_id && (!session || session.status === SessionStatus.IDLE) && task.status !== 'completed'
-  const canResume = task?.agent_id && task.session_id && !isSessionRunning && !session?.sessionId && (!session || session.status === SessionStatus.IDLE)
+  const canStart = task?.agent_id && !task.session_id && (!session || session.status === SessionStatus.IDLE) && !isTaskClosed(task.status)
+  const canResume = task?.agent_id && task.session_id && !isSessionRunning && !session?.sessionId && (!session || session.status === SessionStatus.IDLE) && !isTaskClosed(task.status)
   const canStop = isSessionRunning
 
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header — matches desktop AgentTranscriptPanel header */}
-      <div ref={topOverlayRef} className="glass-bar pointer-events-none relative z-10 shrink-0" style={topOverlayHeight > 0 ? { marginBottom: -topOverlayHeight } : undefined}>
+      <div ref={topOverlayRef} className="glass-bar pointer-events-none relative z-10 shrink-0" style={topOverlayHeight > 0 ? { marginBottom: -topOverlayOverlap } : undefined}>
       <div className="pointer-events-auto flex min-h-[68px] items-center justify-between gap-2 px-3 py-3">
         <div className="flex items-center gap-2 min-w-0">
           <button onClick={() => onNavigate({ page: 'detail', taskId })} className="glass-action !h-[44px] !w-[44px] shrink-0" aria-label="Back to task">
@@ -754,18 +766,30 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                   </div>
                 )
               })}
-            </div>
-          )}
-
-          {/* Working indicator */}
-          {isWorking && messages.length > 0 && (
-            <div className="flex items-center gap-2 px-3 py-2">
-              <div className="flex gap-1">
-                <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
-                <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.2s]" />
-                <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.4s]" />
-              </div>
-              <span className="text-xs text-muted-foreground">Agent is working...</span>
+              {/* Working indicator — positioned as the last row inside this
+                  sized/relative wrapper (right after the last message, at
+                  totalSize - paddingEnd) rather than as a sibling rendered
+                  after it, which would fall inside the virtualizer's
+                  end-padding gap and end up hidden underneath the floating
+                  composer below. */}
+              {isWorking && (
+                <div
+                  className="flex items-center gap-2 px-3 py-2"
+                  style={{
+                    position: 'absolute',
+                    top: virtualizer.getTotalSize() - 80 - WORKING_INDICATOR_HEIGHT,
+                    left: 0,
+                    right: 0
+                  }}
+                >
+                  <div className="flex gap-1">
+                    <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                    <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.2s]" />
+                    <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.4s]" />
+                  </div>
+                  <span className="text-xs text-muted-foreground">Agent is working...</span>
+                </div>
+              )}
             </div>
           )}
         </div>

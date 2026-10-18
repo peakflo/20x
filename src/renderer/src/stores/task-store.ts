@@ -4,6 +4,7 @@ import { taskApi, taskSourceApi, onTaskUpdated, onTaskCreated, onTaskDeleted, on
 import { captureAnalyticsEvent, getTaskAnalyticsProperties, getTaskMutationProperties } from '@/lib/analytics'
 import { TaskStatus } from '@/types'
 import { isTaskClosed } from '@shared/constants'
+import { isReviewUnseen } from '@shared/review-seen'
 
 /** Completed top-level tasks fetched per "Show more" page. */
 export const COMPLETED_PAGE_SIZE = 50
@@ -101,6 +102,25 @@ interface TaskState {
   updateTask: (id: string, data: UpdateTaskDTO) => Promise<WorkfloTask | null>
   deleteTask: (id: string) => Promise<boolean>
   selectTask: (id: string | null) => void
+  /** Review seen state (see @shared/review-seen). Optimistic; main is the source of truth. */
+  markReviewSeen: (id: string) => Promise<void>
+  markReviewUnseen: (id: string) => Promise<void>
+  markAllReviewSeen: () => Promise<void>
+}
+
+type ReviewSeenPatch = Pick<WorkfloTask, 'review_entered_at' | 'review_seen_at'>
+
+function applyReviewSeenPatch(tasks: WorkfloTask[], patches: Map<string, Partial<ReviewSeenPatch>>): WorkfloTask[] {
+  if (patches.size === 0) return tasks
+  return tasks.map((task) => {
+    const patch = patches.get(task.id)
+    return patch ? { ...task, ...patch } : task
+  })
+}
+
+function reviewSeenPatchFrom(task: WorkfloTask | undefined | null): Partial<ReviewSeenPatch> | null {
+  if (!task) return null
+  return { review_entered_at: task.review_entered_at ?? null, review_seen_at: task.review_seen_at ?? null }
 }
 
 export const useTaskStore = create<TaskState>((set, get) => ({
@@ -271,6 +291,57 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     // Selecting a task that is not in the working set (e.g. a completed task
     // opened from search, a notification or the command palette) loads it.
     if (id && !get().tasks.some((task) => task.id === id)) void get().ensureTask(id)
+  },
+
+  markReviewSeen: async (id) => {
+    const previous = get().tasks.find((task) => task.id === id)
+    if (!previous || !isReviewUnseen(previous)) return
+    set((state) => ({ tasks: applyReviewSeenPatch(state.tasks, new Map([[id, { review_seen_at: new Date().toISOString() }]])) }))
+    try {
+      const patch = reviewSeenPatchFrom(await taskApi.markReviewSeen(id))
+      if (patch) set((state) => ({ tasks: applyReviewSeenPatch(state.tasks, new Map([[id, patch]])) }))
+    } catch (err) {
+      console.error('[task-store] markReviewSeen failed:', err)
+      const patch = reviewSeenPatchFrom(previous)
+      if (patch) set((state) => ({ tasks: applyReviewSeenPatch(state.tasks, new Map([[id, patch]])) }))
+    }
+  },
+
+  markReviewUnseen: async (id) => {
+    const previous = get().tasks.find((task) => task.id === id)
+    if (!previous || previous.status !== TaskStatus.ReadyForReview) return
+    set((state) => ({ tasks: applyReviewSeenPatch(state.tasks, new Map([[id, { review_seen_at: null }]])) }))
+    try {
+      const patch = reviewSeenPatchFrom(await taskApi.markReviewUnseen(id))
+      if (patch) set((state) => ({ tasks: applyReviewSeenPatch(state.tasks, new Map([[id, patch]])) }))
+    } catch (err) {
+      console.error('[task-store] markReviewUnseen failed:', err)
+      const patch = reviewSeenPatchFrom(previous)
+      if (patch) set((state) => ({ tasks: applyReviewSeenPatch(state.tasks, new Map([[id, patch]])) }))
+    }
+  },
+
+  markAllReviewSeen: async () => {
+    const now = new Date().toISOString()
+    const previous = new Map<string, Partial<ReviewSeenPatch>>()
+    for (const task of get().tasks) {
+      if (isReviewUnseen(task)) previous.set(task.id, reviewSeenPatchFrom(task)!)
+    }
+    if (previous.size === 0) return
+    const optimistic = new Map<string, Partial<ReviewSeenPatch>>([...previous.keys()].map((id) => [id, { review_seen_at: now }]))
+    set((state) => ({ tasks: applyReviewSeenPatch(state.tasks, optimistic) }))
+    try {
+      const changed = await taskApi.markAllReviewSeen()
+      const patches = new Map<string, Partial<ReviewSeenPatch>>()
+      for (const task of changed ?? []) {
+        const patch = reviewSeenPatchFrom(task)
+        if (patch) patches.set(task.id, patch)
+      }
+      set((state) => ({ tasks: applyReviewSeenPatch(state.tasks, patches) }))
+    } catch (err) {
+      console.error('[task-store] markAllReviewSeen failed:', err)
+      set((state) => ({ tasks: applyReviewSeenPatch(state.tasks, previous) }))
+    }
   }
 }))
 

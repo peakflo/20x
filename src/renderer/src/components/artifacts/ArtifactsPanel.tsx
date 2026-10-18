@@ -23,6 +23,8 @@ export interface ArtifactsPanelProps {
   ui: ArtifactUIState
   artifactApi: ArtifactApi
   hasChanges: boolean
+  hasSubtasks?: boolean
+  subtaskCounts?: { working: number; review: number }
   hasOutput: boolean
   changesCount?: number
   onSelectTab: (tabId: string) => void
@@ -30,13 +32,14 @@ export interface ArtifactsPanelProps {
   onToggleOpen: () => void
   onToggleRail: () => void
   details: ReactNode
+  subtasks?: ReactNode
   changes: ReactNode
   output: ReactNode
   className?: string
 }
 
-export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutput, changesCount, onSelectTab, onCloseTab, onToggleOpen, details, changes, output, className }: ArtifactsPanelProps) {
-  const active = ui.activeTabId || PinnedArtifactTabId.DETAILS
+export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubtasks = false, subtaskCounts, hasOutput, changesCount, onSelectTab, onCloseTab, onToggleOpen, details, subtasks, changes, output, className }: ArtifactsPanelProps) {
+  const active = ui.activeTabId === PinnedArtifactTabId.SUBTASKS && !hasSubtasks ? PinnedArtifactTabId.DETAILS : ui.activeTabId || PinnedArtifactTabId.DETAILS
   const activeArtifact = artifacts.find((artifact) => artifact.id === active)
   const navigation = useArtifactNavigation(activeArtifact)
   const selectedArtifact = navigation.selectedArtifact
@@ -53,7 +56,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
   return (
     <section className={cn('flex h-full min-h-0 min-w-0 flex-col bg-background', className)} data-task-artifacts>
       <div className="relative">
-        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? 'pr-52' : 'pr-11'} />
+        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasSubtasks={hasSubtasks} subtaskCounts={subtaskCounts} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? 'pr-52' : 'pr-11'} />
         <div className="absolute right-2 top-1.5 flex items-center gap-1 glass-control">
           {activeArtifact && <ArtifactCopyActions key={`${activeArtifact.id}:${selectedArtifact?.path}`} artifact={selectedArtifact!} artifactApi={artifactApi} />}
           <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
@@ -63,6 +66,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasOutp
       {navigation.linkError && <div role="alert" className="px-3 py-2 text-sm text-red-400">{navigation.linkError}</div>}
       <div className="relative min-h-0 flex-1">
         <div className={active === PinnedArtifactTabId.DETAILS ? 'h-full' : 'hidden'}>{details}</div>
+        {hasSubtasks && active === PinnedArtifactTabId.SUBTASKS && <div className="h-full">{subtasks}</div>}
         {hasChanges && active === PinnedArtifactTabId.CHANGES && <div className="h-full">{changes}</div>}
         {hasOutput && <div className={active === PinnedArtifactTabId.OUTPUT ? 'h-full overflow-y-auto p-4' : 'hidden'}>{output}</div>}
         {artifacts.map((artifact) => (

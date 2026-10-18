@@ -11,6 +11,9 @@ vi.mock('../src/mobile/api/client', () => ({
     },
     tasks: {
       list: vi.fn().mockResolvedValue([]),
+      open: vi.fn().mockResolvedValue([]),
+      completedPage: vi.fn().mockResolvedValue({ tasks: [], total: 0 }),
+      complete: vi.fn().mockResolvedValue({ completed: true, status: 'completed' }),
       get: vi.fn().mockResolvedValue(undefined),
       create: vi.fn().mockResolvedValue({}),
       update: vi.fn().mockResolvedValue({})

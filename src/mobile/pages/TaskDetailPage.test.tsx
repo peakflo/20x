@@ -4,14 +4,14 @@ import { render, cleanup, fireEvent, waitFor, within, act } from '@testing-libra
 import { ArtifactType } from '@shared/artifacts'
 import { TaskDetailPage } from './TaskDetailPage'
 import { useTaskStore, type Task } from '../stores/task-store'
-import { useAgentStore } from '../stores/agent-store'
+import { SessionStatus, useAgentStore } from '../stores/agent-store'
 import { useArtifactStore } from '../stores/artifact-store'
 
 const mockNavigate = vi.fn()
 
 // Route a source-backed completion through the server without a network call.
 const { completeMock } = vi.hoisted(() => ({
-  completeMock: vi.fn(async () => ({ completed: true, status: 'completed' }))
+  completeMock: vi.fn(async (_id: string, _completeAtSource?: boolean) => ({ completed: true, status: 'completed' }))
 }))
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>()
@@ -67,6 +67,10 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  completeMock.mockImplementation(async (id: string) => ({
+    completed: true, status: 'completed',
+    task: { ...useTaskStore.getState().tasks.find((task) => task.id === id), status: 'completed' }
+  }))
   cleanup()
   useAgentStore.setState({
     agents: [],
@@ -155,7 +159,32 @@ describe('TaskDetailPage', () => {
     }
   })
 
-  it.each(['approve', undefined])('shows the Session Feedback action %s before Skip completes', async (action) => {
+  it('resumes an idle session before sending feedback', async () => {
+    const task = makeTask({ agent_id: 'agent-1', session_id: 'persisted' })
+    const originalUpdate = useTaskStore.getState().updateTask
+    const updateTask = vi.fn().mockResolvedValue(true)
+    const resume = vi.spyOn(api.sessions, 'resume').mockResolvedValue({ sessionId: 'resumed' })
+    const send = vi.spyOn(api.sessions, 'send').mockResolvedValue({ success: true })
+    useTaskStore.setState({ tasks: [task], isLoading: false, updateTask })
+    useAgentStore.getState().initSession(task.id, 'stale-live-handle', 'agent-1')
+    const idle = useAgentStore.getState().sessions.get(task.id)!
+    useAgentStore.setState({ sessions: new Map([[task.id, { ...idle, status: SessionStatus.IDLE }]]) })
+    try {
+      const view = render(<TaskDetailPage taskId={task.id} onNavigate={mockNavigate} />)
+      fireEvent.click(view.getByTestId('main-cta-complete'))
+      fireEvent.click(view.getByRole('button', { name: 'Rate 4' }))
+      fireEvent.click(view.getByRole('button', { name: 'Submit Feedback' }))
+      await waitFor(() => expect(send).toHaveBeenCalledWith('resumed', expect.any(String), task.id, task.agent_id))
+      expect(resume).toHaveBeenCalledWith('persisted', task.agent_id, task.id)
+    } finally {
+      cleanup()
+      useTaskStore.setState({ updateTask: originalUpdate })
+      resume.mockRestore()
+      send.mockRestore()
+    }
+  })
+
+  it.each(['approve', undefined])('shows the Session Feedback action %s before completion', async (action) => {
     const task = makeTask({ agent_id: 'agent-1', source_id: 'session-feedback', source: 'Session Feedback',
       output_fields: action ? [{ id: 'action', value: action }] : [] })
     useTaskStore.setState({ tasks: [task], isLoading: false })
@@ -164,8 +193,32 @@ describe('TaskDetailPage', () => {
     const dialog = within(view.getByRole('dialog'))
     expect(dialog.getByText(`Action at Session Feedback: ${action || 'complete'}. Completion sends this action and the task outputs to the source.`)).toBeTruthy()
     expect(completeMock).not.toHaveBeenCalled()
-    fireEvent.click(dialog.getByRole('button', { name: 'Skip' }))
+    expect(dialog.queryByRole('button', { name: 'Submit Feedback' })).toBeNull()
+    fireEvent.click(dialog.getByRole('button', { name: 'Complete' }))
     await waitFor(() => expect(completeMock).toHaveBeenCalledWith(task.id, true))
+  })
+
+  it('keeps the feedback dialog open when completion fails, then lets the user retry', async () => {
+    const task = makeTask({ agent_id: 'agent-1', session_id: 'persisted' })
+    useTaskStore.setState({ tasks: [task], isLoading: false })
+    completeMock.mockRejectedValueOnce(new Error('Source action failed'))
+    const view = render(<TaskDetailPage taskId={task.id} onNavigate={mockNavigate} />)
+    fireEvent.click(view.getByTestId('main-cta-complete'))
+    fireEvent.click(within(view.getByRole('dialog')).getByRole('button', { name: 'Skip' }))
+    await waitFor(() => expect(within(view.getByRole('dialog')).getByRole('alert').textContent).toContain('Source action failed'))
+    expect(useTaskStore.getState().tasks[0].status).toBe('not_started')
+    fireEvent.click(within(view.getByRole('dialog')).getByRole('button', { name: 'Skip' }))
+    await waitFor(() => expect(view.queryByRole('dialog')).toBeNull())
+    expect(useTaskStore.getState().tasks[0].status).toBe('completed')
+  })
+
+  it('completes an assigned task directly when it has no agent session', async () => {
+    const task = makeTask({ agent_id: 'agent-1', session_id: null })
+    useTaskStore.setState({ tasks: [task], isLoading: false })
+    const view = render(<TaskDetailPage taskId={task.id} onNavigate={mockNavigate} />)
+    fireEvent.click(view.getByTestId('main-cta-complete'))
+    expect(view.queryByRole('dialog')).toBeNull()
+    await waitFor(() => expect(useTaskStore.getState().tasks[0].status).toBe('completed'))
   })
 
   it('cancels source feedback without completing', () => {
@@ -234,6 +287,48 @@ describe('TaskDetailPage', () => {
     // Subtasks section should be visible
     expect(container.textContent).toContain('Subtask 1')
     expect(container.textContent).toContain('Subtask 2')
+  })
+
+  it('shows counts only in the searchable Subtasks tab', () => {
+    const parent = makeTask({ id: 'parent-1', title: 'Parent task' })
+    const working = makeTask({ id: 'working-1', title: 'Build the view', parent_task_id: parent.id, status: 'agent_working' })
+    const review = makeTask({ id: 'review-1', title: 'Check the view', parent_task_id: parent.id, status: 'ready_for_review' })
+    const completed = makeTask({ id: 'done-1', title: 'Old work', parent_task_id: parent.id, status: 'completed' })
+    useTaskStore.setState({ tasks: [parent, working, review, completed], isLoading: false })
+
+    const view = render(<TaskDetailPage taskId={parent.id} onNavigate={mockNavigate} />)
+    expect(view.queryByTestId('mobile-header-subtasks')).toBeNull()
+    expect(view.container.querySelector('.glass-task-detail-bar')?.textContent).not.toContain('Subtasks')
+    const tabControl = view.getByRole('button', { name: 'Subtasks: 1 in progress, 1 in review' })
+    expect(tabControl.closest('.glass-task-detail-bar')).not.toBeNull()
+    fireEvent.click(tabControl)
+    const tab = view.getByTestId('mobile-subtasks-tab')
+    expect(tab.className).not.toContain('hidden')
+    fireEvent.click(within(tab).getByRole('button', { name: 'Ready for review' }))
+    expect(within(tab).queryByText('Build the view')).toBeNull()
+    expect(within(tab).getByText('Check the view')).toBeTruthy()
+    fireEvent.change(within(tab).getByRole('searchbox', { name: 'Search subtasks' }), { target: { value: 'absent' } })
+    expect(within(tab).getByText('No subtasks match this search.')).toBeTruthy()
+    fireEvent.change(within(tab).getByRole('searchbox', { name: 'Search subtasks' }), { target: { value: 'check' } })
+    fireEvent.click(within(tab).getByRole('button', { name: /Check the view/ }))
+    expect(mockNavigate).toHaveBeenCalledWith({ page: 'detail', taskId: review.id })
+    fireEvent.click(within(tab).getByRole('button', { name: 'All' }))
+    fireEvent.change(within(tab).getByRole('searchbox', { name: 'Search subtasks' }), { target: { value: 'build' } })
+    fireEvent.click(within(tab).getByRole('button', { name: /Build the view/ }))
+    expect(mockNavigate).toHaveBeenCalledWith({ page: 'detail', taskId: working.id })
+
+    act(() => useTaskStore.setState({ tasks: [parent, { ...working, status: 'ready_for_review' }, completed] }))
+    expect(view.getByRole('button', { name: 'Subtasks: 1 in review' })).toBeTruthy()
+    expect(view.queryByText('0 in progress')).toBeNull()
+
+    act(() => useTaskStore.setState({ tasks: [parent, working, completed] }))
+    expect(view.getByRole('button', { name: 'Subtasks: 1 in progress' })).toBeTruthy()
+    expect(view.queryByText('0 in review')).toBeNull()
+
+    act(() => useTaskStore.setState({ tasks: [parent, { ...working, status: 'completed' }, completed] }))
+    expect(view.getByRole('button', { name: 'Subtasks' })).toBeTruthy()
+    expect(view.queryByText('0 in progress')).toBeNull()
+    expect(view.queryByText('0 in review')).toBeNull()
   })
 
   it('renders without error for a task with a parent task', () => {

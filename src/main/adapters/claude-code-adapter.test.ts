@@ -15,6 +15,7 @@ vi.mock('fs', () => ({ existsSync: vi.fn(() => false) }))
 
 import { ClaudeCodeAdapter, ClaudeSystemSubtype } from './claude-code-adapter'
 import { MessagePartType } from './coding-agent-adapter'
+import { query } from '@anthropic-ai/claude-agent-sdk'
 
 /**
  * Helper: creates an adapter with a pre-populated session so we can test
@@ -43,6 +44,27 @@ function createAdapterWithSession(
   ;(adapter as any).sessions.set(sessionId, session)
   return { adapter, session }
 }
+
+describe('ClaudeCodeAdapter speed mode', () => {
+  it('enables fast mode for supported Opus sessions only', async () => {
+    const { adapter, session } = createAdapterWithSession('s1', [])
+    await adapter.initialize()
+    ;(adapter as any).findClaudeExecutable = vi.fn().mockResolvedValue('/usr/local/bin/claude')
+    vi.mocked(query).mockImplementation(() => (async function* () {})() as any)
+    const base = { agentId: 'a1', taskId: 't1', workspaceDir: '/tmp/workspace', speedMode: 'ultrafast' as const }
+
+    await adapter.sendPrompt('s1', [{ type: MessagePartType.TEXT, text: 'hello' }], { ...base, model: 'claude-opus-5-5' })
+    expect(vi.mocked(query)).toHaveBeenLastCalledWith(expect.objectContaining({
+      options: expect.objectContaining({ settings: { fastMode: true } })
+    }))
+    await session.streamTask
+
+    session.queryIterator = null
+    await adapter.sendPrompt('s1', [{ type: MessagePartType.TEXT, text: 'hello' }], { ...base, model: 'claude-sonnet-5-5' })
+    expect(vi.mocked(query).mock.lastCall?.[0].options).not.toHaveProperty('settings')
+    await session.streamTask
+  })
+})
 
 describe('ClaudeCodeAdapter error result handling', () => {
   describe('consumeStream error extraction', () => {

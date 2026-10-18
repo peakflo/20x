@@ -3,6 +3,22 @@ import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, TaskPriority } from '@/types'
+import { isSnoozed } from '@/lib/utils'
+import { isReviewUnseen } from '@shared/review-seen'
+
+/**
+ * A task that counts toward "Review · Unseen": in review, not yet looked at,
+ * and not hidden by a snooze.
+ */
+export function isUnseenReviewTask(task: WorkfloTask): boolean {
+  return isReviewUnseen(task) && !isSnoozed(task.snoozed_until)
+}
+
+export function countUnseenReviewTasks(tasks: WorkfloTask[]): number {
+  let count = 0
+  for (const task of tasks) if (isUnseenReviewTask(task)) count++
+  return count
+}
 
 const PRIORITY_ORDER: Record<TaskPriority, number> = {
   critical: 3,
@@ -41,6 +57,10 @@ export function useTasks() {
   const sortField = useUIStore((s) => s.sortField)
   const sortDirection = useUIStore((s) => s.sortDirection)
   const searchQuery = useUIStore((s) => s.searchQuery)
+  const reviewUnseenOnly = useUIStore((s) => s.reviewUnseenOnly)
+  // Only matters for the unseen filter; keeps selection changes from
+  // re-sorting the list otherwise.
+  const stickyReviewTaskId = reviewUnseenOnly ? selectedTaskId : null
 
   useEffect(() => {
     fetchTasks()
@@ -61,6 +81,13 @@ export function useTasks() {
     // Status filter
     if (statusFilter !== 'all') {
       result = result.filter((t) => t.status === statusFilter)
+    }
+
+    // Review · Unseen. The open task stays listed after it turns seen, so the
+    // row does not vanish while it is being read; it drops out on the next
+    // selection.
+    if (reviewUnseenOnly) {
+      result = result.filter((t) => isUnseenReviewTask(t) || (t.id === stickyReviewTaskId && t.status === TaskStatus.ReadyForReview))
     }
 
     // Priority filter
@@ -110,7 +137,7 @@ export function useTasks() {
     })
 
     return result
-  }, [tasks, sourceFilter, statusFilter, priorityFilter, searchQuery, sortField, sortDirection])
+  }, [tasks, sourceFilter, statusFilter, priorityFilter, searchQuery, sortField, sortDirection, reviewUnseenOnly, stickyReviewTaskId])
 
   const selectedTask: WorkfloTask | undefined = useMemo(
     () => (selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) : undefined),

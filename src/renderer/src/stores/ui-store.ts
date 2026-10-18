@@ -35,6 +35,8 @@ interface UIState {
   statusFilter: TaskStatus | 'all'
   priorityFilter: TaskPriority | 'all'
   sourceFilter: string
+  /** "Review · Unseen" chip: only tasks in review the user has not looked at yet. */
+  reviewUnseenOnly: boolean
   sortField: SortField
   sortDirection: SortDirection
   searchQuery: string
@@ -61,6 +63,8 @@ interface UIState {
   setStatusFilter: (filter: TaskStatus | 'all') => void
   setPriorityFilter: (filter: TaskPriority | 'all') => void
   setSourceFilter: (filter: string) => void
+  setReviewUnseenOnly: (on: boolean) => void
+  toggleReviewUnseenOnly: () => void
   setSortField: (field: SortField) => void
   setSortDirection: (dir: SortDirection) => void
   setSearchQuery: (query: string) => void
@@ -100,6 +104,7 @@ export const useUIStore = create<UIState>((set) => ({
   statusFilter: 'all',
   priorityFilter: 'all',
   sourceFilter: 'all',
+  reviewUnseenOnly: false,
   sortField: 'created_at',
   sortDirection: 'desc',
   searchQuery: '',
@@ -120,6 +125,8 @@ export const useUIStore = create<UIState>((set) => ({
   setStatusFilter: (statusFilter) => set({ statusFilter }),
   setPriorityFilter: (priorityFilter) => set({ priorityFilter }),
   setSourceFilter: (sourceFilter) => set({ sourceFilter }),
+  setReviewUnseenOnly: (reviewUnseenOnly) => set({ reviewUnseenOnly }),
+  toggleReviewUnseenOnly: () => set((s) => ({ reviewUnseenOnly: !s.reviewUnseenOnly })),
   setSortField: (sortField) => {
     // Auto-set the most intuitive sort direction for each field
     const FIELD_DEFAULT_DIRECTION: Record<SortField, SortDirection> = {

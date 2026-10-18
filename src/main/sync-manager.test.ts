@@ -11,6 +11,7 @@ function makeMockDb(): DatabaseManager {
     getTaskSource: vi.fn(),
     getMcpServer: vi.fn(),
     getTask: vi.fn(),
+    getSetting: vi.fn(),
     updateTask: vi.fn()
   } as unknown as DatabaseManager
 }
@@ -206,6 +207,37 @@ describe('SyncManager', () => {
   })
 
   describe('executeAction', () => {
+    it.each([
+      { flag: 'false', brand: 'Workflo' },
+      { flag: 'true', brand: 'Spaces' }
+    ])('uses $brand in linked-task completion errors', async ({ flag, brand }) => {
+      const previous = process.env.BRAND_SPACES
+      process.env.BRAND_SPACES = flag
+      try {
+        vi.mocked(db.getTaskSource).mockReturnValue({
+          id: 'src-1', plugin_id: 'peakflo', config: {}
+        } as ReturnType<DatabaseManager['getTaskSource']>)
+        vi.mocked(registry.get).mockReturnValue(makeMockPlugin({ id: 'peakflo' }))
+        vi.mocked(db.getSetting).mockImplementation((key) => key === 'enterprise_tenant_id' ? 'tenant-1' : undefined)
+
+        const disconnected = await syncManager.executeAction('complete', { id: 't1' } as TaskRecord, undefined, 'src-1')
+        expect(disconnected.error).toBe(`Connect to ${brand} and select an organization before completing this task.`)
+
+        Object.assign(syncManager, {
+          workfloApiClient: { getDomain: () => 'app.peakflo.ai', getTask: vi.fn().mockResolvedValue({}) },
+          enterpriseUserId: 'user-1'
+        })
+        const unlinked = await syncManager.executeAction('complete', { id: 't1' } as TaskRecord, undefined, 'src-1')
+        expect(unlinked.error).toBe(`This task has no ${brand} task ID. Sync it before completing at source.`)
+
+        const unversioned = await syncManager.executeAction('complete', { id: 't1', external_id: 'remote-1' } as TaskRecord, undefined, 'src-1')
+        expect(unversioned.error).toBe(`${brand} did not return the task version needed for completion. Ask your ${brand} administrator to update the server.`)
+      } finally {
+        if (previous === undefined) delete process.env.BRAND_SPACES
+        else process.env.BRAND_SPACES = previous
+      }
+    })
+
     it('returns error when source not found', async () => {
       ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue(undefined)
       const task = { id: 't1' } as TaskRecord

@@ -1,6 +1,7 @@
 import { getSourceCompletionDescription, getTaskSourceName } from '@shared/task-completion'
 import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
-import { TaskStatus } from '@shared/constants'
+import { isTaskClosed, TASK_STATUSES, TaskStatus } from '@shared/constants'
+import { filterSubtasks, SUBTASK_FILTERS, type SubtaskFilter } from '@shared/subtask-filter'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 import { harnessInstanceDisplayName, type HarnessInstanceView } from '@shared/harness-instances'
 import { CollapsibleDescription } from '../components/CollapsibleDescription'
@@ -8,8 +9,8 @@ import { useTaskStore, type Task, type TaskAttachment } from '../stores/task-sto
 import { ScadAttachmentEditor } from '@/components/artifacts/viewers/ScadAttachmentEditor'
 import { useAgentStore, SessionStatus } from '../stores/agent-store'
 import { api } from '../api/client'
-import { desktopBrandName } from '@/lib/brand'
 import { useSessionControls } from '../hooks/useSessionControls'
+import { useMarkReviewSeen } from '../hooks/useMarkReviewSeen'
 import { Badge } from '../components/Badge'
 import { PriorityBadge } from '../components/PriorityBadge'
 import { TaskStatusDot } from '../components/TaskStatusDot'
@@ -82,6 +83,9 @@ function ParentTaskContextMobile({ parentTask, onNavigate }: { parentTask: Task;
 export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavigate: (route: Route) => void }) {
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
   const updateTask = useTaskStore((s) => s.updateTask)
+  const completeTask = useTaskStore((s) => s.completeTask)
+  // Opening a task in review for a moment marks it seen (shared with desktop).
+  useMarkReviewSeen(task)
   const agents = useAgentStore((s) => s.agents)
   // Read-only account labels (harness instances) for the agent menu.
   const [harnessInstances, setHarnessInstances] = useState<HarnessInstanceView[]>([])
@@ -105,7 +109,12 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
 
   // Session feedback is collected before the completion request.
   const [completeModal, setCompleteModal] = useState<{ withFeedback: boolean } | null>(null)
-  const [activeSection, setActiveSection] = useState<'details' | 'artifacts'>('details')
+  const [completionError, setCompletionError] = useState<string | null>(null)
+  const [completionBusy, setCompletionBusy] = useState(false)
+  const completionBusyRef = useRef(false)
+  const [activeSection, setActiveSection] = useState<'details' | 'artifacts' | 'subtasks'>('details')
+  const [subtaskFilter, setSubtaskFilter] = useState<SubtaskFilter>('all')
+  const [subtaskQuery, setSubtaskQuery] = useState('')
   const [openScad, setOpenScad] = useState<TaskAttachment | null>(null)
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
   const agentMenuRef = useRef<HTMLDivElement>(null)
@@ -200,28 +209,43 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   }, [task?.status, session?.sessionId, _stopSession])
 
   const completeTaskNow = useCallback(async (t: Task, completeAtSource = true) => {
+    if (completionBusyRef.current) return
+    completionBusyRef.current = true
+    setCompletionBusy(true)
+    setCompletionError(null)
     try {
-      await api.tasks.complete(t.id, completeAtSource)
+      await completeTask(t.id, completeAtSource)
+      setCompleteModal(null)
     } catch (error) {
-      const brand = await api.brand.get().catch(() => ({ spaces: false }))
-      window.alert(error instanceof Error ? error.message : `${desktopBrandName('Workflo', brand.spaces)} has not confirmed completion.`)
+      setCompletionError(error instanceof Error ? error.message : 'The task could not be completed.')
+    } finally {
+      completionBusyRef.current = false
+      setCompletionBusy(false)
     }
-  }, [])
+  }, [completeTask])
 
   const handleCompleteTask = useCallback(async () => {
     if (!task) return
-    if (task.agent_id || task.source_id) setCompleteModal({ withFeedback: !!task.agent_id })
+    setCompletionError(null)
+    const withFeedback = !!task.agent_id &&
+      (!!task.session_id || (!!session?.sessionId && session.messages.length > 0))
+    if (withFeedback || task.source_id) setCompleteModal({ withFeedback })
     else await completeTaskNow(task)
-  }, [task, completeTaskNow])
+  }, [task, session, completeTaskNow])
 
   const handleFeedbackSubmit = useCallback(async (rating: number, comment: string, completeAtSource: boolean) => {
-    if (!task?.agent_id) return
-    const saved = await updateTask(task.id, {status: TaskStatus.AgentLearning, feedback_rating: rating,
-      feedback_comment: comment || null, complete_at_source: completeAtSource})
-    if (!saved) return
-    setCompleteModal(null)
+    if (!task?.agent_id || completionBusyRef.current) return
+    completionBusyRef.current = true
+    setCompletionBusy(true)
+    setCompletionError(null)
     try {
-      let sessionId = session?.sessionId
+      const saved = await updateTask(task.id, {status: TaskStatus.AgentLearning, feedback_rating: rating,
+        feedback_comment: comment || null, complete_at_source: completeAtSource})
+      if (!saved) throw new Error('Could not save feedback. Try again.')
+      // An idle session can still have an ID in the mobile store. Resume its
+      // durable session before sending feedback to avoid a stale live handle.
+      const liveSession = session?.status === SessionStatus.WORKING || session?.status === SessionStatus.WAITING_APPROVAL
+      let sessionId = liveSession ? session?.sessionId : null
       if (!sessionId && task.session_id) {
         sessionId = (await api.sessions.resume(task.session_id, task.agent_id, task.id)).sessionId
       }
@@ -230,15 +254,20 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       await api.sessions.send(sessionId,
         `User rated this session ${rating}/5. Comment: "${comment}". Review the session and update skills in .agents/skills/. Update confidence, uses, lastUsed, and tags for useful skills. Create skills for new reusable patterns.`,
         task.id, task.agent_id)
+      setCompleteModal(null)
     } catch (error) {
-      await updateTask(task.id, {status: TaskStatus.ReadyForReview})
-      window.alert(error instanceof Error ? error.message : 'Could not start the learning session.')
+      if (useTaskStore.getState().tasks.find((t) => t.id === task.id)?.status === TaskStatus.AgentLearning) {
+        await updateTask(task.id, { status: TaskStatus.ReadyForReview })
+      }
+      setCompletionError(error instanceof Error ? error.message : 'Could not start the learning session.')
+    } finally {
+      completionBusyRef.current = false
+      setCompletionBusy(false)
     }
   }, [task, session, updateTask, initSession])
 
   const handleFeedbackSkip = useCallback(async (completeAtSource: boolean) => {
     if (!task) return
-    setCompleteModal(null)
     await completeTaskNow(task, completeAtSource)
   }, [task, completeTaskNow])
 
@@ -269,6 +298,17 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         }),
     [allTasks, taskId]
   )
+  const workingSubtaskCount = subtasks.filter((subtask) => subtask.status === TaskStatus.AgentWorking).length
+  const reviewSubtaskCount = subtasks.filter((subtask) => subtask.status === TaskStatus.ReadyForReview).length
+  const subtaskCountLabels = [
+    workingSubtaskCount > 0 ? `${workingSubtaskCount} in progress` : null,
+    reviewSubtaskCount > 0 ? `${reviewSubtaskCount} in review` : null
+  ].filter((label): label is string => label !== null)
+  const visibleSubtasks = filterSubtasks(subtasks, subtaskFilter, subtaskQuery)
+
+  useEffect(() => {
+    if (activeSection === 'subtasks' && subtasks.length === 0) setActiveSection('details')
+  }, [activeSection, subtasks.length])
 
   const parentTask = useMemo(() => {
     if (!task?.parent_task_id) return null
@@ -295,11 +335,11 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     : (triageAgent && !triageAgentConfigured ? triageAgent : null)
 
   // Session state logic — don't show Resume if session is already running
-  const canStart = task.agent_id && assignedAgentConfigured && !task.session_id && (!session || session.status === SessionStatus.IDLE) && task.status !== TaskStatus.Completed
-  const canResume = task.agent_id && task.session_id && !isSessionRunning && (!session?.sessionId) && (!session || session.status === SessionStatus.IDLE)
+  const canStart = task.agent_id && assignedAgentConfigured && !task.session_id && (!session || session.status === SessionStatus.IDLE) && !isTaskClosed(task.status)
+  const canResume = task.agent_id && task.session_id && !isSessionRunning && (!session?.sessionId) && (!session || session.status === SessionStatus.IDLE) && !isTaskClosed(task.status)
   const canStop = isSessionRunning
-  const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging && !isSessionRunning
-  const canComplete = task.status !== TaskStatus.Completed && !isSessionRunning
+  const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && !isTaskClosed(task.status) && task.status !== TaskStatus.Triaging && !isSessionRunning
+  const canComplete = !isTaskClosed(task.status) && !isSessionRunning
   const hasMessages = session && session.messages.length > 0
 
   // Preview: last 3 messages
@@ -307,15 +347,14 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
 
   return (
     <div className="flex flex-col h-full">
-      {/* Title (3.5rem), agent (3rem), and tabs (3rem) overlap the scroll area. */}
-      <div className="relative z-10 shrink-0 -mb-[9.5rem]">
+      <div className="relative z-10 -mb-[9.5rem] shrink-0">
       <Header
         onBack={() => parentTask ? onNavigate({ page: 'detail', taskId: parentTask.id }) : onNavigate({ page: 'list' })}
         title={task.title}
         rightAction={
           <button
             onClick={() => onNavigate({ page: 'edit', taskId })}
-            className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors"
+            className="glass-action !h-10 !w-10"
             aria-label="Edit task"
           >
             <svg className="w-4 h-4 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -326,13 +365,16 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       />
 
       {/* Top-bar agent switcher — mirrors desktop TaskHeaderBar, always visible without opening Details */}
-      <div className="glass-bar relative z-10 flex h-12 items-center gap-2 border-b bg-background px-4 py-2">
-        <span className="text-xs text-muted-foreground shrink-0">Agent</span>
-        <div ref={agentMenuRef} className="relative">
+      <div className="glass-bar glass-task-detail-bar relative z-10 flex h-12 items-center justify-between gap-2 border-b px-4 py-2">
+        <Badge variant={STATUS_VARIANT[task.status]?.variant || 'default'} className="shrink-0 gap-1.5 rounded-full whitespace-nowrap">
+          <TaskStatusDot status={task.status} className="!h-1.5 !w-1.5" />
+          {STATUS_VARIANT[task.status]?.label || task.status}
+        </Badge>
+        <div ref={agentMenuRef} className="relative min-w-0">
           <button
             type="button"
             onClick={() => setAgentMenuOpen((o) => !o)}
-            className="inline-flex max-w-40 items-center gap-1.5 rounded-full border border-border/50 bg-card px-2.5 py-1 text-xs text-muted-foreground"
+            className="glass-control inline-flex h-8 max-w-[45vw] items-center gap-1.5 px-2.5 text-xs text-muted-foreground"
             aria-label="Change agent"
             aria-haspopup="menu"
             aria-expanded={agentMenuOpen}
@@ -377,14 +419,10 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             </div>
           )}
         </div>
-        <span className="ml-auto text-[11px] text-muted-foreground flex items-center gap-1">
-          <span className={`h-1.5 w-1.5 rounded-full ${task.status === 'completed' ? 'bg-emerald-400' : task.status === 'agent_working' ? 'bg-amber-400' : 'bg-muted-foreground'}`} />
-          {task.status}
-        </span>
       </div>
 
-      <div className="glass-bar flex h-12 items-center border-b bg-background px-4 py-2">
-        <div className="grid grid-cols-2 rounded-md bg-muted/40 p-0.5 text-xs">
+      <div className="glass-bar glass-task-detail-bar flex h-12 items-center overflow-x-auto border-b px-4 py-2">
+        <div className="flex shrink-0 rounded-md bg-muted/40 p-0.5 text-xs">
           <button
             type="button"
             onClick={() => setActiveSection('details')}
@@ -399,6 +437,11 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           >
             Artifacts{artifacts.length > 0 ? ` (${artifacts.length})` : ''}
           </button>
+          {subtasks.length > 0 && <button type="button" onClick={() => setActiveSection('subtasks')} aria-label={subtaskCountLabels.length > 0 ? `Subtasks: ${subtaskCountLabels.join(', ')}` : 'Subtasks'} className={cn('inline-flex shrink-0 items-center gap-1.5 rounded px-3 py-1.5 transition-colors', activeSection === 'subtasks' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}>
+            <span>Subtasks</span>
+            {workingSubtaskCount > 0 && <span className="tabular-nums text-amber-400">{workingSubtaskCount} in progress</span>}
+            {reviewSubtaskCount > 0 && <span className="tabular-nums text-violet-400">{reviewSubtaskCount} in review</span>}
+          </button>}
         </div>
       </div>
       </div>
@@ -409,12 +452,8 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           <ParentTaskContextMobile parentTask={parentTask} onNavigate={onNavigate} />
         )}
 
-        {/* Badges bar — matches desktop TaskDetailView header */}
+        {/* Priority and type stay in the details; status stays in the pinned header. */}
         <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border flex-wrap">
-          <TaskStatusDot status={task.status} />
-          {STATUS_VARIANT[task.status] && (
-            <Badge variant={STATUS_VARIANT[task.status].variant}>{STATUS_VARIANT[task.status].label}</Badge>
-          )}
           <PriorityBadge priority={task.priority} />
           {task.type !== 'general' && (
             <Badge variant={task.type === 'coding' ? 'blue' : task.type === 'review' ? 'teal' : 'default'}>
@@ -511,7 +550,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                   {session.status === SessionStatus.WAITING_APPROVAL && '● Waiting'}
                 </span>
               )}
-              {unconfiguredAgent && task.status !== TaskStatus.Completed && (
+              {unconfiguredAgent && !isTaskClosed(task.status) && (
                 <div
                   data-testid="agent-config-warning"
                   className="w-full mt-1 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
@@ -684,7 +723,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             <span className="text-foreground">{formatRelativeDate(task.updated_at)}</span>
 
             {/* Heartbeat */}
-            {task.status !== TaskStatus.Completed && (task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
+            {!isTaskClosed(task.status) && (task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
               <>
                 <span className="text-muted-foreground flex items-center gap-1.5">
                   <svg className={`h-3.5 w-3.5 ${task.heartbeat_enabled ? 'text-rose-500' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -776,6 +815,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
               {canComplete && (
                 <button
                   onClick={handleCompleteTask}
+                  disabled={completionBusy}
                   data-testid="main-cta-complete"
                   className={completeIsPrimary ? primaryBtnClass : secondaryBtnClass}
                 >
@@ -785,6 +825,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                   Complete Task
                 </button>
               )}
+              {completionError && !completeModal && <p role="alert" className="w-full text-xs text-destructive">{completionError}</p>}
               {agentAction && !agentActionIsPrimary && (
                 <button
                   onClick={agentAction.onClick}
@@ -871,6 +912,24 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         )}
       </div>
 
+      {subtasks.length > 0 && <div className={cn('flex-1 overflow-y-auto px-4 pb-4 pt-[10.5rem]', activeSection !== 'subtasks' && 'hidden')} data-testid="mobile-subtasks-tab">
+        <div className="space-y-3 pb-3">
+          <input type="search" aria-label="Search subtasks" placeholder="Search subtasks" value={subtaskQuery} onChange={(event) => setSubtaskQuery(event.target.value)} className="glass-control h-10 w-full px-3 text-sm text-foreground outline-none placeholder:text-[var(--glass-placeholder)] focus:border-ring" />
+          <div className="flex flex-wrap gap-1.5" aria-label="Filter subtasks">
+            {SUBTASK_FILTERS.map(({ id, label }) => <button key={id} type="button" aria-pressed={subtaskFilter === id} onClick={() => setSubtaskFilter(id)} className={cn('glass-filter-block rounded-full px-2.5 py-1.5 text-xs', subtaskFilter === id ? 'glass-filter-active' : 'text-muted-foreground')}>{label}</button>)}
+          </div>
+          <p className="text-xs text-muted-foreground">{visibleSubtasks.length} of {subtasks.length}</p>
+        </div>
+        {visibleSubtasks.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">No subtasks match this search.</p> : (
+          <div className="divide-y divide-border/50">
+            {visibleSubtasks.map((subtask) => <button key={subtask.id} type="button" onClick={() => onNavigate({ page: 'detail', taskId: subtask.id })} className="flex w-full items-center justify-between gap-3 py-3 text-left active:bg-accent/30">
+              <span className="min-w-0 break-words text-sm text-foreground">{subtask.title}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">{TASK_STATUSES.find((entry) => entry.value === subtask.status)?.label || subtask.status}</span>
+            </button>)}
+          </div>
+        )}
+      </div>}
+
       {openScad && <div role="dialog" aria-label={`Edit ${openScad.filename}`} className="fixed inset-0 z-50 flex flex-col bg-background">
         <div className="glass-bar flex shrink-0 items-center justify-between border-b px-4 py-3">
           <span className="truncate text-sm font-medium">{openScad.filename}</span>
@@ -885,6 +944,8 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           completionDescription={getSourceCompletionDescription(task)}
           sourceName={task.source_id ? getTaskSourceName(task) : undefined}
           withFeedback={completeModal.withFeedback}
+          busy={completionBusy}
+          error={completionError}
           onSubmit={handleFeedbackSubmit}
           onSkip={handleFeedbackSkip}
           onCancel={() => setCompleteModal(null)}
@@ -1010,10 +1071,12 @@ function SubtasksSection({ subtasks, onNavigateToTask, onReorderSubtasks }: { su
   )
 }
 
-function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sourceName, withFeedback }: {
+function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sourceName, withFeedback, busy, error }: {
   completionDescription?: string
   sourceName?: string
   withFeedback: boolean
+  busy: boolean
+  error: string | null
   onSubmit: (rating: number, comment: string, completeAtSource: boolean) => void
   onSkip: (completeAtSource: boolean) => void
   onCancel: () => void
@@ -1022,28 +1085,30 @@ function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sour
   const [comment, setComment] = useState('')
   const [completeAtSource, setCompleteAtSource] = useState(true)
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div role="dialog" aria-label={withFeedback ? 'Session feedback' : 'Complete task'} className="glass-popover mx-4 w-full max-w-md rounded-2xl border p-5 space-y-4">
-        <h2>{withFeedback ? 'Session feedback' : 'Complete task'}</h2>
+    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 p-3 pb-[max(env(safe-area-inset-bottom),12px)] sm:items-center">
+      <div role="dialog" aria-modal="true" aria-label={withFeedback ? 'Session feedback' : 'Complete task'} className="glass-popover max-h-[calc(100dvh-24px)] w-full max-w-md overflow-y-auto rounded-2xl border p-5 text-foreground shadow-xl space-y-4">
+        <h2 className="text-base font-semibold">{withFeedback ? 'Session feedback' : 'Complete task'}</h2>
+        {withFeedback && <p className="text-xs text-muted-foreground">Rate this session to help the agent improve its skills. The task closes after learning ends.</p>}
         {sourceName && (
-          <div className="rounded-md border p-3 text-sm space-y-2">
-            <p>{completeAtSource ? completionDescription : 'Complete in 20x only. The source record will not change.'}</p>
-            <div className="flex gap-2">
-              <button className={`flex-1 rounded-md border px-2 py-2 ${completeAtSource ? 'border-ring bg-accent' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={completeAtSource} onClick={() => setCompleteAtSource(true)}>Close it in {sourceName}</button>
-              <button className={`flex-1 rounded-md border px-2 py-2 ${!completeAtSource ? 'border-ring bg-accent' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={!completeAtSource} onClick={() => setCompleteAtSource(false)}>I'll do it manually</button>
+          <div className="rounded-lg border border-border/50 p-3 text-sm space-y-2">
+            <p className="text-xs text-muted-foreground">{completeAtSource ? completionDescription : 'Complete in 20x only. The source record will not change.'}</p>
+            <div role="radiogroup" aria-label="Source completion" className="flex gap-2">
+              <button type="button" disabled={busy} className={`min-h-11 flex-1 rounded-lg border px-2 py-2 text-xs font-medium ${completeAtSource ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={completeAtSource} onClick={() => setCompleteAtSource(true)}>Close it in {sourceName}</button>
+              <button type="button" disabled={busy} className={`min-h-11 flex-1 rounded-lg border px-2 py-2 text-xs font-medium ${!completeAtSource ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={!completeAtSource} onClick={() => setCompleteAtSource(false)}>I'll do it manually</button>
             </div>
           </div>
         )}
         {withFeedback && <>
-          <div className="flex gap-2">
-            {[1, 2, 3, 4, 5].map(value => <button key={value} aria-label={`Rate ${value}`} aria-pressed={rating === value} onClick={() => setRating(value)}>{value}</button>)}
+          <div role="group" aria-label="Session rating" className="flex justify-center gap-2">
+            {[1, 2, 3, 4, 5].map(value => <button key={value} type="button" disabled={busy} aria-label={`Rate ${value}`} aria-pressed={rating === value} className={`flex h-11 w-11 items-center justify-center rounded-lg text-xl ${rating >= value ? 'text-amber-400' : 'text-muted-foreground/50'}`} onClick={() => setRating(value)}>★</button>)}
           </div>
-          <textarea aria-label="Feedback" placeholder="Optional feedback..." value={comment} onChange={event => setComment(event.target.value)} />
+          <textarea aria-label="Feedback" placeholder="Optional feedback..." value={comment} disabled={busy} onChange={event => setComment(event.target.value)} className="min-h-24 w-full resize-y rounded-lg border border-border bg-background/70 p-3 text-sm text-foreground" />
         </>}
-        <div className="flex gap-3">
-          <button onClick={onCancel}>Cancel</button>
-          <button onClick={() => onSkip(completeAtSource)}>{withFeedback ? 'Skip' : 'Complete'}</button>
-          {withFeedback && <button disabled={!rating} onClick={() => onSubmit(rating, comment, completeAtSource)}>Submit Feedback</button>}
+        {error && <p role="alert" className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive">{error}</p>}
+        <div className="flex flex-wrap justify-end gap-2">
+          <button type="button" disabled={busy} className="min-h-11 rounded-lg px-3 text-sm text-muted-foreground" onClick={onCancel}>Cancel</button>
+          <button type="button" disabled={busy} className="min-h-11 rounded-lg border border-border px-3 text-sm" onClick={() => onSkip(completeAtSource)}>{withFeedback ? 'Skip' : 'Complete'}</button>
+          {withFeedback && <button type="button" disabled={!rating || busy} className="min-h-11 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50" onClick={() => onSubmit(rating, comment, completeAtSource)}>{busy ? 'Saving…' : 'Submit Feedback'}</button>}
         </div>
       </div>
     </div>
@@ -1052,8 +1117,8 @@ function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sour
 
 function Header({ onBack, title, rightAction }: { onBack: () => void; title: string; rightAction?: React.ReactNode }) {
   return (
-    <div className="glass-bar glass-task-detail-bar flex h-14 shrink-0 items-center gap-2 border-b px-2 py-3">
-      <button onClick={onBack} className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors">
+    <div className="glass-bar glass-task-detail-bar relative z-20 flex h-14 shrink-0 items-center gap-2 border-b px-2 py-3">
+      <button onClick={onBack} className="glass-action !h-10 !w-10" aria-label="Back">
         <svg className="w-5 h-5 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="m15 18-6-6 6-6" />
         </svg>

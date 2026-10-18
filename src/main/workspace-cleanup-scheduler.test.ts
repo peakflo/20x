@@ -15,6 +15,12 @@ vi.mock('fs', async (importOriginal) => {
   }
 })
 
+vi.mock('./workspace-process-cleanup', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./workspace-process-cleanup')>()
+  return { ...actual, terminateProcessesInWorkspaces: vi.fn().mockResolvedValue([]) }
+})
+
+import { terminateProcessesInWorkspaces } from './workspace-process-cleanup'
 import { existsSync, readdirSync, rmSync, statSync } from 'fs'
 
 // ── Helpers ──────────────────────────────────────────────
@@ -140,6 +146,10 @@ describe('WorkspaceCleanupScheduler', () => {
 
     const result = await scheduler.runNow()
 
+    expect(terminateProcessesInWorkspaces).toHaveBeenCalledWith({
+      workspacesRoot: expect.any(String),
+      workspaceIds: ['orphan-task']
+    })
     expect(result.cleaned).toBe(1)
     expect(mockedRmSync).toHaveBeenCalledTimes(1)
     expect(mockedRmSync.mock.calls[0][0]).toContain('orphan-task')

@@ -76,6 +76,7 @@ export function App() {
   const setOnFirstConnect = useConnectionStore((s) => s.setOnFirstConnect)
   const setOnVisibilityReconnect = useConnectionStore((s) => s.setOnVisibilityReconnect)
   const fetchTasks = useTaskStore((s) => s.fetchTasks)
+  const ensureTask = useTaskStore((s) => s.ensureTask)
   const fetchAgents = useAgentStore((s) => s.fetchAgents)
   const fetchSkills = useAgentStore((s) => s.fetchSkills)
   const syncActiveSessions = useAgentStore((s) => s.syncActiveSessions)
@@ -115,6 +116,10 @@ export function App() {
       paired
     })
   }, [route, paired])
+
+  useEffect(() => {
+    if (activeTaskId) void ensureTask(activeTaskId)
+  }, [activeTaskId, ensureTask])
 
   // Poll tasks every 10s as a fallback — but only while the tab is visible.
   // The WebSocket already pushes task events and re-syncs on visibility
