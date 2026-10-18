@@ -14,6 +14,7 @@ import { PairPage } from './pages/PairPage'
 import { ArtifactViewerPage } from './pages/ArtifactViewerPage'
 import { getPairCodeFromUrl, hasSessionToken } from './api/auth'
 import { captureAnalyticsEvent, capturePageView } from '@/lib/analytics'
+import { ComputerUseBanner } from './components/ComputerUseBanner'
 
 export type Route =
   | { page: 'list' }
@@ -153,6 +154,7 @@ export function App() {
           Connecting...
         </div>
       )}
+      <ComputerUseBanner />
 
       {route.page === 'list' && (
         <TaskListPage onNavigate={navigate} />

@@ -13,6 +13,7 @@ import { makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
 import { startTaskApiServer, stopTaskApiServer, setTaskApiNotifier } from './task-api-server'
 import { buildTaskMcpUrl, parseScopeFromUrl } from './task-mcp-endpoint'
+import { computerUseBroker } from './computer-use-broker'
 
 let db: DatabaseManager
 
@@ -68,6 +69,29 @@ describe('buildTaskMcpUrl and parseScopeFromUrl', () => {
 })
 
 describe('MCP endpoint over HTTP', () => {
+  it('requires a task-bound capability token for Computer Use and blocks the plain route', async () => {
+    const task = db.createTask(makeTask({ title: 'Native task' }))!
+    const port = await startTaskApiServer(db)
+    const plain = await fetch(`http://127.0.0.1:${port}/computer_snapshot`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task_id: task.id })
+    })
+    expect(plain.status).toBe(403)
+
+    const forged = await connect(buildTaskMcpUrl(port, { artifactTaskId: task.id, computerToken: 'forged' }))
+    const denied = await forged.callTool({ name: 'computer_snapshot', arguments: { task_id: task.id } })
+    expect(denied.isError).toBe(true)
+    expect(textOf(denied)).toContain('authorized agent session')
+    await forged.close()
+
+    const token = computerUseBroker.issueSessionToken(task.id)
+    const authorized = await connect(buildTaskMcpUrl(port, { artifactTaskId: task.id, computerToken: token }))
+    const noGrant = await authorized.callTool({ name: 'computer_snapshot', arguments: { task_id: task.id } })
+    expect(noGrant.isError).toBe(true)
+    expect(textOf(noGrant)).toContain('not enabled')
+    await authorized.close()
+    computerUseBroker.revokeSessionToken(task.id)
+  })
+
   it('serves the full tool set to an unscoped session', async () => {
     const port = await startTaskApiServer(db)
     const client = await connect(buildTaskMcpUrl(port))

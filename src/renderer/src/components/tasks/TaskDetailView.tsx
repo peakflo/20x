@@ -19,6 +19,7 @@ import type { WorkfloTask, FileAttachment, OutputField, Agent, RecurrencePattern
 import { AnthropicLogo, OpenCodeLogo, OpenAILogo, PiLogo } from '@/components/icons/AgentLogos'
 import { AgentHoverCard } from '@/components/usage/AgentHoverCard'
 import { HeartbeatSection } from './HeartbeatSection'
+import { ComputerUseControl } from './ComputerUseControl'
 import { useUIStore } from '@/stores/ui-store'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 import { isTaskClosed } from '@shared/constants'
@@ -484,6 +485,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
           </div>
 
           <div className="grid grid-cols-[auto_1fr] gap-x-10 gap-y-4 text-sm">
+            <ComputerUseControl taskId={task.id} />
             <>
               <span className="text-muted-foreground flex items-center gap-2"><User className="h-3.5 w-3.5" /> Assignee</span>
               <AssigneeSelect

@@ -23,6 +23,7 @@ import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, Mc
 import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { buildTaskMcpUrl } from './task-mcp-endpoint'
+import { computerUseBroker } from './computer-use-broker'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
@@ -1625,7 +1626,8 @@ export class AgentManager extends EventEmitter {
       url: buildTaskMcpUrl(apiPort, {
         taskId: opts?.taskScope?.taskId,
         parentTaskId: opts?.taskScope?.parentTaskId,
-        artifactTaskId: opts?.artifactTaskId
+        artifactTaskId: opts?.artifactTaskId,
+        computerToken: opts?.artifactTaskId ? computerUseBroker.issueSessionToken(opts.artifactTaskId) : undefined
       })
     }
   }

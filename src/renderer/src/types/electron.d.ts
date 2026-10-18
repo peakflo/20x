@@ -2,6 +2,7 @@ import type { BrowserRecordingManifest } from '@shared/browser-recording'
 import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '@shared/browser-session-import'
 import type { UiCommand } from '@shared/ui-commands'
 import type { TaskRunDuration } from '@shared/task-run-duration'
+import type { ComputerGrant, ComputerStatus, ComputerWindow } from '@shared/computer-use'
 import type {
   WorkfloTask,
   CreateTaskDTO,
@@ -590,6 +591,12 @@ interface ElectronAPI {
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onWorkspaceCleanupProgress: (callback: (event: WorkspaceCleanupProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
+  computerUse: {
+    listWindows: () => Promise<ComputerWindow[]>
+    status: () => Promise<ComputerStatus>
+    grant: (taskId: string, pid: number, windowId: number) => Promise<ComputerGrant>
+    stop: (taskId: string) => Promise<ComputerStatus>
+  }
   browser: {
     listImportSources: () => Promise<BrowserImportSource[]>
     importSessions: (input: BrowserImportRequest) => Promise<BrowserImportResult>

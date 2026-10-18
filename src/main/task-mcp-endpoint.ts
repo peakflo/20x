@@ -16,14 +16,15 @@
  *   /mcp?task=<id>&parent=<id>                  subtask set, parent + siblings only
  *   /mcp?...&artifact=<id>                      pins artifact writes to one task
  *
- * The parameters are an address, not a credential. The Task API server they
- * reach has no authentication either, and it listens only on 127.0.0.1.
+ * Most parameters describe task scope, but computer_cap is a bearer credential
+ * for native Computer Use. The Task API server listens only on 127.0.0.1.
  *
  * Each request is handled statelessly: one transport and one Server per request.
  * That needs no session table, so a resumed agent keeps working with the same
  * URL, and nothing accumulates between calls.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { computerUseBroker } from './computer-use-broker'
 import { Server, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server'
 import {
   callToolForScope,
@@ -51,7 +52,7 @@ export function parseScopeFromUrl(url: URL): TaskMcpScope {
  */
 export function buildTaskMcpUrl(
   port: number,
-  scope: { taskId?: string | null; parentTaskId?: string | null; artifactTaskId?: string | null } = {}
+  scope: { taskId?: string | null; parentTaskId?: string | null; artifactTaskId?: string | null; computerToken?: string | null } = {}
 ): string {
   const params = new URLSearchParams()
   if (scope.taskId) params.set('task', scope.taskId)
@@ -60,12 +61,13 @@ export function buildTaskMcpUrl(
   if (scope.artifactTaskId && scope.artifactTaskId !== scope.taskId) {
     params.set('artifact', scope.artifactTaskId)
   }
+  if (scope.computerToken) params.set('computer_cap', scope.computerToken)
   const query = params.toString()
   return `http://127.0.0.1:${port}${TASK_MCP_PATH}${query ? `?${query}` : ''}`
 }
 
 /** A fresh MCP server bound to one scope. */
-function createScopedServer(scope: TaskMcpScope, invoke: TaskApiInvoke): Server {
+function createScopedServer(scope: TaskMcpScope, invoke: TaskApiInvoke, computerToken: string | null): Server {
   const server = new Server(
     { name: 'task-management', version: '1.0.0' },
     { capabilities: { tools: {} } }
@@ -73,6 +75,9 @@ function createScopedServer(scope: TaskMcpScope, invoke: TaskApiInvoke): Server 
   server.setRequestHandler('tools/list', async () => ({ tools: listToolsForScope(scope) }))
   server.setRequestHandler('tools/call', async (request) => {
     const { name, arguments: args } = request.params as { name: string; arguments?: Record<string, unknown> }
+    if (name.startsWith('computer_') && !computerUseBroker.authorizesSession(scope.artifactTaskId, computerToken)) {
+      return { content: [{ type: 'text' as const, text: 'Computer Use requires this task’s authorized agent session' }], isError: true }
+    }
     return callToolForScope(name, args, scope, invoke)
   })
   return server
@@ -142,7 +147,7 @@ export async function handleTaskMcpRequest(
     // request/response only, and no tool sends server-initiated notifications.
     enableJsonResponse: true
   })
-  const server = createScopedServer(scope, invoke)
+  const server = createScopedServer(scope, invoke, url.searchParams.get('computer_cap'))
 
   try {
     await server.connect(transport)

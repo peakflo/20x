@@ -40,6 +40,7 @@ import { MessageSquare, LayoutDashboard, CheckSquare, Zap, Settings, Layers, Pan
 import { Button } from '@/components/ui/Button'
 import { ThemeToggle } from './ThemeToggle'
 import { StatusBar } from './StatusBar'
+import { ComputerUseBar } from './ComputerUseBar'
 import { CommandPalette } from './CommandPalette'
 import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog'
 import { SubtaskPickerDialog } from '@/components/tasks/SubtaskPickerDialog'
@@ -842,6 +843,8 @@ export function AppLayout() {
           </Button>
         </div>
       </div>
+
+      <ComputerUseBar />
 
       {/* ── Content area: left rail + optional sidebar + workspace + orchestrator ── */}
       <div className="app-chrome-field flex flex-1 min-h-0 overflow-hidden bg-background">

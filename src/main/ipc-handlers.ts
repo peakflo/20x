@@ -18,6 +18,7 @@ import { listBrowserImportSources, importBrowserSessions, clearImportedBrowserSe
 import type { BrowserImportRequest } from '../shared/browser-session-import'
 import type { CustomModelPrice, UsageSummaryQuery } from '../shared/usage'
 import { sanitizeUsageSummaryQuery, sanitizeUsageParallelismQuery } from './usage/usage-query'
+import { computerUseBroker } from './computer-use-broker'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -183,6 +184,7 @@ export function registerIpcHandlers(
     const previousAgentId = data.agent_id !== undefined ? (db.getTask(id)?.agent_id ?? null) : undefined
 
     const updated = updateTaskFromUser(db, id, data)
+    if (updated && data.status === TaskStatus.Completed) void computerUseBroker.stop(id)
     if (previousAgentId !== undefined && updated && (updated.agent_id ?? null) !== previousAgentId) {
       agentManager.handleTaskAgentChanged(id).catch((error) => {
         console.error(`[IPC] Failed to stop the previous agent's session for task ${id}:`, error)
@@ -282,6 +284,8 @@ export function registerIpcHandlers(
     const existing = db.getTask(id)
     const success = db.deleteTask(id)
     if (success) {
+      void computerUseBroker.stop(id)
+      computerUseBroker.revokeSessionToken(id)
       event.sender.send('task:deleted', { taskId: id })
       analytics()?.record('task.deleted', {
         taskType: existing?.type,
@@ -2422,6 +2426,21 @@ else:
     const choice = await dialog.showMessageBox({ type: 'warning', buttons: ['Cancel', 'Clear all agent browser sessions'], defaultId: 0, cancelId: 0, title: 'Clear all agent browser sessions', message: 'Close agent browser pages and remove all cookies and site data from the agent browser?' })
     return choice.response === 1 ? clearImportedBrowserSessions() : 0
   })
+
+  // Only the desktop UI can discover and grant a native window. Task agents
+  // receive bounded computer_* tools through task-management MCP instead.
+  ipcMain.handle('computerUse:listWindows', () => computerUseBroker.listWindows())
+  ipcMain.handle('computerUse:status', () => computerUseBroker.status())
+  ipcMain.handle('computerUse:grant', async (_event, taskId: string, pid: number, windowId: number) => {
+    if (typeof taskId !== 'string' || !db.getTask(taskId)) throw new Error('Task not found')
+    return computerUseBroker.grantWindow(taskId, pid, windowId)
+  })
+  ipcMain.handle('computerUse:stop', async (_event, taskId: string) => {
+    if (typeof taskId !== 'string') throw new Error('taskId is required')
+    await computerUseBroker.stop(taskId)
+    return computerUseBroker.status()
+  })
+
   // Canvas browser panels register themselves here so agents can drive them
   // through browser_* MCP tools. Only registered panels are addressable; the
   // main app window is never registered and there is no global debug port.

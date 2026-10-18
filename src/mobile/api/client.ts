@@ -17,6 +17,7 @@ import type {
   HarnessUpdateAllResult,
   HarnessUpdateResult
 } from '@shared/harness-maintenance'
+import type { ComputerStatus } from '@shared/computer-use'
 
 const MOBILE_API_PORT = '20620'
 // When served via a reverse proxy (Cloudflare tunnel, https with no explicit port),
@@ -66,6 +67,10 @@ export const api = {
     subscribe: (subscription: PushSubscriptionJSON | null) => post<{ success: boolean }>('/api/push/subscription', { subscription }),
     preferences: (preferences: PushPreferences) => post<{ preferences: PushPreferences }>('/api/push/preferences', { preferences }),
     test: () => post<{ success: boolean }>('/api/push/test')
+  },
+  computerUse: {
+    status: () => get<ComputerStatus>('/api/computer-use'),
+    stop: () => post<ComputerStatus>('/api/computer-use/stop')
   },
   tasks: {
     list: (params?: Record<string, string>) => {
