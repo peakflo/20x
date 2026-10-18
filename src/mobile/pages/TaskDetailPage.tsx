@@ -9,6 +9,7 @@ import { ScadAttachmentEditor } from '@/components/artifacts/viewers/ScadAttachm
 import { useAgentStore, SessionStatus } from '../stores/agent-store'
 import { api } from '../api/client'
 import { useSessionControls } from '../hooks/useSessionControls'
+import { useMarkReviewSeen } from '../hooks/useMarkReviewSeen'
 import { Badge } from '../components/Badge'
 import { PriorityBadge } from '../components/PriorityBadge'
 import { TaskStatusDot } from '../components/TaskStatusDot'
@@ -81,6 +82,8 @@ function ParentTaskContextMobile({ parentTask, onNavigate }: { parentTask: Task;
 export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavigate: (route: Route) => void }) {
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
   const updateTask = useTaskStore((s) => s.updateTask)
+  // Opening a task in review for a moment marks it seen (shared with desktop).
+  useMarkReviewSeen(task)
   const agents = useAgentStore((s) => s.agents)
   // Read-only account labels (harness instances) for the agent menu.
   const [harnessInstances, setHarnessInstances] = useState<HarnessInstanceView[]>([])

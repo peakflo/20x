@@ -79,6 +79,18 @@ export const taskApi = {
 
   reorderSubtasks: (parentId: string, orderedIds: string[]): Promise<boolean> => {
     return window.electronAPI.db.reorderSubtasks(parentId, orderedIds)
+  },
+
+  markReviewSeen: (id: string): Promise<WorkfloTask | undefined> => {
+    return window.electronAPI.db.markReviewSeen(id)
+  },
+
+  markReviewUnseen: (id: string): Promise<WorkfloTask | undefined> => {
+    return window.electronAPI.db.markReviewUnseen(id)
+  },
+
+  markAllReviewSeen: (): Promise<WorkfloTask[]> => {
+    return window.electronAPI.db.markAllReviewSeen()
   }
 }
 

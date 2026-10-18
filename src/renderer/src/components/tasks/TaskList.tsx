@@ -1,13 +1,16 @@
 import { useState, useMemo, useRef, useCallback } from 'react'
-import { Inbox, ChevronRight, Loader2 } from 'lucide-react'
+import { Inbox, ChevronRight, Loader2, CheckCheck } from 'lucide-react'
 import { TaskListItem } from './TaskListItem'
+import { TaskReviewContextMenu } from './TaskReviewContextMenu'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { isSnoozed } from '@/lib/utils'
 import { useSnoozeTick } from '@/hooks/use-snooze-tick'
-import { isTaskClosed } from '@shared/constants'
+import { isTaskClosed, TaskStatus } from '@shared/constants'
+import { isReviewUnseen } from '@shared/review-seen'
 import type { WorkfloTask } from '@/types'
-import { COMPLETED_PAGE_SIZE } from '@/stores/task-store'
+import { COMPLETED_PAGE_SIZE, useTaskStore } from '@/stores/task-store'
 import { useTaskRunDurations } from '@/hooks/use-task-run-durations'
+import { isUnseenReviewTask } from '@/hooks/use-tasks'
 
 interface TaskListProps {
   tasks: WorkfloTask[]
@@ -24,6 +27,11 @@ interface TaskListProps {
   completedLoading?: boolean
   /** Load the next page of completed tasks. */
   onLoadMoreCompleted?: () => void
+  /**
+   * "Review · Unseen" filter is on: `tasks` is already narrowed to unseen
+   * review tasks, rendered flat (subtasks included) with a summary line.
+   */
+  reviewUnseenOnly?: boolean
 }
 
 export function TaskList({
@@ -33,8 +41,14 @@ export function TaskList({
   completedTotal,
   hasMoreCompleted = false,
   completedLoading = false,
-  onLoadMoreCompleted
+  onLoadMoreCompleted,
+  reviewUnseenOnly = false
 }: TaskListProps) {
+  const markReviewSeen = useTaskStore((s) => s.markReviewSeen)
+  const markReviewUnseen = useTaskStore((s) => s.markReviewUnseen)
+  const markAllReviewSeen = useTaskStore((s) => s.markAllReviewSeen)
+  const [contextMenu, setContextMenu] = useState<{ taskId: string; x: number; y: number } | null>(null)
+  const closeContextMenu = useCallback(() => setContextMenu(null), [])
   const [completedOpen, setCompletedOpen] = useState(false)
   const [hiddenOpen, setHiddenOpen] = useState(false)
   const [recurringOpen, setRecurringOpen] = useState(false)
@@ -66,6 +80,24 @@ export function TaskList({
     if (!handler) {
       handler = () => onSelectRef.current(id)
       selectHandlers.current.set(id, handler)
+    }
+    return handler
+  }
+  // Right-click on a row in review opens the seen/unseen menu. Other rows keep
+  // the default behaviour.
+  const tasksRef = useRef(tasks)
+  tasksRef.current = tasks
+  const contextMenuHandlers = useRef(new Map<string, (e: React.MouseEvent) => void>())
+  const getContextMenuHandler = (id: string): ((e: React.MouseEvent) => void) => {
+    let handler = contextMenuHandlers.current.get(id)
+    if (!handler) {
+      handler = (e: React.MouseEvent) => {
+        const task = tasksRef.current.find((t) => t.id === id)
+        if (task?.status !== TaskStatus.ReadyForReview) return
+        e.preventDefault()
+        setContextMenu({ taskId: id, x: e.clientX, y: e.clientY })
+      }
+      contextMenuHandlers.current.set(id, handler)
     }
     return handler
   }
@@ -132,6 +164,59 @@ export function TaskList({
     if (opening && hasMoreCompleted && completedTasks.length < COMPLETED_PAGE_SIZE) onLoadMoreCompleted?.()
   }
 
+  const contextMenuTask = contextMenu ? tasks.find((t) => t.id === contextMenu.taskId) : undefined
+  const contextMenuNode = contextMenu && contextMenuTask && contextMenuTask.status === TaskStatus.ReadyForReview ? (
+    <TaskReviewContextMenu
+      x={contextMenu.x}
+      y={contextMenu.y}
+      unseen={isReviewUnseen(contextMenuTask)}
+      onMarkSeen={() => void markReviewSeen(contextMenuTask.id)}
+      onMarkUnseen={() => void markReviewUnseen(contextMenuTask.id)}
+      onClose={closeContextMenu}
+    />
+  ) : null
+
+  if (reviewUnseenOnly) {
+    const unseenCount = tasks.filter(isUnseenReviewTask).length
+    if (tasks.length === 0) {
+      return (
+        <EmptyState
+          icon={CheckCheck}
+          title="All caught up ✓"
+          description="No tasks in review you haven't seen."
+          className="py-10"
+        />
+      )
+    }
+    return (
+      <div className="flex flex-col gap-0.5 px-2 pb-2">
+        <div className="flex items-center gap-2 px-3 pt-1 pb-1.5 text-xs text-muted-foreground">
+          <span className="tabular-nums">{unseenCount} unseen in review</span>
+          {unseenCount > 0 && (
+            <button
+              type="button"
+              onClick={() => void markAllReviewSeen()}
+              className="ml-auto text-[11px] text-primary hover:underline cursor-pointer"
+            >
+              Mark all seen
+            </button>
+          )}
+        </div>
+        {tasks.map((task) => (
+          <TaskListItem
+            key={task.id}
+            task={task}
+            runDuration={runDurations[task.id]}
+            isSelected={task.id === selectedTaskId}
+            onSelect={getSelectHandler(task.id)}
+            onContextMenu={getContextMenuHandler(task.id)}
+          />
+        ))}
+        {contextMenuNode}
+      </div>
+    )
+  }
+
   if (tasks.length === 0 && completedCount === 0) {
     return <EmptyState icon={Inbox} title="No tasks" description="Create a task to get started" className="py-10" />
   }
@@ -148,6 +233,7 @@ export function TaskList({
           runDuration={runDurations[task.id]}
           isSelected={task.id === selectedTaskId}
           onSelect={getSelectHandler(task.id)}
+          onContextMenu={getContextMenuHandler(task.id)}
         />
       )
     }
@@ -161,6 +247,7 @@ export function TaskList({
           runDuration={runDurations[task.id]}
           isSelected={task.id === selectedTaskId}
           onSelect={getSelectHandler(task.id)}
+          onContextMenu={getContextMenuHandler(task.id)}
           subtaskCount={subtasks.length}
           isExpanded={isExpanded}
           onToggleExpand={getToggleHandler(task.id)}
@@ -174,6 +261,7 @@ export function TaskList({
                 runDuration={runDurations[subtask.id]}
                 isSelected={subtask.id === selectedTaskId}
                 onSelect={getSelectHandler(subtask.id)}
+                onContextMenu={getContextMenuHandler(subtask.id)}
                 isSubtask
               />
             ))}
@@ -238,6 +326,7 @@ export function TaskList({
           )}
         </>
       )}
+      {contextMenuNode}
     </div>
   )
 }

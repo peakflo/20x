@@ -6989,6 +6989,23 @@ Important:
         data = { ...event, updates }
       }
     }
+    // Status pushes here are often partial ({ status }). The database stamps
+    // review_entered_at when a task enters review, so carry the review seen
+    // fields along — otherwise clients would keep the previous round's
+    // timestamps and show a fresh review as already seen.
+    if (channel === 'task:updated' && data && typeof data === 'object') {
+      const event = data as { taskId?: string; updates?: Record<string, unknown> }
+      if (event.taskId && event.updates && 'status' in event.updates && !('review_entered_at' in event.updates)) {
+        let current: TaskRecord | undefined
+        try { current = this.db?.getTask?.(event.taskId) } catch { current = undefined }
+        if (current && current.review_entered_at !== undefined) {
+          data = {
+            ...event,
+            updates: { ...event.updates, review_entered_at: current.review_entered_at, review_seen_at: current.review_seen_at }
+          }
+        }
+      }
+    }
     // Durable transcript projection: persist every transcript part BEFORE any
     // client sees it. The main process owns the source of truth; renderer and
     // mobile hydrate from snapshots (transcript:get) instead of depending on

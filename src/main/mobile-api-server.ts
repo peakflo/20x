@@ -209,6 +209,13 @@ export function broadcastToMobileClients(channel: string, data: unknown): void {
   }
 }
 
+/** Pushes a review seen/unseen change to every mobile client and the desktop. */
+function broadcastReviewSeen(task: { id: string; review_entered_at: string | null; review_seen_at: string | null }): void {
+  const payload = { taskId: task.id, updates: { review_entered_at: task.review_entered_at, review_seen_at: task.review_seen_at } }
+  broadcastToMobileClients('task:updated', payload)
+  if (notifyDesktop) notifyDesktop('task:updated', payload)
+}
+
 // ── MIME types for static file serving ───────────────────────
 const MIME: Record<string, string> = {
   '.html': 'text/html',
@@ -859,6 +866,24 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     broadcastToMobileClients('task:subtasks-reordered', { parentId, orderedIds })
     if (notifyDesktop) notifyDesktop('task:subtasks-reordered', { parentId, orderedIds })
     return { success: true }
+  }
+
+  // POST /api/tasks/review-seen-all — mark every unseen review task as seen
+  // (must be checked before the :id update route)
+  if (pathname === '/api/tasks/review-seen-all') {
+    const changed = db.markAllReviewSeen()
+    for (const task of changed) broadcastReviewSeen(task)
+    return changed
+  }
+
+  // POST /api/tasks/:id/review-seen | review-unseen — review seen state
+  const reviewSeenMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/review-(seen|unseen)$/)
+  if (reviewSeenMatch) {
+    const taskId = decodeURIComponent(reviewSeenMatch[1])
+    if (!db.getTask(taskId)) throw Object.assign(new Error('Task not found'), { status: 404 })
+    const task = reviewSeenMatch[2] === 'seen' ? db.markReviewSeen(taskId) : db.markReviewUnseen(taskId)
+    if (task) broadcastReviewSeen(task)
+    return task
   }
 
   // POST /api/tasks — create task (must be checked before the :id update route)

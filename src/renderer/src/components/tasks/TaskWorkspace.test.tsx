@@ -66,6 +66,8 @@ function makeRendererTask(overrides: Partial<WorkfloTask> = {}): WorkfloTask {
     auto_start_agent: false,
     auto_complete_without_review: false,
     complete_at_source: null,
+    review_entered_at: null,
+    review_seen_at: null,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
     parent_task_id: null,

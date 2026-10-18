@@ -47,6 +47,8 @@ interface RawTaskRow {
   auto_start_agent: number
   auto_complete_without_review: number
   complete_at_source: number | null
+  review_entered_at?: string | null
+  review_seen_at?: string | null
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -467,6 +469,8 @@ export class RecurrenceScheduler {
       auto_complete_without_review: (row.auto_complete_without_review ?? 0) === 1,
       // A new occurrence must not inherit the answer given on a past one.
       complete_at_source: row.complete_at_source == null ? null : row.complete_at_source === 1,
+      review_entered_at: row.review_entered_at ?? null,
+      review_seen_at: row.review_seen_at ?? null,
       parent_task_id: row.parent_task_id ?? null,
       sort_order: row.sort_order ?? 0,
     }

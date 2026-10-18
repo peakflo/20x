@@ -20,6 +20,7 @@ import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
 import { AgentFormDialog } from '@/components/settings/forms/AgentFormDialog'
 import { WorktreeProgressOverlay } from '@/components/github/WorktreeProgressOverlay'
 import { useAgentSession } from '@/hooks/use-agent-session'
+import { useMarkReviewSeen } from '@/hooks/use-mark-review-seen'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
@@ -142,6 +143,8 @@ function TaskWorkspaceComponent({
   const startingRef = useRef(false)
   const submittedQuestionIdsRef = useRef(new Set<string>())
   const workspaceBodyRef = useRef<HTMLDivElement>(null)
+  // Opening a task in review for a moment marks it seen (desktop + mobile share it).
+  useMarkReviewSeen(task, workspaceBodyRef)
   const resizingRef = useRef(false)
   const [transcriptWidth, setTranscriptWidth] = useState(() => {
     const stored = readStoredTranscriptWidth()

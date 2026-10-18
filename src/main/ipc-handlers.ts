@@ -304,6 +304,32 @@ export function registerIpcHandlers(
     return true
   })
 
+  // Review seen/unseen. Stored in the main database so desktop and mobile share
+  // it; every change is pushed to both clients as a partial task update.
+  const broadcastReviewSeen = (sender: Electron.WebContents | undefined, task: { id: string; review_entered_at: string | null; review_seen_at: string | null }) => {
+    const payload = { taskId: task.id, updates: { review_entered_at: task.review_entered_at, review_seen_at: task.review_seen_at } }
+    sender?.send('task:updated', payload)
+    broadcastToMobileClients('task:updated', payload)
+  }
+
+  ipcMain.handle('db:markReviewSeen', (event, id: string) => {
+    const task = db.markReviewSeen(id)
+    if (task) broadcastReviewSeen(event.sender, task)
+    return task
+  })
+
+  ipcMain.handle('db:markReviewUnseen', (event, id: string) => {
+    const task = db.markReviewUnseen(id)
+    if (task) broadcastReviewSeen(event.sender, task)
+    return task
+  })
+
+  ipcMain.handle('db:markAllReviewSeen', (event) => {
+    const tasks = db.markAllReviewSeen()
+    for (const task of tasks) broadcastReviewSeen(event.sender, task)
+    return tasks
+  })
+
   // Attachment handlers
   ipcMain.handle('attachments:pick', async () => {
     const result = await dialog.showOpenDialog({

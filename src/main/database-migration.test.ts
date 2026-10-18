@@ -103,6 +103,34 @@ describe('DatabaseManager migrations on an existing install', () => {
     expect(Number(stored.value)).toBeGreaterThanOrEqual(9)
   })
 
+  it('backfills tasks already in review as seen when adding the review seen columns', () => {
+    const first = new DatabaseManager()
+    first.initialize()
+    const review = first.createTask({ title: 'In review', status: 'ready_for_review' })!
+    const working = first.createTask({ title: 'Working', status: 'agent_working' })!
+    first.close?.()
+
+    // Roll back to the previous release: no review seen columns, version 10.
+    const raw = openRaw()
+    raw.exec('ALTER TABLE tasks DROP COLUMN review_entered_at')
+    raw.exec('ALTER TABLE tasks DROP COLUMN review_seen_at')
+    raw.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run('2026-01-02T03:04:05.000Z', review.id)
+    raw.prepare("UPDATE settings SET value = ? WHERE key = '__schema_version'").run('10')
+    raw.close()
+
+    const second = new DatabaseManager()
+    second.initialize()
+    const reviewAfter = second.getTask(review.id)!
+    const workingAfter = second.getTask(working.id)!
+    expect(reviewAfter.review_entered_at).toBe('2026-01-02T03:04:05.000Z')
+    expect(reviewAfter.review_seen_at).toBe('2026-01-02T03:04:05.000Z')
+    expect(workingAfter.review_entered_at).toBeNull()
+    expect(workingAfter.review_seen_at).toBeNull()
+    // Nothing lights up as unseen right after the upgrade.
+    expect(second.getUnseenReviewTaskIds()).toEqual([])
+    second.close?.()
+  })
+
   it('migrates existing push subscriptions and removes duplicate endpoints', () => {
     const first = new DatabaseManager()
     first.initialize()

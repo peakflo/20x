@@ -1,7 +1,8 @@
 import { create } from 'zustand'
 import { api } from '../api/client'
 import { onEvent } from '../api/websocket'
-import type { TaskStatus } from '@shared/constants'
+import { TaskStatus } from '@shared/constants'
+import { isReviewUnseen } from '@shared/review-seen'
 import { captureAnalyticsEvent, getTaskAnalyticsProperties, getTaskMutationProperties } from '@/lib/analytics'
 
 // Re-export for convenience
@@ -50,6 +51,8 @@ export interface Task {
   auto_start_agent: boolean
   auto_complete_without_review: boolean
   complete_at_source: boolean | null
+  review_entered_at?: string | null
+  review_seen_at?: string | null
   parent_task_id: string | null
   sort_order: number
   created_at: string
@@ -64,9 +67,31 @@ interface TaskState {
   syncAndFetch: () => Promise<void>
   createTask: (data: Record<string, unknown>) => Promise<Task | null>
   updateTask: (id: string, data: Record<string, unknown>) => Promise<boolean>
+  /** Review seen state (see @shared/review-seen). Optimistic; desktop main is the source of truth. */
+  markReviewSeen: (id: string) => Promise<void>
+  markReviewUnseen: (id: string) => Promise<void>
+  markAllReviewSeen: () => Promise<void>
+}
+
+type ReviewSeenPatch = Partial<Pick<Task, 'review_entered_at' | 'review_seen_at'>>
+
+function reviewSeenPatchFrom(task: unknown): ReviewSeenPatch | null {
+  if (!task || typeof task !== 'object') return null
+  const t = task as Task
+  return { review_entered_at: t.review_entered_at ?? null, review_seen_at: t.review_seen_at ?? null }
 }
 
 export const useTaskStore = create<TaskState>((set, get) => {
+  const patchTasks = (patches: Map<string, ReviewSeenPatch>) => {
+    if (patches.size === 0) return
+    set((state) => ({
+      tasks: state.tasks.map((t) => {
+        const patch = patches.get(t.id)
+        return patch ? { ...t, ...patch } : t
+      })
+    }))
+  }
+
   // Listen to WebSocket events
   onEvent('task:updated', (payload) => {
     const { taskId, updates } = payload as { taskId: string; updates: Partial<Task> }
@@ -168,6 +193,52 @@ export const useTaskStore = create<TaskState>((set, get) => {
       } catch (e) {
         console.error('Failed to update task:', e)
         return false
+      }
+    },
+
+    markReviewSeen: async (id) => {
+      const previous = get().tasks.find((t) => t.id === id)
+      if (!previous || !isReviewUnseen(previous)) return
+      patchTasks(new Map([[id, { review_seen_at: new Date().toISOString() }]]))
+      try {
+        const patch = reviewSeenPatchFrom(await api.tasks.markReviewSeen(id))
+        if (patch) patchTasks(new Map([[id, patch]]))
+      } catch (e) {
+        console.error('Failed to mark task seen:', e)
+        patchTasks(new Map([[id, reviewSeenPatchFrom(previous)!]]))
+      }
+    },
+
+    markReviewUnseen: async (id) => {
+      const previous = get().tasks.find((t) => t.id === id)
+      if (!previous || previous.status !== TaskStatus.ReadyForReview) return
+      patchTasks(new Map([[id, { review_seen_at: null }]]))
+      try {
+        const patch = reviewSeenPatchFrom(await api.tasks.markReviewUnseen(id))
+        if (patch) patchTasks(new Map([[id, patch]]))
+      } catch (e) {
+        console.error('Failed to mark task unseen:', e)
+        patchTasks(new Map([[id, reviewSeenPatchFrom(previous)!]]))
+      }
+    },
+
+    markAllReviewSeen: async () => {
+      const previous = new Map<string, ReviewSeenPatch>()
+      for (const t of get().tasks) if (isReviewUnseen(t)) previous.set(t.id, reviewSeenPatchFrom(t)!)
+      if (previous.size === 0) return
+      const now = new Date().toISOString()
+      patchTasks(new Map([...previous.keys()].map((id) => [id, { review_seen_at: now }])))
+      try {
+        const changed = await api.tasks.markAllReviewSeen()
+        const patches = new Map<string, ReviewSeenPatch>()
+        for (const t of changed ?? []) {
+          const patch = reviewSeenPatchFrom(t)
+          if (patch) patches.set((t as Task).id, patch)
+        }
+        patchTasks(patches)
+      } catch (e) {
+        console.error('Failed to mark all review tasks seen:', e)
+        patchTasks(previous)
       }
     }
   }

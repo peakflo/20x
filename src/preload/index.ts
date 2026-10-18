@@ -41,7 +41,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('db:updateTask', id, data),
     deleteTask: (id: string): Promise<boolean> => ipcRenderer.invoke('db:deleteTask', id),
     getSubtasks: (parentId: string): Promise<unknown[]> => ipcRenderer.invoke('db:getSubtasks', parentId),
-    reorderSubtasks: (parentId: string, orderedIds: string[]): Promise<boolean> => ipcRenderer.invoke('db:reorderSubtasks', parentId, orderedIds)
+    reorderSubtasks: (parentId: string, orderedIds: string[]): Promise<boolean> => ipcRenderer.invoke('db:reorderSubtasks', parentId, orderedIds),
+    markReviewSeen: (id: string): Promise<unknown> => ipcRenderer.invoke('db:markReviewSeen', id),
+    markReviewUnseen: (id: string): Promise<unknown> => ipcRenderer.invoke('db:markReviewUnseen', id),
+    markAllReviewSeen: (): Promise<unknown[]> => ipcRenderer.invoke('db:markAllReviewSeen')
   },
   tasks: {
     getWorkspaceDir: (taskId: string): Promise<string> =>
