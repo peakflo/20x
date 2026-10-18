@@ -68,6 +68,11 @@ export const api = {
     test: () => post<{ success: boolean }>('/api/push/test')
   },
   tasks: {
+    open: () => get<unknown[]>('/api/tasks/open'),
+    completedPage: (params: { offset: number; limit: number; query?: string }) =>
+      get<{ tasks: unknown[]; total: number }>(`/api/tasks/completed?${new URLSearchParams({
+        offset: String(params.offset), limit: String(params.limit), ...(params.query ? { query: params.query } : {})
+      })}`),
     list: (params?: Record<string, string>) => {
       const qs = params ? '?' + new URLSearchParams(params).toString() : ''
       return get<unknown[]>(`/api/tasks${qs}`)

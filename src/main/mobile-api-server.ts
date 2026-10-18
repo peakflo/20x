@@ -347,6 +347,16 @@ async function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathnam
 async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Promise<unknown> {
   const db = dbRef!
 
+  if (pathname === '/api/tasks/open') return db.getOpenTasks()
+
+  if (pathname === '/api/tasks/completed') {
+    return db.getCompletedTasksPage(
+      Number(url.searchParams.get('offset') ?? 0),
+      Number(url.searchParams.get('limit') ?? 50),
+      url.searchParams.get('query') ?? undefined
+    )
+  }
+
   // GET /api/tasks
   if (pathname === '/api/tasks') {
     let tasks = db.getTasks()

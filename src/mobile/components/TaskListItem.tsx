@@ -1,5 +1,5 @@
 import { useRef } from 'react'
-import { TaskStatus } from '@shared/constants'
+import { isTaskClosed, TaskStatus } from '@shared/constants'
 import { isReviewSeen, isReviewUnseen } from '@shared/review-seen'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
 import type { TaskPriority } from '@/types'
@@ -33,7 +33,7 @@ export function TaskListItem({ task, onSelect, sessionStatus, isSubtask, subtask
   }
   const reviewUnseen = isReviewUnseen(task)
   const reviewSeen = isReviewSeen(task)
-  const isActive = task.status !== TaskStatus.Completed
+  const isActive = !isTaskClosed(task.status)
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
   const hasActiveAgent = sessionStatus && sessionStatus !== SessionStatus.IDLE

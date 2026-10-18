@@ -1,12 +1,25 @@
 import { create } from 'zustand'
 import { api } from '../api/client'
 import { onEvent } from '../api/websocket'
-import { TaskStatus } from '@shared/constants'
+import { isTaskClosed, TaskStatus } from '@shared/constants'
 import { isReviewUnseen } from '@shared/review-seen'
 import { captureAnalyticsEvent, getTaskAnalyticsProperties, getTaskMutationProperties } from '@/lib/analytics'
 
 // Re-export for convenience
 export type { TaskStatus }
+
+export const COMPLETED_PAGE_SIZE = 50
+
+function mergeTasks(current: Task[], incoming: Task[]): Task[] {
+  const byId = new Map(incoming.map((task) => [task.id, task]))
+  const merged = current.map((task) => {
+    const next = byId.get(task.id)
+    if (!next) return task
+    byId.delete(task.id)
+    return next
+  })
+  return [...merged, ...byId.values()]
+}
 
 export interface TaskAttachment {
   id: string
@@ -63,7 +76,13 @@ interface TaskState {
   tasks: Task[]
   isLoading: boolean
   isSyncing: boolean
+  completedTotal: number
+  completedLoaded: number
+  completedLoading: boolean
   fetchTasks: () => Promise<void>
+  loadMoreCompleted: () => Promise<void>
+  searchCompleted: (query: string) => Promise<void>
+  ensureTask: (id: string) => Promise<Task | null>
   syncAndFetch: () => Promise<void>
   createTask: (data: Record<string, unknown>) => Promise<Task | null>
   updateTask: (id: string, data: Record<string, unknown>) => Promise<boolean>
@@ -134,14 +153,68 @@ export const useTaskStore = create<TaskState>((set, get) => {
     tasks: [],
     isLoading: false,
     isSyncing: false,
+    completedTotal: 0,
+    completedLoaded: 0,
+    completedLoading: false,
 
     fetchTasks: async () => {
       set({ isLoading: true })
       try {
-        const tasks = (await api.tasks.list()) as Task[]
-        set({ tasks, isLoading: false })
+        const [openResult, completedResult] = await Promise.allSettled([
+          api.tasks.open() as Promise<Task[]>,
+          api.tasks.completedPage({ offset: 0, limit: 0 })
+        ])
+        if (openResult.status === 'rejected') throw openResult.reason
+        const open = openResult.value
+        const openIds = new Set(open.map((task) => task.id))
+        set((state) => ({
+          tasks: [...open, ...state.tasks.filter((task) => !openIds.has(task.id) && isTaskClosed(task.status))],
+          completedTotal: completedResult.status === 'fulfilled' ? completedResult.value.total : state.completedTotal,
+          isLoading: false
+        }))
       } catch {
         set({ isLoading: false })
+      }
+    },
+
+    loadMoreCompleted: async () => {
+      if (get().completedLoading) return
+      set({ completedLoading: true })
+      try {
+        const { tasks, total } = await api.tasks.completedPage({ offset: get().completedLoaded, limit: COMPLETED_PAGE_SIZE })
+        const page = tasks as Task[]
+        set((state) => ({
+          tasks: mergeTasks(state.tasks, page),
+          completedTotal: total,
+          completedLoaded: state.completedLoaded + page.filter((task) => !task.parent_task_id).length,
+          completedLoading: false
+        }))
+      } catch (e) {
+        console.error('Failed to load completed tasks:', e)
+        set({ completedLoading: false })
+      }
+    },
+
+    searchCompleted: async (query) => {
+      const q = query.trim()
+      if (!q) return
+      try {
+        const { tasks } = await api.tasks.completedPage({ offset: 0, limit: COMPLETED_PAGE_SIZE, query: q })
+        set((state) => ({ tasks: mergeTasks(state.tasks, tasks as Task[]) }))
+      } catch (e) {
+        console.error('Failed to search completed tasks:', e)
+      }
+    },
+
+    ensureTask: async (id) => {
+      const existing = get().tasks.find((task) => task.id === id)
+      if (existing) return existing
+      try {
+        const task = (await api.tasks.get(id)) as Task
+        set((state) => ({ tasks: mergeTasks(state.tasks, [task]) }))
+        return task
+      } catch {
+        return null
       }
     },
 
@@ -152,13 +225,9 @@ export const useTaskStore = create<TaskState>((set, get) => {
       } catch (e) {
         console.error('Failed to sync task sources:', e)
       }
-      // Always re-fetch tasks after sync (even if sync failed, tasks may have changed)
-      try {
-        const tasks = (await api.tasks.list()) as Task[]
-        set({ tasks, isSyncing: false })
-      } catch {
-        set({ isSyncing: false })
-      }
+      // Always refresh the open set after sync, even when the sync failed.
+      await get().fetchTasks()
+      set({ isSyncing: false })
     },
 
     createTask: async (data) => {

@@ -1,5 +1,6 @@
 import { UsageLimitRecoveryNotice } from '../components/UsageLimitRecoveryNotice'
 import { memo, useRef, useEffect, useLayoutEffect, useCallback, useMemo, useState } from 'react'
+import { isTaskClosed } from '@shared/constants'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useTaskStore } from '../stores/task-store'
 import { useAgentStore, SessionStatus, type AgentMessage } from '../stores/agent-store'
@@ -468,8 +469,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
 
   // Session state flags — matches TaskDetailPage logic
   const isSessionRunning = session?.sessionId && (session.status === SessionStatus.WORKING || session.status === SessionStatus.WAITING_APPROVAL)
-  const canStart = task?.agent_id && !task.session_id && (!session || session.status === SessionStatus.IDLE) && task.status !== 'completed'
-  const canResume = task?.agent_id && task.session_id && !isSessionRunning && !session?.sessionId && (!session || session.status === SessionStatus.IDLE)
+  const canStart = task?.agent_id && !task.session_id && (!session || session.status === SessionStatus.IDLE) && !isTaskClosed(task.status)
+  const canResume = task?.agent_id && task.session_id && !isSessionRunning && !session?.sessionId && (!session || session.status === SessionStatus.IDLE) && !isTaskClosed(task.status)
   const canStop = isSessionRunning
 
   return (

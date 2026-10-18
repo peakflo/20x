@@ -1,6 +1,6 @@
 import { getSourceCompletionDescription, getTaskSourceName } from '@shared/task-completion'
 import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
-import { TASK_STATUSES, TaskStatus } from '@shared/constants'
+import { isTaskClosed, TASK_STATUSES, TaskStatus } from '@shared/constants'
 import { filterSubtasks, SUBTASK_FILTERS, type SubtaskFilter } from '@shared/subtask-filter'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 import { harnessInstanceDisplayName, type HarnessInstanceView } from '@shared/harness-instances'
@@ -310,11 +310,11 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     : (triageAgent && !triageAgentConfigured ? triageAgent : null)
 
   // Session state logic — don't show Resume if session is already running
-  const canStart = task.agent_id && assignedAgentConfigured && !task.session_id && (!session || session.status === SessionStatus.IDLE) && task.status !== TaskStatus.Completed
-  const canResume = task.agent_id && task.session_id && !isSessionRunning && (!session?.sessionId) && (!session || session.status === SessionStatus.IDLE)
+  const canStart = task.agent_id && assignedAgentConfigured && !task.session_id && (!session || session.status === SessionStatus.IDLE) && !isTaskClosed(task.status)
+  const canResume = task.agent_id && task.session_id && !isSessionRunning && (!session?.sessionId) && (!session || session.status === SessionStatus.IDLE) && !isTaskClosed(task.status)
   const canStop = isSessionRunning
-  const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && task.status !== TaskStatus.Completed && task.status !== TaskStatus.Triaging && !isSessionRunning
-  const canComplete = task.status !== TaskStatus.Completed && !isSessionRunning
+  const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && !isTaskClosed(task.status) && task.status !== TaskStatus.Triaging && !isSessionRunning
+  const canComplete = !isTaskClosed(task.status) && !isSessionRunning
   const hasMessages = session && session.messages.length > 0
 
   // Preview: last 3 messages
@@ -525,7 +525,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                   {session.status === SessionStatus.WAITING_APPROVAL && '● Waiting'}
                 </span>
               )}
-              {unconfiguredAgent && task.status !== TaskStatus.Completed && (
+              {unconfiguredAgent && !isTaskClosed(task.status) && (
                 <div
                   data-testid="agent-config-warning"
                   className="w-full mt-1 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
@@ -698,7 +698,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             <span className="text-foreground">{formatRelativeDate(task.updated_at)}</span>
 
             {/* Heartbeat */}
-            {task.status !== TaskStatus.Completed && (task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
+            {!isTaskClosed(task.status) && (task.status === TaskStatus.ReadyForReview || task.heartbeat_enabled) && (
               <>
                 <span className="text-muted-foreground flex items-center gap-1.5">
                   <svg className={`h-3.5 w-3.5 ${task.heartbeat_enabled ? 'text-rose-500' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

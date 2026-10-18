@@ -1,6 +1,6 @@
 import { Fragment, useState, useMemo, useEffect } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { TaskStatus } from '@shared/constants'
+import { isTaskClosed, TaskStatus } from '@shared/constants'
 import { isReviewUnseen } from '@shared/review-seen'
 import { useTaskStore, type Task } from '../stores/task-store'
 import { useAgentStore, SessionStatus } from '../stores/agent-store'
@@ -29,6 +29,11 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
   const isLoading = useTaskStore((s) => s.isLoading)
   const isSyncing = useTaskStore((s) => s.isSyncing)
   const syncAndFetch = useTaskStore((s) => s.syncAndFetch)
+  const completedTotal = useTaskStore((s) => s.completedTotal)
+  const completedLoaded = useTaskStore((s) => s.completedLoaded)
+  const completedLoading = useTaskStore((s) => s.completedLoading)
+  const loadMoreCompleted = useTaskStore((s) => s.loadMoreCompleted)
+  const searchCompleted = useTaskStore((s) => s.searchCompleted)
   const markReviewSeen = useTaskStore((s) => s.markReviewSeen)
   const markReviewUnseen = useTaskStore((s) => s.markReviewUnseen)
   const markAllReviewSeen = useTaskStore((s) => s.markAllReviewSeen)
@@ -52,6 +57,12 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
     const id = setInterval(() => setSnoozeTick((t) => t + 1), 60_000)
     return () => clearInterval(id)
   }, [])
+
+  useEffect(() => {
+    if (!search.trim() || (filter !== 'all' && filter !== TaskStatus.Completed)) return
+    const id = setTimeout(() => { void searchCompleted(search) }, 250)
+    return () => clearTimeout(id)
+  }, [search, filter, searchCompleted])
 
   const toggleParentExpanded = (parentId: string) => {
     setExpandedParents(prev => {
@@ -109,7 +120,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
 
     // Filter by status
     if (filter !== 'all' && filter !== REVIEW_UNSEEN_FILTER) {
-      filtered = filtered.filter((t) => t.status === filter)
+      filtered = filtered.filter((t) => filter === TaskStatus.Completed ? isTaskClosed(t.status) : t.status === filter)
     }
 
     // Split into active vs completed (excluding snoozed, recurring templates, and subtasks)
@@ -120,7 +131,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
       // Skip subtasks from top-level grouping — they render under their parent
       if (t.parent_task_id) continue
 
-      if (t.status === TaskStatus.Completed) {
+      if (isTaskClosed(t.status)) {
         completed.push(t)
       } else if (!isSnoozed(t.snoozed_until) && !(t.is_recurring && !t.recurrence_parent_id)) {
         active.push(t)
@@ -129,6 +140,14 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
 
     return { active, completed }
   }, [tasks, filter, search, snoozeTick])
+
+  const completedCount = search ? completed.length : Math.max(completedTotal, completed.length)
+  const hasMoreCompleted = completedLoaded < completedTotal
+  const toggleCompleted = () => {
+    const opening = !showCompleted
+    setShowCompleted(opening)
+    if (opening && !search && hasMoreCompleted && completedLoaded === 0) void loadMoreCompleted()
+  }
 
   const renderTaskWithSubtasks = (task: Task) => {
     const subtasks = subtasksByParent.get(task.id)
@@ -293,7 +312,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
               ))}
             </>
           )
-        ) : active.length === 0 && completed.length === 0 ? (
+        ) : active.length === 0 && completedCount === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <svg className="w-12 h-12 mb-3 opacity-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18" /><path d="M9 21V9" />
@@ -304,16 +323,25 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
           <>
             {active.map(renderTaskWithSubtasks)}
 
-            {completed.length > 0 && (
+            {completedCount > 0 && (
               <>
                 <button
-                  onClick={() => setShowCompleted(!showCompleted)}
+                  onClick={toggleCompleted}
                   className="w-full flex items-center gap-2 px-4 py-2.5 text-xs text-muted-foreground active:bg-accent/30 border-b border-border/30"
                 >
                   <span className="text-[10px]">{showCompleted ? '\u25BC' : '\u25B6'}</span>
-                  <span>Completed ({completed.length})</span>
+                  <span>Closed ({completedCount})</span>
                 </button>
                 {showCompleted && completed.map(renderTaskWithSubtasks)}
+                {showCompleted && !search && (hasMoreCompleted || completedLoading) && (
+                  <button
+                    onClick={() => void loadMoreCompleted()}
+                    disabled={completedLoading}
+                    className="w-full px-4 py-3 text-xs text-muted-foreground active:bg-accent/30 disabled:opacity-60"
+                  >
+                    {completedLoading ? 'Loading…' : 'Show more'}
+                  </button>
+                )}
               </>
             )}
           </>
