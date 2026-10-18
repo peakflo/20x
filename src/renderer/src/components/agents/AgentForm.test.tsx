@@ -58,6 +58,11 @@ function selectCodingAgent(value = 'opencode'): void {
   fireEvent.change(screen.getByLabelText('Coding Agent'), { target: { value } })
 }
 
+function selectModel(name: string): void {
+  fireEvent.click(screen.getByLabelText('Model'))
+  fireEvent.click(screen.getByRole('option', { name }))
+}
+
 beforeEach(() => {
   cleanup()
 })
@@ -140,5 +145,38 @@ describe('AgentForm server URL', () => {
     render(<AgentForm onSubmit={vi.fn()} onCancel={vi.fn()} />)
     selectCodingAgent('claude-code')
     expect(screen.queryByText(/doesn't require a server URL/)).toBeNull()
+  })
+})
+
+describe('AgentForm speed mode', () => {
+  it('offers ultrafast for supported Claude and Codex models', () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm onSubmit={onSubmit} onCancel={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Fast agent' } })
+    selectCodingAgent('claude-code')
+    selectModel('Claude Opus 5.5')
+    fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'ultrafast' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(onSubmit.mock.calls[0][0].config.speed_mode).toBe('ultrafast')
+
+    selectCodingAgent('codex')
+    selectModel('GPT-6 Astra (Recommended)')
+    fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'ultrafast' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    expect(onSubmit.mock.calls[1][0].config.speed_mode).toBe('ultrafast')
+  })
+
+  it('clears ultrafast when the chosen model does not support it', () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm
+      agent={makeAgent({ coding_agent: CodingAgentType.CLAUDE_CODE, model: 'claude-opus-5-5', speed_mode: 'ultrafast' })}
+      onSubmit={onSubmit}
+      onCancel={vi.fn()}
+    />)
+    expect(screen.getByLabelText('Speed')).toHaveValue('ultrafast')
+    selectModel('Claude Sonnet 5.5')
+    expect(screen.getByLabelText('Speed')).toHaveValue('')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(onSubmit.mock.calls[0][0].config.speed_mode).toBeUndefined()
   })
 })

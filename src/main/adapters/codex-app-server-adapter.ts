@@ -23,6 +23,7 @@ import type {
 import type { AdapterUsageLimitsEvent, AdapterUsageReport, UsageLimitStop } from './coding-agent-adapter'
 import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
 import type { ProviderUsageLimits } from '../../shared/usage'
+import { supportsUltrafast } from '../../shared/ultrafast'
 import type { UsageBucket } from '../usage/usage-normalize'
 import {
   codexRateLimitsResponseToLimits,
@@ -417,6 +418,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     const result = await this.sendRpcRequest(session, 'thread/start', {
       cwd: config.workspaceDir,
       model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
+      serviceTier: config.speedMode === 'ultrafast' && supportsUltrafast('codex', config.model || DEFAULT_CODEX_APP_SERVER_MODEL)
+        ? 'ultrafast' : null,
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',
       sandbox: this.resolveSandboxMode(config),
@@ -500,6 +503,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       threadId: sessionId,
       cwd: config.workspaceDir,
       model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
+      serviceTier: config.speedMode === 'ultrafast' && supportsUltrafast('codex', config.model || DEFAULT_CODEX_APP_SERVER_MODEL)
+        ? 'ultrafast' : null,
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',
       sandbox: this.resolveSandboxMode(config),
@@ -566,6 +571,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       input: [{ type: 'text', text: promptText }],
       cwd: config.workspaceDir,
       model: config.model || DEFAULT_CODEX_APP_SERVER_MODEL,
+      serviceTier: config.speedMode === 'ultrafast' && supportsUltrafast('codex', config.model || DEFAULT_CODEX_APP_SERVER_MODEL)
+        ? 'ultrafast' : null,
       effort: config.reasoningEffort && config.reasoningEffort !== 'max' ? config.reasoningEffort : null,
       approvalPolicy: config.permissionMode === 'allow' ? 'never' : 'on-request',
       approvalsReviewer: 'user',
