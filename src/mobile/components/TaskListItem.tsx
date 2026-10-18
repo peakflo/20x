@@ -42,7 +42,7 @@ export function TaskListItem({ task, onSelect, sessionStatus, isSubtask, subtask
   return (
     <button
       onClick={onSelect}
-      className="w-full text-left px-3 py-2.5 rounded-md transition-colors cursor-pointer group hover:bg-accent/50 active:bg-accent"
+      className="w-full text-left px-4 py-2.5 rounded-md transition-colors cursor-pointer group hover:bg-accent/50 active:bg-accent"
     >
       <div className="flex items-start gap-3">
         <div className={cn(

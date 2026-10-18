@@ -247,7 +247,7 @@ describe('TaskDetailPage', () => {
     expect(view.queryByTestId('mobile-header-subtasks')).toBeNull()
     expect(view.container.querySelector('.glass-task-detail-bar')?.textContent).not.toContain('Subtasks')
     const tabControl = view.getByRole('button', { name: 'Subtasks: 1 in progress, 1 in review' })
-    expect(tabControl.closest('.glass-task-detail-bar')).toBeNull()
+    expect(tabControl.closest('.glass-task-detail-bar')).not.toBeNull()
     fireEvent.click(tabControl)
     const tab = view.getByTestId('mobile-subtasks-tab')
     expect(tab.className).not.toContain('hidden')

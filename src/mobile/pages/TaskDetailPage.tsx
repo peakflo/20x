@@ -320,28 +320,29 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         onBack={() => parentTask ? onNavigate({ page: 'detail', taskId: parentTask.id }) : onNavigate({ page: 'list' })}
         title={task.title}
         rightAction={
-          <div className="flex shrink-0 items-center gap-1">
-            <button
-              onClick={() => onNavigate({ page: 'edit', taskId })}
-              className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors"
-              aria-label="Edit task"
-            >
-              <svg className="w-4 h-4 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>
-              </svg>
-            </button>
-          </div>
+          <button
+            onClick={() => onNavigate({ page: 'edit', taskId })}
+            className="glass-action !h-10 !w-10"
+            aria-label="Edit task"
+          >
+            <svg className="w-4 h-4 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>
+            </svg>
+          </button>
         }
       />
 
       {/* Top-bar agent switcher — mirrors desktop TaskHeaderBar, always visible without opening Details */}
-      <div className="glass-bar relative z-10 flex h-12 items-center gap-2 border-b bg-background px-4 py-2">
-        <span className="text-xs text-muted-foreground shrink-0">Agent</span>
-        <div ref={agentMenuRef} className="relative">
+      <div className="glass-bar glass-task-detail-bar relative z-10 flex h-12 items-center justify-between gap-2 border-b px-4 py-2">
+        <Badge variant={STATUS_VARIANT[task.status]?.variant || 'default'} className="shrink-0 gap-1.5 rounded-full whitespace-nowrap">
+          <TaskStatusDot status={task.status} className="!h-1.5 !w-1.5" />
+          {STATUS_VARIANT[task.status]?.label || task.status}
+        </Badge>
+        <div ref={agentMenuRef} className="relative min-w-0">
           <button
             type="button"
             onClick={() => setAgentMenuOpen((o) => !o)}
-            className="inline-flex max-w-40 items-center gap-1.5 rounded-full border border-border/50 bg-card px-2.5 py-1 text-xs text-muted-foreground"
+            className="glass-control inline-flex h-8 max-w-[45vw] items-center gap-1.5 px-2.5 text-xs text-muted-foreground"
             aria-label="Change agent"
             aria-haspopup="menu"
             aria-expanded={agentMenuOpen}
@@ -386,13 +387,9 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
             </div>
           )}
         </div>
-        <span className="ml-auto text-[11px] text-muted-foreground flex items-center gap-1">
-          <span className={`h-1.5 w-1.5 rounded-full ${task.status === 'completed' ? 'bg-emerald-400' : task.status === 'agent_working' ? 'bg-amber-400' : 'bg-muted-foreground'}`} />
-          {task.status}
-        </span>
       </div>
 
-      <div className="glass-bar flex h-12 items-center overflow-x-auto border-b bg-background px-4 py-2">
+      <div className="glass-bar glass-task-detail-bar flex h-12 items-center overflow-x-auto border-b px-4 py-2">
         <div className="flex shrink-0 rounded-md bg-muted/40 p-0.5 text-xs">
           <button
             type="button"
@@ -423,12 +420,8 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           <ParentTaskContextMobile parentTask={parentTask} onNavigate={onNavigate} />
         )}
 
-        {/* Badges bar — matches desktop TaskDetailView header */}
+        {/* Priority and type stay in the details; status stays in the pinned header. */}
         <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border flex-wrap">
-          <TaskStatusDot status={task.status} />
-          {STATUS_VARIANT[task.status] && (
-            <Badge variant={STATUS_VARIANT[task.status].variant}>{STATUS_VARIANT[task.status].label}</Badge>
-          )}
           <PriorityBadge priority={task.priority} />
           {task.type !== 'general' && (
             <Badge variant={task.type === 'coding' ? 'blue' : task.type === 'review' ? 'teal' : 'default'}>
@@ -887,9 +880,9 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
 
       {subtasks.length > 0 && <div className={cn('flex-1 overflow-y-auto px-4 pb-4 pt-[10.5rem]', activeSection !== 'subtasks' && 'hidden')} data-testid="mobile-subtasks-tab">
         <div className="space-y-3 pb-3">
-          <input type="search" aria-label="Search subtasks" placeholder="Search subtasks" value={subtaskQuery} onChange={(event) => setSubtaskQuery(event.target.value)} className="h-10 w-full rounded-md border border-border/50 bg-card/60 px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring" />
+          <input type="search" aria-label="Search subtasks" placeholder="Search subtasks" value={subtaskQuery} onChange={(event) => setSubtaskQuery(event.target.value)} className="glass-control h-10 w-full px-3 text-sm text-foreground outline-none placeholder:text-[var(--glass-placeholder)] focus:border-ring" />
           <div className="flex flex-wrap gap-1.5" aria-label="Filter subtasks">
-            {SUBTASK_FILTERS.map(({ id, label }) => <button key={id} type="button" aria-pressed={subtaskFilter === id} onClick={() => setSubtaskFilter(id)} className={cn('rounded-md px-2.5 py-1.5 text-xs', subtaskFilter === id ? 'bg-accent text-foreground' : 'text-muted-foreground')}>{label}</button>)}
+            {SUBTASK_FILTERS.map(({ id, label }) => <button key={id} type="button" aria-pressed={subtaskFilter === id} onClick={() => setSubtaskFilter(id)} className={cn('glass-filter-block rounded-full px-2.5 py-1.5 text-xs', subtaskFilter === id ? 'glass-filter-active' : 'text-muted-foreground')}>{label}</button>)}
           </div>
           <p className="text-xs text-muted-foreground">{visibleSubtasks.length} of {subtasks.length}</p>
         </div>
@@ -1085,7 +1078,7 @@ function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sour
 function Header({ onBack, title, rightAction }: { onBack: () => void; title: string; rightAction?: React.ReactNode }) {
   return (
     <div className="glass-bar glass-task-detail-bar relative z-20 flex h-14 shrink-0 items-center gap-2 border-b px-2 py-3">
-      <button onClick={onBack} className="p-2 active:opacity-60 hover:bg-accent rounded-md transition-colors">
+      <button onClick={onBack} className="glass-action !h-10 !w-10" aria-label="Back">
         <svg className="w-5 h-5 text-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="m15 18-6-6 6-6" />
         </svg>

@@ -377,7 +377,10 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     if (task?.agent_id && session?.sessionId) _restartSession(task.agent_id, session.sessionId)
   }, [task?.agent_id, session?.sessionId, _restartSession])
 
-  const headerClearance = topOverlayHeight > 0 ? topOverlayHeight + 12 : isSearchOpen ? (normalizedSearchQuery ? 192 : 144) : 80
+  // Keep messages below the clear title row. They can still pass behind the
+  // search controls and the diffused todo summary below it.
+  const topOverlayOverlap = Math.max(0, topOverlayHeight - 68)
+  const headerClearance = topOverlayHeight > 0 ? topOverlayOverlap + 12 : isSearchOpen ? (normalizedSearchQuery ? 124 : 76) : 12
   const hasLeadingContent = Boolean(session?.systemStatus || artifacts.length)
   const virtualizer = useVirtualizer({
     count: transcriptItems.length,
@@ -472,7 +475,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header — matches desktop AgentTranscriptPanel header */}
-      <div ref={topOverlayRef} className="glass-bar pointer-events-none relative z-10 shrink-0" style={topOverlayHeight > 0 ? { marginBottom: -topOverlayHeight } : undefined}>
+      <div ref={topOverlayRef} className="glass-bar pointer-events-none relative z-10 shrink-0" style={topOverlayHeight > 0 ? { marginBottom: -topOverlayOverlap } : undefined}>
       <div className="pointer-events-auto flex min-h-[68px] items-center justify-between gap-2 px-3 py-3">
         <div className="flex items-center gap-2 min-w-0">
           <button onClick={() => onNavigate({ page: 'detail', taskId })} className="glass-action !h-[44px] !w-[44px] shrink-0" aria-label="Back to task">

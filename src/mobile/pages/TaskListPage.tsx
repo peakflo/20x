@@ -153,7 +153,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
   return (
     <div className="relative flex flex-col h-full">
       {/* Header */}
-      <div className="glass-bar pointer-events-none relative z-10 shrink-0 -mb-[160px] px-4 pt-3 pb-2">
+      <div className="glass-bar pointer-events-none relative z-10 shrink-0 -mb-[92px] px-4 pt-3 pb-2">
         <div className="pointer-events-auto flex items-center justify-between mb-2">
           <h1 className="text-lg font-semibold">Tasks</h1>
           <div className="flex items-center gap-1">
@@ -190,16 +190,20 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
         </div>
 
         {/* Search */}
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search tasks..."
-          className="glass-control pointer-events-auto w-full px-5 h-[44px] text-sm text-foreground placeholder:text-[var(--glass-placeholder)] focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 mb-2"
-        />
+        <div className="relative mb-2">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search tasks..."
+            className="glass-control pointer-events-auto block w-full px-5 h-[44px] text-sm text-foreground placeholder:text-[var(--glass-placeholder)] focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30"
+          />
+          {/* Cover the gap between the two glass controls as rows pass under them. */}
+          <div aria-hidden="true" className="pointer-events-none absolute top-full -left-4 -right-4 h-[9px] bg-background" />
+        </div>
 
         {/* Filter pills */}
-        <div className="pointer-events-auto flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
+        <div className="glass-filter-rail pointer-events-auto flex gap-1.5 overflow-x-auto rounded-2xl p-1">
           {FILTER_OPTIONS.map((opt) => (
             <button
               key={opt.value}
@@ -217,7 +221,7 @@ export function TaskListPage({ onNavigate }: { onNavigate: (route: Route) => voi
       </div>
 
       {/* Task list (relative for FAB positioning) */}
-      <div className="flex-1 overflow-y-auto relative pt-[168px]">
+      <div className="flex-1 overflow-y-auto relative pt-[98px]">
         {active.length === 0 && completed.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
             <svg className="w-12 h-12 mb-3 opacity-20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
