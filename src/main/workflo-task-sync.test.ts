@@ -244,6 +244,37 @@ it('stores an offline human completion with its original version until the serve
   expect(db.getSetting(`workflo-completion:${local.id}`)).toBeUndefined()
 })
 
+it('fetches a missing server version and submits completion details', async () => {
+  db.setSetting('enterprise_tenant_id', 'tenant-1')
+  const local = db.createTask(makeTask({ external_id: 'remote-1', source_id: sourceId,
+    output_fields: [{ id: 'summary', name: 'Summary', type: 'text', value: 'Finished the work', required: true }]
+  }))!
+  const api = { getDomain: () => 'api.test', getTask: vi.fn()
+    .mockResolvedValueOnce(remote()).mockResolvedValueOnce(remote('completed')),
+    executeAction: vi.fn().mockResolvedValue(undefined) }
+  const sync = new SyncManager(db, {} as never, { get: () => new PeakfloPlugin() } as never)
+  Object.assign(sync, { workfloApiClient: api, enterpriseUserId: 'user-1' })
+
+  expect((await sync.executeAction('complete', local, undefined, sourceId)).success).toBe(true)
+  expect(api.executeAction).toHaveBeenCalledWith('remote-1',
+    { summary: 'Finished the work', action: 'complete' }, 3)
+  expect(db.getTask(local.id)?.status).toBe('completed')
+})
+
+it('does not queue completion when Workflo provides no task version', async () => {
+  db.setSetting('enterprise_tenant_id', 'tenant-1')
+  const local = db.createTask(makeTask({ external_id: 'remote-1', source_id: sourceId }))!
+  const api = { getDomain: () => 'api.test', getTask: vi.fn().mockResolvedValue({ ...remote(), version: undefined }),
+    executeAction: vi.fn() }
+  const sync = new SyncManager(db, {} as never, { get: () => new PeakfloPlugin() } as never)
+  Object.assign(sync, { workfloApiClient: api, enterpriseUserId: 'user-1' })
+
+  const result = await sync.executeAction('complete', local, undefined, sourceId)
+  expect(result).toMatchObject({ success: false, error: expect.stringContaining('task version') })
+  expect(api.executeAction).not.toHaveBeenCalled()
+  expect(db.getSetting(`workflo-completion:${local.id}`)).toBeUndefined()
+})
+
 it('a source-less local task completes without server acceptance',()=>{
   const draft=db.createTask(makeTask())!
   expect(db.updateTask(draft.id,{status:'completed'})?.status).toBe('completed')
