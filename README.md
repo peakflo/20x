@@ -91,7 +91,7 @@ Open a parent task and its subtasks as linked panels. Keep an embedded browser b
 ### 🔗 Smart Integrations
 
 <p align="center">
-  <img src="docs/diagrams/task-ecosystem.svg" alt="20x keeps tasks at the center while connecting task sources, five coding harnesses, repositories, skills, MCP servers, and browser panels" width="960" />
+  <img src="docs/diagrams/task-ecosystem.svg" alt="Logos for Linear, GitHub Issues, HubSpot, Notion, GitLab, YouTrack, Peakflo, and manual entry feed tasks into 20x. Logos for Claude Code, OpenCode, Codex, Cursor, and Pi show the supported coding harnesses." width="960" />
 </p>
 
 - **Linear** — Pull issues, update status, post comments
