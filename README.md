@@ -39,14 +39,12 @@ Hand off the work once. Mastermind helps plan and coordinate subtasks. Triage pr
 ## How It Works
 
 <p align="center">
-  <img src="docs/diagrams/task-flow.svg" alt="20x task flow: a task arrives, Mastermind and triage set up the work, an agent works with linked context, and you review the result" width="960" />
+  <img src="docs/diagrams/task-flow.svg" alt="Your role: set the outcome, approve consequential actions when needed, and review the result. 20x's role: plan with Mastermind, propose setup with triage, run agents, and keep canvas context together." width="960" />
 </p>
 
-1. **Tasks flow in** — from Linear, YouTrack, HubSpot, GitHub Issues, Notion, Peakflo Workflo, or created manually
-2. **Mastermind and triage** — Break down work and propose priority, coding harness, relevant skills, and git repos
-3. **Agent works the task** — reads skills, git worktrees, and MCP servers; streams output in real time
-4. **HITL review** — Agents pause for human approval before risky actions
-5. **Feedback loop** — Skills and confidence levels are automatically updated after completion
+**Your part:** Define the outcome, approve consequential actions when asked, then review the result and give feedback.
+
+**20x's part:** Keep the task and context together; use Mastermind to plan subtasks and triage to propose priority, harness, skills, and repository; run and coordinate agents; keep the work log, output, and reusable learning attached to the task.
 
 ## Features
 
