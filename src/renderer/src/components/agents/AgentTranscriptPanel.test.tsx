@@ -285,6 +285,40 @@ describe('AgentTranscriptPanel message layout', () => {
     expect(rows[1].style.transform).toBe('')
   })
 
+  it('renders the working indicator inside the message list, after the last message and before the composer', () => {
+    render(
+      <AgentTranscriptPanel
+        messages={[{ id: 'latest', role: 'assistant', content: 'Working on it', timestamp: new Date(), partType: 'text' }]}
+        status={SessionStatus.WORKING}
+        onStop={() => undefined}
+        onSend={() => undefined}
+      />
+    )
+
+    const indicator = screen.getByText('Agent is working...')
+    const virtualWindow = screen.getByTestId('transcript-virtual-window')
+    const composer = screen.getByTestId('transcript-composer')
+
+    // The indicator must live inside the virtualized message list (as the last
+    // row, after the last transcript message), not as a sibling rendered after
+    // it — otherwise it falls into the virtualizer's end-padding gap reserved
+    // for the floating composer and ends up hidden underneath it.
+    expect(virtualWindow.contains(indicator)).toBe(true)
+    expect(composer.contains(indicator)).toBe(false)
+
+    // Growing the gap by the indicator's own height keeps real composer
+    // clearance after it (instead of the indicator eating into that gap).
+    expect(virtualizerOptions.mock.lastCall?.[0]).toMatchObject({ paddingEnd: 64 + 28, scrollPaddingEnd: 64 + 28 })
+
+    // The scroll container renders the virtual-size wrapper, then the virtual
+    // window (which now contains the indicator) — never the indicator as a
+    // trailing sibling of the whole message list.
+    const scrollContainer = virtualWindow.closest('.overflow-y-auto') as HTMLElement
+    const directChildren = Array.from(scrollContainer.children)
+    expect(directChildren).toHaveLength(1)
+    expect(directChildren[0].contains(indicator)).toBe(true)
+  })
+
   it('renders tool calls as compact expandable rows without a card bubble', () => {
     render(
       <AgentTranscriptPanel

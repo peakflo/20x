@@ -34,6 +34,11 @@ function collectSearchableText(value: unknown, output: string[]): void {
 const EMPTY_MESSAGES: AgentMessage[] = []
 const EMPTY_ARTIFACTS: Artifact[] = []
 
+// Approximate rendered height (px) of the "Agent is working..." row (dots +
+// label, with its vertical padding). Used to grow the virtualizer's end
+// padding so the row still clears the floating composer overlap below it.
+const WORKING_INDICATOR_HEIGHT = 36
+
 // Cache per message object: search runs over the whole transcript on every
 // keystroke AND every streamed delta. Message objects are identity-stable per
 // part (store projection cache), so a WeakMap makes this compute-once.
@@ -378,8 +383,11 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
     count: transcriptItems.length,
     getScrollElement: () => scrollRef.current,
     paddingStart: hasLeadingContent ? 0 : headerClearance,
-    paddingEnd: 80,
-    scrollPaddingEnd: 80,
+    // Reserve extra room for the "Agent is working" row rendered as the last
+    // transcript item below, so it still clears the floating composer instead
+    // of landing inside its own clearance gap.
+    paddingEnd: isWorking ? 80 + WORKING_INDICATOR_HEIGHT : 80,
+    scrollPaddingEnd: isWorking ? 80 + WORKING_INDICATOR_HEIGHT : 80,
     estimateSize: () => 120,
     overscan: 8
   })
@@ -754,18 +762,30 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                   </div>
                 )
               })}
-            </div>
-          )}
-
-          {/* Working indicator */}
-          {isWorking && messages.length > 0 && (
-            <div className="flex items-center gap-2 px-3 py-2">
-              <div className="flex gap-1">
-                <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
-                <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.2s]" />
-                <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.4s]" />
-              </div>
-              <span className="text-xs text-muted-foreground">Agent is working...</span>
+              {/* Working indicator — positioned as the last row inside this
+                  sized/relative wrapper (right after the last message, at
+                  totalSize - paddingEnd) rather than as a sibling rendered
+                  after it, which would fall inside the virtualizer's
+                  end-padding gap and end up hidden underneath the floating
+                  composer below. */}
+              {isWorking && (
+                <div
+                  className="flex items-center gap-2 px-3 py-2"
+                  style={{
+                    position: 'absolute',
+                    top: virtualizer.getTotalSize() - 80 - WORKING_INDICATOR_HEIGHT,
+                    left: 0,
+                    right: 0
+                  }}
+                >
+                  <div className="flex gap-1">
+                    <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                    <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.2s]" />
+                    <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse [animation-delay:0.4s]" />
+                  </div>
+                  <span className="text-xs text-muted-foreground">Agent is working...</span>
+                </div>
+              )}
             </div>
           )}
         </div>
