@@ -11,7 +11,11 @@
 
 **Give 20x the task. Keep your focus.**
 
-20x is a desktop app that brings tasks, AI agents, and results into one place. Connect a task source such as Linear, HubSpot, YouTrack, GitLab, Notion, or Peakflo. 20x keeps the task brief with the work, helps select an agent and the right tools, and brings the result back for review.
+20x is a desktop workspace organized around **tasks**, not agent chats. Connect a task source such as Linear, HubSpot, YouTrack, GitLab, Notion, or Peakflo, or create a task yourself. Mastermind and triage help decide how to run it; the brief, agent work, and result stay attached to the task.
+
+> [!IMPORTANT]
+> **The 20x metric: agent run hours ÷ your active hours in 20x.**
+> The app measures your own multiplier from live agent work and time you spend on screen in 20x. It shows how much work you can delegate for the time you spend steering it. “20x” is the goal behind the name, not a guaranteed result.
 
 **No cloud. No subscriptions. Everything runs on your machine.**
 
@@ -19,13 +23,18 @@
   <img src="resources/product-demo.gif" alt="20x product demo" />
 </p>
 
-## Fewer small decisions. Fewer app switches.
+## Fewer small decisions. Less handholding.
 
-You should be able to hand off a task without copying its brief into a new chat, choosing an agent from scratch, or searching another app for the result. In 20x, the task, agent, work log, and output stay together.
+Hand off the work once. Mastermind helps plan and coordinate subtasks. Triage proposes a priority, harness, skills, and repository. Canvas keeps related tasks and an embedded browser visible together. You step in for approvals and review the result on the task, without rebuilding context across chats and tabs.
 
 1. **Bring in the task.** Connect a task source or create a task in 20x. Its brief stays attached.
-2. **Let 20x set up the work.** Triage sets the priority, agent, skills, and repository. The agent works from that context.
-3. **Review the result.** Follow the work log and output on the task. Approve a risky step when the agent asks.
+2. **Let 20x set up the work.** Ask Mastermind to break down the task; triage proposes the setup and the agent works from that context.
+3. **Keep context together.** Open linked subtasks and a browser on the canvas while agents work.
+4. **Review and learn.** Follow the work log and output, approve consequential steps, and turn useful feedback into reusable skills.
+
+## Get more output from each handoff
+
+20x helps you learn how to delegate better. Compare agent run hours with your own active time, review the work and result on each task, and give feedback. Reusable skills carry what worked into the next task, so you spend less time repeating instructions.
 
 ## How It Works
 
@@ -34,7 +43,7 @@ You should be able to hand off a task without copying its brief into a new chat,
 </p>
 
 1. **Tasks flow in** — from Linear, YouTrack, HubSpot, GitHub Issues, Notion, Peakflo Workflo, or created manually
-2. **Triage agent** — Assigns priority, coding agent (Claude Code, OpenCode, Codex, Cursor, or Pi), relevant skills, and git repos
+2. **Mastermind and triage** — Break down work and propose priority, coding harness, relevant skills, and git repos
 3. **Agent works the task** — reads skills, git worktrees, and MCP servers; streams output in real time
 4. **HITL review** — Agents pause for human approval before risky actions
 5. **Feedback loop** — Skills and confidence levels are automatically updated after completion
@@ -47,8 +56,13 @@ You should be able to hand off a task without copying its brief into a new chat,
 
 Light mode screenshots below show the app with sample tasks, skills, and browser content.
 
+### 🧭 Mastermind and triage
+
+Start with the task instead of choosing an agent and writing a new prompt from scratch. Mastermind helps clarify the next step and coordinate subtasks. Triage proposes the priority, agent, skills, and repository; you can review that setup before work starts.
+
 ### 📊 Dashboard Workspace
-- **Overview dashboard** — See task completion stats, AI autonomy metrics, and agent success rates at a glance
+- **Your 20x multiplier** — See live agent run hours relative to your active time in 20x
+- **Overview dashboard** — See task completion, usage, and agent activity at a glance
 - **Kanban task board** — Tasks grouped by status with drag-and-drop support
 - **Workflow applications** — Launch and manage workflow apps directly from the dashboard
 - **Presetup wizard** — Guided templates to get started quickly with new applications
@@ -57,12 +71,15 @@ Light mode screenshots below show the app with sample tasks, skills, and browser
   <img src="docs/screenshots/readme-dashboard-light.png" alt="20x light mode dashboard showing tasks moving from triage through agent work to review" width="960" />
 </p>
 
-### 🤖 Multi-Agent Support
-- **Claude Code** — Anthropic's official agent SDK (Claude Sonnet 4.6)
-- **OpenCode** — Open-source coding agent
-- **Codex** — OpenAI's agent framework (GPT-6 Astra)
-- **Cursor** — Cursor's coding agent via the Agent Client Protocol
-- **Pi** — Open-source coding agent with Peakflo AI Gateway models
+### 🤖 Five coding harnesses, one task workflow
+
+20x supports **Claude Code, OpenCode, Codex, Cursor, and Pi**. Choose the harness that fits the task while keeping its context and result in the same place.
+
+- **Claude Code** — Anthropic's coding harness
+- **OpenCode** — Open-source coding harness
+- **Codex** — OpenAI's coding harness
+- **Cursor** — Coding harness through the Agent Client Protocol
+- **Pi** — Open-source coding harness
 - **Live transcripts** — Watch agents think and work in real time with message counts
 - **Human-in-the-loop** — Approve risky actions before execution
 - **Task progress tracking** — Real-time progress events during agent execution
@@ -75,7 +92,7 @@ The task brief, repository, skills, and agent work log stay in the same view.
 
 ### 🕸️ Canvas Workspace
 
-Open a parent task and its subtasks as linked panels. Keep an embedded browser beside them so the agent can work with the same reference page you see. The brief, related work, and browser remain in one workspace as you move between steps.
+Open a parent task and its subtasks as linked panels. Keep an embedded browser beside them so the agent can work with the same reference page you see. Canvas reduces the small decisions of which chat, tab, or task to open next: the brief, related work, and browser remain in view as you move between steps.
 
 <p align="center">
   <img src="docs/screenshots/readme-canvas-light.png" alt="20x light mode canvas with a parent task linked to two subtasks and an embedded browser linked to the implementation subtask" width="960" />
@@ -93,7 +110,8 @@ Open a parent task and its subtasks as linked panels. Keep an embedded browser b
 
 ### 🧠 Skills System
 - **Reusable instructions** — Create skill templates for common patterns
-- **Auto-learning** — Agents update skills based on feedback
+- **Learn from outcomes** — Review agent results and feed useful lessons into reusable skills
+- **Auto-learning** — Agents can update skills based on feedback
 - **Confidence tracking** — Skills improve over time
 - **2-way sync** — Skills synchronize bidirectionally between 20x and Workflo
 - **Searchable skills** — Quickly find skills with built-in search
