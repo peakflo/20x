@@ -25,6 +25,7 @@ import {
   type HarnessUpdateAllResult,
   type HarnessUpdateResult
 } from '../shared/harness-maintenance'
+import type { ComputerGrant, ComputerStatus, ComputerWindow } from '../shared/computer-use'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -830,6 +831,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return () => ipcRenderer.removeListener('voice:tts:modelProgress', handler)
       }
     }
+  },
+  computerUse: {
+    listWindows: (): Promise<ComputerWindow[]> => ipcRenderer.invoke('computerUse:listWindows'),
+    status: (): Promise<ComputerStatus> => ipcRenderer.invoke('computerUse:status'),
+    grant: (taskId: string, pid: number, windowId: number): Promise<ComputerGrant> =>
+      ipcRenderer.invoke('computerUse:grant', taskId, pid, windowId),
+    stop: (taskId: string): Promise<ComputerStatus> => ipcRenderer.invoke('computerUse:stop', taskId)
   },
   browser: {
     listImportSources: (): Promise<BrowserImportSource[]> => ipcRenderer.invoke('browser:listImportSources'),

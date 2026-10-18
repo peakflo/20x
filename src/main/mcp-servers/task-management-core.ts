@@ -780,6 +780,31 @@ const browserTools: Tool[] = [
   }
 ]
 
+// Always advertised because agent backends may cache a session's tool list.
+// Calls are denied until the user grants one exact native window to this task.
+const computerTools: Tool[] = [
+  {
+    name: 'computer_snapshot',
+    description: 'Read the accessibility tree and screenshot of the native window granted to this task. Computer Use is separate from browser panels.',
+    inputSchema: { type: 'object', properties: { task_id: taskParam }, required: ['task_id'] }
+  },
+  {
+    name: 'computer_click',
+    description: 'Click an element_token from computer_snapshot, or window-local x/y pixels. Only the granted window can be targeted.',
+    inputSchema: { type: 'object', properties: { task_id: taskParam, element_token: { type: 'string' }, x: { type: 'number' }, y: { type: 'number' } }, required: ['task_id'] }
+  },
+  {
+    name: 'computer_type',
+    description: 'Type text into the granted native window, optionally targeting an element_token from computer_snapshot.',
+    inputSchema: { type: 'object', properties: { task_id: taskParam, text: { type: 'string' }, element_token: { type: 'string' } }, required: ['task_id', 'text'] }
+  },
+  {
+    name: 'computer_press_key',
+    description: 'Press one key in the granted native window, optionally targeting an element_token.',
+    inputSchema: { type: 'object', properties: { task_id: taskParam, key: { type: 'string' }, element_token: { type: 'string' } }, required: ['task_id', 'key'] }
+  }
+]
+
 // Subtask-scoped tools (can only access parent task + sibling subtasks)
 const subtaskTools: Tool[] = [
   getMessagesTool,
@@ -1049,8 +1074,8 @@ async function handleScopedCall(
 /** The tools a session may see. This is the whole answer to "which tools to serve". */
 export function listToolsForScope(scope: TaskMcpScope) {
   return isScopedSession(scope)
-    ? [...subtaskTools, ...browserTools, ...sharedTools]
-    : [...mastermindTools, ...browserTools, ...sharedTools]
+    ? [...subtaskTools, ...browserTools, ...computerTools, ...sharedTools]
+    : [...mastermindTools, ...browserTools, ...computerTools, ...sharedTools]
 }
 
 /**
@@ -1086,6 +1111,11 @@ export async function callToolForScope(
       normalizedArgs.task_id = scope.taskId || scope.artifactTaskId
     }
 
+    if (name.startsWith('computer_')) {
+      if (!scope.artifactTaskId) throw new Error('Computer Use requires a task-scoped agent session')
+      normalizedArgs.task_id = scope.artifactTaskId
+    }
+
     const result = isScopedSession(scope)
       ? await handleScopedCall(name, normalizedArgs, scope, invoke) as Record<string, unknown> | null
       : await invoke(`/${name}`, normalizedArgs) as Record<string, unknown> | null
@@ -1106,6 +1136,9 @@ export async function callToolForScope(
           { type: 'text', text: JSON.stringify(metrics, null, 2) }
         ]
       }
+    }
+    if (name.startsWith('computer_') && Array.isArray(result?.content)) {
+      return { content: result.content as ToolCallResult['content'], isError: result.isError === true }
     }
     return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
   } catch (error: unknown) {

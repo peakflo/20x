@@ -156,6 +156,34 @@ describe('html_render / html_preview tools', () => {
   })
 })
 
+describe('native Computer Use tools', () => {
+  it('advertises bounded tools separately from browser tools', () => {
+    const names = listToolsForScope(SCOPED).map((tool) => tool.name)
+    expect(names).toContain('computer_snapshot')
+    expect(names).toContain('computer_click')
+    expect(names).toContain('browser_snapshot')
+    expect(names).not.toContain('list_windows')
+    expect(names).not.toContain('get_desktop_state')
+  })
+
+  it('pins calls to the agent task regardless of the supplied task_id', async () => {
+    const calls: Array<{ route: string; params: Record<string, unknown> }> = []
+    const invoke = async (route: string, params: Record<string, unknown>): Promise<unknown> => {
+      calls.push({ route, params })
+      return { content: [{ type: 'text', text: 'ok' }] }
+    }
+    const result = await callToolForScope('computer_click', { task_id: 'other-task', element_token: 's1:1' }, SCOPED, invoke)
+    expect(calls).toEqual([{ route: '/computer_click', params: { task_id: 'task-own', element_token: 's1:1' } }])
+    expect(result.isError).not.toBe(true)
+  })
+
+  it('refuses unscoped sessions even when tools were advertised', async () => {
+    const invoke = async (): Promise<unknown> => { throw new Error('must not call route') }
+    const result = await callToolForScope('computer_snapshot', { task_id: 'some-task' }, FULL_ACCESS_SCOPE, invoke)
+    expect(result.isError).toBe(true)
+  })
+})
+
 describe('tool sets per scope', () => {
   it('gives a full-access session the orchestration tools and no scoped aliases', () => {
     const names = listToolsForScope(FULL_ACCESS_SCOPE).map((t) => t.name)

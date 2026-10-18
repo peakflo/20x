@@ -53,6 +53,7 @@ import {
   HTML_RENDER_MAX_LENGTH,
   HTML_RENDER_MAX_TITLE_LENGTH
 } from '../shared/html-render'
+import { computerUseBroker } from './computer-use-broker'
 
 let server: HttpServer | null = null
 let port: number | null = null
@@ -199,6 +200,14 @@ export function startTaskApiServer(db: DatabaseManager): Promise<number> {
             await handleTaskMcpRequest(req, res, url, body, (mcpRoute, params) =>
               handleRoute(db, mcpRoute, params)
             )
+            return
+          }
+
+          // Plain local HTTP routes have no task-session identity. Never let
+          // them invoke the native-control broker directly.
+          if (route.startsWith('/computer_')) {
+            res.writeHead(403, { 'Content-Type': 'application/json' })
+            res.end(JSON.stringify({ error: 'Computer Use is available only through a task-bound MCP session' }))
             return
           }
 
@@ -577,6 +586,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (previousAgentId !== undefined && params.agent_id !== previousAgentId) {
         db.markContextHandoff(params.task_id as string, previousAgentId)
       }
+      if (params.status === TaskStatus.Completed) void computerUseBroker.stop(params.task_id as string)
 
       const updated = rawDb.prepare('SELECT * FROM tasks WHERE id = ?').get(params.task_id) as Record<string, unknown>
       const parsedUpdated = parseTask(updated)
@@ -1287,6 +1297,48 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         return { task_id: params.task_id, messages: transcript }
       } catch (err) {
         return { error: `Failed to retrieve transcript: ${(err as Error).message}` }
+      }
+    }
+
+    // Native Computer Use is separate from canvas browser-panel access. The
+    // MCP dispatcher pins task_id to the calling agent's task before routing.
+    case '/computer_snapshot':
+    case '/computer_click':
+    case '/computer_type':
+    case '/computer_press_key': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      const task = taskId ? db.getTask(taskId) : null
+      if (!task) return { error: 'Task not found' }
+      if (task.status === TaskStatus.Completed) {
+        await computerUseBroker.stop(taskId)
+        return { error: 'Computer Use stopped because the task is completed' }
+      }
+      try {
+        const name = route === '/computer_snapshot' ? 'get_window_state'
+          : route === '/computer_click' ? 'click'
+          : route === '/computer_type' ? 'type_text' : 'press_key'
+        const args: Record<string, unknown> = {}
+        if (name === 'click') {
+          if (typeof params.element_token === 'string' && params.element_token) args.element_token = params.element_token
+          else if (Number.isFinite(params.x) && Number.isFinite(params.y)) {
+            args.x = params.x
+            args.y = params.y
+          } else return { error: 'element_token or window-local x/y is required' }
+        }
+        if (name === 'type_text') {
+          if (typeof params.text !== 'string') return { error: 'text is required' }
+          args.text = params.text
+          if (typeof params.element_token === 'string') args.element_token = params.element_token
+        }
+        if (name === 'press_key') {
+          if (typeof params.key !== 'string' || !params.key) return { error: 'key is required' }
+          args.key = params.key
+          if (typeof params.element_token === 'string') args.element_token = params.element_token
+        }
+        const result = await computerUseBroker.act(taskId, name, args)
+        return { content: result.content, structuredContent: result.structuredContent, isError: result.isError }
+      } catch (error) {
+        return { error: (error as Error).message }
       }
     }
 

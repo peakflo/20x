@@ -22,6 +22,7 @@ import { YouTrackPlugin } from './plugins/youtrack-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { panelBrowserBroker } from './panel-browser-broker'
 import { getAgentBrowserSession } from './agent-browser-session'
+import { computerUseBroker } from './computer-use-broker'
 import { VoiceSessionManager } from './voice/voice-session-manager'
 import { assistantTextParts, sinceLastUserMessage } from './voice/voice-answer-parts'
 import { EnterpriseAuth } from './enterprise-auth'
@@ -1441,8 +1442,8 @@ app.on('before-quit', async (event) => {
   if (db) recordFocusLost(db, Date.now())
 
   panelBrowserBroker.stopAll()
-
   event.preventDefault()
+  await computerUseBroker.stop()
 
   // If a downloaded update is ready, offer to install before quitting
   if (isUpdateDownloaded()) {

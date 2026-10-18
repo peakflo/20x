@@ -29,6 +29,7 @@ import { guardStream } from './child-stream-guards'
 import type { ArtifactMcpCall } from '../shared/artifact-mcp'
 import { getVapidPublicKey, isPushSubscription, sendMobilePush, PUSH_PREFERENCES_KEY } from './mobile-push'
 import { parsePushPreferences, PUSH_EVENTS, type PushPreferences } from '../shared/push-notifications'
+import { computerUseBroker } from './computer-use-broker'
 
 // ── State ────────────────────────────────────────────────────
 let server: HttpServer | null = null
@@ -339,6 +340,8 @@ async function handleApiRoute(req: IncomingMessage, res: ServerResponse, pathnam
 
 async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Promise<unknown> {
   const db = dbRef!
+
+  if (pathname === '/api/computer-use') return computerUseBroker.status()
 
   // GET /api/tasks
   if (pathname === '/api/tasks') {
@@ -717,6 +720,12 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     return { success: true }
   }
 
+  if (pathname === '/api/computer-use/stop') {
+    const grant = computerUseBroker.status().grant
+    if (grant) await computerUseBroker.stop(grant.taskId)
+    return computerUseBroker.status()
+  }
+
   // POST /api/auth/pair/initiate — phone sends init code, server generates PIN
   if (pathname === '/api/auth/pair/initiate') {
     const { code } = params as { code?: string }
@@ -890,6 +899,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     }
     if (!task.source_id || !completeAtSource) {
       const fresh = db.updateTask(taskId, { status: TaskStatus.Completed, ...(task.source_id ? { complete_at_source: false } : {}) })
+      if (fresh?.status === TaskStatus.Completed) await computerUseBroker.stop(taskId)
       if (fresh) {
         broadcastToMobileClients('task:updated', { taskId, updates: fresh })
         if (notifyDesktop) notifyDesktop('task:updated', { taskId, updates: fresh })
@@ -910,6 +920,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     if (!result.success) throw Object.assign(new Error(result.error || 'Completion is pending.'), { status: 409 })
     const completed = true
     const fresh = db.getTask(taskId)
+    if (fresh?.status === TaskStatus.Completed) await computerUseBroker.stop(taskId)
     if (fresh) {
       broadcastToMobileClients('task:updated', { taskId, updates: fresh })
     }
@@ -923,6 +934,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     const existing = db.getTask(taskId)
     if (!existing) throw Object.assign(new Error('Task not found'), { status: 404 })
     const updated = updateTaskFromUser(db, taskId, params as Parameters<DatabaseManager['updateTask']>[1])
+    if (updated?.status === TaskStatus.Completed) await computerUseBroker.stop(taskId)
     // A reassignment from the agent dropdown stops the previous agent's live session.
     if (updated && (params as Record<string, unknown>).agent_id !== undefined && (updated.agent_id ?? null) !== (existing.agent_id ?? null)) {
       agentRef?.handleTaskAgentChanged(taskId).catch((error) => {
