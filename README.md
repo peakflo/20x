@@ -38,6 +38,10 @@ Hand off the work once. Mastermind helps plan and coordinate subtasks. Triage pr
 
 ## How It Works
 
+<p align="center">
+  <img src="docs/diagrams/task-flow.svg" alt="20x task flow: a task arrives, Mastermind and triage set up the work, an agent works with linked context, and you review the result" width="960" />
+</p>
+
 1. **Tasks flow in** — from Linear, YouTrack, HubSpot, GitHub Issues, Notion, Peakflo Workflo, or created manually
 2. **Mastermind and triage** — Break down work and propose priority, coding harness, relevant skills, and git repos
 3. **Agent works the task** — reads skills, git worktrees, and MCP servers; streams output in real time
@@ -87,6 +91,11 @@ The task brief, repository, skills, and agent work log stay in the same view.
 Open a parent task and its subtasks as linked panels. Keep an embedded browser beside them so the agent can work with the same reference page you see. Canvas reduces the small decisions of which chat, tab, or task to open next: the brief, related work, and browser remain in view as you move between steps.
 
 ### 🔗 Smart Integrations
+
+<p align="center">
+  <img src="docs/diagrams/task-ecosystem.svg" alt="20x keeps tasks at the center while connecting task sources, five coding harnesses, repositories, skills, MCP servers, and browser panels" width="960" />
+</p>
+
 - **Linear** — Pull issues, update status, post comments
 - **HubSpot** — Sync tickets and workflows
 - **YouTrack** — Connect JetBrains YouTrack projects and tasks

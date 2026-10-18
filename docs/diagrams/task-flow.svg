@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="492" viewBox="0 0 1200 492" role="img" aria-labelledby="title desc">
+  <title id="title">One task, fewer decisions</title>
+  <desc id="desc">A task moves through intake, Mastermind and triage, agent work, and review. The human gives direction and reviews outcomes while 20x keeps context and repeated setup together.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7faff"/>
+      <stop offset="1" stop-color="#edf4ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-25%" width="130%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="13" flood-color="#15315b" flood-opacity=".08"/>
+    </filter>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M1 1 L6 4 L1 7" fill="none" stroke="#5a85d5" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+      .ink{fill:#16233d}.muted{fill:#5d6b82}.blue{fill:#2465c4}.small{font-size:16px}.label{font-size:14px;font-weight:700;letter-spacing:.08em}.heading{font-size:25px;font-weight:700}.body{font-size:18px}
+    </style>
+  </defs>
+  <rect width="1200" height="492" rx="28" fill="url(#background)"/>
+  <rect x="28" y="28" width="1144" height="436" rx="24" fill="#fff" opacity=".46" stroke="#dbe6f5"/>
+
+  <rect x="64" y="58" width="108" height="32" rx="16" fill="#e8f0ff"/>
+  <text x="118" y="79" text-anchor="middle" class="label blue">THE FLOW</text>
+  <text x="64" y="132" class="ink" style="font-size:34px;font-weight:750">One task. Fewer decisions.</text>
+  <text x="64" y="164" class="body muted">Give direction once. Keep the work, context, and result together.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="64" y="205" width="245" height="202" rx="20" fill="#fff" stroke="#dce7f5"/>
+    <rect x="337" y="205" width="245" height="202" rx="20" fill="#fff" stroke="#dce7f5"/>
+    <rect x="610" y="205" width="245" height="202" rx="20" fill="#fff" stroke="#dce7f5"/>
+    <rect x="883" y="205" width="245" height="202" rx="20" fill="#fff" stroke="#dce7f5"/>
+  </g>
+  <path d="M309 306 H333" fill="none" stroke="#5a85d5" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M582 306 H606" fill="none" stroke="#5a85d5" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M855 306 H879" fill="none" stroke="#5a85d5" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <g>
+    <rect x="84" y="225" width="39" height="36" rx="11" fill="#eaf1ff"/>
+    <text x="103.5" y="249" text-anchor="middle" class="small blue" style="font-weight:750">01</text>
+    <text x="84" y="296" class="heading ink">Task arrives</text>
+    <text x="84" y="330" class="body muted">Source or manual entry</text>
+    <text x="84" y="357" class="body muted">Brief stays attached</text>
+  </g>
+  <g>
+    <rect x="357" y="225" width="39" height="36" rx="11" fill="#eaf1ff"/>
+    <text x="376.5" y="249" text-anchor="middle" class="small blue" style="font-weight:750">02</text>
+    <text x="357" y="296" class="heading ink">Set up the work</text>
+    <text x="357" y="330" class="body muted">Mastermind plans</text>
+    <text x="357" y="357" class="body muted">Triage proposes setup</text>
+  </g>
+  <g>
+    <rect x="630" y="225" width="39" height="36" rx="11" fill="#eaf1ff"/>
+    <text x="649.5" y="249" text-anchor="middle" class="small blue" style="font-weight:750">03</text>
+    <text x="630" y="296" class="heading ink">Agent works</text>
+    <text x="630" y="330" class="body muted">Linked subtasks</text>
+    <text x="630" y="357" class="body muted">Canvas + browser</text>
+  </g>
+  <g>
+    <rect x="903" y="225" width="39" height="36" rx="11" fill="#eaf1ff"/>
+    <text x="922.5" y="249" text-anchor="middle" class="small blue" style="font-weight:750">04</text>
+    <text x="903" y="296" class="heading ink">Review + learn</text>
+    <text x="903" y="330" class="body muted">Approve key steps</text>
+    <text x="903" y="357" class="body muted">Reuse what worked</text>
+  </g>
+  <circle cx="74" cy="441" r="5" fill="#2465c4"/>
+  <text x="89" y="446" class="small muted"><tspan font-weight="700" fill="#263b60">You:</tspan> set intent, approve, review</text>
+  <circle cx="420" cy="441" r="5" fill="#82a8eb"/>
+  <text x="435" y="446" class="small muted"><tspan font-weight="700" fill="#263b60">20x:</tspan> carries context and recurring setup choices</text>
+</svg>

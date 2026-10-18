@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="518" viewBox="0 0 1200 518" role="img" aria-labelledby="title desc">
+  <title id="title">The task is the center of the 20x workspace</title>
+  <desc id="desc">Tasks enter from connected apps or manual entry. The 20x task workspace keeps the brief, linked work, canvas, and result together while using one of five coding harnesses. Repositories, skills, MCP tools, and browser panels supply context.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f7faff"/>
+      <stop offset="1" stop-color="#edf4ff"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-20%" width="130%" height="150%">
+      <feDropShadow dx="0" dy="8" stdDeviation="13" flood-color="#15315b" flood-opacity=".08"/>
+    </filter>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M1 1 L6 4 L1 7" fill="none" stroke="#5a85d5" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+      .ink{fill:#16233d}.muted{fill:#5d6b82}.blue{fill:#2465c4}.label{font-size:14px;font-weight:700;letter-spacing:.08em}.heading{font-size:24px;font-weight:700}.body{font-size:18px}.chip{font-size:16px;font-weight:600}.foot{font-size:16px}
+    </style>
+  </defs>
+  <rect width="1200" height="518" rx="28" fill="url(#background)"/>
+  <rect x="28" y="28" width="1144" height="462" rx="24" fill="#fff" opacity=".46" stroke="#dbe6f5"/>
+  <text x="60" y="78" class="label blue">ONE WORKSPACE, MANY CONNECTIONS</text>
+  <text x="60" y="121" class="ink" style="font-size:33px;font-weight:750">The task stays at the center.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="60" y="160" width="276" height="226" rx="20" fill="#fff" stroke="#dce7f5"/>
+    <rect x="393" y="160" width="414" height="226" rx="20" fill="#fff" stroke="#a9c7fb" stroke-width="2"/>
+    <rect x="864" y="160" width="276" height="226" rx="20" fill="#fff" stroke="#dce7f5"/>
+    <rect x="60" y="412" width="1080" height="62" rx="17" fill="#fff" stroke="#dce7f5"/>
+  </g>
+  <path d="M336 270 H386" fill="none" stroke="#5a85d5" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M807 270 H857" fill="none" stroke="#5a85d5" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <path d="M600 409 V390" fill="none" stroke="#5a85d5" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <text x="82" y="199" class="label muted">TASK SOURCES</text>
+  <text x="82" y="238" class="heading ink">Work comes in</text>
+  <g fill="#eef4ff">
+    <rect x="82" y="261" width="91" height="35" rx="11"/>
+    <rect x="181" y="261" width="125" height="35" rx="11"/>
+    <rect x="82" y="305" width="113" height="35" rx="11"/>
+    <rect x="203" y="305" width="103" height="35" rx="11"/>
+  </g>
+  <text x="127.5" y="284" text-anchor="middle" class="chip blue">Linear</text>
+  <text x="243.5" y="284" text-anchor="middle" class="chip blue">GitHub Issues</text>
+  <text x="138.5" y="328" text-anchor="middle" class="chip blue">HubSpot</text>
+  <text x="254.5" y="328" text-anchor="middle" class="chip blue">Notion</text>
+  <text x="82" y="355" class="foot muted">+ YouTrack · GitLab</text>
+  <text x="82" y="375" class="foot muted">+ Peakflo · manual</text>
+
+  <rect x="417" y="183" width="52" height="52" rx="15" fill="#2568ce"/>
+  <text x="443" y="216" text-anchor="middle" fill="#fff" style="font-size:21px;font-weight:800">20x</text>
+  <text x="480" y="200" class="label blue">20x TASK WORKSPACE</text>
+  <text x="480" y="228" class="heading ink">The brief stays here</text>
+  <path d="M417 255 H783" stroke="#e0e9f7"/>
+  <text x="417" y="290" class="body muted">Mastermind + triage prepare the setup</text>
+  <text x="417" y="322" class="body muted">Canvas links tasks and browser context</text>
+  <text x="417" y="354" class="body muted">Work log, approvals, and result return here</text>
+
+  <text x="886" y="199" class="label muted">CODING HARNESSES</text>
+  <text x="886" y="238" class="heading ink">Agents do the work</text>
+  <g fill="#eef4ff">
+    <rect x="886" y="261" width="120" height="35" rx="11"/>
+    <rect x="1014" y="261" width="105" height="35" rx="11"/>
+    <rect x="886" y="305" width="85" height="35" rx="11"/>
+    <rect x="979" y="305" width="85" height="35" rx="11"/>
+    <rect x="1072" y="305" width="47" height="35" rx="11"/>
+  </g>
+  <text x="946" y="284" text-anchor="middle" class="chip blue">Claude Code</text>
+  <text x="1066.5" y="284" text-anchor="middle" class="chip blue">OpenCode</text>
+  <text x="928.5" y="328" text-anchor="middle" class="chip blue">Codex</text>
+  <text x="1021.5" y="328" text-anchor="middle" class="chip blue">Cursor</text>
+  <text x="1095.5" y="328" text-anchor="middle" class="chip blue">Pi</text>
+
+  <text x="82" y="450" class="label blue">CONTEXT + TOOLS</text>
+  <text x="285" y="451" class="body ink">Git repositories</text>
+  <circle cx="438" cy="445" r="3" fill="#afc2db"/>
+  <text x="458" y="451" class="body ink">Reusable skills</text>
+  <circle cx="628" cy="445" r="3" fill="#afc2db"/>
+  <text x="648" y="451" class="body ink">MCP servers</text>
+  <circle cx="799" cy="445" r="3" fill="#afc2db"/>
+  <text x="819" y="451" class="body ink">Browser panels</text>
+</svg>
