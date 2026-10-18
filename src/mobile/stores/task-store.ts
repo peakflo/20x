@@ -83,6 +83,7 @@ interface TaskState {
   loadMoreCompleted: () => Promise<void>
   searchCompleted: (query: string) => Promise<void>
   ensureTask: (id: string) => Promise<Task | null>
+  completeTask: (id: string, completeAtSource: boolean) => Promise<Task>
   syncAndFetch: () => Promise<void>
   createTask: (data: Record<string, unknown>) => Promise<Task | null>
   updateTask: (id: string, data: Record<string, unknown>) => Promise<boolean>
@@ -216,6 +217,16 @@ export const useTaskStore = create<TaskState>((set, get) => {
       } catch {
         return null
       }
+    },
+
+    completeTask: async (id, completeAtSource) => {
+      const result = await api.tasks.complete(id, completeAtSource)
+      const task = (result.task ?? await api.tasks.get(id)) as Task
+      if (!result.completed || !task || !isTaskClosed(task.status)) {
+        throw new Error('The task source has not confirmed completion.')
+      }
+      set((state) => ({ tasks: mergeTasks(state.tasks, [task]) }))
+      return task
     },
 
     syncAndFetch: async () => {

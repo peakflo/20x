@@ -83,6 +83,7 @@ function ParentTaskContextMobile({ parentTask, onNavigate }: { parentTask: Task;
 export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavigate: (route: Route) => void }) {
   const task = useTaskStore((s) => s.tasks.find((t) => t.id === taskId))
   const updateTask = useTaskStore((s) => s.updateTask)
+  const completeTask = useTaskStore((s) => s.completeTask)
   // Opening a task in review for a moment marks it seen (shared with desktop).
   useMarkReviewSeen(task)
   const agents = useAgentStore((s) => s.agents)
@@ -108,6 +109,9 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
 
   // Session feedback is collected before the completion request.
   const [completeModal, setCompleteModal] = useState<{ withFeedback: boolean } | null>(null)
+  const [completionError, setCompletionError] = useState<string | null>(null)
+  const [completionBusy, setCompletionBusy] = useState(false)
+  const completionBusyRef = useRef(false)
   const [activeSection, setActiveSection] = useState<'details' | 'artifacts' | 'subtasks'>('details')
   const [subtaskFilter, setSubtaskFilter] = useState<SubtaskFilter>('all')
   const [subtaskQuery, setSubtaskQuery] = useState('')
@@ -205,27 +209,43 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   }, [task?.status, session?.sessionId, _stopSession])
 
   const completeTaskNow = useCallback(async (t: Task, completeAtSource = true) => {
+    if (completionBusyRef.current) return
+    completionBusyRef.current = true
+    setCompletionBusy(true)
+    setCompletionError(null)
     try {
-      await api.tasks.complete(t.id, completeAtSource)
+      await completeTask(t.id, completeAtSource)
+      setCompleteModal(null)
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Workflo has not confirmed completion.')
+      setCompletionError(error instanceof Error ? error.message : 'The task could not be completed.')
+    } finally {
+      completionBusyRef.current = false
+      setCompletionBusy(false)
     }
-  }, [])
+  }, [completeTask])
 
   const handleCompleteTask = useCallback(async () => {
     if (!task) return
-    if (task.agent_id || task.source_id) setCompleteModal({ withFeedback: !!task.agent_id })
+    setCompletionError(null)
+    const withFeedback = !!task.agent_id &&
+      (!!task.session_id || (!!session?.sessionId && session.messages.length > 0))
+    if (withFeedback || task.source_id) setCompleteModal({ withFeedback })
     else await completeTaskNow(task)
-  }, [task, completeTaskNow])
+  }, [task, session, completeTaskNow])
 
   const handleFeedbackSubmit = useCallback(async (rating: number, comment: string, completeAtSource: boolean) => {
-    if (!task?.agent_id) return
-    const saved = await updateTask(task.id, {status: TaskStatus.AgentLearning, feedback_rating: rating,
-      feedback_comment: comment || null, complete_at_source: completeAtSource})
-    if (!saved) return
-    setCompleteModal(null)
+    if (!task?.agent_id || completionBusyRef.current) return
+    completionBusyRef.current = true
+    setCompletionBusy(true)
+    setCompletionError(null)
     try {
-      let sessionId = session?.sessionId
+      const saved = await updateTask(task.id, {status: TaskStatus.AgentLearning, feedback_rating: rating,
+        feedback_comment: comment || null, complete_at_source: completeAtSource})
+      if (!saved) throw new Error('Could not save feedback. Try again.')
+      // An idle session can still have an ID in the mobile store. Resume its
+      // durable session before sending feedback to avoid a stale live handle.
+      const liveSession = session?.status === SessionStatus.WORKING || session?.status === SessionStatus.WAITING_APPROVAL
+      let sessionId = liveSession ? session?.sessionId : null
       if (!sessionId && task.session_id) {
         sessionId = (await api.sessions.resume(task.session_id, task.agent_id, task.id)).sessionId
       }
@@ -234,15 +254,20 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       await api.sessions.send(sessionId,
         `User rated this session ${rating}/5. Comment: "${comment}". Review the session and update skills in .agents/skills/. Update confidence, uses, lastUsed, and tags for useful skills. Create skills for new reusable patterns.`,
         task.id, task.agent_id)
+      setCompleteModal(null)
     } catch (error) {
-      await updateTask(task.id, {status: TaskStatus.ReadyForReview})
-      window.alert(error instanceof Error ? error.message : 'Could not start the learning session.')
+      if (useTaskStore.getState().tasks.find((t) => t.id === task.id)?.status === TaskStatus.AgentLearning) {
+        await updateTask(task.id, { status: TaskStatus.ReadyForReview })
+      }
+      setCompletionError(error instanceof Error ? error.message : 'Could not start the learning session.')
+    } finally {
+      completionBusyRef.current = false
+      setCompletionBusy(false)
     }
   }, [task, session, updateTask, initSession])
 
   const handleFeedbackSkip = useCallback(async (completeAtSource: boolean) => {
     if (!task) return
-    setCompleteModal(null)
     await completeTaskNow(task, completeAtSource)
   }, [task, completeTaskNow])
 
@@ -790,6 +815,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
               {canComplete && (
                 <button
                   onClick={handleCompleteTask}
+                  disabled={completionBusy}
                   data-testid="main-cta-complete"
                   className={completeIsPrimary ? primaryBtnClass : secondaryBtnClass}
                 >
@@ -799,6 +825,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                   Complete Task
                 </button>
               )}
+              {completionError && !completeModal && <p role="alert" className="w-full text-xs text-destructive">{completionError}</p>}
               {agentAction && !agentActionIsPrimary && (
                 <button
                   onClick={agentAction.onClick}
@@ -917,6 +944,8 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           completionDescription={getSourceCompletionDescription(task)}
           sourceName={task.source_id ? getTaskSourceName(task) : undefined}
           withFeedback={completeModal.withFeedback}
+          busy={completionBusy}
+          error={completionError}
           onSubmit={handleFeedbackSubmit}
           onSkip={handleFeedbackSkip}
           onCancel={() => setCompleteModal(null)}
@@ -1042,10 +1071,12 @@ function SubtasksSection({ subtasks, onNavigateToTask, onReorderSubtasks }: { su
   )
 }
 
-function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sourceName, withFeedback }: {
+function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sourceName, withFeedback, busy, error }: {
   completionDescription?: string
   sourceName?: string
   withFeedback: boolean
+  busy: boolean
+  error: string | null
   onSubmit: (rating: number, comment: string, completeAtSource: boolean) => void
   onSkip: (completeAtSource: boolean) => void
   onCancel: () => void
@@ -1054,28 +1085,30 @@ function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sour
   const [comment, setComment] = useState('')
   const [completeAtSource, setCompleteAtSource] = useState(true)
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div role="dialog" aria-label={withFeedback ? 'Session feedback' : 'Complete task'} className="glass-popover mx-4 w-full max-w-md rounded-2xl border p-5 space-y-4">
-        <h2>{withFeedback ? 'Session feedback' : 'Complete task'}</h2>
+    <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 p-3 pb-[max(env(safe-area-inset-bottom),12px)] sm:items-center">
+      <div role="dialog" aria-modal="true" aria-label={withFeedback ? 'Session feedback' : 'Complete task'} className="glass-popover max-h-[calc(100dvh-24px)] w-full max-w-md overflow-y-auto rounded-2xl border p-5 text-foreground shadow-xl space-y-4">
+        <h2 className="text-base font-semibold">{withFeedback ? 'Session feedback' : 'Complete task'}</h2>
+        {withFeedback && <p className="text-xs text-muted-foreground">Rate this session to help the agent improve its skills. The task closes after learning ends.</p>}
         {sourceName && (
-          <div className="rounded-md border p-3 text-sm space-y-2">
-            <p>{completeAtSource ? completionDescription : 'Complete in 20x only. The source record will not change.'}</p>
-            <div className="flex gap-2">
-              <button className={`flex-1 rounded-md border px-2 py-2 ${completeAtSource ? 'border-ring bg-accent' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={completeAtSource} onClick={() => setCompleteAtSource(true)}>Close it in {sourceName}</button>
-              <button className={`flex-1 rounded-md border px-2 py-2 ${!completeAtSource ? 'border-ring bg-accent' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={!completeAtSource} onClick={() => setCompleteAtSource(false)}>I'll do it manually</button>
+          <div className="rounded-lg border border-border/50 p-3 text-sm space-y-2">
+            <p className="text-xs text-muted-foreground">{completeAtSource ? completionDescription : 'Complete in 20x only. The source record will not change.'}</p>
+            <div role="radiogroup" aria-label="Source completion" className="flex gap-2">
+              <button type="button" disabled={busy} className={`min-h-11 flex-1 rounded-lg border px-2 py-2 text-xs font-medium ${completeAtSource ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={completeAtSource} onClick={() => setCompleteAtSource(true)}>Close it in {sourceName}</button>
+              <button type="button" disabled={busy} className={`min-h-11 flex-1 rounded-lg border px-2 py-2 text-xs font-medium ${!completeAtSource ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground'}`} role="radio" aria-checked={!completeAtSource} onClick={() => setCompleteAtSource(false)}>I'll do it manually</button>
             </div>
           </div>
         )}
         {withFeedback && <>
-          <div className="flex gap-2">
-            {[1, 2, 3, 4, 5].map(value => <button key={value} aria-label={`Rate ${value}`} aria-pressed={rating === value} onClick={() => setRating(value)}>{value}</button>)}
+          <div role="group" aria-label="Session rating" className="flex justify-center gap-2">
+            {[1, 2, 3, 4, 5].map(value => <button key={value} type="button" disabled={busy} aria-label={`Rate ${value}`} aria-pressed={rating === value} className={`flex h-11 w-11 items-center justify-center rounded-lg text-xl ${rating >= value ? 'text-amber-400' : 'text-muted-foreground/50'}`} onClick={() => setRating(value)}>★</button>)}
           </div>
-          <textarea aria-label="Feedback" placeholder="Optional feedback..." value={comment} onChange={event => setComment(event.target.value)} />
+          <textarea aria-label="Feedback" placeholder="Optional feedback..." value={comment} disabled={busy} onChange={event => setComment(event.target.value)} className="min-h-24 w-full resize-y rounded-lg border border-border bg-background/70 p-3 text-sm text-foreground" />
         </>}
-        <div className="flex gap-3">
-          <button onClick={onCancel}>Cancel</button>
-          <button onClick={() => onSkip(completeAtSource)}>{withFeedback ? 'Skip' : 'Complete'}</button>
-          {withFeedback && <button disabled={!rating} onClick={() => onSubmit(rating, comment, completeAtSource)}>Submit Feedback</button>}
+        {error && <p role="alert" className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive">{error}</p>}
+        <div className="flex flex-wrap justify-end gap-2">
+          <button type="button" disabled={busy} className="min-h-11 rounded-lg px-3 text-sm text-muted-foreground" onClick={onCancel}>Cancel</button>
+          <button type="button" disabled={busy} className="min-h-11 rounded-lg border border-border px-3 text-sm" onClick={() => onSkip(completeAtSource)}>{withFeedback ? 'Skip' : 'Complete'}</button>
+          {withFeedback && <button type="button" disabled={!rating || busy} className="min-h-11 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground disabled:opacity-50" onClick={() => onSubmit(rating, comment, completeAtSource)}>{busy ? 'Saving…' : 'Submit Feedback'}</button>}
         </div>
       </div>
     </div>

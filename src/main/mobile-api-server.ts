@@ -935,7 +935,7 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
           })
         }
       }
-      return { completed: true, status: fresh?.status }
+      return { completed: fresh?.status === TaskStatus.Completed, status: fresh?.status, task: fresh }
     }
     if (!syncManagerRef) {
       throw Object.assign(new Error('Sync this task with Workflo before completing it.'), { status: 409 })
@@ -943,12 +943,25 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     db.updateTask(taskId, { complete_at_source: true })
     const result = await syncManagerRef.executeAction(getTaskCompletionAction(task.output_fields), task, undefined, task.source_id)
     if (!result.success) throw Object.assign(new Error(result.error || 'Completion is pending.'), { status: 409 })
-    const completed = true
-    const fresh = db.getTask(taskId)
+    // Some plugins confirm the source action without returning a taskUpdate.
+    // Persist the confirmed completion so the next mobile fetch cannot reopen it.
+    let fresh = db.getTask(taskId)
+    if (fresh && fresh.status !== TaskStatus.Completed) {
+      fresh = db.updateTask(taskId, { status: TaskStatus.Completed }, 'task-source')
+    }
     if (fresh) {
       broadcastToMobileClients('task:updated', { taskId, updates: fresh })
+      if (notifyDesktop) notifyDesktop('task:updated', { taskId, updates: fresh })
+      if (fresh.status === TaskStatus.Completed && task.status !== TaskStatus.Completed) {
+        triggerTaskAutomation()
+        if (fresh.parent_task_id) {
+          agent.notifyParentOfSubtaskCompletion(fresh.parent_task_id, taskId).catch(err => {
+            console.error('[MobileAPI] Failed to wake parent after source completion:', err)
+          })
+        }
+      }
     }
-    return { completed, status: fresh?.status }
+    return { completed: fresh?.status === TaskStatus.Completed, status: fresh?.status, task: fresh }
   }
 
   // POST /api/tasks/:id — update task

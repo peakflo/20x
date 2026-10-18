@@ -332,6 +332,8 @@ describe('mobile-api-server: source completion action', () => {
     })
     expect(response.status).toBe(200)
     expect(executeAction).toHaveBeenCalledWith(action || 'complete', expect.objectContaining({ id: task.id }), undefined, source.id)
+    expect(await response.json()).toMatchObject({ completed: true, status: 'completed', task: { id: task.id, status: 'completed' } })
+    expect(db.getTask(task.id)?.status).toBe('completed')
     db.close()
   })
 

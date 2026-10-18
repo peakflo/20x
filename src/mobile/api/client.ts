@@ -81,7 +81,7 @@ export const api = {
     create: (data: unknown) => post<unknown>('/api/tasks', data),
     update: (id: string, data: unknown) => post<unknown>(`/api/tasks/${encodeURIComponent(id)}`, data),
     complete: (id: string, completeAtSource = true) =>
-      post<{ completed: boolean; status?: string }>(`/api/tasks/${encodeURIComponent(id)}/complete`, { completeAtSource }),
+      post<{ completed: boolean; status?: string; task?: unknown }>(`/api/tasks/${encodeURIComponent(id)}/complete`, { completeAtSource }),
     reorderSubtasks: (parentId: string, orderedIds: string[]) =>
       post<{ success: boolean }>('/api/tasks/reorder-subtasks', { parentId, orderedIds }),
     markReviewSeen: (id: string) => post<unknown>(`/api/tasks/${encodeURIComponent(id)}/review-seen`),

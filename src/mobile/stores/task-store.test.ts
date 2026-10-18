@@ -71,6 +71,25 @@ describe('useTaskStore', () => {
       await useTaskStore.getState().ensureTask('old')
       expect(api.tasks.get).toHaveBeenCalledTimes(1)
     })
+
+    it('moves a completed task to the closed group from the server response', async () => {
+      useTaskStore.setState({ tasks: [task('active', 'ready_for_review')] })
+      ;(api.tasks.complete as unknown as Mock).mockResolvedValueOnce({
+        completed: true, status: 'completed', task: task('active')
+      })
+      await useTaskStore.getState().completeTask('active', false)
+      expect(api.tasks.complete).toHaveBeenCalledWith('active', false)
+      expect(useTaskStore.getState().tasks[0].status).toBe('completed')
+    })
+
+    it('does not change the task when the source has not confirmed completion', async () => {
+      useTaskStore.setState({ tasks: [task('active', 'ready_for_review')] })
+      ;(api.tasks.complete as unknown as Mock).mockResolvedValueOnce({
+        completed: false, status: 'ready_for_review', task: task('active', 'ready_for_review')
+      })
+      await expect(useTaskStore.getState().completeTask('active', true)).rejects.toThrow('not confirmed')
+      expect(useTaskStore.getState().tasks[0].status).toBe('ready_for_review')
+    })
   })
 
   describe('createTask', () => {
