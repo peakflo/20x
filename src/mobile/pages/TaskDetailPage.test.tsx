@@ -236,6 +236,38 @@ describe('TaskDetailPage', () => {
     expect(container.textContent).toContain('Subtask 2')
   })
 
+  it('shows counts only in the searchable Subtasks tab', () => {
+    const parent = makeTask({ id: 'parent-1', title: 'Parent task' })
+    const working = makeTask({ id: 'working-1', title: 'Build the view', parent_task_id: parent.id, status: 'agent_working' })
+    const review = makeTask({ id: 'review-1', title: 'Check the view', parent_task_id: parent.id, status: 'ready_for_review' })
+    const completed = makeTask({ id: 'done-1', title: 'Old work', parent_task_id: parent.id, status: 'completed' })
+    useTaskStore.setState({ tasks: [parent, working, review, completed], isLoading: false })
+
+    const view = render(<TaskDetailPage taskId={parent.id} onNavigate={mockNavigate} />)
+    expect(view.queryByTestId('mobile-header-subtasks')).toBeNull()
+    expect(view.container.querySelector('.glass-task-detail-bar')?.textContent).not.toContain('Subtasks')
+    const tabControl = view.getByRole('button', { name: 'Subtasks: 1 in progress, 1 in review' })
+    expect(tabControl.closest('.glass-task-detail-bar')).toBeNull()
+    fireEvent.click(tabControl)
+    const tab = view.getByTestId('mobile-subtasks-tab')
+    expect(tab.className).not.toContain('hidden')
+    fireEvent.click(within(tab).getByRole('button', { name: 'Ready for review' }))
+    expect(within(tab).queryByText('Build the view')).toBeNull()
+    expect(within(tab).getByText('Check the view')).toBeTruthy()
+    fireEvent.change(within(tab).getByRole('searchbox', { name: 'Search subtasks' }), { target: { value: 'absent' } })
+    expect(within(tab).getByText('No subtasks match this search.')).toBeTruthy()
+    fireEvent.change(within(tab).getByRole('searchbox', { name: 'Search subtasks' }), { target: { value: 'check' } })
+    fireEvent.click(within(tab).getByRole('button', { name: /Check the view/ }))
+    expect(mockNavigate).toHaveBeenCalledWith({ page: 'detail', taskId: review.id })
+    fireEvent.click(within(tab).getByRole('button', { name: 'All' }))
+    fireEvent.change(within(tab).getByRole('searchbox', { name: 'Search subtasks' }), { target: { value: 'build' } })
+    fireEvent.click(within(tab).getByRole('button', { name: /Build the view/ }))
+    expect(mockNavigate).toHaveBeenCalledWith({ page: 'detail', taskId: working.id })
+
+    act(() => useTaskStore.setState({ tasks: [parent, { ...working, status: 'ready_for_review' }, completed] }))
+    expect(view.getByRole('button', { name: 'Subtasks: 0 in progress, 1 in review' })).toBeTruthy()
+  })
+
   it('renders without error for a task with a parent task', () => {
     const parentTask = makeTask({ id: 'parent-1', title: 'Parent task' })
     const childTask = makeTask({

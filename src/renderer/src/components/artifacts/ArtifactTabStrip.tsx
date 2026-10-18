@@ -1,4 +1,4 @@
-import { FileDiff, List, PackageOpen, X } from 'lucide-react'
+import { FileDiff, List, ListTree, PackageOpen, X } from 'lucide-react'
 import type { Artifact } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
@@ -8,6 +8,8 @@ export interface ArtifactTabStripProps {
   artifacts: Artifact[]
   activeTabId: string | null
   hasChanges: boolean
+  hasSubtasks?: boolean
+  subtaskCounts?: { working: number; review: number }
   hasOutput: boolean
   changesCount?: number
   onSelectTab: (tabId: string) => void
@@ -19,6 +21,8 @@ export function ArtifactTabStrip({
   artifacts,
   activeTabId,
   hasChanges,
+  hasSubtasks = false,
+  subtaskCounts,
   hasOutput,
   changesCount = 0,
   onSelectTab,
@@ -27,6 +31,7 @@ export function ArtifactTabStrip({
 }: ArtifactTabStripProps) {
   const pinned = [
     { id: PinnedArtifactTabId.DETAILS, label: 'Details', icon: List, visible: true, dimmed: false },
+    { id: PinnedArtifactTabId.SUBTASKS, label: 'Subtasks', icon: ListTree, visible: hasSubtasks, dimmed: false },
     { id: PinnedArtifactTabId.CHANGES, label: 'Changes', icon: FileDiff, visible: hasChanges, dimmed: changesCount === 0 },
     { id: PinnedArtifactTabId.OUTPUT, label: 'Output', icon: PackageOpen, visible: hasOutput, dimmed: false }
   ]
@@ -48,6 +53,12 @@ export function ArtifactTabStrip({
           >
             <Icon className="h-3.5 w-3.5" />
             {tab.label}
+            {tab.id === PinnedArtifactTabId.SUBTASKS && subtaskCounts && (
+              <span className="inline-flex items-center gap-1.5 tabular-nums">
+                <span className="text-amber-400">{subtaskCounts.working} in progress</span>
+                <span className="text-violet-400">{subtaskCounts.review} in review</span>
+              </span>
+            )}
             {tab.id === PinnedArtifactTabId.CHANGES && changesCount > 0 && (
               <span className="rounded-full bg-primary/15 px-1.5 text-[10px] font-semibold tabular-nums text-primary">{changesCount}</span>
             )}

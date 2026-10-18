@@ -11,6 +11,7 @@ import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { ChangesPanel } from './ChangesPanel'
 import { OutputFieldsDisplay } from './OutputFieldsDisplay'
 import { TaskHeaderBar, TaskPrimaryAction } from './TaskHeaderBar'
+import { SubtasksTab } from './SubtasksTab'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
 import { UsageLimitRecoveryBanner } from '@/components/usage/UsageLimitRecoveryBanner'
 import { GhCliSetupDialog } from '@/components/github/GhCliSetupDialog'
@@ -1135,6 +1136,47 @@ Update existing skills that were helpful or create new ones for patterns worth r
     else selectArtifactTab(task.id, PinnedArtifactTabId.DETAILS, true)
   }
 
+  const showStandaloneSidePanel = subtasks.length > 0 && artifactUI.open
+  const workingSubtaskCount = subtasks.filter((subtask) => subtask.status === TaskStatus.AgentWorking).length
+  const reviewSubtaskCount = subtasks.filter((subtask) => subtask.status === TaskStatus.ReadyForReview).length
+  const rightPanel = (
+    <ArtifactsPanel
+      taskId={task.id}
+      artifacts={artifacts}
+      ui={artifactUI}
+      artifactApi={artifactApi}
+      hasChanges
+      hasSubtasks={subtasks.length > 0}
+      subtaskCounts={{ working: workingSubtaskCount, review: reviewSubtaskCount }}
+      hasOutput={task.output_fields.length > 0}
+      changesCount={changesSummary?.files}
+      onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
+      onCloseTab={(artifactId) => removeArtifact(task.id, artifactId)}
+      onToggleOpen={() => setArtifactsOpen(task.id, false)}
+      onToggleRail={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
+      details={detailsView}
+      subtasks={<SubtasksTab subtasks={subtasks} onNavigateToTask={onNavigateToTask} />}
+      changes={<ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} onPullRequests={handlePullRequests} />}
+      output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={!isTaskClosed(task.status)} onComplete={handleCompleteTask} taskUpdatedAt={task.updated_at} />}
+      className="min-w-[320px] flex-1 border-l border-border/50 pt-12"
+    />
+  )
+  const rightRail = (
+    <ArtifactRail
+      className="pt-12"
+      artifacts={artifacts}
+      expanded={artifactUI.railExpanded}
+      activeTabId={artifactUI.activeTabId}
+      agentActive={session.status === SessionStatus.WORKING}
+      hasChanges
+      hasSubtasks={subtasks.length > 0}
+      hasOutput={task.output_fields.length > 0}
+      changesCount={changesSummary?.files}
+      onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
+      onToggleExpanded={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
+    />
+  )
+
   return (
     <>
       <div className="native-backdrop-page relative flex h-full min-h-0 flex-col bg-background">
@@ -1165,6 +1207,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
         />
         <div ref={workspaceBodyRef} className="relative flex min-h-0 flex-1 overflow-hidden">
           {panelLayout === 'task-only' || (!hasSession && panelLayout === 'both') ? (
+            <>
             <div className="native-backdrop-page flex min-h-0 min-w-0 flex-1 flex-col bg-background">
               <div className="min-h-0 flex-1">{detailsView}</div>
               {!hasSession && panelLayout === 'both' && !isTaskClosed(task.status) && (
@@ -1188,8 +1231,15 @@ Update existing skills that were helpful or create new ones for patterns worth r
                 </div>
               )}
             </div>
+            {showStandaloneSidePanel && rightPanel}
+            {!artifactUI.open && subtasks.length > 0 && rightRail}
+            </>
           ) : panelLayout === 'transcript-only' ? (
-            <div className="min-h-0 min-w-0 flex-1">{transcriptView}</div>
+            <>
+              <div className="min-h-0 min-w-0 flex-1">{transcriptView}</div>
+              {showStandaloneSidePanel && rightPanel}
+              {!artifactUI.open && subtasks.length > 0 && rightRail}
+            </>
           ) : (
             <>
               <div data-testid="transcript-pane" className="min-h-0 min-w-0 shrink-0" style={{ width: artifactUI.open ? transcriptWidth : 'auto', flex: artifactUI.open ? undefined : 1 }}>
@@ -1207,37 +1257,10 @@ Update existing skills that were helpful or create new ones for patterns worth r
                     onPointerCancel={handleResizeEnd}
                     className="group relative w-1 shrink-0 cursor-col-resize bg-border/50 hover:bg-primary/50"
                   />
-                  <ArtifactsPanel
-                    taskId={task.id}
-                    artifacts={artifacts}
-                    ui={artifactUI}
-                    artifactApi={artifactApi}
-                    hasChanges
-                    hasOutput={task.output_fields.length > 0}
-                    changesCount={changesSummary?.files}
-                    onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
-                    onCloseTab={(artifactId) => removeArtifact(task.id, artifactId)}
-                    onToggleOpen={() => setArtifactsOpen(task.id, false)}
-                    onToggleRail={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
-                    details={detailsView}
-                    changes={<ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} onPullRequests={handlePullRequests} />}
-                    output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={!isTaskClosed(task.status)} onComplete={handleCompleteTask} taskUpdatedAt={task.updated_at} />}
-                    className="min-w-[320px] flex-1 border-l border-border/50 pt-12"
-                  />
+                  {rightPanel}
                 </>
               ) : (
-                <ArtifactRail
-                  className="pt-12"
-                  artifacts={artifacts}
-                  expanded={artifactUI.railExpanded}
-                  activeTabId={artifactUI.activeTabId}
-                  agentActive={session.status === SessionStatus.WORKING}
-                  hasChanges
-                  hasOutput={task.output_fields.length > 0}
-                  changesCount={changesSummary?.files}
-                  onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
-                  onToggleExpanded={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
-                />
+                rightRail
               )}
             </>
           )}

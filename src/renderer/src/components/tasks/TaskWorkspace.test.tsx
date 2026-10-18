@@ -1,5 +1,6 @@
 import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { useTaskSourceStore } from '@/stores/task-source-store'
+import { useTaskStore } from '@/stores/task-store'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, fireEvent, screen, waitFor, cleanup } from '@testing-library/react'
 import { clampTranscriptWidth, TaskWorkspace } from './TaskWorkspace'
@@ -12,8 +13,8 @@ import { dispatchTaskShortcut, onShortcutFeedback, TaskShortcutAction } from '@/
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 
 vi.mock('@/components/agents/AgentTranscriptPanel', () => ({
-  AgentTranscriptPanel: ({ onSend }: { onSend?: (message: string) => void }) => (
-    <button data-testid="mock-send" onClick={() => onSend?.('approved')}>send</button>
+  AgentTranscriptPanel: ({ onSend, externalHeaderHeight }: { onSend?: (message: string) => void; externalHeaderHeight?: number }) => (
+    <button data-testid="mock-send" data-external-header-height={externalHeaderHeight} onClick={() => onSend?.('approved')}>send</button>
   )
 }))
 
@@ -171,6 +172,36 @@ describe('TaskWorkspace completed artifacts', () => {
     await act(async () => { await Promise.resolve() })
     expect(window.electronAPI.worktree.cleanup).not.toHaveBeenCalled()
     expect(window.electronAPI.artifacts.scan).toHaveBeenCalledWith(task.id)
+  })
+})
+
+describe('TaskWorkspace subtasks tab', () => {
+  it('shows the right rail before an agent session starts', () => {
+    const task = makeRendererTask({ session_id: null })
+    const working = makeRendererTask({ id: 'working-1', title: 'Build the view', parent_task_id: task.id, status: TaskStatus.AgentWorking })
+    useTaskStore.setState({ tasks: [task, working] })
+
+    renderWorkspace(task)
+    fireEvent.click(screen.getByRole('button', { name: 'Subtasks' }))
+    expect(screen.getByTestId('subtasks-tab-content')).toHaveTextContent('Build the view')
+  })
+
+  it('shows counts in the right tab and keeps the task top bar clear', () => {
+    const task = makeRendererTask({ session_id: 'session-1' })
+    const working = makeRendererTask({ id: 'working-1', title: 'Build the view', parent_task_id: task.id, status: TaskStatus.AgentWorking })
+    const review = makeRendererTask({ id: 'review-1', title: 'Check the view', parent_task_id: task.id, status: TaskStatus.ReadyForReview })
+    useTaskStore.setState({ tasks: [task, working, review] })
+
+    const view = renderWorkspace(task)
+    expect(view.container.querySelector('header')).not.toHaveTextContent('Subtasks')
+    expect(screen.getByTestId('mock-send')).toHaveAttribute('data-external-header-height', '48')
+    fireEvent.click(screen.getByRole('button', { name: 'Subtasks' }))
+    expect(screen.getByTestId('subtasks-tab-content')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Subtasks 1 in progress 1 in review' })).toBeInTheDocument()
+
+    act(() => useTaskStore.setState({ tasks: [task, { ...working, status: TaskStatus.ReadyForReview }, review] }))
+    expect(screen.getByRole('button', { name: 'Subtasks 0 in progress 2 in review' })).toBeInTheDocument()
+    expect(screen.getByTestId('mock-send')).toHaveAttribute('data-external-header-height', '48')
   })
 })
 
