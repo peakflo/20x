@@ -28,10 +28,10 @@ describe('ComputerUseBroker', () => {
     const broker = new ComputerUseBroker()
     await broker.grantWindow('task-a', 123, 7)
     await expect(broker.act('task-b', 'click', { x: 1, y: 2 })).rejects.toThrow('not enabled')
-    await broker.act('task-a', 'click', { x: 10, y: 20, target: { kind: 'desktop', display_id: 'primary' }, pid: 999 })
+    await broker.act('task-a', 'click', { x: 10, y: 20, target: { kind: 'desktop', display_id: 'primary' }, pid: 999, scope: 'desktop', delivery_mode: 'foreground', session: 'other' })
     expect(driver.calls.at(-1)).toEqual({
       name: 'click',
-      arguments: { x: 10, y: 20, target: { kind: 'window', pid: 123, window_id: 7 }, pid: 123, window_id: 7, scope: 'window', delivery_mode: 'background' }
+      arguments: { x: 10, y: 20, target: { kind: 'window', pid: 123, window_id: 7 }, delivery_mode: 'background' }
     })
     await broker.stop('task-a')
     await expect(broker.act('task-a', 'click', { x: 1, y: 2 })).rejects.toThrow('not enabled')

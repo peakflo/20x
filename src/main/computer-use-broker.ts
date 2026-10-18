@@ -136,7 +136,12 @@ export class ComputerUseBroker {
       await this.stop(taskId)
       throw new Error('The granted window closed or changed owner; Computer Use was stopped')
     }
-    const safeArgs = { ...args, target: { kind: 'window', pid, window_id }, pid, window_id, scope: 'window', delivery_mode: 'background' }
+    // The tagged target is mutually exclusive with legacy scope/pid/window_id.
+    // Never forward caller-supplied routing or delivery options.
+    const safeArgs = { ...args }
+    for (const key of ['target', 'scope', 'pid', 'window_id', 'session', 'delivery_mode']) delete safeArgs[key]
+    safeArgs.target = { kind: 'window', pid, window_id }
+    safeArgs.delivery_mode = 'background'
     if (name === 'get_window_state') {
       return this.call(name, { pid, window_id, include_accessibility_tree: true, include_screenshot: true })
     }

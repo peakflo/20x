@@ -16,8 +16,8 @@
  *   /mcp?task=<id>&parent=<id>                  subtask set, parent + siblings only
  *   /mcp?...&artifact=<id>                      pins artifact writes to one task
  *
- * The parameters are an address, not a credential. The Task API server they
- * reach has no authentication either, and it listens only on 127.0.0.1.
+ * Most parameters describe task scope, but computer_cap is a bearer credential
+ * for native Computer Use. The Task API server listens only on 127.0.0.1.
  *
  * Each request is handled statelessly: one transport and one Server per request.
  * That needs no session table, so a resumed agent keeps working with the same
