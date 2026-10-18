@@ -53,10 +53,10 @@ export function ArtifactTabStrip({
           >
             <Icon className="h-3.5 w-3.5" />
             {tab.label}
-            {tab.id === PinnedArtifactTabId.SUBTASKS && subtaskCounts && (
+            {tab.id === PinnedArtifactTabId.SUBTASKS && subtaskCounts && (subtaskCounts.working > 0 || subtaskCounts.review > 0) && (
               <span className="inline-flex items-center gap-1.5 tabular-nums">
-                <span className="text-amber-400">{subtaskCounts.working} in progress</span>
-                <span className="text-violet-400">{subtaskCounts.review} in review</span>
+                {subtaskCounts.working > 0 && <span className="text-amber-400">{subtaskCounts.working} in progress</span>}
+                {subtaskCounts.review > 0 && <span className="text-violet-400">{subtaskCounts.review} in review</span>}
               </span>
             )}
             {tab.id === PinnedArtifactTabId.CHANGES && changesCount > 0 && (

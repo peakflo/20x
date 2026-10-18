@@ -272,6 +272,10 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   )
   const workingSubtaskCount = subtasks.filter((subtask) => subtask.status === TaskStatus.AgentWorking).length
   const reviewSubtaskCount = subtasks.filter((subtask) => subtask.status === TaskStatus.ReadyForReview).length
+  const subtaskCountLabels = [
+    workingSubtaskCount > 0 ? `${workingSubtaskCount} in progress` : null,
+    reviewSubtaskCount > 0 ? `${reviewSubtaskCount} in review` : null
+  ].filter((label): label is string => label !== null)
   const visibleSubtasks = filterSubtasks(subtasks, subtaskFilter, subtaskQuery)
 
   useEffect(() => {
@@ -408,10 +412,10 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           >
             Artifacts{artifacts.length > 0 ? ` (${artifacts.length})` : ''}
           </button>
-          {subtasks.length > 0 && <button type="button" onClick={() => setActiveSection('subtasks')} aria-label={`Subtasks: ${workingSubtaskCount} in progress, ${reviewSubtaskCount} in review`} className={cn('inline-flex shrink-0 items-center gap-1.5 rounded px-3 py-1.5 transition-colors', activeSection === 'subtasks' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}>
+          {subtasks.length > 0 && <button type="button" onClick={() => setActiveSection('subtasks')} aria-label={subtaskCountLabels.length > 0 ? `Subtasks: ${subtaskCountLabels.join(', ')}` : 'Subtasks'} className={cn('inline-flex shrink-0 items-center gap-1.5 rounded px-3 py-1.5 transition-colors', activeSection === 'subtasks' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground')}>
             <span>Subtasks</span>
-            <span className="tabular-nums text-amber-400">{workingSubtaskCount} in progress</span>
-            <span className="tabular-nums text-violet-400">{reviewSubtaskCount} in review</span>
+            {workingSubtaskCount > 0 && <span className="tabular-nums text-amber-400">{workingSubtaskCount} in progress</span>}
+            {reviewSubtaskCount > 0 && <span className="tabular-nums text-violet-400">{reviewSubtaskCount} in review</span>}
           </button>}
         </div>
       </div>

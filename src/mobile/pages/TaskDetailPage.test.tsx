@@ -265,7 +265,17 @@ describe('TaskDetailPage', () => {
     expect(mockNavigate).toHaveBeenCalledWith({ page: 'detail', taskId: working.id })
 
     act(() => useTaskStore.setState({ tasks: [parent, { ...working, status: 'ready_for_review' }, completed] }))
-    expect(view.getByRole('button', { name: 'Subtasks: 0 in progress, 1 in review' })).toBeTruthy()
+    expect(view.getByRole('button', { name: 'Subtasks: 1 in review' })).toBeTruthy()
+    expect(view.queryByText('0 in progress')).toBeNull()
+
+    act(() => useTaskStore.setState({ tasks: [parent, working, completed] }))
+    expect(view.getByRole('button', { name: 'Subtasks: 1 in progress' })).toBeTruthy()
+    expect(view.queryByText('0 in review')).toBeNull()
+
+    act(() => useTaskStore.setState({ tasks: [parent, { ...working, status: 'completed' }, completed] }))
+    expect(view.getByRole('button', { name: 'Subtasks' })).toBeTruthy()
+    expect(view.queryByText('0 in progress')).toBeNull()
+    expect(view.queryByText('0 in review')).toBeNull()
   })
 
   it('renders without error for a task with a parent task', () => {

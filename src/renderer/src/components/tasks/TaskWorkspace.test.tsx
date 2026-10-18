@@ -200,7 +200,17 @@ describe('TaskWorkspace subtasks tab', () => {
     expect(screen.getByRole('button', { name: 'Subtasks 1 in progress 1 in review' })).toBeInTheDocument()
 
     act(() => useTaskStore.setState({ tasks: [task, { ...working, status: TaskStatus.ReadyForReview }, review] }))
-    expect(screen.getByRole('button', { name: 'Subtasks 0 in progress 2 in review' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Subtasks 2 in review' })).toBeInTheDocument()
+    expect(screen.queryByText('0 in progress')).not.toBeInTheDocument()
+
+    act(() => useTaskStore.setState({ tasks: [task, working, { ...review, status: TaskStatus.Completed }] }))
+    expect(screen.getByRole('button', { name: 'Subtasks 1 in progress' })).toBeInTheDocument()
+    expect(screen.queryByText('0 in review')).not.toBeInTheDocument()
+
+    act(() => useTaskStore.setState({ tasks: [task, { ...working, status: TaskStatus.Completed }, { ...review, status: TaskStatus.Completed }] }))
+    expect(screen.getAllByRole('button', { name: 'Subtasks' }).length).toBeGreaterThan(0)
+    expect(screen.queryByText('0 in progress')).not.toBeInTheDocument()
+    expect(screen.queryByText('0 in review')).not.toBeInTheDocument()
     expect(screen.getByTestId('mock-send')).toHaveAttribute('data-external-header-height', '48')
   })
 })
