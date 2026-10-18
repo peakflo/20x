@@ -1973,6 +1973,11 @@ export class OpencodeAdapter implements CodingAgentAdapter {
           }
     }
 
+    // Nothing to declare: leave the directory alone. Writing the file would only
+    // dispose the instance of this directory for no gain, and another session that
+    // still runs here may need the servers an earlier write declared.
+    if (this.pluginFilePaths.length === 0 && Object.keys(mcp).length === 0) return
+
     const body: Record<string, unknown> = {
       $schema: 'https://opencode.ai/config.json',
       plugin: [...this.pluginFilePaths]
