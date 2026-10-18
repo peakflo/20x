@@ -95,6 +95,7 @@ import { AcpAgentAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import { getTaskApiPort } from './task-api-server'
+import { issueTaskMcpToken, resolveTaskMcpToken, revokeTaskMcpToken } from './task-mcp-endpoint'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
 const mockedWriteFileAsync = vi.mocked(writeFileAsync)
@@ -621,7 +622,7 @@ describe('AgentManager skill file paths', () => {
 
       const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', {
         'configured-server': { type: 'stdio', command: '/bin/configured', args: ['a.js'] },
-        'task-management': { type: 'http', url: 'http://127.0.0.1:5555/mcp?task=t1&parent=p1' }
+        'task-management': { type: 'http', url: 'http://127.0.0.1:5555/mcp', headers: { Authorization: 'Bearer secret-token' } }
       })
 
       expect(md).toContain('### task-management')
@@ -671,11 +672,13 @@ describe('AgentManager skill file paths', () => {
       manager = new AgentManager(makeMcpDb())
 
       const md: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', {
-        'task-management': { type: 'http', url: 'http://127.0.0.1:5555/mcp?task=t1&parent=p1' }
+        'task-management': { type: 'http', url: 'http://127.0.0.1:5555/mcp', headers: { Authorization: 'Bearer secret-token' } }
       })
 
       expect(md).toContain('**Type:** Local (HTTP, in-process)')
-      expect(md).toContain('http://127.0.0.1:5555/mcp?task=t1&parent=p1')
+      expect(md).toContain('http://127.0.0.1:5555/mcp')
+      // The token travels in a header and must never reach the memory file.
+      expect(md).not.toContain('secret-token')
       expect(md).not.toContain('/bin/Electron')
       expect(md).not.toContain('**Command:**')
     })
@@ -1419,40 +1422,62 @@ describe('AgentManager MCP server routing', () => {
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
   }
 
+  /** The scope that the bearer token of a built task-management entry grants. */
+  function scopeOf(entry: { headers?: Record<string, string> }) {
+    const auth = entry.headers?.Authorization ?? ''
+    return resolveTaskMcpToken(auth.replace(/^Bearer /, ''))
+  }
+
   it('pins artifact MCP tools to the current task without restricting task orchestration', async () => {
     vi.mocked(getTaskApiPort).mockReturnValue(4321)
     const manager = new AgentManager(makeTaskManagementDb())
 
     const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1', {
-      artifactTaskId: 'task-current'
+      artifactTaskId: 'task-current',
+      tokenOwner: 'task-current'
     })
 
-    // The scope now travels in the URL. No child process is spawned, so there is
-    // no command and no environment to carry it.
+    // No child process is spawned, so there is no command and no environment.
+    // The URL is fixed; the scope is bound to the bearer token.
     const entry = mcpServers['task-management']
     expect(entry.type).toBe('http')
     expect(entry.command).toBeUndefined()
-    const url = new URL(entry.url)
-    expect(url.pathname).toBe('/mcp')
-    expect(url.searchParams.get('artifact')).toBe('task-current')
-    expect(url.searchParams.get('task')).toBeNull()
-    expect(url.searchParams.get('parent')).toBeNull()
+    expect(entry.url).toBe('http://127.0.0.1:4321/mcp')
+    expect(scopeOf(entry)).toEqual({ taskId: null, parentTaskId: null, artifactTaskId: 'task-current' })
+    revokeTaskMcpToken('task-current')
   })
 
-  it('puts the subtask scope in the URL of a scoped session', async () => {
+  it('binds the subtask scope to the token of a scoped session, not to the URL', async () => {
     vi.mocked(getTaskApiPort).mockReturnValue(4321)
     const manager = new AgentManager(makeTaskManagementDb())
-
-    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1', {
+    const opts = {
       taskScope: { taskId: 'task-child', parentTaskId: 'task-parent' },
-      artifactTaskId: 'task-child'
-    })
+      artifactTaskId: 'task-child',
+      tokenOwner: 'task-child'
+    }
 
-    const url = new URL(mcpServers['task-management'].url)
-    expect(url.searchParams.get('task')).toBe('task-child')
-    expect(url.searchParams.get('parent')).toBe('task-parent')
-    // Redundant when it equals the task, so it is left out.
-    expect(url.searchParams.get('artifact')).toBeNull()
+    const first = (await (manager as any).buildMcpServersForAdapter('agent-1', opts))['task-management']
+    const again = (await (manager as any).buildMcpServersForAdapter('agent-1', opts))['task-management']
+
+    expect(first.url).toBe('http://127.0.0.1:4321/mcp')
+    expect(first.url).not.toContain('task-child')
+    expect(scopeOf(first)).toEqual({ taskId: 'task-child', parentTaskId: 'task-parent', artifactTaskId: 'task-child' })
+    // A resume builds the same config, so the agent has nothing to re-attach.
+    expect(again).toEqual(first)
+    revokeTaskMcpToken('task-child')
+  })
+
+  it('revokes the token only when the last session of its owner is gone', () => {
+    const manager = new AgentManager(makeTaskManagementDb())
+    const token = issueTaskMcpToken('task-owned')
+    ;(manager as any).sessions.set('s1', { taskId: 'task-owned' })
+
+    ;(manager as any).releaseTaskMcpTokenIfUnused('task-owned')
+    expect(resolveTaskMcpToken(token)).not.toBeNull()
+
+    ;(manager as any).sessions.delete('s1')
+    ;(manager as any).releaseTaskMcpTokenIfUnused('task-owned')
+    expect(resolveTaskMcpToken(token)).toBeNull()
   })
 
   it('probes the built-in task-management server over HTTP instead of spawning its stored node command', async () => {
@@ -1485,6 +1510,10 @@ describe('AgentManager MCP server routing', () => {
 
       expect(spawn).not.toHaveBeenCalled()
       expect(fetchMock.mock.calls[0][0]).toBe('http://127.0.0.1:4321/mcp')
+      // The probe authenticates with a token of its own and revokes it after.
+      const auth = (fetchMock.mock.calls[0][1]?.headers as Record<string, string>).Authorization
+      expect(auth).toMatch(/^Bearer \S+$/)
+      expect(resolveTaskMcpToken(auth.replace(/^Bearer /, ''))).toBeNull()
       expect(result).toEqual({
         status: 'connected',
         toolCount: 1,
