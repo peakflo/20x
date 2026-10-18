@@ -2,7 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { OpencodeAdapter, describeOpencodeServerError } from './opencode-adapter'
 import { SessionStatusType } from './coding-agent-adapter'
 import { ENTERPRISE_AI_GATEWAY_PROVIDER_ID } from '../enterprise-ai-gateway'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -338,7 +338,11 @@ describe('OpencodeAdapter', () => {
     })
 
     const TASK_MCP = {
-      'task-management': { type: 'http' as const, url: 'http://127.0.0.1:53945/mcp?task=t1&parent=p1' },
+      'task-management': {
+        type: 'http' as const,
+        url: 'http://127.0.0.1:53945/mcp',
+        headers: { Authorization: 'Bearer tok-t1' }
+      },
       'gcp-logs': { type: 'stdio' as const, command: 'node', args: ['gcp.js'], env: { TOKEN: 'x' } }
     }
 
@@ -363,9 +367,14 @@ describe('OpencodeAdapter', () => {
         const written = JSON.parse(readFileSync(configPath, 'utf-8'))
         expect(written.mcp['task-management']).toEqual({
           type: 'remote',
-          url: 'http://127.0.0.1:53945/mcp?task=t1&parent=p1',
+          url: 'http://127.0.0.1:53945/mcp',
+          headers: { Authorization: 'Bearer tok-t1' },
+          // A 401 from a revoked token must not start OpenCode's OAuth flow.
+          oauth: false,
           enabled: true
         })
+        // The file can hold the token, so it is owner-only.
+        expect(statSync(configPath).mode & 0o777).toBe(0o600)
         expect(written.mcp['gcp-logs']).toEqual({
           type: 'local',
           command: ['node', 'gcp.js'],
@@ -542,6 +551,245 @@ describe('OpencodeAdapter', () => {
       await (adapter as any).handleInstanceDisposed('/tmp/ws-a', 'server.instance.disposed')
 
       expect(adapter.getMcpAttachFailures('ses_a')).toEqual(['task-management'])
+    })
+  })
+
+  describe('MCP check before each turn', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    const SERVERS = {
+      'task-management': { type: 'http' as const, url: 'http://127.0.0.1:53945/mcp', headers: { Authorization: 'Bearer tok-a' } },
+      'gcp-logs': { type: 'stdio' as const, command: 'node', args: ['gcp.js'] }
+    }
+
+    function liveSession(adapter: OpencodeAdapter, mcp: Record<string, unknown>) {
+      ;(adapter as any).clients.set('ses_a', { mcp })
+      ;(adapter as any).sessionWorkspaceDirs.set('ses_a', '/tmp/ws-a')
+      ;(adapter as any).sessionMcpConfigs.set('ses_a', SERVERS)
+    }
+
+    /**
+     * A dispose that OpenCode never reported (the event stream was reconnecting)
+     * leaves the session without its tools. The next turn must put them back.
+     */
+    it('re-adds only the servers that are not connected', async () => {
+      const adapter = new OpencodeAdapter()
+      const add = vi.fn().mockImplementation(async ({ body }: any) => ({ data: { [body.name]: { status: 'connected' } } }))
+      const status = vi.fn().mockResolvedValue({ data: { 'gcp-logs': { status: 'connected' } } })
+      liveSession(adapter, { add, status })
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      await (adapter as any).ensureSessionMcpAttached('ses_a')
+
+      expect(add).toHaveBeenCalledTimes(1)
+      const call = add.mock.calls[0][0]
+      expect(call.body.name).toBe('task-management')
+      expect(call.query.directory).toBe('/tmp/ws-a')
+      expect(call.body.config).toEqual({
+        type: 'remote',
+        url: 'http://127.0.0.1:53945/mcp',
+        headers: { Authorization: 'Bearer tok-a' },
+        oauth: false
+      })
+      expect(adapter.getMcpAttachFailures('ses_a')).toEqual([])
+    })
+
+    it('adds nothing when every server is connected', async () => {
+      const adapter = new OpencodeAdapter()
+      const add = vi.fn()
+      const status = vi.fn().mockResolvedValue({
+        data: { 'task-management': { status: 'connected' }, 'gcp-logs': { status: 'connected' } }
+      })
+      liveSession(adapter, { add, status })
+
+      await (adapter as any).ensureSessionMcpAttached('ses_a')
+
+      expect(status).toHaveBeenCalledTimes(1)
+      expect(add).not.toHaveBeenCalled()
+    })
+
+    it('gives up after its time limit instead of blocking the prompt', async () => {
+      const adapter = new OpencodeAdapter()
+      const add = vi.fn()
+      const status = vi.fn().mockImplementation(() => new Promise(() => {}))
+      liveSession(adapter, { add, status })
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.useFakeTimers()
+      try {
+        const done = (adapter as any).ensureSessionMcpAttached('ses_a')
+        await vi.advanceTimersByTimeAsync((OpencodeAdapter as any).MCP_PRETURN_TIMEOUT_MS)
+        await expect(done).resolves.toBeUndefined()
+        expect(add).not.toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('runs before the prompt is sent', async () => {
+      const adapter = new OpencodeAdapter()
+      const order: string[] = []
+      const status = vi.fn().mockImplementation(async () => {
+        order.push('mcp.status')
+        return { data: {} }
+      })
+      const add = vi.fn().mockImplementation(async ({ body }: any) => {
+        order.push(`mcp.add:${body.name}`)
+        return { data: { [body.name]: { status: 'connected' } } }
+      })
+      liveSession(adapter, { add, status })
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const prompt = vi.fn().mockImplementation(async () => {
+        order.push('session.prompt')
+        return { data: {} }
+      })
+
+      await (adapter as any).executePromptWithRetry(
+        { session: { prompt } },
+        'ses_a',
+        [{ type: 'text', text: 'hi' }],
+        undefined,
+        { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws-a' },
+        new AbortController()
+      )
+
+      expect(order.indexOf('session.prompt')).toBeGreaterThan(order.indexOf('mcp.add:task-management'))
+      expect(order.indexOf('mcp.add:task-management')).toBeGreaterThan(-1)
+      expect(prompt).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('MCP servers on session end', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    const serversWithToken = (token: string) => ({
+      'task-management': { type: 'http' as const, url: 'http://127.0.0.1:53945/mcp', headers: { Authorization: `Bearer ${token}` } },
+      'gcp-logs': { type: 'stdio' as const, command: 'node', args: ['gcp.js'] }
+    })
+
+    function addSession(adapter: OpencodeAdapter, id: string, dir: string, servers: Record<string, any>, mcp: Record<string, unknown>) {
+      ;(adapter as any).clients.set(id, { mcp })
+      ;(adapter as any).sessionWorkspaceDirs.set(id, dir)
+      ;(adapter as any).sessionMcpConfigs.set(id, servers)
+    }
+
+    function markRegistered(adapter: OpencodeAdapter, dir: string, servers: Record<string, any>) {
+      const known = (adapter as any).getDirectoryMcpConfigs(dir) as Map<string, string>
+      for (const [name, cfg] of Object.entries(servers)) {
+        known.set(name, JSON.stringify(OpencodeAdapter.toOpencodeMcpConfig(name, cfg)))
+      }
+    }
+
+    it('disconnects the servers and drops them, with the token, from opencode.json', async () => {
+      const adapter = new OpencodeAdapter()
+      const workspaceDir = mkdtempSync(join(tmpdir(), 'opencode-adapter-test-'))
+      const servers = serversWithToken('tok-ending')
+      try {
+        ;(adapter as any).writeRuntimePluginFiles({ agentId: 'a', taskId: 't', workspaceDir, mcpServers: servers })
+        const configPath = join(workspaceDir, '.opencode', 'opencode.json')
+        expect(readFileSync(configPath, 'utf-8')).toContain('tok-ending')
+
+        const disconnect = vi.fn().mockResolvedValue({ data: true })
+        addSession(adapter, 'ses_a', workspaceDir, servers, { disconnect })
+        markRegistered(adapter, workspaceDir, servers)
+        vi.spyOn(console, 'log').mockImplementation(() => {})
+
+        await (adapter as any).disconnectSessionMcpServers('ses_a')
+
+        expect(disconnect.mock.calls.map((c) => c[0].path.name).sort()).toEqual(['gcp-logs', 'task-management'])
+        expect(disconnect.mock.calls.every((c) => c[0].query.directory === workspaceDir)).toBe(true)
+        const written = JSON.parse(readFileSync(configPath, 'utf-8'))
+        expect(written.mcp).toBeUndefined()
+        expect(written.plugin).toEqual((adapter as any).pluginFilePaths)
+        expect(readFileSync(configPath, 'utf-8')).not.toContain('tok-ending')
+        expect(((adapter as any).getDirectoryMcpConfigs(workspaceDir) as Map<string, string>).size).toBe(0)
+      } finally {
+        rmSync(workspaceDir, { recursive: true, force: true })
+      }
+    })
+
+    it('releases a server that only a session in another directory still uses', async () => {
+      // Sessions in other directories live in other OpenCode instances, so they
+      // must not keep this directory's server alive.
+      const adapter = new OpencodeAdapter()
+      const disconnect = vi.fn().mockResolvedValue({ data: true })
+      addSession(adapter, 'ses_a', '/tmp/ws-a', serversWithToken('tok-a'), { disconnect })
+      addSession(adapter, 'ses_b', '/tmp/ws-b', serversWithToken('tok-b'), { disconnect: vi.fn() })
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+
+      await (adapter as any).disconnectSessionMcpServers('ses_a')
+
+      expect(disconnect.mock.calls.map((c) => c[0].path.name).sort()).toEqual(['gcp-logs', 'task-management'])
+    })
+
+    /**
+     * The heartbeat session of a task runs in the task's directory with its own
+     * task-management token. When the session whose token OpenCode holds ends,
+     * the session that stays must get its own config back, not keep a token that
+     * is about to be revoked.
+     */
+    it('hands a shared server over to the session that stays in the same directory', async () => {
+      const adapter = new OpencodeAdapter()
+      const dir = '/tmp/ws-shared'
+      const disconnectA = vi.fn().mockResolvedValue({ data: true })
+      const addB = vi.fn().mockImplementation(async ({ body }: any) => ({ data: { [body.name]: { status: 'connected' } } }))
+      const statusB = vi.fn().mockResolvedValue({ data: { 'task-management': { status: 'connected' }, 'gcp-logs': { status: 'connected' } } })
+      const serversA = serversWithToken('tok-heartbeat')
+      const serversB = serversWithToken('tok-task')
+      addSession(adapter, 'ses_a', dir, serversA, { disconnect: disconnectA })
+      addSession(adapter, 'ses_b', dir, serversB, { add: addB, status: statusB })
+      // OpenCode holds the copy of the ending session.
+      markRegistered(adapter, dir, serversA)
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+
+      await (adapter as any).disconnectSessionMcpServers('ses_a')
+
+      expect(disconnectA).not.toHaveBeenCalled()
+      expect(addB).toHaveBeenCalledTimes(1)
+      expect(addB.mock.calls[0][0].body.name).toBe('task-management')
+      expect(addB.mock.calls[0][0].body.config.headers).toEqual({ Authorization: 'Bearer tok-task' })
+    })
+
+    it('leaves a shared server alone when the copy OpenCode holds is the one of the session that stays', async () => {
+      const adapter = new OpencodeAdapter()
+      const dir = '/tmp/ws-shared'
+      const disconnectA = vi.fn()
+      const addB = vi.fn()
+      const serversB = serversWithToken('tok-task')
+      addSession(adapter, 'ses_a', dir, serversWithToken('tok-heartbeat'), { disconnect: disconnectA })
+      addSession(adapter, 'ses_b', dir, serversB, { add: addB })
+      markRegistered(adapter, dir, serversB)
+
+      await (adapter as any).disconnectSessionMcpServers('ses_a')
+
+      expect(disconnectA).not.toHaveBeenCalled()
+      expect(addB).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('MCP config logging', () => {
+    it('redacts header and environment values', () => {
+      const line = OpencodeAdapter.describeMcpConfigForLog({
+        type: 'remote',
+        url: 'http://127.0.0.1:1/mcp',
+        headers: { Authorization: 'Bearer very-secret' },
+        environment: { API_KEY: 'also-secret' }
+      })
+      expect(line).not.toContain('very-secret')
+      expect(line).not.toContain('also-secret')
+      expect(line).toContain('Authorization')
+      expect(line).toContain('http://127.0.0.1:1/mcp')
+    })
+
+    it('switches OAuth off only for the task-management server', () => {
+      expect(OpencodeAdapter.toOpencodeMcpConfig('task-management', { type: 'http', url: 'u' })).toEqual({
+        type: 'remote', url: 'u', oauth: false
+      })
+      expect(OpencodeAdapter.toOpencodeMcpConfig('other', { type: 'http', url: 'u' })).toEqual({ type: 'remote', url: 'u' })
     })
   })
 

@@ -22,7 +22,7 @@ import { PiAdapter } from './adapters/pi-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
-import { buildTaskMcpUrl } from './task-mcp-endpoint'
+import { buildTaskMcpHeaders, buildTaskMcpUrl, issueTaskMcpToken, revokeTaskMcpToken } from './task-mcp-endpoint'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
@@ -1521,7 +1521,7 @@ export class AgentManager extends EventEmitter {
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
-  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
+  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string; tokenOwner?: string }): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
     const result: Record<string, McpServerConfig> = {}
@@ -1540,7 +1540,8 @@ export class AgentManager extends EventEmitter {
 
       if (mcpServer.name === 'task-management') {
         // Served in process over HTTP, so no child process is spawned. The scope
-        // travels in the URL, which keeps the config identical across resumes.
+        // travels in a per-owner bearer token, which keeps the config identical
+        // across resumes.
         const taskManagement = this.buildTaskManagementMcpConfig(opts)
         if (taskManagement) result[mcpServer.name] = taskManagement
       } else if (mcpServer.type === 'local') {
@@ -1608,25 +1609,46 @@ export class AgentManager extends EventEmitter {
    *
    * The server runs inside this process, on the Task API server, and it is
    * reached over HTTP. Nothing is spawned, so there is no command, no
-   * TASK_API_URL to inject into a child environment, and no process to leak. The
-   * scope is part of the URL, which means every call for the same session builds
-   * the same config, including after a resume.
+   * TASK_API_URL to inject into a child environment, and no process to leak.
+   *
+   * The URL is the same for every session. The scope is bound to a random
+   * bearer token issued for the session owner (the agent-manager task id), so
+   * every call for the same owner builds the same config, including after a
+   * resume. The token is revoked when the last session of that owner goes away
+   * (releaseTaskMcpTokenIfUnused).
    */
   private buildTaskManagementMcpConfig(
-    opts?: { taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }
+    opts?: { taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string; tokenOwner?: string }
   ): McpServerConfig | null {
     const apiPort = getTaskApiPort()
     if (!apiPort) {
       console.warn('[AgentManager] buildTaskManagementMcpConfig - task API port is null; task-management tools unavailable')
       return null
     }
+    const owner = opts?.tokenOwner || opts?.taskScope?.taskId || opts?.artifactTaskId || 'unscoped'
+    const token = issueTaskMcpToken(owner, {
+      taskId: opts?.taskScope?.taskId,
+      parentTaskId: opts?.taskScope?.parentTaskId,
+      artifactTaskId: opts?.artifactTaskId
+    })
     return {
       type: 'http',
-      url: buildTaskMcpUrl(apiPort, {
-        taskId: opts?.taskScope?.taskId,
-        parentTaskId: opts?.taskScope?.parentTaskId,
-        artifactTaskId: opts?.artifactTaskId
-      })
+      url: buildTaskMcpUrl(apiPort),
+      headers: buildTaskMcpHeaders(token)
+    }
+  }
+
+  /**
+   * Revokes the task-management token of an owner once no session of that owner
+   * is left. Several sessions can share an owner (a restart, a handoff), and they
+   * all carry the same token, so it may only go with the last of them.
+   */
+  private releaseTaskMcpTokenIfUnused(owner: string): void {
+    for (const session of this.sessions.values()) {
+      if (session.taskId === owner) return
+    }
+    if (revokeTaskMcpToken(owner)) {
+      console.log(`[AgentManager] Revoked task-management MCP token for ${owner}`)
     }
   }
 
@@ -1687,7 +1709,7 @@ export class AgentManager extends EventEmitter {
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined, tokenOwner: taskId })
 
     // systemPrompt is intentionally task-agnostic and identical every time this
     // is called for a given agent — it must stay byte-for-byte frozen for the
@@ -2357,7 +2379,7 @@ export class AgentManager extends EventEmitter {
     // per-agent MCP configuration.
     const isMastermind = taskId === 'mastermind-session'
     const ensureTaskManagement = isMastermind || isTriageSession || isSubtask || !!task
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined, tokenOwner: taskId })
 
     // Write SKILL.md files and the session documentation (async to avoid
     // blocking the event loop). This runs AFTER the MCP map is built so the
@@ -3729,7 +3751,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     await yieldEL()
 
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined, tokenOwner: taskId })
 
     // Rewrite the memory file before the harness reads it. A resumed session
     // otherwise keeps the catalog written at start, and that file is reloaded
@@ -4784,6 +4806,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       // its task-management MCP child stay alive with no handle left to stop them.
       await this.releaseAdapterSession(sessionId, 'triage_completed')
       this.sessions.delete(sessionId)
+      this.releaseTaskMcpTokenIfUnused(session.taskId)
       this.schedulePowerSaveBlockerUpdate()
       console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} reason=triage_completed`)
       return
@@ -5072,6 +5095,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     this.sessions.delete(sessionId)
     this.lastSentStatus.delete(sessionId)
+    this.releaseTaskMcpTokenIfUnused(session.taskId)
     this.schedulePowerSaveBlockerUpdate()
     console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} resetStatus=${resetTaskStatus} reason=stop_session`)
 
@@ -5764,7 +5788,15 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     if (!apiPort) {
       return { status: 'failed', error: 'Task API server is not running' }
     }
-    return this.testRemoteMcpServer({ name: 'task-management', url: buildTaskMcpUrl(apiPort) })
+    // A short-lived token of its own: the probe must not borrow the token of a
+    // live session, and it must leave nothing valid behind.
+    const owner = `settings-probe-${randomUUID()}`
+    const token = issueTaskMcpToken(owner)
+    try {
+      return await this.testRemoteMcpServer({ name: 'task-management', url: buildTaskMcpUrl(apiPort), headers: buildTaskMcpHeaders(token) })
+    } finally {
+      revokeTaskMcpToken(owner)
+    }
   }
 
   private testLocalMcpServer(serverData: { name: string; command?: string; args?: string[]; environment?: Record<string, string> }): Promise<{ status: 'connected' | 'failed'; error?: string; errorDetail?: string; toolCount?: number; tools?: { name: string; description: string }[] }> {
@@ -6511,6 +6543,7 @@ Important:
     // running on untracked until the app quits.
     await this.releaseAdapterSession(sessionId, 'learn_from_session')
     this.sessions.delete(sessionId)
+    this.releaseTaskMcpTokenIfUnused(session.taskId)
     this.schedulePowerSaveBlockerUpdate()
     console.log(`[AgentManager] Learning complete for session ${sessionId}:`, result)
     return result

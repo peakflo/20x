@@ -196,7 +196,7 @@ export function startTaskApiServer(db: DatabaseManager): Promise<number> {
           // must be served before anything below assumes a plain JSON route.
           // It replaces the per-session task-management-mcp.js child process.
           if (route === TASK_MCP_PATH) {
-            await handleTaskMcpRequest(req, res, url, body, (mcpRoute, params) =>
+            await handleTaskMcpRequest(req, res, body, (mcpRoute, params) =>
               handleRoute(db, mcpRoute, params)
             )
             return

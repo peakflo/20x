@@ -11,23 +11,36 @@
  * This endpoint replaces all of them. It serves MCP over HTTP from the Task API
  * server, so no child process starts and none can leak.
  *
- * The scope travels in the URL as plain query parameters:
- *   /mcp                                        full orchestration tool set
- *   /mcp?task=<id>&parent=<id>                  subtask set, parent + siblings only
- *   /mcp?...&artifact=<id>                      pins artifact writes to one task
+ * Every session uses the same URL, `/mcp`. What a session may do is carried by
+ * a bearer token instead:
  *
- * The parameters are an address, not a credential. The Task API server they
- * reach has no authentication either, and it listens only on 127.0.0.1.
+ *   POST /mcp
+ *   Authorization: Bearer <token>
+ *
+ * The token is random, issued by the main process for one session owner (a
+ * task, the mastermind session, ...), and bound in memory to the scope of that
+ * owner: full orchestration, a subtask limited to its parent and siblings, and
+ * the task that owns artifact writes. A request with no token, an unknown one,
+ * or a revoked one is refused with 401 before any MCP server is built.
+ *
+ * Why not the URL: the URL used to differ per task (`/mcp?task=..`). A fixed
+ * URL makes the MCP config of a session the same shape for every task, keeps the
+ * scope out of logs and documentation that print the URL, and lets the token be
+ * revoked when the session ends. The token is not a strong security boundary on
+ * its own: the plain Task API routes on this same 127.0.0.1 server still have no
+ * authentication. It binds a session to its own scope and makes a leftover
+ * config (an old opencode.json, a dropped session) stop working once revoked.
  *
  * Each request is handled statelessly: one transport and one Server per request.
  * That needs no session table, so a resumed agent keeps working with the same
- * URL, and nothing accumulates between calls.
+ * token, and nothing accumulates between calls.
  *
  * The endpoint answers on POST only. A GET asks for the standalone stream of
  * server-initiated messages, and these tools never send one, so the GET is
  * refused with 405 before a transport exists. See handleTaskMcpRequest.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { randomBytes } from 'node:crypto'
 import { Server, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server'
 import {
   callToolForScope,
@@ -39,33 +52,90 @@ import {
 /** Path that serves MCP on the Task API server. */
 export const TASK_MCP_PATH = '/mcp'
 
-/** Reads the scope of a session from the request URL. */
-export function parseScopeFromUrl(url: URL): TaskMcpScope {
-  const taskId = url.searchParams.get('task')
+type TokenGrant = { owner: string; scope: TaskMcpScope }
+
+/** token -> grant. In memory only: a restart of the app revokes every token. */
+const grants = new Map<string, TokenGrant>()
+/** owner -> token, so every config built for one owner carries the same token. */
+const ownerTokens = new Map<string, string>()
+
+/** The scope of a session, as the main process knows it. */
+export type TaskMcpScopeInput = {
+  taskId?: string | null
+  parentTaskId?: string | null
+  artifactTaskId?: string | null
+}
+
+function toScope(input: TaskMcpScopeInput): TaskMcpScope {
+  const taskId = input.taskId || null
   return {
-    parentTaskId: url.searchParams.get('parent') || null,
-    taskId: taskId || null,
-    artifactTaskId: url.searchParams.get('artifact') || taskId || null
+    parentTaskId: input.parentTaskId || null,
+    taskId,
+    artifactTaskId: input.artifactTaskId || taskId
   }
 }
 
 /**
- * Builds the MCP URL for a session. This is the whole session configuration:
- * there is no command to spawn and no port to inject into a child environment.
+ * Returns the token of a session owner, issuing a random one on first use.
+ *
+ * The same owner always gets the same token until it is revoked. A session
+ * config is rebuilt on every resume and on every status check, and a new token
+ * each time would change the config and make the agent re-attach the server
+ * for nothing. The scope is refreshed on every call, so a task that changed
+ * parent is served with its current scope.
  */
-export function buildTaskMcpUrl(
-  port: number,
-  scope: { taskId?: string | null; parentTaskId?: string | null; artifactTaskId?: string | null } = {}
-): string {
-  const params = new URLSearchParams()
-  if (scope.taskId) params.set('task', scope.taskId)
-  if (scope.parentTaskId) params.set('parent', scope.parentTaskId)
-  // Only needed when it differs from `task`, which already implies it.
-  if (scope.artifactTaskId && scope.artifactTaskId !== scope.taskId) {
-    params.set('artifact', scope.artifactTaskId)
+export function issueTaskMcpToken(owner: string, scope: TaskMcpScopeInput = {}): string {
+  const existing = ownerTokens.get(owner)
+  if (existing) {
+    grants.set(existing, { owner, scope: toScope(scope) })
+    return existing
   }
-  const query = params.toString()
-  return `http://127.0.0.1:${port}${TASK_MCP_PATH}${query ? `?${query}` : ''}`
+  const token = randomBytes(32).toString('base64url')
+  grants.set(token, { owner, scope: toScope(scope) })
+  ownerTokens.set(owner, token)
+  return token
+}
+
+/** Revokes the token of an owner. Returns whether there was one. */
+export function revokeTaskMcpToken(owner: string): boolean {
+  const token = ownerTokens.get(owner)
+  if (!token) return false
+  ownerTokens.delete(owner)
+  grants.delete(token)
+  return true
+}
+
+/** The scope a token grants, or null when the token is unknown or revoked. */
+export function resolveTaskMcpToken(token: string | null | undefined): TaskMcpScope | null {
+  if (!token) return null
+  return grants.get(token)?.scope ?? null
+}
+
+/** Owners that hold a live token. For tests and diagnostics. */
+export function listTaskMcpTokenOwners(): string[] {
+  return [...ownerTokens.keys()]
+}
+
+/** Reads `Authorization: Bearer <token>` from a request. */
+export function readBearerToken(req: Pick<IncomingMessage, 'headers'>): string | null {
+  const header = req.headers.authorization
+  const value = Array.isArray(header) ? header[0] : header
+  if (!value) return null
+  const match = /^Bearer\s+(\S+)\s*$/i.exec(value)
+  return match ? match[1] : null
+}
+
+/**
+ * The MCP URL. It is the same for every session: the scope travels in the
+ * bearer token (see issueTaskMcpToken), never in the URL.
+ */
+export function buildTaskMcpUrl(port: number): string {
+  return `http://127.0.0.1:${port}${TASK_MCP_PATH}`
+}
+
+/** The headers that authenticate a session on the endpoint. */
+export function buildTaskMcpHeaders(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}` }
 }
 
 /** A fresh MCP server bound to one scope. */
@@ -134,7 +204,6 @@ async function writeWebResponse(response: Response, res: ServerResponse): Promis
 export async function handleTaskMcpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  url: URL,
   body: string,
   invoke: TaskApiInvoke
 ): Promise<void> {
@@ -165,9 +234,20 @@ export async function handleTaskMcpRequest(
     return
   }
 
-  const scope = parseScopeFromUrl(url)
+  // Authenticate before a transport exists, so a refused request costs nothing.
+  const scope = resolveTaskMcpToken(readBearerToken(req))
+  if (!scope) {
+    res.writeHead(401, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      error: { code: -32001, message: 'Unauthorized: missing, unknown or revoked task-management token' },
+      id: null
+    }))
+    return
+  }
+
   const transport = new WebStandardStreamableHTTPServerTransport({
-    // Stateless: no session table, so a resumed agent keeps the same URL.
+    // Stateless: no session table, so a resumed agent keeps working with its token.
     sessionIdGenerator: undefined,
     // Plain JSON replies instead of an SSE frame per response. These tools are
     // request/response only, and no tool sends server-initiated notifications.
