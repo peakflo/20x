@@ -5026,6 +5026,79 @@ describe('AgentManager Mastermind session continuity + memory', () => {
     })
   })
 
+  // Round-3 review finding: the triage-completed and learnFromSession
+  // teardown paths deleted the session directly (`this.sessions.delete(...)`)
+  // instead of going through stopSession, so they never reached the
+  // unregisterMemorySession (or unregisterSecretSession) cleanup — a session
+  // that completed triage, or that only ever reached "learn from session",
+  // left its memory token valid forever. Fixed by extracting
+  // releaseSessionCredentials and calling it from every teardown path, not
+  // just stopSession.
+  describe('session teardown releases per-session credentials on every path, not just stopSession', () => {
+    beforeEach(() => {
+      vi.mocked(registerMemorySession).mockClear()
+      vi.mocked(unregisterMemorySession).mockClear()
+    })
+
+    it('unregisters the memory (and secret) token when a triage session completes', async () => {
+      const db = createMockDb() as any
+      Object.assign(db, {
+        getTask: vi.fn(() => ({ id: 'task-1', status: TaskStatus.Triaging })),
+      })
+      const manager = new AgentManager(db)
+      vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+      vi.spyOn(manager as any, 'releaseAdapterSession').mockResolvedValue(undefined)
+
+      const session = {
+        id: 'session-1',
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        status: 'working',
+        isTriageSession: true,
+        createdAt: new Date(),
+        seenMessageIds: new Set<string>(),
+        seenPartIds: new Set<string>(),
+        partContentLengths: new Map<string, string>(),
+        memorySessionToken: 'tok-triage-1',
+        secretSessionToken: 'secret-tok-triage-1',
+      }
+      ;(manager as any).sessions.set('session-1', session)
+
+      await (manager as any).transitionToIdle('session-1', session)
+
+      expect(unregisterMemorySession).toHaveBeenCalledWith('tok-triage-1')
+      expect(unregisterSecretSession).toHaveBeenCalledWith('secret-tok-triage-1')
+      expect((manager as any).sessions.has('session-1')).toBe(false)
+    })
+
+    it('unregisters the memory (and secret) token when learnFromSession tears down the session', async () => {
+      const db = createMockDb() as any
+      const manager = new AgentManager(db)
+      vi.spyOn(manager as any, 'syncSkillsFromWorkspace').mockReturnValue({ created: [], updated: [], unchanged: [] })
+      vi.spyOn(manager as any, 'releaseAdapterSession').mockResolvedValue(undefined)
+
+      const session = {
+        id: 'session-1',
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        status: 'working',
+        createdAt: new Date(),
+        seenMessageIds: new Set<string>(),
+        seenPartIds: new Set<string>(),
+        partContentLengths: new Map<string, string>(),
+        memorySessionToken: 'tok-learn-1',
+        secretSessionToken: 'secret-tok-learn-1',
+      }
+      ;(manager as any).sessions.set('session-1', session)
+
+      await manager.learnFromSession('session-1', 'feedback text')
+
+      expect(unregisterMemorySession).toHaveBeenCalledWith('tok-learn-1')
+      expect(unregisterSecretSession).toHaveBeenCalledWith('secret-tok-learn-1')
+      expect((manager as any).sessions.has('session-1')).toBe(false)
+    })
+  })
+
   it('marks a context handoff and skips native resume when Mastermind switches to a different harness', async () => {
     const settings = new Map<string, string>([
       [SESSION_SETTING, 'persisted-session-1'],
