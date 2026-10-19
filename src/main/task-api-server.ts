@@ -17,6 +17,7 @@ import { randomUUID } from 'crypto'
 import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager } from './database'
 import { TASK_MCP_PATH, handleTaskMcpRequest } from './task-mcp-endpoint'
+import { withIdempotency, pruneExpiredOrchestrationReceiptsOnce } from './orchestration/idempotency'
 import { TaskStatus } from '../shared/constants'
 import { desktopBrandName } from './brand'
 import { ArtifactType } from '../shared/artifacts'
@@ -528,6 +529,11 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (params.status === 'completed') return { error: `Create the task in ${desktopBrandName()} before completing it.` }
       if (!params.title) return { error: 'Title is required' }
 
+      pruneExpiredOrchestrationReceiptsOnce(db)
+      // No parent task to scope a retry to at the root — every root-level
+      // create_task call shares one 'global' idempotency bucket.
+      const idempotencyScope = params.parent_task_id ? `task:${String(params.parent_task_id)}` : 'global'
+      return withIdempotency(db, idempotencyScope, params.client_request_id as string | undefined, () => {
       const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
       const now = new Date().toISOString()
 
@@ -598,6 +604,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (params.auto_start_agent === true) triggerTaskAutomation()
 
       return { success: true, task: parsed }
+      })
     }
 
     case '/get_task': {
@@ -1201,10 +1208,14 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         }
       }
 
-      // The message is attributed to the user, because that is who spoke it.
-      // A transcript that credited the agent would misreport who asked.
-      const result = await agentController.sendByTaskId(taskId, String(params.text))
-      return { success: true, task_id: taskId, session_id: result.sessionId ?? result.newSessionId ?? null }
+      pruneExpiredOrchestrationReceiptsOnce(db)
+      const sendController = agentController
+      return withIdempotency(db, `task:${taskId}`, params.client_request_id as string | undefined, async () => {
+        // The message is attributed to the user, because that is who spoke it.
+        // A transcript that credited the agent would misreport who asked.
+        const result = await sendController.sendByTaskId(taskId, String(params.text))
+        return { success: true, task_id: taskId, session_id: result.sessionId ?? result.newSessionId ?? null }
+      })
     }
 
     case '/respond_to_checkpoint': {
@@ -1247,17 +1258,21 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (!params.task_id) return { error: 'task_id is required' }
       if (!agentController) return { error: 'Agent controller not available' }
 
-      const result = await agentController.startTask(String(params.task_id), {
-        preferSubtasks: params.prefer_subtasks !== false,
-        allowTriage: params.allow_triage !== false
-      })
+      pruneExpiredOrchestrationReceiptsOnce(db)
+      const startController = agentController
+      return withIdempotency(db, `task:${String(params.task_id)}`, params.client_request_id as string | undefined, async () => {
+        const result = await startController.startTask(String(params.task_id), {
+          preferSubtasks: params.prefer_subtasks !== false,
+          allowTriage: params.allow_triage !== false
+        })
 
-      const startedTask = result.startedTaskId ? db.getTask(result.startedTaskId) : null
-      return {
-        success: result.action !== 'no_action',
-        ...result,
-        task: startedTask
-      }
+        const startedTask = result.startedTaskId ? db.getTask(result.startedTaskId) : null
+        return {
+          success: result.action !== 'no_action',
+          ...result,
+          task: startedTask
+        }
+      })
     }
 
     case '/create_subtask': {
@@ -1268,6 +1283,8 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const parentTask = rawDb.prepare('SELECT id, repos, priority, auto_complete_without_review FROM tasks WHERE id = ?').get(params.parent_task_id) as Record<string, unknown> | undefined
       if (!parentTask) return { error: 'Parent task not found' }
 
+      pruneExpiredOrchestrationReceiptsOnce(db)
+      return withIdempotency(db, `task:${String(params.parent_task_id)}`, params.client_request_id as string | undefined, () => {
       const subtaskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
       const now = new Date().toISOString()
 
@@ -1325,6 +1342,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       triggerTaskAutomation()
 
       return { success: true, task: parsedSubtask }
+      })
     }
 
     case '/wait_for_subtasks': {
