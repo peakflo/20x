@@ -390,6 +390,28 @@ describe('AcpAgentAdapter - plan session update maps to todowrite', () => {
   })
 })
 
+describe('AcpAgentAdapter - unexpected error responses convert to an ERROR part, not plain text', () => {
+  it('marks an _isError event as MessagePartType.ERROR so it is never mistaken for a final answer', () => {
+    // Regression: this used to come out as {type: TEXT, role: 'assistant'},
+    // indistinguishable by type/role from a genuine completion — a turn
+    // that ended here was misclassified as finished instead of errored
+    // (see run-finalization.ts's classifyIdleEnd).
+    const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [] })
+    const priv = adapterPrivate(adapter)
+    const session = createMockSession('err-1')
+
+    const parts = priv.convertAcpEventToMessageParts(
+      { _isError: true, message: 'Unexpected error response', data: null },
+      new Set(), new Set(), new Map(), session
+    )
+
+    expect(parts).toHaveLength(1)
+    expect(parts[0].type).toBe(MessagePartType.ERROR)
+    expect(parts[0].role).toBe('assistant')
+    expect(parts[0].text).toContain('Unexpected error response')
+  })
+})
+
 describe('AcpAgentAdapter - Non-content updates must not fragment assistant turns', () => {
   it('available_commands_update between chunks does not start a new turn', () => {
     const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [] })

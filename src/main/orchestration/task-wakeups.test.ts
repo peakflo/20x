@@ -4,6 +4,7 @@ import {
   TaskWakeupStore,
   TaskWakeupQueue,
   computeWakeupDeliveryId,
+  reasonForChildStatus,
   type ParentDeliveryContext,
   type SubtaskSnapshot
 } from './task-wakeups'
@@ -160,7 +161,7 @@ describe('TaskWakeupQueue', () => {
     expect(store.listPending('parent-1')).toHaveLength(0)
   })
 
-  it('calls onGivenUp with the retired wake-ups when a parent is completed or gone', async () => {
+  it('retires silently (no onGivenUp) when a parent is completed or gone — nothing failed, a "could not be delivered" note would be misleading', async () => {
     const onGivenUp = vi.fn()
     ctx = makeContext({ completed: true })
     queue = new TaskWakeupQueue({ store, getDeliveryContext: () => ctx, send, onGivenUp, now: () => now })
@@ -172,11 +173,9 @@ describe('TaskWakeupQueue', () => {
 
     await queue.tryDeliver('parent-1')
 
-    expect(onGivenUp).toHaveBeenCalledTimes(1)
-    const [parentArg, wakeupsArg] = onGivenUp.mock.calls[0]
-    expect(parentArg).toBe('parent-1')
-    expect(wakeupsArg).toHaveLength(1)
-    expect(wakeupsArg[0].childTaskId).toBe('child-1')
+    expect(onGivenUp).not.toHaveBeenCalled()
+    // Still retired (not left pending forever) — just without the callback.
+    expect(store.listPending('parent-1')).toHaveLength(0)
   })
 
   it('retries a failed send and records the error without dropping the wake-up, backing off before the next attempt', async () => {
@@ -265,6 +264,23 @@ describe('TaskWakeupQueue', () => {
       .prepare("SELECT COUNT(*) as n FROM task_wakeups WHERE parent_task_id = 'parent-1'").get() as { n: number }
     expect(remaining.n).toBe(0)
   })
+
+  it('also prunes long-given-up rows, not just delivered ones', async () => {
+    ctx = makeContext({ completed: true })
+    const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', 'child_ready')
+    store.enqueue(
+      { parentTaskId: 'parent-1', childTaskId: 'child-1', reason: 'child_ready', deliveryId, payload: { childTitle: 'Child', childStatus: 'ready_for_review' } },
+      now
+    )
+    await queue.tryDeliver('parent-1') // retires it (parent completed) — given_up_at set, delivered_at stays NULL
+
+    now += 8 * 24 * 60 * 60 * 1000
+    await queue.sweep()
+
+    const remaining = (store as unknown as { db: import('better-sqlite3').Database }).db
+      .prepare("SELECT COUNT(*) as n FROM task_wakeups WHERE parent_task_id = 'parent-1'").get() as { n: number }
+    expect(remaining.n).toBe(0)
+  })
 })
 
 describe('TaskWakeupStore.markObserved', () => {
@@ -302,6 +318,49 @@ describe('TaskWakeupStore.markObserved', () => {
     const message = send.mock.calls[0][1]
     expect(message).toContain('child-2')
     expect(message).not.toContain('child-1')
+  })
+
+  it('narrows the race: observing BEFORE the real enqueue lays a tombstone, so the real enqueue is a no-op and never delivers', async () => {
+    // The child's status just flipped and the caller (wait_for_subtasks)
+    // observed it, but notifyParentOfSubtaskCompletion hasn't enqueued the
+    // real wake-up row yet — markObserved has nothing pending to consume.
+    const consumed = queue.markObserved('parent-1', 'child-1', 'ready_for_review', '2026-10-19T00:00:00.000Z')
+    expect(consumed).toBe(0)
+
+    // The real enqueue runs moments later, for the SAME transition.
+    const reason = reasonForChildStatus('ready_for_review')
+    const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', reason)
+    const enqueued = await queue.enqueueAndTryDeliver({
+      parentTaskId: 'parent-1',
+      childTaskId: 'child-1',
+      reason,
+      deliveryId,
+      payload: { childTitle: 'Child', childStatus: 'ready_for_review' }
+    })
+
+    // Collided with the tombstone's delivery_id — treated as "already
+    // enqueued", so nothing new was created and nothing was (redundantly) sent.
+    expect(enqueued).toBeNull()
+    expect(send).not.toHaveBeenCalled()
+    expect(store.listPending('parent-1')).toHaveLength(0)
+  })
+
+  it('does not lay a tombstone when markObserved is called without the child status/updated_at (backward-compatible 2-arg call)', async () => {
+    const consumed = queue.markObserved('parent-1', 'child-1')
+    expect(consumed).toBe(0)
+
+    const reason = reasonForChildStatus('ready_for_review')
+    const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', reason)
+    await queue.enqueueAndTryDeliver({
+      parentTaskId: 'parent-1',
+      childTaskId: 'child-1',
+      reason,
+      deliveryId,
+      payload: { childTitle: 'Child', childStatus: 'ready_for_review' }
+    })
+
+    // No tombstone was laid, so the real enqueue proceeds normally and delivers.
+    expect(send).toHaveBeenCalledTimes(1)
   })
 })
 

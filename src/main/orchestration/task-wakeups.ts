@@ -45,6 +45,19 @@ import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../.
 
 export type WakeupReason = 'child_ready' | 'child_completed' | 'child_error' | 'child_question'
 
+/**
+ * The reason a child's current status maps to — single source of truth so
+ * every caller that needs to compute a transition's deterministic
+ * `delivery_id` (a real enqueue, or a pre-observation tombstone — see
+ * `TaskWakeupStore.preObserve`) agrees on the same mapping, and therefore
+ * the same id.
+ */
+export function reasonForChildStatus(status: string): WakeupReason {
+  if (status === 'model_error') return 'child_error'
+  if (status === 'completed') return 'child_completed'
+  return 'child_ready'
+}
+
 export interface WakeupPayload {
   childTitle: string
   childStatus: string
@@ -231,10 +244,37 @@ export class TaskWakeupStore {
     return rows.length
   }
 
-  /** Drops delivered rows older than `olderThanMs` ago, so the table doesn't grow forever. */
+  /**
+   * Narrows the `wait_for_subtasks` race: the child's status change and the
+   * real `enqueue()` for its wake-up are not one atomic transaction, so a
+   * caller can observe the new status and call `markObserved` in the
+   * window BEFORE the real row exists — finding nothing to mark. Lays down
+   * an already-delivered row under the EXACT SAME deterministic
+   * `delivery_id` the real transition will use (see `reasonForChildStatus`
+   * + `computeWakeupDeliveryId`), so when the real `enqueue()` runs moments
+   * later, it hits the UNIQUE constraint and no-ops instead of creating a
+   * redundant pending row that gets delivered as a stale re-notification.
+   * A UNIQUE collision here (the real row won the race instead) is treated
+   * as success — `markObserved`'s normal path already covers that case.
+   */
+  preObserve(input: EnqueueWakeupInput, nowMs: number): void {
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO task_wakeups (id, parent_task_id, child_task_id, reason, delivery_id, payload, created_at, delivered_at, attempts, last_error, last_attempt_at, given_up_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL)`
+        )
+        .run(randomUUID(), input.parentTaskId, input.childTaskId, input.reason, input.deliveryId, JSON.stringify(input.payload), nowMs, nowMs)
+    } catch (err) {
+      if (err instanceof Error && /UNIQUE constraint failed/.test(err.message)) return
+      throw err
+    }
+  }
+
+  /** Drops delivered or given-up rows older than `olderThanMs` ago, so the table doesn't grow forever — neither kind is ever retried again. */
   pruneDelivered(nowMs: number, olderThanMs: number): number {
     const result = this.db
-      .prepare('DELETE FROM task_wakeups WHERE delivered_at IS NOT NULL AND delivered_at < ?')
+      .prepare('DELETE FROM task_wakeups WHERE (delivered_at IS NOT NULL OR given_up_at IS NOT NULL) AND COALESCE(delivered_at, given_up_at) < ?')
       .run(nowMs - olderThanMs)
     return result.changes
   }
@@ -353,9 +393,25 @@ export class TaskWakeupQueue {
    * has already observed this child's result through another channel (see
    * the module doc for why only `wait_for_subtasks` is a safe caller of
    * this today).
+   *
+   * `childStatus`/`childStatusEnteredAt` (the child's current status and its
+   * `updated_at`) let this narrow the race where the real wake-up hasn't
+   * been enqueued yet when the observation happens: if there's nothing
+   * pending to mark, a tombstone is laid down under the exact delivery_id
+   * the real enqueue will use (see `TaskWakeupStore.preObserve`), so that
+   * enqueue is a no-op instead of creating a redundant, later-delivered row.
    */
-  markObserved(parentTaskId: string, childTaskId: string): number {
-    return this.deps.store.markObserved(parentTaskId, childTaskId, this.now())
+  markObserved(parentTaskId: string, childTaskId: string, childStatus?: string, childStatusEnteredAt?: string): number {
+    const consumed = this.deps.store.markObserved(parentTaskId, childTaskId, this.now())
+    if (consumed === 0 && childStatus && childStatusEnteredAt) {
+      const reason = reasonForChildStatus(childStatus)
+      const deliveryId = computeWakeupDeliveryId(parentTaskId, childTaskId, childStatusEnteredAt, reason)
+      this.deps.store.preObserve(
+        { parentTaskId, childTaskId, reason, deliveryId, payload: { childTitle: childTaskId, childStatus } },
+        this.now()
+      )
+    }
+    return consumed
   }
 
   /** Same as `markObserved`, scoped to one reason — see `TaskWakeupStore.markObservedForReason`. */
@@ -378,7 +434,11 @@ export class TaskWakeupQueue {
 
     const ctx = this.deps.getDeliveryContext(parentTaskId)
     if (!ctx.exists || ctx.completed) {
-      this.giveUp(parentTaskId, pending, ctx.exists ? 'the parent task is already completed' : 'the parent task no longer exists')
+      // Nothing failed here — the parent legitimately finished (or was
+      // deleted) before this wake-up could be delivered. A "could not be
+      // delivered" note on an already-completed task's transcript would be
+      // misleading, so this retirement is silent — no onGivenUp callback.
+      this.giveUp(parentTaskId, pending, ctx.exists ? 'the parent task is already completed' : 'the parent task no longer exists', { silent: true })
       return
     }
     if (ctx.sessionBusy) return
@@ -425,9 +485,10 @@ export class TaskWakeupQueue {
     }
   }
 
-  private giveUp(parentTaskId: string, wakeups: Wakeup[], reason: string): void {
+  private giveUp(parentTaskId: string, wakeups: Wakeup[], reason: string, opts: { silent?: boolean } = {}): void {
     this.deps.store.giveUp(wakeups.map((w) => w.id), this.now())
     console.warn(`[TaskWakeupQueue] Giving up on ${wakeups.length} wake-up(s) for parent ${parentTaskId}: ${reason}`)
+    if (opts.silent) return
     try {
       this.deps.onGivenUp?.(parentTaskId, wakeups)
     } catch (err) {

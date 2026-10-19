@@ -1779,7 +1779,8 @@ describe('AgentManager transitionToIdle — completing without review', () => {
       // completion path always asks for subtasks.
       getSubtasks: vi.fn(() => [] as unknown[]),
       openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: 'task-1', sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
-      closeTaskRun: vi.fn(() => null),
+      closeTaskRun: vi.fn((sessionId: string, endedAt: number, endReason: string) => ({ id: 'run-1', taskId: 'task-1', sessionId, startedAt: 0, endedAt, endReason })),
+      upsertTranscriptParts: vi.fn(),
       // getTaskWakeupQueue() (called from transitionToIdle to deliver any
       // wake-ups pending for THIS task, now that it's idle) needs a real
       // sqlite handle to create TaskWakeupStore's table against.
@@ -1824,6 +1825,69 @@ describe('AgentManager transitionToIdle — completing without review', () => {
     const executeAction=vi.fn();mgr.setSyncManager({executeAction} as never)
     expect(await mgr.completeTaskWithoutReview('task-1')).toBe(false)
     expect(mockDb.updateTask).not.toHaveBeenCalled();expect(executeAction).not.toHaveBeenCalled()
+  })
+
+  it('a turn ending on a question is awaiting_input — status untouched, no completion wake-up to the parent', async () => {
+    const mockDb = makeDb({ parent_task_id: 'parent-1' })
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    const notifySpy = vi.spyOn(mgr, 'notifyParentOfSubtaskCompletion').mockResolvedValue(undefined)
+    const session = {
+      id: 'session-1',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      // The turn ended with a pending question, not a final text answer.
+      lastPartRole: 'assistant',
+      lastPartType: 'question',
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    // Never flipped to ready_for_review or model_error — left exactly as it was.
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ModelError })
+    // #650's own child_question wake-up owns notifying the parent — a
+    // generic "finished" wake-up here would double-notify.
+    expect(notifySpy).not.toHaveBeenCalled()
+    expect(mockDb.closeTaskRun).toHaveBeenCalledWith('session-1', expect.any(Number), 'awaiting_input')
+  })
+
+  it('persists the end-reason note to the transcript (not just a live, loseable renderer push)', async () => {
+    const mockDb = makeDb()
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    const session = {
+      id: 'session-1',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      // No final text, no question, no tool call — stopped_early.
+      lastPartRole: undefined as string | undefined,
+      lastPartType: undefined as string | undefined,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(mockDb.upsertTranscriptParts).toHaveBeenCalledWith('task-1', [
+      expect.objectContaining({
+        role: 'system',
+        partType: 'text',
+        content: expect.stringContaining('Stopped before finishing')
+      })
+    ])
   })
 })
 

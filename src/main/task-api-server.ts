@@ -636,6 +636,15 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     case '/update_task': {
+      // An explicit edit that could plausibly fix whatever caused an
+      // earlier auto-start/auto-complete failure (reassigning an agent,
+      // changing status) resets both retry budgets — otherwise a days-old
+      // exhausted count keeps silently blocking automation even after the
+      // actual cause is gone.
+      if (params.task_id && (params.agent_id !== undefined || params.status !== undefined)) {
+        db.clearAutomationRetryCount(params.task_id as string, 'start')
+        db.clearAutomationRetryCount(params.task_id as string, 'complete')
+      }
       if (params.status && params.status !== 'in_progress') {
         try { db.updateTask(params.task_id as string, { status: params.status as never }) }
         catch (error) { return { error: error instanceof Error ? error.message : 'Task status refused' } }
@@ -1409,6 +1418,12 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (!params.task_id) return { error: 'task_id is required' }
       if (!agentController) return { error: 'Agent controller not available' }
 
+      // An explicit start request (a human via the renderer/IPC, or an
+      // agent via MCP) is a fresh attempt, not another tick of the
+      // scheduler's own auto-retry loop — give it a full retry budget
+      // instead of letting a run exhausted days ago silently block it.
+      db.clearAutomationRetryCount(String(params.task_id), 'start')
+
       pruneExpiredOrchestrationReceiptsOnce(db)
       const startController = agentController
       return withIdempotency(
@@ -1614,7 +1629,17 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         if (!agentController) return
         for (const subtask of subtasks) {
           if (terminalStatuses.includes(String(subtask.status))) {
-            agentController.getTaskWakeupQueue().markObserved(parentTaskId, String(subtask.id))
+            // Pass the child's status/updated_at too: if the real wake-up
+            // row hasn't been enqueued yet (narrow race between the
+            // status change and notifyParentOfSubtaskCompletion), this lets
+            // markObserved lay down a tombstone under the same deterministic
+            // delivery_id instead of only consuming a row that may not exist yet.
+            agentController.getTaskWakeupQueue().markObserved(
+              parentTaskId,
+              String(subtask.id),
+              String(subtask.status),
+              String(subtask.updated_at)
+            )
           }
         }
       }

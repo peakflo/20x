@@ -30,6 +30,15 @@ import type { DatabaseManager } from '../database'
 /** Receipts older than this are no longer honored and are pruned on sight. */
 export const ORCHESTRATION_RECEIPT_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
+/**
+ * A claim (result IS NULL) older than this is treated as abandoned — the
+ * call that made it crashed or was killed before it could ever complete or
+ * release it. Without this, every retry with the same key would wait out
+ * `CONCURRENT_WAIT_TIMEOUT_MS` and then error, for up to the full 7-day
+ * receipt TTL.
+ */
+export const STALE_CLAIM_MS = 2 * 60 * 1000
+
 /** How long a caller waits for a CONCURRENT duplicate call (same key, already in flight) to finish, before giving up. */
 const CONCURRENT_WAIT_TIMEOUT_MS = 10_000
 const CONCURRENT_POLL_INTERVAL_MS = 50
@@ -67,7 +76,19 @@ export async function withIdempotency<T>(
 ): Promise<T> {
   if (!clientRequestId) return await fn()
 
-  const won = db.claimOrchestrationReceipt(scope, clientRequestId, Date.now())
+  let won = db.claimOrchestrationReceipt(scope, clientRequestId, Date.now())
+  if (!won) {
+    // Someone already holds this key. If their claim is old enough that
+    // they can't possibly still be running (a crash or kill mid-call, with
+    // no throw to ever release it), treat it as abandoned: clear it and
+    // claim fresh ourselves, instead of waiting out the full concurrent-wait
+    // timeout for a call that will never complete.
+    const existing = db.getOrchestrationReceipt(scope, clientRequestId)
+    if (existing?.isPending && Date.now() - existing.createdAt > STALE_CLAIM_MS) {
+      db.releaseOrchestrationReceiptClaim(scope, clientRequestId)
+      won = db.claimOrchestrationReceipt(scope, clientRequestId, Date.now())
+    }
+  }
   if (!won) {
     // Someone else already claimed this key — wait for it to resolve
     // (genuinely concurrent duplicate), or return immediately if it already
@@ -120,8 +141,27 @@ export function pruneExpiredOrchestrationReceiptsOnce(db: DatabaseManager, nowMs
   lastPruneAtMs = nowMs
   try {
     db.pruneExpiredOrchestrationReceipts(nowMs, ORCHESTRATION_RECEIPT_TTL_MS)
+    // Defense in depth for a stale claim nobody ever retries (so the inline
+    // check in withIdempotency never gets a chance to clear it itself).
+    db.clearStalePendingOrchestrationReceipts(nowMs, STALE_CLAIM_MS)
   } catch (err) {
     console.error('[Idempotency] pruneExpiredOrchestrationReceipts failed:', err)
+  }
+}
+
+/**
+ * Clears every pending (uncompleted) claim. Call exactly once at startup,
+ * before anything can retry an orchestration tool call: no claim made in a
+ * PREVIOUS run of the app could possibly still be "in flight" — the process
+ * that would complete it is gone — so every pending row left over is
+ * abandoned by definition, not just "probably" stale.
+ */
+export function clearAllPendingOrchestrationReceiptsOnStartup(db: DatabaseManager): void {
+  try {
+    const cleared = db.clearAllPendingOrchestrationReceipts()
+    if (cleared > 0) console.log(`[Idempotency] Cleared ${cleared} pending orchestration receipt claim(s) left over from before a restart.`)
+  } catch (err) {
+    console.error('[Idempotency] clearAllPendingOrchestrationReceipts failed:', err)
   }
 }
 

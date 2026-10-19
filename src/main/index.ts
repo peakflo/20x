@@ -39,6 +39,7 @@ import { EnterpriseStateSync } from './enterprise-state-sync'
 import { UI_COMMAND_CHANNEL } from '../shared/ui-commands'
 import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiCommandSender, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { runRestartRepair } from './orchestration/restart-repair'
+import { clearAllPendingOrchestrationReceiptsOnStartup } from './orchestration/idempotency'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
@@ -1100,6 +1101,12 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.warn('[Main] Harness account check failed:', err)
   }
+
+  // No orchestration tool call from a previous run could possibly still be
+  // "in flight" — clear every pending idempotency claim left over from
+  // before this restart, so a retry doesn't wait out the concurrent-wait
+  // timeout for a call that will never complete.
+  clearAllPendingOrchestrationReceiptsOnStartup(db)
 
   // Restart repair: shutdown stops every in-memory session but leaves its
   // task's DB row exactly as it was — `agent_working` or `triaging` forever,
