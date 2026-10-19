@@ -19,6 +19,28 @@ describe('SecretScrubber', () => {
     expect(s.scrub(`encoded: ${b64}`)).toBe('encoded: «$X»')
   })
 
+  // Re-review (round 3, Minor — a PR body overclaim corrected into an
+  // actual fix): base64 groups bytes 3-at-a-time, so a value embedded
+  // inside a larger string that then gets base64-encoded AS A WHOLE
+  // (`echo "token=$SECRET" | base64`, a JSON blob containing the secret,
+  // …) produces a DIFFERENT substring for the value's own bytes depending
+  // on how many bytes of prefix content precede it (mod 3) — three
+  // possible phases, not just the "encoded completely alone" case.
+  it('matches a base64-encoded value embedded at every byte-alignment phase inside a larger encoded blob', () => {
+    const value = 'sk-verysecretvalue123456789'
+    const s = new SecretScrubber([{ name: 'X', value }])
+    for (let prefixLen = 0; prefixLen < 6; prefixLen++) {
+      // Different prefix lengths cycle through all 3 possible phases
+      // (prefixLen mod 3) twice, to catch an off-by-one in the phase math.
+      const prefix = 'p'.repeat(prefixLen)
+      const suffix = '-trailing-stuff'
+      const wholeEncoded = Buffer.from(`${prefix}${value}${suffix}`, 'utf8').toString('base64')
+      const result = s.scrub(`encoded: ${wholeEncoded}`)
+      expect(result, `prefixLen=${prefixLen}`).toContain('«$X»')
+      expect(result, `prefixLen=${prefixLen}`).not.toBe(`encoded: ${wholeEncoded}`)
+    }
+  })
+
   it('matches base64url-encoded form of the value', () => {
     const value = 'sk-very/secret+value123=='
     const s = new SecretScrubber([{ name: 'X', value }])

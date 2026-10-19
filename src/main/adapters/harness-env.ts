@@ -47,6 +47,16 @@ export const KNOWN_PROVIDER_CREDENTIAL_ENV_VARS = [
   'NPM_TOKEN',
   'GITHUB_TOKEN',
   'GH_TOKEN',
+  // Found while testing the round-3 re-review's AWS/Bedrock gating fix:
+  // neither of these two matches CREDENTIAL_SUFFIX_RE below (one ends in
+  // "_ID", the other in "_BEDROCK" — neither is "_ACCESS_KEY"/"_TOKEN"/
+  // etc.), so buildHarnessBaseEnv never actually stripped them — they
+  // passed through to every harness unconditionally, regardless of any
+  // Bedrock-mode gate, the whole time. Their sibling vars
+  // (AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN) were always explicit-listed;
+  // these two just happened to be missing.
+  'AWS_ACCESS_KEY_ID',
+  'AWS_BEARER_TOKEN_BEDROCK',
   'AWS_SECRET_ACCESS_KEY',
   'AWS_SESSION_TOKEN'
 ] as const

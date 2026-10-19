@@ -1482,19 +1482,28 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
   // custom gateway, and Bedrock — with no re-add, breaking agents that rely
   // on any of them.
   describe('Claude Code\'s own alternate auth modes are re-added ambiently', () => {
-    const CASES: Array<{ name: string; value: string }> = [
+    // `gate`, when set, is an ambient env var that must ALSO be present for
+    // the re-add to happen — re-review (round 3, Medium): the AWS triad and
+    // ANTHROPIC_AUTH_TOKEN used to be re-added unconditionally, so an agent
+    // that never uses Bedrock or a custom gateway still got whatever
+    // AWS/gateway credentials happened to sit in the ambient shell env.
+    // CLAUDE_CODE_OAUTH_TOKEN has no such flag — its own presence is the
+    // signal, same as before.
+    const CASES: Array<{ name: string; value: string; gate?: string }> = [
       { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'setup-token-value-123456' },
-      { name: 'ANTHROPIC_AUTH_TOKEN', value: 'gateway-auth-token-123456' },
-      { name: 'AWS_BEARER_TOKEN_BEDROCK', value: 'bedrock-bearer-token-123456' },
-      { name: 'AWS_ACCESS_KEY_ID', value: 'AKIAEXAMPLE123456' },
-      { name: 'AWS_SECRET_ACCESS_KEY', value: 'aws-secret-access-key-123456' },
-      { name: 'AWS_SESSION_TOKEN', value: 'aws-session-token-123456' }
+      { name: 'ANTHROPIC_AUTH_TOKEN', value: 'gateway-auth-token-123456', gate: 'ANTHROPIC_BASE_URL' },
+      { name: 'AWS_BEARER_TOKEN_BEDROCK', value: 'bedrock-bearer-token-123456', gate: 'CLAUDE_CODE_USE_BEDROCK' },
+      { name: 'AWS_ACCESS_KEY_ID', value: 'AKIAEXAMPLE123456', gate: 'CLAUDE_CODE_USE_BEDROCK' },
+      { name: 'AWS_SECRET_ACCESS_KEY', value: 'aws-secret-access-key-123456', gate: 'CLAUDE_CODE_USE_BEDROCK' },
+      { name: 'AWS_SESSION_TOKEN', value: 'aws-session-token-123456', gate: 'CLAUDE_CODE_USE_BEDROCK' }
     ]
 
-    for (const { name, value } of CASES) {
-      it(`re-adds ambient ${name} and registers it with the scrubber`, async () => {
+    for (const { name, value, gate } of CASES) {
+      it(`re-adds ambient ${name} and registers it with the scrubber${gate ? ` (when ${gate} is set)` : ''}`, async () => {
         const prev = process.env[name]
+        const prevGate = gate ? process.env[gate] : undefined
         process.env[name] = value
+        if (gate) process.env[gate] = '1'
         try {
           const options = await sendAndCaptureOptions({})
           expect(options.env[name]).toBe(value)
@@ -1507,6 +1516,32 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
         } finally {
           if (prev === undefined) delete process.env[name]
           else process.env[name] = prev
+          if (gate) {
+            if (prevGate === undefined) delete process.env[gate]
+            else process.env[gate] = prevGate
+          }
+        }
+      })
+    }
+
+    const GATED_CASES = CASES.filter((c) => c.gate)
+    for (const { name, value, gate } of GATED_CASES) {
+      it(`does NOT re-add ambient ${name} when ${gate} is not set`, async () => {
+        const prev = process.env[name]
+        const prevGate = process.env[gate!]
+        // Explicitly absent — simulates the common case where the ambient
+        // shell has leftover AWS/gateway credentials for an unrelated
+        // purpose, and this agent never turned on Bedrock/gateway mode.
+        delete process.env[gate!]
+        process.env[name] = value
+        try {
+          const options = await sendAndCaptureOptions({})
+          expect(options.env[name]).toBeUndefined()
+        } finally {
+          if (prev === undefined) delete process.env[name]
+          else process.env[name] = prev
+          if (prevGate === undefined) delete process.env[gate!]
+          else process.env[gate!] = prevGate
         }
       })
     }
@@ -1695,6 +1730,43 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
     expect(stdout).toContain('before')
     expect(stdout).not.toContain('SHOULD_NOT_PRINT')
     expect(stdout).toContain('OUTER_EC=0')
+  })
+
+  // Nit, re-review (round 3): a predictable fallback path
+  // (`/tmp/.20x-cwd-$$`, guessable by PID in a shared, world-writable
+  // directory) used to be used when `mktemp` itself was unavailable. Fails
+  // closed now instead: no predictable path is ever used, and the wrapper's
+  // actual security-relevant job (exit-status reporting, so the command
+  // still routes through the rewritable PostToolUse hook) keeps working
+  // regardless of whether `mktemp` succeeds.
+  it('fails closed (no predictable fallback tmp path) and still reports the real exit status when mktemp is unavailable', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    const result = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo before; exit 3; echo SHOULD_NOT_PRINT' }
+    })
+    const wrapped = result.hookSpecificOutput.updatedInput.command as string
+    expect(wrapped).not.toContain('/tmp/.20x-cwd-')
+
+    const { mkdtempSync, writeFileSync } = await vi.importActual<typeof import('fs')>('fs')
+    const { tmpdir } = await import('os')
+    const { join } = await import('path')
+    const { execFileSync } = await vi.importActual<typeof import('child_process')>('child_process')
+    const dir = mkdtempSync(join(tmpdir(), 'mktemp-fail-'))
+    // A fake `mktemp` that always fails, shadowing the real one for this
+    // shell only — simulates mktemp being unavailable/broken.
+    const scriptFile = join(dir, 'wrapped.sh')
+    writeFileSync(scriptFile, `mktemp() { return 1; }\n${wrapped}`, 'utf-8')
+    const stdout = execFileSync('bash', ['-c', `source "$1" 2>&1; echo OUTER_EC=$?`, 'bash', scriptFile], { encoding: 'utf-8' })
+    expect(stdout).toContain('before')
+    expect(stdout).not.toContain('SHOULD_NOT_PRINT')
+    expect(stdout).toContain('[20x] command exited with status 3')
+    expect(stdout).toContain('OUTER_EC=0')
+
+    const { readdirSync } = await vi.importActual<typeof import('fs')>('fs')
+    expect(readdirSync('/tmp').some((f) => f.startsWith('.20x-cwd-'))).toBe(false)
   })
 
   it('does not wrap the command when the session has nothing to scrub (no behavior change)', async () => {

@@ -873,6 +873,25 @@ describe('AcpAgentAdapter buildEnv — credential re-adds and the shell-credenti
     }
   })
 
+  // Minor/Medium finding, re-review (round 3): GEMINI_API_KEY used to be
+  // re-added unconditionally for every ACP agent, not just Gemini CLI — so
+  // cursor-agent (or any other registry/local-command ACP agent) picked up
+  // a Gemini key it had no use for whenever one happened to sit in the
+  // ambient shell env, reopening the exact leak path the denylist exists
+  // to close for an agent that doesn't actually need it.
+  it('does NOT re-add ambient GEMINI_API_KEY for a non-Gemini ACP agent (e.g. cursor-agent)', () => {
+    const prev = process.env.GEMINI_API_KEY
+    process.env.GEMINI_API_KEY = 'gemini-key-value-123456'
+    try {
+      const adapter = new AcpAgentAdapter({ command: 'cursor-agent', args: [] })
+      const env = buildEnv(adapter, {})
+      expect(env.GEMINI_API_KEY).toBeUndefined()
+    } finally {
+      if (prev === undefined) delete process.env.GEMINI_API_KEY
+      else process.env.GEMINI_API_KEY = prev
+    }
+  })
+
   it('does not pass ambient GH_TOKEN through by default, but does once the agent opts in', () => {
     const prev = process.env.GH_TOKEN
     process.env.GH_TOKEN = 'gh-token-value-123456'
