@@ -72,15 +72,47 @@ export interface SessionConfig {
     anthropic?: string
     cursor?: string
   }
-  /** Port of the local secret broker HTTP server */
+  /** Port of the local secret broker HTTP server. */
   secretBrokerPort?: number
-  /** Per-session token for authenticating with the secret broker */
+  /**
+   * Per-session token for authenticating with the secret broker. Not a user
+   * secret — an ephemeral, loopback-only, revoked-on-session-end capability
+   * token. May appear in a command's loader line; a real secret value never
+   * does.
+   */
   secretSessionToken?: string
-  /** Absolute path to the secret-shell.sh wrapper script */
-  secretShellPath?: string
-  /** Decrypted secret env vars to inject directly into the agent process env.
-   *  Used when the agent runtime doesn't respect $SHELL (e.g. Claude Code). */
+  /** Absolute path to the shared secret-loader script (secret-broker.ts's `writeSecretLoaderScript()`). */
+  secretLoaderPath?: string
+  /**
+   * Decrypted secret env vars. Only read by harnesses with no command-scoped
+   * exec hook to route through the broker instead (Codex, ACP, Pi — see each
+   * adapter's buildEnv/processEnv). Claude Code and OpenCode get secrets
+   * exclusively through the broker+loader (secretBrokerPort/secretSessionToken/
+   * secretLoaderPath above) and never read this field.
+   */
   secretEnvVars?: Record<string, string>
+  /**
+   * Every secret this agent is configured with, independent of how they
+   * reach the harness. Used ONLY to build this session's SecretScrubber
+   * (secret-entries.ts) — a value delivered through the broker+loader still
+   * needs scrubbing from command output (`echo $VAR`, a verbose curl, a
+   * script that logs its own config) exactly like one delivered via
+   * secretEnvVars. No adapter should read this for injection; that would
+   * reintroduce the plaintext-in-env problem this field is deliberately
+   * kept separate from.
+   */
+  secretsForScrubbing?: Record<string, string>
+  /**
+   * Explicit per-agent acknowledgement that this harness places secrets in
+   * its own full process environment (Codex/ACP/Pi — no command-scoped hook
+   * exists to route them through the broker instead). **Off by default**
+   * (re-reviewed: was "defaults to true") — a harness with no command-scoped
+   * delivery hands a configured secret to every tool and subprocess it
+   * spawns, with nothing to scrub what happens to it there, so an agent
+   * must explicitly set this to true to receive its secrets through this
+   * path. Ignored by Claude Code/OpenCode, which never need it.
+   */
+  allowSecretsInEnv?: boolean
   /** Whether the OpenCode tillDone runtime plugin should enforce todo completion for this session. */
   tillDone?: boolean
   /** Agent's `pass_shell_credentials` opt-in — see `AgentConfigRecord` for the full explanation. Off (undefined/false) is the default, safer posture. */

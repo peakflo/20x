@@ -1,23 +1,37 @@
 /**
  * Secret Broker — local HTTP server for secure secret injection.
  *
- * Runs in the Electron main process, listens on 127.0.0.1:{random port}.
- * Agent shell wrappers call this to fetch decrypted secrets at command execution time.
- * Secrets never enter the agent process environment directly — only the broker
- * port and a per-session token are passed to the agent.
+ * Runs in the Electron main process, listens on 127.0.0.1:{random port} only.
+ * A harness-specific hook/plugin (the PreToolUse hook in claude-code-adapter.ts,
+ * the OpenCode plugin in opencode-adapter.ts) rewrites the single command about
+ * to run into a tiny loader call that fetches this session's secrets from the
+ * broker and `eval`s the result — so the exported values live only inside that
+ * one command's own shell process, never in the agent's own process env, never
+ * in a file in the workspace, and never as a literal value in the command text
+ * that gets shown in the transcript.
  *
- * Flow:
+ * Flow (per Bash/shell tool call, not per session):
  *   1. Agent session starts → registerSecretSession(token, agentId, secretIds)
- *   2. Agent's SHELL is set to secret-shell.sh wrapper
- *   3. Wrapper calls GET /secrets/export?token=<token>
- *   4. Broker decrypts secrets from SQLite, returns export KEY='val' statements
- *   5. Wrapper evals exports, unsets broker vars, exec's real shell
- *   6. The real shell command runs with secrets in env — agent process never has them
+ *   2. The hook/plugin rewrites `command` to:
+ *        eval "$(<secret-loader.sh> <port> <token>)"
+ *        <original command>
+ *   3. The loader calls GET /secrets/export with `Authorization: Bearer <token>`
+ *   4. Broker decrypts secrets from SQLite, returns `export KEY='val'` lines
+ *   5. The subshell `eval`s them, then the original command runs with the
+ *      secrets in ITS OWN env only — nothing else on the machine ever sees them
+ *   6. Session ends → unregisterSecretSession(token) — the token stops working
+ *      immediately, even if it leaked into a log somewhere
+ *
+ * The broker token itself (not a user secret — an ephemeral, per-session,
+ * loopback-only, revoked-on-end capability) is allowed to appear in the
+ * command text the loader line shows — the guarantee this module exists for
+ * is that no *secret value* ever does.
  */
 
-import { createServer, type Server as HttpServer } from 'http'
-import { writeFileSync, chmodSync } from 'fs'
+import { createServer, type Server as HttpServer, type IncomingMessage } from 'http'
+import { writeFileSync, chmodSync, existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
+import { createHash, timingSafeEqual } from 'crypto'
 import { app } from 'electron'
 import type { DatabaseManager } from './database'
 
@@ -25,20 +39,50 @@ let server: HttpServer | null = null
 let port: number | null = null
 let dbRef: DatabaseManager | null = null
 
-// session token → { agentId, secretIds }
+// SHA-256(token) hex → { agentId, secretIds }. Keyed by hash, never by the
+// raw token, so a lookup never has to branch on the token's own bytes.
 const activeSessions = new Map<string, { agentId: string; secretIds: string[] }>()
+
+function hashToken(token: string): Buffer {
+  return createHash('sha256').update(token, 'utf8').digest()
+}
+
+/**
+ * Constant-time membership check: every registered session's digest is
+ * compared against the candidate with `timingSafeEqual` (itself constant-time
+ * for equal-length buffers, which SHA-256 digests always are), and every
+ * entry is checked regardless of an earlier match — so the total time taken
+ * depends only on how many sessions are registered, never on how close a
+ * wrong guess got.
+ */
+function findSessionForToken(token: string): { agentId: string; secretIds: string[] } | null {
+  const candidate = hashToken(token)
+  let found: { agentId: string; secretIds: string[] } | null = null
+  for (const [digestHex, session] of activeSessions) {
+    if (timingSafeEqual(candidate, Buffer.from(digestHex, 'hex'))) found = session
+  }
+  return found
+}
+
+function readBearerToken(authHeader: string | string[] | undefined): string | null {
+  const header = Array.isArray(authHeader) ? authHeader[0] : authHeader
+  if (!header) return null
+  const match = /^Bearer\s+(.+)$/i.exec(header.trim())
+  return match?.[1]?.trim() || null
+}
 
 export function getSecretBrokerPort(): number | null {
   return port
 }
 
 export function registerSecretSession(token: string, agentId: string, secretIds: string[]): void {
-  activeSessions.set(token, { agentId, secretIds })
+  activeSessions.set(hashToken(token).toString('hex'), { agentId, secretIds })
   console.log(`[SecretBroker] Registered session for agent ${agentId} with ${secretIds.length} secret(s)`)
 }
 
+/** Revokes a token immediately — called on every session-ending path (stop/destroy/cleanup). */
 export function unregisterSecretSession(token: string): void {
-  activeSessions.delete(token)
+  activeSessions.delete(hashToken(token).toString('hex'))
 }
 
 export function startSecretBroker(db: DatabaseManager): Promise<number> {
@@ -46,37 +90,33 @@ export function startSecretBroker(db: DatabaseManager): Promise<number> {
   dbRef = db
 
   return new Promise((resolve, reject) => {
-    server = createServer((req, res) => {
+    server = createServer((req: IncomingMessage, res) => {
       const url = new URL(req.url || '/', 'http://localhost')
 
       if (url.pathname === '/secrets/export') {
-        const token = url.searchParams.get('token')
-        if (!token || !activeSessions.has(token)) {
-          console.log(`[SecretBroker] 403 — invalid/missing token: ${token ? token.substring(0, 8) + '...' : 'null'}`)
+        const token = readBearerToken(req.headers.authorization)
+        const session = token ? findSessionForToken(token) : null
+        if (!session) {
           res.writeHead(403, { 'Content-Type': 'text/plain' })
           res.end('')
           return
         }
 
-        const session = activeSessions.get(token)!
         if (!dbRef) {
-          console.log('[SecretBroker] 500 — dbRef is null')
           res.writeHead(500, { 'Content-Type': 'text/plain' })
           res.end('')
           return
         }
 
-        console.log(`[SecretBroker] Fetching secrets for agent ${session.agentId}, secretIds: [${session.secretIds.join(', ')}]`)
         const secrets = dbRef.getSecretsWithValues(session.secretIds)
-        console.log(`[SecretBroker] Found ${secrets.length} secret(s): [${secrets.map(s => `${s.env_var_name}(${s.value.length} chars)`).join(', ')}]`)
+        // Names and a count only — never values, never the request itself.
+        console.log(`[SecretBroker] Served ${secrets.length} secret(s) to agent ${session.agentId}: [${secrets.map((s) => s.env_var_name).join(', ')}]`)
 
-        // Return shell export statements
-        // Single-quote values and escape embedded single quotes
+        // Single-quote values and escape embedded single quotes.
         const exports = secrets
-          .map(s => `export ${s.env_var_name}='${s.value.replace(/'/g, "'\\''")}'`)
+          .map((s) => `export ${s.env_var_name}='${s.value.replace(/'/g, "'\\''")}'`)
           .join('\n')
 
-        console.log(`[SecretBroker] Response body length: ${exports.length} bytes`)
         res.writeHead(200, { 'Content-Type': 'text/plain' })
         res.end(exports)
         return
@@ -86,7 +126,7 @@ export function startSecretBroker(db: DatabaseManager): Promise<number> {
       res.end('')
     })
 
-    // Listen on random available port, loopback only
+    // Listen on random available port, loopback only.
     server.listen(0, '127.0.0.1', () => {
       const addr = server!.address()
       if (typeof addr === 'object' && addr) {
@@ -111,109 +151,69 @@ export function stopSecretBroker(): void {
   activeSessions.clear()
 }
 
-/**
- * Writes the secret shell wrapper script to the app's userData directory.
- * This script is set as $SHELL for agent processes — it transparently fetches
- * secrets from the broker before executing the real shell.
- *
- * Returns the absolute path to the wrapper script.
- */
-export function writeSecretShellWrapper(): string {
-  const isWin = process.platform === 'win32'
+function secretLoaderDir(): string {
+  const dir = join(app.getPath('userData'), 'secret-loader')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
+  return dir
+}
 
-  if (isWin) {
-    return writeWindowsSecretShellWrapper()
-  }
-
-  const shellPath = join(app.getPath('userData'), 'secret-shell.sh')
-
-  const debugLog = join(app.getPath('userData'), 'secret-shell-debug.log')
-
-  const script = `#!/bin/bash
-# 20x Secret Shell Wrapper
-# Fetches secrets from the local broker and injects them into the command environment.
-# The agent process has _20X_SB_PORT and _20X_SB_TOKEN but NOT the actual secret values.
-
-_real_shell="\${_20X_REAL_SHELL:-/bin/bash}"
-
-# Fetch secrets from broker and export them
-if [ -n "\$_20X_SB_PORT" ] && [ -n "\$_20X_SB_TOKEN" ]; then
-  _20x_http_code=\$(curl -sf -o /tmp/_20x_secrets_body -w "%{http_code}" "http://127.0.0.1:\${_20X_SB_PORT}/secrets/export?token=\${_20X_SB_TOKEN}" 2>/dev/null)
-  _20x_secrets=\$(cat /tmp/_20x_secrets_body 2>/dev/null)
-  rm -f /tmp/_20x_secrets_body
-
-  # Debug logging
-  echo "[secret-shell \$(date '+%H:%M:%S')] port=\$_20X_SB_PORT http_code=\$_20x_http_code body_len=\${#_20x_secrets} args=\$*" >> "${debugLog}"
-
-  if [ -n "\$_20x_secrets" ]; then
-    eval "\$_20x_secrets"
-  fi
-  # Clean up broker vars so they don't leak into command output
-  unset _20X_SB_PORT _20X_SB_TOKEN _20X_REAL_SHELL _20x_secrets _20x_http_code
+// Takes (port, token) as plain arguments — no file, no env var, nothing
+// written to disk per session. Stdout carries ONLY the broker's `export`
+// lines (or nothing) — the channel the caller's `eval "$(...)"` captures and
+// runs — so a secret value is the only thing that can ever reach the
+// command it's injected into. Never enables `-x`. Fails closed on any
+// error: nothing is exported, the original command still runs (just without
+// secrets), and a one-line diagnostic goes to STDERR, which `eval "$(...)"`
+// does NOT capture — it reaches the harness's own stderr/log, not the
+// command's captured stdout or the transcript the model sees as output.
+const POSIX_LOADER = `#!/bin/bash
+port="$1"
+token="$2"
+if [ -z "$port" ] || [ -z "$token" ]; then
+  echo "20x secret-loader: missing port/token — failing closed, no secrets available" >&2
+  exit 1
 fi
-
-# Execute the real shell with original arguments
-exec "\$_real_shell" "\$@"
+if ! curl -sf -H "Authorization: Bearer $token" "http://127.0.0.1:$port/secrets/export"; then
+  echo "20x secret-loader: could not reach the secret broker at 127.0.0.1:$port — failing closed, no secrets available" >&2
+  exit 1
+fi
 `
 
-  writeFileSync(shellPath, script, 'utf-8')
-  chmodSync(shellPath, 0o755)
-  console.log(`[SecretBroker] Wrote shell wrapper to ${shellPath}`)
-  return shellPath
+// Windows equivalent, for harnesses/paths that invoke the loader through
+// PowerShell rather than a POSIX shell (currently none do — kept for parity
+// and so a future Windows-side caller does not have to reinvent this).
+const WINDOWS_LOADER = `param([string]$Port, [string]$Token)
+if (-not $Port -or -not $Token) {
+  Write-Error "20x secret-loader: missing port/token — failing closed, no secrets available"
+  exit 1
 }
+try {
+  $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/secrets/export" -Headers @{ Authorization = "Bearer $Token" } -UseBasicParsing -TimeoutSec 5
+  Write-Output $response.Content
+} catch {
+  Write-Error "20x secret-loader: could not reach the secret broker at 127.0.0.1:$Port — failing closed, no secrets available"
+  exit 1
+}
+`
 
 /**
- * Windows equivalent of the secret shell wrapper using PowerShell.
- * Fetches secrets from the broker and injects them as environment variables
- * before executing the real command.
+ * Writes the shared secret-loader script (idempotent — written once, shared
+ * by every session and every harness that wraps a command with it) and
+ * returns its path. Callers build the command-text invocation themselves:
+ * `eval "$(<loaderPath> <port> <token>)"`.
  */
-function writeWindowsSecretShellWrapper(): string {
-  const shellPath = join(app.getPath('userData'), 'secret-shell.ps1')
-  const debugLog = join(app.getPath('userData'), 'secret-shell-debug.log').replace(/\\/g, '\\\\')
-
-  const script = `# 20x Secret Shell Wrapper (Windows PowerShell)
-# Fetches secrets from the local broker and injects them into the command environment.
-
-$ErrorActionPreference = "SilentlyContinue"
-
-if ($env:_20X_SB_PORT -and $env:_20X_SB_TOKEN) {
-    try {
-        $response = Invoke-WebRequest -Uri "http://127.0.0.1:$($env:_20X_SB_PORT)/secrets/export?token=$($env:_20X_SB_TOKEN)" -UseBasicParsing -TimeoutSec 5
-        $secrets = $response.Content
-
-        # Debug logging
-        $timestamp = Get-Date -Format "HH:mm:ss"
-        Add-Content -Path "${debugLog}" -Value "[secret-shell $timestamp] port=$($env:_20X_SB_PORT) status=$($response.StatusCode) body_len=$($secrets.Length) args=$args"
-
-        if ($secrets) {
-            # Parse KEY=VALUE lines and set as environment variables
-            $secrets -split "\\n" | ForEach-Object {
-                if ($_ -match "^export\\s+([^=]+)=(.*)$") {
-                    $key = $Matches[1]
-                    $val = $Matches[2] -replace "^['\"]|['\"]$", ""
-                    [Environment]::SetEnvironmentVariable($key, $val, "Process")
-                }
-            }
-        }
-    } catch {
-        Add-Content -Path "${debugLog}" -Value "[secret-shell $(Get-Date -Format 'HH:mm:ss')] ERROR: $_"
-    }
-
-    # Clean up broker vars
-    Remove-Item Env:\\_20X_SB_PORT -ErrorAction SilentlyContinue
-    Remove-Item Env:\\_20X_SB_TOKEN -ErrorAction SilentlyContinue
-    Remove-Item Env:\\_20X_REAL_SHELL -ErrorAction SilentlyContinue
+export function writeSecretLoaderScript(): string {
+  const dir = secretLoaderDir()
+  const isWin = process.platform === 'win32'
+  const loaderPath = join(dir, isWin ? 'secret-loader.ps1' : 'secret-loader.sh')
+  if (!existsSync(loaderPath)) {
+    writeFileSync(loaderPath, isWin ? WINDOWS_LOADER : POSIX_LOADER, 'utf-8')
+    if (!isWin) chmodSync(loaderPath, 0o755)
+  }
+  return loaderPath
 }
 
-# Execute the real command with original arguments
-if ($args.Count -gt 0) {
-    & $args[0] $args[1..($args.Count-1)]
-} else {
-    cmd.exe /c
-}
-`
-
-  writeFileSync(shellPath, script, 'utf-8')
-  console.log(`[SecretBroker] Wrote shell wrapper to ${shellPath}`)
-  return shellPath
+/** Shell-quotes a command-line argument for the loader invocation (the token). Single-quote, escape embedded single quotes — same convention as the export lines above. */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`
 }
