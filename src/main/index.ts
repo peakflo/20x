@@ -1107,6 +1107,19 @@ app.whenReady().then(async () => {
   mcpToolCaller.setOAuthManager(oauthManager)
   agentManager.setOAuthManager(oauthManager)
 
+  // Start the MCP auth proxy unconditionally (not just for enterprise auth):
+  // any remote MCP server authenticated via OAuthManager routes its Bearer
+  // token through this loopback proxy too, so the token never sits in the
+  // --mcp-config JSON a harness's CLI spawns with (visible to `ps -ef`).
+  // The later enterprise-restore path (if any) just supplies its own
+  // default token provider on top of the same running proxy.
+  try {
+    const proxyPort = await startMcpAuthProxy()
+    console.log(`[Main] MCP auth proxy started on port ${proxyPort}`)
+  } catch (proxyErr) {
+    console.warn('[Main] MCP auth proxy failed to start (MCP tokens will use static headers):', proxyErr)
+  }
+
   pluginRegistry = new PluginRegistry()
   pluginRegistry.register(new PeakfloPlugin())
   pluginRegistry.register(new LinearPlugin())
@@ -1119,6 +1132,25 @@ app.whenReady().then(async () => {
   agentManager.setSyncManager(syncManager)
   // Continue tasks that stopped on a usage limit once it resets (incl. overdue ones from before a restart).
   agentManager.startUsageLimitRecovery()
+
+  // One-time, idempotent: scrubs secret values out of transcript_parts and
+  // output_fields written before scrubbing existed. No-ops instantly once
+  // done (one setting read). Fire-and-forget — never blocks startup.
+  void (async () => {
+    try {
+      const { runSecretScrubMigrationIfNeeded } = await import('./secret-scrub-migration')
+      const result = await runSecretScrubMigrationIfNeeded(db!)
+      if (result) {
+        console.log(
+          `[Main] Secret scrub migration: ${result.tasksWithSecrets}/${result.tasksScanned} task(s) had secrets, ` +
+          `${result.partsScrubbed}/${result.partsScanned} transcript part(s) scrubbed, ` +
+          `${result.outputFieldsScrubbed} output field(s) scrubbed, ${result.durationMs}ms`
+        )
+      }
+    } catch (err) {
+      console.warn('[Main] Secret scrub migration failed (will retry next launch):', err)
+    }
+  })()
 
   recurrenceScheduler = new RecurrenceScheduler(db)
   heartbeatScheduler = new HeartbeatScheduler(db, agentManager)

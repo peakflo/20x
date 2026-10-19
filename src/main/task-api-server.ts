@@ -35,6 +35,8 @@ import { buildSimilarTasksQuery } from './task-search'
 import { limitsByInstance, summarizeAgentUsage } from './usage/agent-usage-summary'
 import { agentInstanceId } from '../shared/harness-instances'
 import { isSameHarness, toolOutputPage } from './context-handoff'
+import { SecretScrubber, NOOP_SCRUBBER } from './secret-scrubber'
+import { buildSecretEntriesForAgent } from './secret-entries'
 import {
   createRegisteredTaskArtifact,
   editRegisteredTaskArtifactFile,
@@ -264,6 +266,13 @@ export function stopTaskApiServer(): void {
 
 // ── Route handler ──────────────────────────────────────────────
 
+/** Scrubs a string of known secret values for the agent currently assigned to `taskId`. */
+function scrubForTask(db: DatabaseManager, taskId: string, text: string): string {
+  const entries = buildSecretEntriesForAgent(db, db.getTask(taskId)?.agent_id)
+  if (entries.length === 0) return text
+  return new SecretScrubber(entries).scrub(text) ?? text
+}
+
 /** Exported so the routes can be tested without starting an HTTP server. */
 export async function handleRoute(db: DatabaseManager, route: string, params: Record<string, unknown>): Promise<unknown> {
   const rawDb = (db as unknown as { db: import('better-sqlite3').Database }).db // Access the underlying better-sqlite3 instance
@@ -292,11 +301,17 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (typeof params.artifact_id !== 'string' || typeof params.filename !== 'string' || typeof params.content !== 'string') {
         return { error: 'artifact_id, filename, and content are required' }
       }
+      const encoding = params.encoding === 'base64' ? 'base64' : 'utf8'
+      // Text/markdown artifact content is the agent's own writing — scrub it
+      // the same as any other agent output before it's saved. base64 content
+      // is binary (images, etc), not scrubbed (matching values there would
+      // be astronomically unlikely and the rewrite would corrupt the bytes).
+      const content = encoding === 'utf8' ? scrubForTask(db, taskId, params.content) : params.content
       const artifact = await writeRegisteredTaskArtifactFile(db.getWorkspaceDir(taskId), taskId, {
         artifactId: params.artifact_id,
         filename: params.filename,
-        content: params.content,
-        encoding: params.encoding === 'base64' ? 'base64' : 'utf8',
+        content,
+        encoding,
         preview: params.preview === true
       })
       notifyRenderer?.('artifact:updated', { taskId, artifact })
@@ -316,7 +331,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         artifactId: params.artifact_id,
         filename: params.filename,
         textToReplace: params.text_to_replace,
-        replacement: params.replacement
+        replacement: scrubForTask(db, taskId, params.replacement)
       })
       notifyRenderer?.('artifact:updated', { taskId, artifact })
       return { artifact }
@@ -886,17 +901,25 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const before = params.before_seq !== undefined ? Number(params.before_seq) : null
       const page = (before === null ? ordered : ordered.filter((part) => part.seq < before)).slice(0, limit)
 
+      // Scrub before returning — this is a raw read of persisted transcript
+      // content back to a tool caller (any MCP client), including full,
+      // unredacted tool output when include_tools is set. Built once per
+      // request, not per message — getSecretsWithValues decrypts.
+      const entries = buildSecretEntriesForAgent(db, db.getTask(taskId)?.agent_id)
+      const scrubber = entries.length > 0 ? new SecretScrubber(entries) : NOOP_SCRUBBER
+
       return {
         task_id: taskId,
         messages: page.map((part) => {
           // Tool parts carry their real output in `tool`; `content` is often a placeholder.
           // Output is returned in pages, so a long result can be read in full.
           const output = part.partType === 'tool' ? toolOutputPage(part, outputOffset) : null
+          const rawContent = output ? output.text : part.content
           return {
             seq: part.seq,
             role: part.role,
             type: part.partType ?? 'text',
-            content: output ? output.text : part.content,
+            content: scrubber.scrub(rawContent) ?? rawContent,
             ...(output ? { output_total_chars: output.total } : {}),
             ...(output && output.next !== null ? { output_next_offset: output.next } : {}),
             created_at: new Date(part.createdAt).toISOString()

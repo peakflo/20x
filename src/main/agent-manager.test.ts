@@ -7,6 +7,7 @@ import { MessagePartType, MessageRole, SessionStatusType } from './adapters/codi
 import { unregisterSecretSession } from './secret-broker'
 import { sendMobilePush } from './mobile-push'
 import { MAX_OVERLOAD_RETRY_ATTEMPTS, OVERLOAD_RETRY_BASE_DELAY_MS } from './overload-retry'
+import { SecretScrubber } from './secret-scrubber'
 
 describe('startTask startup failure', () => {
   it('restores triage task status when the CLI cannot start', async () => {
@@ -88,6 +89,17 @@ vi.mock('./secret-broker', () => ({
   getSecretBrokerPort: vi.fn(),
   writeSecretShellWrapper: vi.fn(),
 }))
+vi.mock('./mcp-auth-proxy', () => ({
+  registerMcpProxyTarget: vi.fn(),
+  getMcpAuthProxyPort: vi.fn(),
+  unregisterMcpProxyTarget: vi.fn(),
+}))
+vi.mock('./mcp-env-wrapper', () => ({
+  writeLocalMcpEnvWrapper: vi.fn((serverId: string, command: string, args: string[]) => ({
+    command: '/fake/mcp-env-loader.sh',
+    args: [`/fake/mcp-env/${serverId}.env.sh`, command, ...args]
+  })),
+}))
 
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
@@ -95,6 +107,8 @@ import { AcpAgentAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import { getTaskApiPort } from './task-api-server'
+import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
+import { writeLocalMcpEnvWrapper } from './mcp-env-wrapper'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
 const mockedWriteFileAsync = vi.mocked(writeFileAsync)
@@ -1416,6 +1430,22 @@ describe('AgentManager MCP server routing', () => {
     vi.clearAllMocks()
   })
 
+  // vi.clearAllMocks() (above) clears call history but NOT implementations
+  // set via mockReturnValue/mockResolvedValue — reset those explicitly so a
+  // proxy/wrapper mock configured by one test can't leak into an unrelated
+  // later test (these three are shared module-level mocks, not scoped here).
+  afterEach(() => {
+    // These two have no meaningful default (just "proxy not running") — full
+    // reset is safe and correct.
+    vi.mocked(getMcpAuthProxyPort).mockReset()
+    vi.mocked(registerMcpProxyTarget).mockReset()
+    // writeLocalMcpEnvWrapper's mock DOES have a meaningful default
+    // implementation (set once in the vi.mock factory above) — only clear
+    // call history, a full reset would wipe that default for the rest of
+    // this file's tests.
+    vi.mocked(writeLocalMcpEnvWrapper).mockClear()
+  })
+
   function makeTaskManagementDb(): ConstructorParameters<typeof AgentManager>[0] {
     return {
       getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Agent', config: { mcp_servers: ['task-management-id'] } })),
@@ -1692,6 +1722,128 @@ describe('AgentManager MCP server routing', () => {
       url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
       headers: { Authorization: 'Bearer pfwf_tenant_a_key' },
     })
+  })
+
+  it('routes an OAuth-authenticated remote MCP server through the auth proxy — no Bearer token in the config handed to the SDK', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    vi.mocked(registerMcpProxyTarget).mockReturnValue('http://127.0.0.1:5555/abc123')
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['oauth-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'oauth-server',
+        name: 'My OAuth MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {},
+        oauth_metadata: { resource_url: 'https://example.com' },
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    manager.setOAuthManager({
+      getValidMcpServerToken: vi.fn(async () => 'real-oauth-secret-token'),
+    } as any)
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    // The config object that gets handed to each harness's SDK (and, for at
+    // least one harness, serialized onto its spawned process's argv) must
+    // never contain the real token — only the proxy's loopback URL.
+    expect(mcpServers['My OAuth MCP']).toMatchObject({ type: 'http', url: 'http://127.0.0.1:5555/abc123' })
+    expect(JSON.stringify(mcpServers)).not.toContain('real-oauth-secret-token')
+    expect(registerMcpProxyTarget).toHaveBeenCalledWith('https://example.com/mcp', 'My OAuth MCP', expect.any(Function))
+  })
+
+  it('falls back to a static Authorization header for OAuth MCP servers when the proxy is not running', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(null)
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['oauth-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'oauth-server',
+        name: 'My OAuth MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {},
+        oauth_metadata: { resource_url: 'https://example.com' },
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    manager.setOAuthManager({
+      getValidMcpServerToken: vi.fn(async () => 'fallback-token'),
+    } as any)
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+    expect(mcpServers['My OAuth MCP']).toMatchObject({
+      type: 'http',
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer fallback-token' },
+    })
+  })
+
+  it('wraps a local (stdio) MCP server with secret env instead of putting values in the config/argv', async () => {
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['local-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'local-server',
+        name: 'My Local MCP',
+        type: 'local',
+        command: 'node',
+        args: ['server.js'],
+        environment: { API_KEY: 'super-secret-local-value' },
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(JSON.stringify(mcpServers)).not.toContain('super-secret-local-value')
+    expect(mcpServers['My Local MCP']).not.toHaveProperty('env')
+    expect(writeLocalMcpEnvWrapper).toHaveBeenCalledWith('local-server', 'node', ['server.js'], { API_KEY: 'super-secret-local-value' })
+    expect(mcpServers['My Local MCP']).toMatchObject({
+      type: 'stdio',
+      command: '/fake/mcp-env-loader.sh',
+      args: ['/fake/mcp-env/local-server.env.sh', 'node', 'server.js']
+    })
+  })
+
+  it('does not wrap a local MCP server with no configured env', async () => {
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['local-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'local-server',
+        name: 'My Local MCP',
+        type: 'local',
+        command: 'node',
+        args: ['server.js'],
+        environment: {},
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+    expect(writeLocalMcpEnvWrapper).not.toHaveBeenCalled()
+    expect(mcpServers['My Local MCP']).toMatchObject({ type: 'stdio', command: 'node', args: ['server.js'] })
   })
 })
 
@@ -5281,5 +5433,83 @@ describe('AgentManager getUsageParallelismSummary — live-only (never backfille
     const mgr = new AgentManager(db)
     const result = mgr.getUsageParallelismSummary({ days: 30 }, NOW)
     expect(result.countingFromMs).toBeNull()
+  })
+})
+
+describe('AgentManager sendToRenderer — secret scrubbing choke point', () => {
+  const SECRET_VALUE = 'sk-super-secret-leak-value-123'
+
+  function setupScrubbingManager() {
+    const db = createMockDb() as any
+    db.upsertTranscriptParts = vi.fn(() => ({ maxRev: 1, changedPartIds: ['part-1'] }))
+    const mgr = new AgentManager(db) as any
+    const scrubber = new SecretScrubber([{ name: 'MY_SECRET', value: SECRET_VALUE }])
+    mgr.sessions.set('session-1', { agentId: 'agent-1', taskId: 'task-1', scrubber })
+    const sent: Array<{ channel: string; data: unknown }> = []
+    mgr.mainWindow = { isDestroyed: () => false, webContents: { send: (channel: string, data: unknown) => sent.push({ channel, data }) } }
+    const broadcast: Array<{ channel: string; data: unknown }> = []
+    mgr.externalListeners.push((channel: string, data: unknown) => broadcast.push({ channel, data }))
+    return { mgr, db, sent, broadcast }
+  }
+
+  it('scrubs tool.input/tool.output/content before persisting, rendering, and broadcasting', () => {
+    const { mgr, db, sent, broadcast } = setupScrubbingManager()
+
+    mgr.sendToRenderer('agent:output', {
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      data: {
+        id: 'part-1',
+        role: 'assistant',
+        partType: 'tool',
+        content: `ran: echo ${SECRET_VALUE}`,
+        tool: {
+          name: 'Bash',
+          input: { command: `curl -H "Authorization: Bearer ${SECRET_VALUE}" https://example.com` },
+          output: `the value is ${SECRET_VALUE}`
+        }
+      }
+    })
+
+    // Desktop renderer never sees the value.
+    expect(JSON.stringify(sent[0].data)).not.toContain(SECRET_VALUE)
+    expect(JSON.stringify(sent[0].data)).toContain('«$MY_SECRET»')
+
+    // Mobile broadcast never sees the value either.
+    expect(JSON.stringify(broadcast[0].data)).not.toContain(SECRET_VALUE)
+
+    // Nor does what gets persisted to transcript_parts.
+    const persistedParts = db.upsertTranscriptParts.mock.calls[0][1] as Array<{ content?: string; tool?: unknown }>
+    expect(JSON.stringify(persistedParts)).not.toContain(SECRET_VALUE)
+    expect(persistedParts[0].content).toBe(`ran: echo «$MY_SECRET»`)
+  })
+
+  it('passes output through unchanged when the session has no secrets', () => {
+    const db = createMockDb()
+    const mgr = new AgentManager(db) as any
+    const noopScrubber = new SecretScrubber([])
+    mgr.sessions.set('session-1', { agentId: 'agent-1', taskId: 'task-1', scrubber: noopScrubber })
+    const sent: Array<{ channel: string; data: unknown }> = []
+    mgr.mainWindow = { isDestroyed: () => false, webContents: { send: (channel: string, data: unknown) => sent.push({ channel, data }) } }
+
+    mgr.sendToRenderer('agent:output', {
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      data: { id: 'part-1', role: 'assistant', partType: 'text', content: 'ordinary output, nothing secret' }
+    })
+
+    expect((sent[0].data as { data: { content: string } }).data.content).toBe('ordinary output, nothing secret')
+  })
+
+  it('falls back to a taskId scan when sessionId is missing from the payload', () => {
+    const { mgr, sent } = setupScrubbingManager()
+
+    mgr.sendToRenderer('agent:output', {
+      // no sessionId — only taskId
+      taskId: 'task-1',
+      data: { id: 'part-1', role: 'assistant', partType: 'text', content: `leaked: ${SECRET_VALUE}` }
+    })
+
+    expect(JSON.stringify(sent[0].data)).not.toContain(SECRET_VALUE)
   })
 })

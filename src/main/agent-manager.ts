@@ -28,6 +28,9 @@ import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
+import { writeLocalMcpEnvWrapper } from './mcp-env-wrapper'
+import { SecretScrubber, NOOP_SCRUBBER } from './secret-scrubber'
+import { buildSecretEntriesFromSessionConfig, buildSecretEntriesForAgent } from './secret-entries'
 import { analytics } from './analytics-service'
 import { UsageTracker, type UsageLimitsProbeTarget } from './usage/usage-tracker'
 import { RateTableService } from './usage/usage-pricing-service'
@@ -199,6 +202,15 @@ interface AgentSession {
    *  serverOverloaded retry can nudge the session with the exact same prompt. */
   lastPromptText?: string
   lastPromptAttachments?: MessageAttachmentRef[]
+  /**
+   * Redacts every secret value this session's agent process could have seen
+   * or produced — its configured secrets, OAuth/MCP tokens, and provider API
+   * keys present in this app's own env (see secret-entries.ts). Built when
+   * the session starts/resumes and extended on every follow-up turn (secrets
+   * can be added to an agent mid-session). Applied at the sendToRenderer
+   * choke point before output is persisted, rendered, or broadcast anywhere.
+   */
+  scrubber?: SecretScrubber
 }
 
 /** The harness instance an agent runs under, as the manager sees it. */
@@ -1545,21 +1557,50 @@ export class AgentManager extends EventEmitter {
         const taskManagement = this.buildTaskManagementMcpConfig(opts)
         if (taskManagement) result[mcpServer.name] = taskManagement
       } else if (mcpServer.type === 'local') {
-        result[mcpRuntimeName(mcpServer)] = {
-          type: 'stdio',
-          command: mcpServer.command,
-          args: mcpServer.args,
-          env: { ...mcpServer.environment }
-        }
-      } else if (mcpServer.type === 'remote') {
-        // Inject OAuth Bearer token if the server has one
-        let finalHeaders = { ...mcpServer.headers }
-        if (this.oauthManager && mcpServer.oauth_metadata && 'resource_url' in mcpServer.oauth_metadata) {
-          const token = await this.oauthManager.getValidMcpServerToken(mcpServer.id)
-          if (token) {
-            finalHeaders = { ...finalHeaders, Authorization: `Bearer ${token}` }
+        // Local (stdio) MCP server. `mcpServer.environment` can carry secret
+        // values (API keys the MCP server itself needs) — never put those in
+        // the config object directly: at least one harness (Claude Code)
+        // serializes the whole mcpServers config onto its spawned CLI's argv
+        // (`--mcp-config <json>`), which `ps -ef`/`ps eww` can read. Write them
+        // to a 0600 env file outside the workspace instead, and wrap the real
+        // command in a tiny loader that sources it — argv then carries only a
+        // path, never a value.
+        const envEntries = Object.entries(mcpServer.environment || {})
+        if (envEntries.length > 0 && mcpServer.command) {
+          const wrapped = writeLocalMcpEnvWrapper(mcpServer.id, mcpServer.command, mcpServer.args || [], Object.fromEntries(envEntries))
+          result[mcpRuntimeName(mcpServer)] = { type: 'stdio', command: wrapped.command, args: wrapped.args }
+        } else {
+          result[mcpRuntimeName(mcpServer)] = {
+            type: 'stdio',
+            command: mcpServer.command,
+            args: mcpServer.args
           }
         }
+      } else if (mcpServer.type === 'remote') {
+        // Inject OAuth Bearer token if the server has one — routed through the
+        // local auth proxy so the token itself never lands in the mcpServers
+        // config (see fix 4: that config is serialized onto argv for at least
+        // one harness). Only falls back to a static header when the proxy
+        // isn't running.
+        let finalHeaders = { ...mcpServer.headers }
+        let routedThroughProxy = false
+        if (this.oauthManager && mcpServer.oauth_metadata && 'resource_url' in mcpServer.oauth_metadata) {
+          const proxyPort = getMcpAuthProxyPort()
+          const serverId = mcpServer.id
+          const proxyUrl = proxyPort
+            ? registerMcpProxyTarget(mcpServer.url, mcpServer.name, () => this.oauthManager!.getValidMcpServerToken(serverId))
+            : null
+          if (proxyUrl) {
+            result[mcpRuntimeName(mcpServer)] = { type: 'http', url: proxyUrl, headers: finalHeaders }
+            routedThroughProxy = true
+          } else {
+            const token = await this.oauthManager.getValidMcpServerToken(mcpServer.id)
+            if (token) {
+              finalHeaders = { ...finalHeaders, Authorization: `Bearer ${token}` }
+            }
+          }
+        }
+        if (routedThroughProxy) continue
 
         // Inject enterprise JWT for Workflo MCP Dev Server — route through auth proxy
         let finalUrl = mcpServer.url
@@ -1746,6 +1787,11 @@ export class AgentManager extends EventEmitter {
         config.systemPrompt = (config.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
       }
     }
+
+    // Extend the live session's scrubber with anything new this rebuild
+    // picked up (a secret added mid-session, a freshly rotated MCP token).
+    // addEntries is additive/dedup-safe — never drops an entry already known.
+    session?.scrubber?.addEntries(buildSecretEntriesFromSessionConfig(config))
 
     return config
   }
@@ -1947,6 +1993,42 @@ export class AgentManager extends EventEmitter {
       }
     }
     return undefined
+  }
+
+  /** `SecretScrubber` built from a single agent's own secrets (see secret-entries.ts). */
+  private buildScrubberForAgent(agentId: string): SecretScrubber {
+    const entries = buildSecretEntriesForAgent(this.db, agentId)
+    return entries.length > 0 ? new SecretScrubber(entries) : NOOP_SCRUBBER
+  }
+
+  /** `SecretScrubber` covering every secret any of the given agents can use — e.g. both sides of a context handoff. */
+  private buildScrubberForAgents(agentIds: Array<string | null | undefined>): SecretScrubber {
+    const entries = agentIds.flatMap((id) => buildSecretEntriesForAgent(this.db, id))
+    return entries.length > 0 ? new SecretScrubber(entries) : NOOP_SCRUBBER
+  }
+
+  /**
+   * Resolves the SecretScrubber for a sendToRenderer `agent:output`/
+   * `agent:output-batch` payload. Looks up by `sessionId` first (the common
+   * case — this.sessions is keyed by adapter session id), then falls back to
+   * a `taskId` scan (covers the moment right around a session re-key, where
+   * the payload's sessionId may be mid-transition). Returns the no-op
+   * scrubber — never throws, never blocks output — when neither resolves;
+   * callers treat an empty scrubber as "nothing to redact".
+   */
+  private scrubberForOutput(data: unknown): SecretScrubber {
+    const d = data as { sessionId?: string; taskId?: string } | null
+    if (!d || typeof d !== 'object') return NOOP_SCRUBBER
+    if (d.sessionId) {
+      const session = this.sessions.get(d.sessionId)
+      if (session?.scrubber) return session.scrubber
+    }
+    if (d.taskId) {
+      for (const session of this.sessions.values()) {
+        if (session.taskId === d.taskId && session.scrubber) return session.scrubber
+      }
+    }
+    return NOOP_SCRUBBER
   }
 
   /**
@@ -2488,7 +2570,8 @@ export class AgentManager extends EventEmitter {
       adapter,
       isTriageSession,
       secretSessionToken: secretToken,
-      taskContextMode
+      taskContextMode,
+      scrubber: new SecretScrubber(buildSecretEntriesFromSessionConfig(sessionConfig))
     }
     this.sessions.set(adapterSessionId, newSession)
 
@@ -3256,9 +3339,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         if (assistantTexts.length > 0) {
           // Replace (not append) and cap at 50 KB to prevent unbounded string growth
           const joined = assistantTexts.join('\n')
-          currentSession.lastAssistantText = joined.length > 50_000
-            ? joined.slice(-50_000)
-            : joined
+          const capped = joined.length > 50_000 ? joined.slice(-50_000) : joined
+          currentSession.lastAssistantText = currentSession.scrubber?.scrub(capped) ?? capped
         }
       }
 
@@ -3957,7 +4039,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       pollingStarted: false,
       secretSessionToken: secretToken,
       taskContextMode: resumeTaskContextMode,
-      nativeResumeAwaitingAck: !!pendingMarker
+      nativeResumeAwaitingAck: !!pendingMarker,
+      scrubber: new SecretScrubber(buildSecretEntriesFromSessionConfig(sessionConfig))
     })
 
     // Persist the resumed session binding and tell the renderer BEFORE any
@@ -4437,6 +4520,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     try {
       const workspaceDir = this.db.getWorkspaceDir(taskId)
       const messages = await adapter.getPersistedMessages(sessionId, { agentId, taskId, workspaceDir })
+      // No live in-memory session to read a scrubber off of — this reads the
+      // CLI's own persisted session history, which was never scrubbed before.
+      const scrubber = this.buildScrubberForAgent(agentId)
 
       // The projection is empty here (guarded above), so this is a pure seed —
       // no dedup against existing parts is needed. Upsert-by-part-id keeps it
@@ -4454,9 +4540,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
           parts.push({
             id: part.id,
             role,
-            content,
+            content: scrubber.isEmpty ? content : (scrubber.scrub(content) ?? content),
             partType,
-            tool: part.tool,
+            tool: scrubber.isEmpty ? part.tool : scrubber.scrubDeep(part.tool),
             payload: part.taskProgress ? { taskProgress: part.taskProgress } : undefined,
             receivedAt: part.receivedAt
           })
@@ -6276,6 +6362,7 @@ Important:
       }
 
       // Map parsed values to fields — match by name first, then by id
+      const scrubber = session.scrubber
       const updatedFields = task.output_fields.map((field) => {
         const updated = { ...field }
 
@@ -6290,6 +6377,12 @@ Important:
         // For file fields: use written file paths from tool calls
         if (field.type === 'file' && !updated.value && writtenFiles.length > 0) {
           updated.value = field.multiple ? writtenFiles : writtenFiles[0]
+        }
+
+        // The agent writes this value itself — scrub before it's ever saved
+        // (and later synced to an external source, or shown in the UI).
+        if (scrubber && !scrubber.isEmpty && updated.value !== undefined) {
+          updated.value = scrubber.scrubDeep(updated.value)
         }
 
         return updated
@@ -6849,7 +6942,11 @@ Important:
         : 'a previous agent',
       tokenBudget,
       // The task's own request, not the previous agent's startup prompt.
-      request: { title: task.title, description: task.description }
+      request: { title: task.title, description: task.description },
+      // The transcript came from the previous agent's run; the new agent's
+      // own secrets could also show up if the handoff carries its own
+      // earlier turns on a re-handoff — scrub for both sides.
+      scrubber: this.buildScrubberForAgents([marker.fromAgentId, agentId])
     })
     if (!built) {
       this.db.deleteSetting(key)
@@ -7010,6 +7107,19 @@ Important:
             updates: { ...event.updates, review_entered_at: current.review_entered_at, review_seen_at: current.review_seen_at }
           }
         }
+      }
+    }
+    // Secret scrubbing choke point: every agent-output event is redacted
+    // HERE, before persistence, before the desktop renderer, and before the
+    // mobile broadcast — so a secret value can never reach transcript_parts,
+    // the UI, or a paired phone no matter which of those three sinks sees it
+    // first. Deep-scrubs the whole payload (content, tool.input/output/error,
+    // question/plan parts, attachment metadata) since it's cheap on a miss
+    // and no field here is exempt by contract.
+    if (channel === 'agent:output' || channel === 'agent:output-batch') {
+      const scrubber = this.scrubberForOutput(data)
+      if (scrubber && !scrubber.isEmpty) {
+        data = scrubber.scrubDeep(data)
       }
     }
     // Durable transcript projection: persist every transcript part BEFORE any

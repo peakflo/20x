@@ -277,5 +277,45 @@ describe('SyncManager', () => {
       expect(result.success).toBe(true)
       expect(db.updateTask).toHaveBeenCalledWith('t1', { status: TaskStatus.Completed }, 'task-source')
     })
+
+    it('scrubs a secret value out of output_fields before queuing the peakflo completion payload', async () => {
+      vi.mocked(db.getTaskSource).mockReturnValue({ id: 'src-1', plugin_id: 'peakflo', config: {} } as ReturnType<DatabaseManager['getTaskSource']>)
+      vi.mocked(registry.get).mockReturnValue(makeMockPlugin({ id: 'peakflo' }))
+      vi.mocked(db.getSetting).mockImplementation((key: string) => {
+        if (key === 'enterprise_tenant_id') return 'tenant-1'
+        if (key === 'workflo-task:t1') return JSON.stringify({ version: 1 })
+        return undefined
+      })
+      Object.assign(syncManager, {
+        workfloApiClient: { getDomain: () => 'app.peakflo.ai', getTask: vi.fn().mockResolvedValue({}) },
+        enterpriseUserId: 'user-1'
+      })
+      ;(db as unknown as { getAgent: ReturnType<typeof vi.fn> }).getAgent = vi.fn(() => ({
+        id: 'agent-1',
+        config: { secret_ids: ['s1'] }
+      }))
+      ;(db as unknown as { getSecretsWithValues: ReturnType<typeof vi.fn> }).getSecretsWithValues = vi.fn(() => [
+        { env_var_name: 'MY_SECRET', value: 'leakedsecretvalue123' }
+      ])
+      ;(db as unknown as { setSetting: ReturnType<typeof vi.fn> }).setSetting = vi.fn()
+      vi.spyOn(syncManager, 'flushTaskCompletions').mockResolvedValue(undefined)
+
+      const task = {
+        id: 't1',
+        external_id: 'remote-1',
+        agent_id: 'agent-1',
+        output_fields: [{ id: 'f1', name: 'Summary', type: 'text', value: 'token=leakedsecretvalue123' }]
+      } as unknown as TaskRecord
+
+      const result = await syncManager.executeAction('complete', task, undefined, 'src-1')
+      expect(result.success).toBe(true)
+
+      const setSettingCalls = (db.setSetting as unknown as ReturnType<typeof vi.fn>).mock.calls as Array<[string, string]>
+      const completionCall = setSettingCalls.find(([key]) => key === 'workflo-completion:t1')
+      expect(completionCall).toBeDefined()
+      const payload = JSON.parse(completionCall![1] as string)
+      expect(JSON.stringify(payload.outputs)).not.toContain('leakedsecretvalue123')
+      expect(payload.outputs.f1).toBe('token=«$MY_SECRET»')
+    })
   })
 })
