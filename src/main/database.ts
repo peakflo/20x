@@ -57,6 +57,10 @@ export interface AgentConfigRecord {
   speed_mode?: SpeedMode
   auth_method?: 'subscription' | 'api_key'
   permission_mode?: 'ask' | 'allow'
+  /** Per-agent override of the global "route subtask questions to the parent agent first" setting. Unset inherits the global default (on). */
+  route_child_questions_to_parent?: boolean
+  /** Per-agent override of how long (ms) a child's question waits for this agent before auto-escalating to the human. Unset inherits the global default (10 minutes). */
+  child_question_escalation_timeout_ms?: number
   sandbox_mode?: 'read-only' | 'workspace-write' | 'danger-full-access'
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>

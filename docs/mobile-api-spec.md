@@ -10,6 +10,7 @@
 - [Authentication](#authentication)
 - [REST API](#rest-api)
   - [Tasks](#tasks)
+  - [Child Questions](#child-questions)
   - [Agents](#agents)
   - [Harness Maintenance](#harness-maintenance)
   - [Agent Sessions](#agent-sessions)
@@ -195,6 +196,63 @@ Update a task. Only provided fields are updated.
 **Response:** `200 OK` — Updated `Task` object
 
 **Error:** `404` — `{ "error": "Task not found" }`
+
+---
+
+### Child Questions
+
+A subtask's question or approval request (AskUserQuestion / the `question` tool / `waiting_approval` / Codex and ACP permission requests) is routed to its parent task's agent first — the parent can answer it within its own authority, or hand it to you. An approval outside any agent's authority (a deploy, a merge, a destructive command, a payment, an external message) always comes to you directly, as does one the parent didn't answer within its escalation timeout. See `agent:status` / `agent:output` for how a question still surfaces live on the child task itself — these endpoints are for the question's routing/escalation state.
+
+#### `GET /api/tasks/:id/child-questions`
+
+Every question routed through one task, in both directions: questions `:id`'s own subtasks raised (`as_parent`) and the question `:id` itself raised for its own parent, if any (`as_child`).
+
+**Response:** `200 OK`
+
+```json
+{
+  "as_parent": [ { "id": "cq_1", "childTaskId": "...", "questionId": "req-1", "kind": "approval", "questionText": "Run `rm -rf tmp/`?", "state": "pending_parent", "escalateAt": 1732000000000, "...": "..." } ],
+  "as_child": []
+}
+```
+
+See [`ChildQuestionRecord`](#childquestionrecord) for the full shape. `state` is one of `pending_parent`, `escalated`, `answered_by_parent`, `answered_by_human`, `cancelled`.
+
+---
+
+#### `POST /api/tasks/:id/child-questions/answer`
+
+`:id` (the parent) answers one of its descendants' questions within its own authority — the same adapter call `POST /api/sessions/:sessionId/approve` or `/send` would use, so every harness is answered the same way regardless of who answered.
+
+**Request Body:**
+
+| Field          | Type      | Required | Description |
+|----------------|-----------|----------|-------------|
+| `child_task_id`| `string`  | Yes      | The descendant task that raised the question |
+| `question_id`  | `string`  | Yes      | The question's ID, from `GET .../child-questions` |
+| `approved`     | `boolean` | No       | For an approval: true to approve, false to reject |
+| `answer`       | `string`  | No       | For a question (not an approval): the free-text answer |
+| `option_id`    | `string`  | No       | The specific option chosen, when the question offered options |
+
+**Response:** `200 OK` — `{ "success": true, "record": ChildQuestionRecord }`
+
+**Error:** `400` — missing `child_task_id`/`question_id`. A route-level error (not a descendant, already answered, etc.) is returned as `{ "error": "..." }` with `200 OK` — check for the `error` field.
+
+---
+
+#### `POST /api/tasks/:id/child-questions/escalate`
+
+`:id` (the parent) hands a descendant's question to you instead of answering it — the same thing that happens automatically once the parent's escalation timeout passes.
+
+**Request Body:**
+
+| Field          | Type     | Required | Description |
+|----------------|----------|----------|--------------|
+| `child_task_id`| `string` | Yes      | The descendant task that raised the question |
+| `question_id`  | `string` | Yes      | The question's ID |
+| `note`         | `string` | No       | Why this needs you — shown alongside the escalation |
+
+**Response:** `200 OK` — `{ "success": true, "record": ChildQuestionRecord }`
 
 ---
 
@@ -930,6 +988,50 @@ Live output while an update runs.
 
 ---
 
+#### `task:childQuestionRaised`
+
+A subtask raised a question or approval request. Fires once per question, whichever state it landed in (`pending_parent` if routed to the parent, `escalated` if it went straight to you).
+
+```json
+{
+  "type": "task:childQuestionRaised",
+  "payload": { "taskId": "clxyz123abc", "question": { "...": "ChildQuestionRecord" } }
+}
+```
+
+| Field      | Type                 | Description |
+|------------|----------------------|--------------|
+| `taskId`   | `string`             | The subtask that raised the question (its `childTaskId`) |
+| `question` | `ChildQuestionRecord`| The full record — see [Type Definitions](#childquestionrecord) |
+
+---
+
+#### `task:childQuestionAnswered`
+
+The parent answered a descendant's question within its own authority.
+
+```json
+{
+  "type": "task:childQuestionAnswered",
+  "payload": { "taskId": "clxyz123abc", "questionId": "req-1" }
+}
+```
+
+---
+
+#### `task:childQuestionEscalated`
+
+A question reached you directly — out of the parent's authority, the parent's own `ask` permission mode, the parent's escalation timeout, or the parent explicitly handing it off.
+
+```json
+{
+  "type": "task:childQuestionEscalated",
+  "payload": { "taskId": "clxyz123abc", "question": { "...": "ChildQuestionRecord" } }
+}
+```
+
+---
+
 ## Type Definitions
 
 ### TaskStatus
@@ -969,6 +1071,37 @@ idle              — Session exists but not actively generating
 working           — Agent is generating a response
 error             — Session encountered an error (can retry with send)
 waiting_approval  — Agent is waiting for user approval/answer
+```
+
+### ChildQuestionRecord
+
+A subtask's question or approval request, routed to its parent first. See [Child Questions](#child-questions).
+
+```ts
+{
+  id: string
+  childTaskId: string
+  parentTaskId: string | null
+  questionId: string
+  kind: 'approval' | 'question'
+  questionText: string
+  options: Array<{ optionId: string; label: string }> | null
+  toolName: string | null
+  command: string | null
+  contextExcerpt: string | null       // secrets scrubbed
+  requiresHuman: boolean              // true when the authority gate reserved this for you
+  authorityCategories: string[]       // e.g. ["production-deployment", "payment-operation"]
+  state: 'pending_parent' | 'escalated' | 'answered_by_parent' | 'answered_by_human' | 'cancelled'
+  answer: string | null
+  optionId: string | null
+  note: string | null                 // the parent's note when it explicitly escalated
+  answeredBy: 'parent' | 'human' | null
+  createdAt: number                   // epoch ms
+  updatedAt: number
+  escalateAt: number | null           // when this auto-escalates if the parent hasn't answered
+  escalatedAt: number | null
+  answeredAt: number | null
+}
 ```
 
 ### PartType

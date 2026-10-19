@@ -354,3 +354,57 @@ describe('window-driving tools are hard to misuse', () => {
     expect(result.isError).toBe(true)
   })
 })
+
+describe('children\'s questions go to the parent first — tool set', () => {
+  const childQuestionToolNames = ['list_child_questions', 'answer_child_question', 'escalate_to_user']
+
+  it('are available to a full-access (coordinator) session', () => {
+    const names = listToolsForScope(FULL_ACCESS_SCOPE).map((t) => t.name)
+    for (const name of childQuestionToolNames) expect(names).toContain(name)
+  })
+
+  it('are absent from a scoped subtask session — a subtask has no descendants of its own to answer for', () => {
+    const names = listToolsForScope(SCOPED).map((t) => t.name)
+    for (const name of childQuestionToolNames) expect(names).not.toContain(name)
+  })
+
+  it('answer_child_question requires parent_task_id, child_task_id and question_id, and passes everything through untouched', async () => {
+    const schema = toolByName(FULL_ACCESS_SCOPE, 'answer_child_question')!.inputSchema as { required?: string[] }
+    expect(schema.required).toEqual(['parent_task_id', 'child_task_id', 'question_id'])
+
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = async (route: string, params: Record<string, unknown>) => {
+      calls.push([route, params])
+      return { success: true }
+    }
+    await callToolForScope(
+      'answer_child_question',
+      { parent_task_id: 'p1', child_task_id: 'c1', question_id: 'q1', approved: true },
+      FULL_ACCESS_SCOPE,
+      invoke
+    )
+    expect(calls).toEqual([
+      ['/answer_child_question', { parent_task_id: 'p1', child_task_id: 'c1', question_id: 'q1', approved: true }]
+    ])
+  })
+
+  it('escalate_to_user requires parent_task_id, child_task_id and question_id', () => {
+    const schema = toolByName(FULL_ACCESS_SCOPE, 'escalate_to_user')!.inputSchema as { required?: string[] }
+    expect(schema.required).toEqual(['parent_task_id', 'child_task_id', 'question_id'])
+  })
+
+  it('list_child_questions requires neither param (either scopes the call)', () => {
+    const schema = toolByName(FULL_ACCESS_SCOPE, 'list_child_questions')!.inputSchema as { required?: string[] }
+    expect(schema.required ?? []).toEqual([])
+  })
+})
+
+describe('wait_for_subtasks schema', () => {
+  it('return_when includes any_event, and the description tells a caller to prefer this over polling and to call again on timeout', () => {
+    const tool = toolByName(FULL_ACCESS_SCOPE, 'wait_for_subtasks')!
+    const schema = tool.inputSchema as { properties: Record<string, { enum?: string[] }> }
+    expect(schema.properties.return_when.enum).toEqual(['all_terminal', 'any_terminal', 'any_event'])
+    expect(tool.description).toMatch(/prefer this over polling/i)
+    expect((tool.description ?? '').toLowerCase()).toContain('call it again')
+  })
+})

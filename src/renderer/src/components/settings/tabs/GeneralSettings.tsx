@@ -97,6 +97,8 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
   const [heartbeatActiveStart, setHeartbeatActiveStart] = useState('')
   const [heartbeatActiveEnd, setHeartbeatActiveEnd] = useState('')
   const [heartbeatGlobalInstructions, setHeartbeatGlobalInstructions] = useState('')
+  const [routeChildQuestionsToParent, setRouteChildQuestionsToParent] = useState(true)
+  const [childQuestionEscalationMinutes, setChildQuestionEscalationMinutes] = useState('10')
 
   useEffect(() => {
     const loadSettings = async () => {
@@ -163,6 +165,20 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
         if (hbGlobal) setHeartbeatGlobalInstructions(hbGlobal)
       } catch (error) {
         console.error('Failed to load heartbeat settings:', error)
+      }
+
+      // Load delegation settings (children's questions go to the parent first)
+      try {
+        const routeSetting = await settingsApi.get('child_questions_route_to_parent')
+        if (routeSetting !== null) setRouteChildQuestionsToParent(routeSetting !== 'false')
+
+        const timeoutSetting = await settingsApi.get('child_question_escalation_timeout_ms')
+        if (timeoutSetting) {
+          const minutes = Math.round(Number(timeoutSetting) / 60_000)
+          if (Number.isFinite(minutes) && minutes > 0) setChildQuestionEscalationMinutes(String(minutes))
+        }
+      } catch (error) {
+        console.error('Failed to load delegation settings:', error)
       }
 
       // Load mobile URL separately so its failure doesn't block other settings
@@ -869,6 +885,60 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             className="w-full bg-transparent border rounded px-3 py-2 text-sm font-mono disabled:opacity-50 resize-y placeholder:text-muted-foreground"
             placeholder="e.g. Always run `gh api` calls to verify status. Never skip checks. Reply HEARTBEAT_OK only when everything is clean."
           />
+        </div>
+      </div>
+    </SettingsSection>
+
+    <SettingsSection
+      title="Delegation"
+      description="How a subtask's questions and approval requests are routed before they reach you"
+    >
+      <div className="space-y-4">
+        <div className="flex items-center justify-between py-2 border-b border-border">
+          <div className="space-y-0.5">
+            <Label htmlFor="route-child-questions">Route subtask questions to the parent agent first</Label>
+            <p className="text-xs text-muted-foreground">
+              A subtask&apos;s question or approval request goes to its parent task&apos;s agent first. The parent can
+              answer within its own authority, or hand it to you. Approvals outside any agent&apos;s authority
+              (deploys, merges, destructive commands, payments, external messages) always come to you — this only
+              changes who is asked first.
+            </p>
+          </div>
+          <Switch
+            id="route-child-questions"
+            checked={routeChildQuestionsToParent}
+            onCheckedChange={async (checked) => {
+              setRouteChildQuestionsToParent(checked)
+              await settingsApi.set('child_questions_route_to_parent', checked ? 'true' : 'false')
+            }}
+            disabled={loading}
+          />
+        </div>
+
+        <div className="flex items-center justify-between py-2">
+          <div className="space-y-0.5">
+            <Label htmlFor="child-question-escalation-timeout">Escalate to you after</Label>
+            <p className="text-xs text-muted-foreground">
+              If the parent agent hasn&apos;t answered (or can&apos;t be started) within this time, the question
+              escalates to you automatically.
+            </p>
+          </div>
+          <select
+            id="child-question-escalation-timeout"
+            value={childQuestionEscalationMinutes}
+            onChange={async (e) => {
+              setChildQuestionEscalationMinutes(e.target.value)
+              await settingsApi.set('child_question_escalation_timeout_ms', String(Number(e.target.value) * 60_000))
+            }}
+            disabled={loading || !routeChildQuestionsToParent}
+            className="bg-transparent border rounded px-2 py-1 text-sm disabled:opacity-50"
+          >
+            <option value="2">2 minutes</option>
+            <option value="5">5 minutes</option>
+            <option value="10">10 minutes</option>
+            <option value="30">30 minutes</option>
+            <option value="60">1 hour</option>
+          </select>
         </div>
       </div>
     </SettingsSection>

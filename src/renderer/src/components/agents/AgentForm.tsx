@@ -89,6 +89,21 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [permissionMode, setPermissionMode] = useState<AgentPermissionMode>(
     agent?.config.permission_mode ?? 'allow'
   )
+  // Children's questions go to the parent first: per-agent override of the
+  // global "route subtask questions to the parent agent first" setting.
+  // 'default' means "use the global setting" (route_child_questions_to_parent left unset).
+  const [routeChildQuestions, setRouteChildQuestions] = useState<'default' | 'true' | 'false'>(
+    agent?.config.route_child_questions_to_parent === undefined
+      ? 'default'
+      : agent.config.route_child_questions_to_parent
+        ? 'true'
+        : 'false'
+  )
+  const [childQuestionTimeoutMinutes, setChildQuestionTimeoutMinutes] = useState(
+    agent?.config.child_question_escalation_timeout_ms
+      ? String(Math.round(agent.config.child_question_escalation_timeout_ms / 60_000))
+      : ''
+  )
   const [sandboxMode, setSandboxMode] = useState<AgentSandboxMode>(
     agent?.config.sandbox_mode ?? 'danger-full-access'
   )
@@ -289,6 +304,10 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           ? authMethod
           : undefined,
         permission_mode: permissionMode,
+        route_child_questions_to_parent: routeChildQuestions === 'default' ? undefined : routeChildQuestions === 'true',
+        child_question_escalation_timeout_ms: childQuestionTimeoutMinutes.trim()
+          ? Number(childQuestionTimeoutMinutes) * 60_000
+          : undefined,
         sandbox_mode: codingAgent === CodingAgentType.CODEX ? sandboxMode : undefined,
         system_prompt: systemPrompt.trim() || undefined,
         max_parallel_sessions: maxParallelSessions,
@@ -458,6 +477,36 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
                 : 'Controls how this agent handles tool and command approval prompts.'}
             </p>
           </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="agent-route-child-questions">When this agent is a parent, its subtasks' questions</Label>
+            <select
+              id="agent-route-child-questions"
+              value={routeChildQuestions}
+              onChange={(e) => setRouteChildQuestions(e.target.value as 'default' | 'true' | 'false')}
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+            >
+              <option value="default">Use the global setting</option>
+              <option value="true">Come to this agent first</option>
+              <option value="false">Always go straight to the human</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Under &quot;Ask before tools/commands&quot; above, this agent has no standing authority of its own, so
+              a subtask&apos;s question escalates to the human even when this is set to come to it first.
+            </p>
+          </div>
+          {routeChildQuestions !== 'false' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="agent-child-question-timeout">Escalate to the human after (minutes)</Label>
+              <Input
+                id="agent-child-question-timeout"
+                type="number"
+                min={1}
+                value={childQuestionTimeoutMinutes}
+                onChange={(e) => setChildQuestionTimeoutMinutes(e.target.value)}
+                placeholder="Use the global default"
+              />
+            </div>
+          )}
           {codingAgent === CodingAgentType.CODEX && (
             <div className="space-y-1.5">
               <Label htmlFor="agent-sandbox-mode">Sandbox</Label>

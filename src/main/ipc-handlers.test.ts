@@ -346,3 +346,51 @@ describe('db:updateTask heartbeat cascade on parent completion', () => {
     expect(disableHeartbeat).not.toHaveBeenCalled()
   })
 })
+
+describe('child questions — a human answering directly cancels the parent\'s pending item', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  function setupAgentManager() {
+    const cancelLatestPendingForChild = vi.fn()
+    const agentManager = {
+      noteUserTaskActivity: vi.fn(),
+      sendByTaskId: vi.fn(async () => ({ success: true, sessionId: 'session-1' })),
+      sendMessage: vi.fn(async () => ({ success: true })),
+      respondToPermission: vi.fn(async () => undefined),
+      getSessionStatus: vi.fn(() => ({ status: 'waiting_approval', agentId: 'agent-1', taskId: 'task-1' })),
+      getChildQuestionService: vi.fn(() => ({ cancelLatestPendingForChild }))
+    } as unknown as Parameters<typeof registerIpcHandlers>[1]
+    registerIpcHandlers({} as never, agentManager, {} as never, {} as never, {} as never, {} as never)
+    const handlers = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls as [string, (...args: unknown[]) => unknown][]
+    return { cancelLatestPendingForChild, handlers }
+  }
+
+  it('agentSession:sendByTaskId cancels the pending item for that task', async () => {
+    const { cancelLatestPendingForChild, handlers } = setupAgentManager()
+    const handler = handlers.find(([channel]) => channel === 'agentSession:sendByTaskId')![1]
+
+    await handler({}, 'task-1', 'hello')
+
+    expect(cancelLatestPendingForChild).toHaveBeenCalledWith('task-1', 'hello')
+  })
+
+  it('agentSession:send cancels the pending item when a taskId is given', async () => {
+    const { cancelLatestPendingForChild, handlers } = setupAgentManager()
+    const handler = handlers.find(([channel]) => channel === 'agentSession:send')![1]
+
+    await handler({}, 'session-1', 'hello', 'task-1', 'agent-1')
+
+    expect(cancelLatestPendingForChild).toHaveBeenCalledWith('task-1', 'hello')
+  })
+
+  it('agentSession:approve resolves the task from the session and cancels the pending item', async () => {
+    const { cancelLatestPendingForChild, handlers } = setupAgentManager()
+    const handler = handlers.find(([channel]) => channel === 'agentSession:approve')![1]
+
+    await handler({}, 'session-1', true, 'ok')
+
+    expect(cancelLatestPendingForChild).toHaveBeenCalledWith('task-1', 'approved')
+  })
+})

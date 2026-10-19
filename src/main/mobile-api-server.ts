@@ -534,6 +534,19 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
     return agentRef!.getUsageLimitRecovery(decodeURIComponent(limitRecoveryGet[1]))
   }
 
+  // GET /api/tasks/:id/child-questions — children's questions go to the
+  // parent first (see orchestration/child-questions.ts). Returns both
+  // directions for one task: questions its own subtasks raised (as_parent)
+  // and questions it itself raised, for its own parent (as_child) — a task
+  // detail screen wants both: a banner for its own pending question, and a
+  // list of what its subtasks are asking it.
+  const childQuestionsGet = pathname.match(/^\/api\/tasks\/([^/]+)\/child-questions$/)
+  if (childQuestionsGet) {
+    const taskId = decodeURIComponent(childQuestionsGet[1])
+    const service = agentRef!.getChildQuestionService()
+    return { as_parent: service.listForParent(taskId), as_child: service.listForChild(taskId) }
+  }
+
   // GET /api/harness-instances — subscription logins (read-only on mobile)
   if (pathname === '/api/harness-instances') {
     return agentRef!.listHarnessInstances()
@@ -1014,6 +1027,37 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     )
   }
 
+  // POST /api/tasks/:id/child-questions/answer — :id is the parent task
+  // answering one of its descendants' questions within its own authority.
+  // { child_task_id, question_id, approved?, answer?, option_id? }
+  const childQuestionAnswerPost = pathname.match(/^\/api\/tasks\/([^/]+)\/child-questions\/answer$/)
+  if (childQuestionAnswerPost) {
+    const parentTaskId = decodeURIComponent(childQuestionAnswerPost[1])
+    const body = params as { child_task_id?: unknown; question_id?: unknown; approved?: unknown; answer?: unknown; option_id?: unknown }
+    if (!body.child_task_id || !body.question_id) {
+      throw Object.assign(new Error('child_task_id and question_id are required'), { status: 400 })
+    }
+    return agent.getChildQuestionService().answerFromParent(parentTaskId, String(body.child_task_id), String(body.question_id), {
+      approved: body.approved === undefined ? undefined : body.approved === true,
+      answer: body.answer !== undefined ? String(body.answer) : undefined,
+      optionId: body.option_id !== undefined ? String(body.option_id) : undefined
+    })
+  }
+
+  // POST /api/tasks/:id/child-questions/escalate — :id is the parent task
+  // handing a descendant's question to the human. { child_task_id, question_id, note? }
+  const childQuestionEscalatePost = pathname.match(/^\/api\/tasks\/([^/]+)\/child-questions\/escalate$/)
+  if (childQuestionEscalatePost) {
+    const parentTaskId = decodeURIComponent(childQuestionEscalatePost[1])
+    const body = params as { child_task_id?: unknown; question_id?: unknown; note?: unknown }
+    if (!body.child_task_id || !body.question_id) {
+      throw Object.assign(new Error('child_task_id and question_id are required'), { status: 400 })
+    }
+    return agent
+      .getChildQuestionService()
+      .escalateToUser(parentTaskId, String(body.child_task_id), String(body.question_id), body.note !== undefined ? String(body.note) : undefined)
+  }
+
   // POST /api/usage/limits/refresh — re-read plan limits ({ force?: boolean })
   if (pathname === '/api/usage/limits/refresh') {
     return agent.refreshUsageLimits({ force: (params as { force?: unknown }).force === true })
@@ -1097,6 +1141,9 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     if (!message) throw Object.assign(new Error('message is required'), { status: 400 })
     agent.noteUserTaskActivity(taskId, sessionId)
     const result = await agent.sendMessage(sessionId, message, taskId, aid, attachments)
+    // The human answered directly — cancel the parent's pending item, if any
+    // (a no-op when this task has no pending child question).
+    if (taskId) agent.getChildQuestionService().cancelLatestPendingForChild(taskId, message)
     return { success: true, ...result }
   }
 
@@ -1111,7 +1158,9 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
       requestId?: string
     }
     if (typeof approved !== 'boolean') throw Object.assign(new Error('approved (boolean) is required'), { status: 400 })
+    const taskId = agent.getSessionStatus(sessionId)?.taskId
     await agent.respondToPermission(sessionId, approved, message, undefined, responseType, requestId)
+    if (taskId) agent.getChildQuestionService().cancelLatestPendingForChild(taskId, approved ? 'approved' : 'rejected')
     return { success: true }
   }
 

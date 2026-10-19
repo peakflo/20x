@@ -424,15 +424,20 @@ const mastermindTools: Tool[] = [
   },
   {
     name: 'wait_for_subtasks',
-    description: 'Wait until subtasks under a parent task reach ready_for_review, completed, or model_error. Useful for orchestration loops.',
+    description:
+      'Blocks until children change — prefer this over polling get_session_status or list_subtasks. Event-driven: returns the instant a subtask reaches a terminal status, a child question is raised, or (with return_when: "any_event") either happens — not on a fixed interval. A call may return with timed_out: true before anything changed, simply because the wait budget for one call is capped; that is not a failure — call it again to keep waiting.',
     inputSchema: {
       type: 'object',
       properties: {
         parent_task_id: { type: 'string', description: 'Parent task ID whose subtasks should be monitored' },
         subtask_ids: { type: 'array', items: { type: 'string' }, description: 'Optional subset of subtask IDs to wait for' },
-        timeout_ms: { type: 'number', description: 'Maximum time to wait before returning the current subtask state' },
-        return_when: { type: 'string', enum: ['all_terminal', 'any_terminal'], description: 'Return when all selected subtasks are terminal, or as soon as any selected subtask is terminal. Defaults to all_terminal.' },
-        terminal_statuses: { type: 'array', items: { type: 'string' }, description: 'Optional terminal statuses to treat as done. Defaults to ready_for_review + completed.' }
+        timeout_ms: { type: 'number', description: 'How long to wait before returning the current subtask state. Long waits are fine — the call will say timed_out and should simply be called again. Capped per call for transport safety.' },
+        return_when: {
+          type: 'string',
+          enum: ['all_terminal', 'any_terminal', 'any_event'],
+          description: 'all_terminal: every selected subtask has reached a terminal status. any_terminal: as soon as one has. any_event: also returns the moment a child question is raised (waiting for the parent or escalated) or a subtask ends needing attention, even if none are fully terminal yet. Defaults to all_terminal.'
+        },
+        terminal_statuses: { type: 'array', items: { type: 'string' }, description: 'Optional terminal statuses to treat as done. Defaults to ready_for_review + completed + model_error.' }
       },
       required: ['parent_task_id']
     }
@@ -446,6 +451,50 @@ const mastermindTools: Tool[] = [
         parent_task_id: { type: 'string', description: 'The ID of the parent task' }
       },
       required: ['parent_task_id']
+    }
+  },
+  {
+    name: 'list_child_questions',
+    description:
+      'Questions and approvals raised by descendant subtasks, routed to this task first (see the "route subtask questions to the parent" setting). Each has a state: waiting for the parent, escalated to the human, answered by the parent, or answered by the human. Use this instead of list_pending_approvals to see what your own subtasks are asking you.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parent_task_id: { type: 'string', description: 'List every question routed to this task from any of its descendants' },
+        child_task_id: { type: 'string', description: 'List every question raised by this one task instead (any state, including ones already answered)' }
+      }
+    }
+  },
+  {
+    name: 'answer_child_question',
+    description:
+      'Answer a descendant\'s question or approval request within your own authority, the same way a human answering it would. Scoped to your own descendants — fails on any other task. Not every question can be answered this way: one that needs a human\'s authorization (a deploy, a merge, a destructive command, a payment, an external message) or that arrived while you are in "ask" permission mode is already escalated instead, and answering it here will fail — use escalate_to_user\'s note to hand it off explicitly, or just let the human answer it directly.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parent_task_id: { type: 'string', description: 'Your own task ID' },
+        child_task_id: { type: 'string', description: 'The descendant task that raised the question' },
+        question_id: { type: 'string', description: 'The question ID from list_child_questions or the wake-up message' },
+        approved: { type: 'boolean', description: 'For an approval: true to approve, false to reject' },
+        answer: { type: 'string', description: 'For a question (not an approval): the free-text answer' },
+        option_id: { type: 'string', description: 'Optional: the specific option id being chosen, when the question offered options' }
+      },
+      required: ['parent_task_id', 'child_task_id', 'question_id']
+    }
+  },
+  {
+    name: 'escalate_to_user',
+    description:
+      'Hand a descendant\'s pending question to the human instead of answering it yourself — for anything outside your judgment or authority. Scoped to your own descendants. Left unanswered long enough, a question escalates to the human on its own; call this to do it immediately, with a note explaining why.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parent_task_id: { type: 'string', description: 'Your own task ID' },
+        child_task_id: { type: 'string', description: 'The descendant task that raised the question' },
+        question_id: { type: 'string', description: 'The question ID from list_child_questions or the wake-up message' },
+        note: { type: 'string', description: 'Why this needs the human — shown alongside the escalation' }
+      },
+      required: ['parent_task_id', 'child_task_id', 'question_id']
     }
   },
   // ── Live state and control (unscoped agents only) ───────────

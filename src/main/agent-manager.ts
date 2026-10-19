@@ -74,6 +74,14 @@ import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/a
 import { isSystemGeneratedMessage } from '../shared/system-authority'
 import { TaskWakeupQueue, TaskWakeupStore, computeWakeupDeliveryId, type WakeupReason } from './orchestration/task-wakeups'
 import { classifyIdleEnd, statusForEndReason, describeEndReason } from './orchestration/run-finalization'
+import {
+  ChildQuestionService,
+  ChildQuestionStore,
+  type ChildQuestionKind,
+  type ChildQuestionOption,
+  type ChildQuestionParentPolicy
+} from './orchestration/child-questions'
+import { subtaskEvents } from './orchestration/subtask-events'
 import { sendMobilePush } from './mobile-push'
 import { AgentPushEvents, type QuestionPart } from './agent-push-events'
 import { formatRetryDelay, isOverloadError, MAX_OVERLOAD_RETRY_ATTEMPTS, OverloadRetryTracker } from './overload-retry'
@@ -99,6 +107,16 @@ enum CodingAgentType {
   PI = 'pi',
   /** A configured ACP (Agent Client Protocol) registry or local-command agent instance. */
   ACP = 'acp'
+}
+
+/** Minimal shape of an AskUserQuestion / `question` tool transcript part — see `AgentTranscriptPanel`'s `QuestionMessage` for the full renderer-side shape this mirrors. */
+interface ChildQuestionToolPart {
+  id?: string
+  tool?: {
+    name?: string
+    requestId?: string
+    questions?: Array<{ header?: string; question: string; options?: Array<{ label: string }> }>
+  }
 }
 
 /** Handoff block ready to send with the next prompt of a session. */
@@ -476,6 +494,9 @@ export class AgentManager extends EventEmitter {
    *  set — dedup now lives in the `task_wakeups` table's `delivery_id` UNIQUE
    *  constraint, so it survives a restart and never silently drops a wake-up. */
   private taskWakeupQueueInstance: TaskWakeupQueue | undefined
+
+  /** Children's questions/approvals routed to their parent first (see `child-questions.ts`). Lazily constructed, same reason as the wake-up queue above. */
+  private childQuestionServiceInstance: ChildQuestionService | undefined
 
   /** Sessions currently being re-registered for polling after late adapter data
    *  (dedupe guard so a burst of buffered messages produces a single wake-up). */
@@ -3404,6 +3425,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
             taskId: config.taskId,
             status: 'waiting_approval'
           })
+          // A subtask's approval request goes to its parent first (see
+          // child-questions.ts) — only on the transition into waiting_approval,
+          // since raising is idempotent per question id anyway.
+          void this.raiseChildApprovalIfNeeded(config.taskId, sessionId, adapter)
         }
         return
       } else if (status.type === SessionStatusType.BUSY && session) {
@@ -4329,6 +4354,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
   /** Starts the wake-up delivery sweep (delivers every pending row from before a restart). */
   startWakeupDelivery(): void {
     this.getTaskWakeupQueue().start()
+    this.getChildQuestionService().startSweep()
   }
 
   /**
@@ -4348,8 +4374,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
    * sibling in `agent_working`/`triaging`), the row stays pending and is
    * delivered on the parent's next idle transition, the periodic sweep, or
    * startup — never dropped.
+   *
+   * Also the single place that emits the `status` event `wait_for_subtasks`
+   * subscribes to (see `orchestration/subtask-events.ts`) — every call site
+   * that moves a subtask to a terminal state already calls this, so this one
+   * spot covers all of them without having to instrument each one.
    */
-  async notifyParentOfSubtaskCompletion(parentTaskId: string, subtaskId: string): Promise<void> {
+  async notifyParentOfSubtaskCompletion(parentTaskId: string, subtaskId: string, endReason?: string): Promise<void> {
     const parentTask = this.db.getTask(parentTaskId)
     if (!parentTask) return
 
@@ -4375,6 +4406,215 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       deliveryId,
       payload: { childTitle: subtask.title, childStatus: subtask.status }
     })
+
+    subtaskEvents.emitSubtaskEvent({
+      kind: 'status',
+      parentTaskId,
+      childTaskId: subtaskId,
+      status: subtask.status,
+      endReason,
+      needsAttention: reason === 'child_error'
+    })
+  }
+
+  /** Global setting key: whether a child's question/approval is routed to its parent before the human. Default on. */
+  static readonly ROUTE_CHILD_QUESTIONS_TO_PARENT_SETTING = 'child_questions_route_to_parent'
+  /** Global setting key: how long a question waits for the parent before auto-escalating to the human (ms). */
+  static readonly CHILD_QUESTION_ESCALATION_TIMEOUT_SETTING = 'child_question_escalation_timeout_ms'
+
+  /**
+   * Children's questions/approvals routed to the parent first (see
+   * `child-questions.ts`). Lazily constructed, same reason as the wake-up
+   * queue above — shares this manager's `db` and reuses its wake-up queue for
+   * delivery (reason `child_question`).
+   */
+  getChildQuestionService(): ChildQuestionService {
+    if (!this.childQuestionServiceInstance) {
+      this.childQuestionServiceInstance = new ChildQuestionService({
+        store: new ChildQuestionStore(this.db.db),
+        getTask: (taskId) => {
+          const task = this.db.getTask(taskId)
+          if (!task) return undefined
+          return { id: task.id, title: task.title, status: task.status, parent_task_id: task.parent_task_id ?? null, agent_id: task.agent_id ?? null }
+        },
+        getParentPolicy: (parentTaskId) => this.getChildQuestionParentPolicy(parentTaskId),
+        isDescendant: (ancestorTaskId, taskId) => this.isTaskDescendantOf(ancestorTaskId, taskId),
+        enqueueParentWakeup: async (input) => {
+          await this.getTaskWakeupQueue().enqueueAndTryDeliver({
+            parentTaskId: input.parentTaskId,
+            childTaskId: input.childTaskId,
+            reason: 'child_question',
+            deliveryId: input.deliveryId,
+            payload: input.payload
+          })
+        },
+        cancelParentWakeup: (parentTaskId, childTaskId) => {
+          this.getTaskWakeupQueue().cancelPending(parentTaskId, childTaskId, 'child_question')
+        },
+        answerChildSession: async (childTaskId, kind, input) => {
+          const found = this.findSessionByTaskId(childTaskId)
+          if (!found) throw new Error(`No live session for task ${childTaskId} — it may need to be started first.`)
+          if (kind === 'approval') {
+            await this.respondToPermission(found.sessionId, input.approved, input.answer, input.optionId, 'permission')
+          } else {
+            // The "question" tool / AskUserQuestion: the same path the human
+            // UI's plain send uses — the answer becomes the agent's next message.
+            await this.sendByTaskId(childTaskId, input.answer ?? input.optionId ?? (input.approved ? 'Yes' : 'No'))
+          }
+        },
+        notifyHuman: (childTaskId, record) => {
+          this.notifyHumanAboutChildQuestion(childTaskId, record)
+          // Centralized here because escalation has three call sites inside
+          // ChildQuestionService (immediate out-of-authority, the explicit
+          // escalate_to_user tool, and the automatic-timeout sweep) — this is
+          // the one spot every one of them already calls.
+          this.sendToRenderer('task:childQuestionEscalated', { taskId: childTaskId, question: record })
+        },
+        appendTranscriptNote: (childTaskId, text) => {
+          this.sendToRenderer('agent:output', {
+            sessionId: this.findSessionByTaskId(childTaskId)?.sessionId ?? null,
+            taskId: childTaskId,
+            type: 'message',
+            data: { role: 'system', partType: 'text', content: text }
+          })
+        },
+        notifyRaised: (childTaskId, record) => {
+          this.sendToRenderer('task:childQuestionRaised', { taskId: childTaskId, question: record })
+        }
+      })
+    }
+    return this.childQuestionServiceInstance
+  }
+
+  /** Effective child-question routing policy for a parent task: its own agent's override, falling back to the global setting. */
+  private getChildQuestionParentPolicy(parentTaskId: string): ChildQuestionParentPolicy {
+    const parentTask = this.db.getTask(parentTaskId)
+    const agent = parentTask?.agent_id ? this.db.getAgent(parentTask.agent_id) : undefined
+    const config = agent?.config
+
+    const globalRoute = this.db.getSetting(AgentManager.ROUTE_CHILD_QUESTIONS_TO_PARENT_SETTING)
+    const routeToParent = config?.route_child_questions_to_parent ?? (globalRoute == null ? true : globalRoute !== 'false')
+
+    const globalTimeout = this.db.getSetting(AgentManager.CHILD_QUESTION_ESCALATION_TIMEOUT_SETTING)
+    const parsedGlobalTimeout = globalTimeout != null ? Number(globalTimeout) : NaN
+    const escalationTimeoutMs =
+      config?.child_question_escalation_timeout_ms ?? (Number.isFinite(parsedGlobalTimeout) && parsedGlobalTimeout > 0 ? parsedGlobalTimeout : undefined)
+
+    return { routeToParent, permissionMode: config?.permission_mode, escalationTimeoutMs }
+  }
+
+  /** Walks the parent_task_id chain. True when `taskId` is somewhere below `ancestorTaskId`. A cycle guard makes a corrupt chain fail closed (false) instead of looping forever. */
+  private isTaskDescendantOf(ancestorTaskId: string, taskId: string): boolean {
+    const seen = new Set<string>()
+    let current = this.db.getTask(taskId)
+    while (current?.parent_task_id) {
+      if (current.parent_task_id === ancestorTaskId) return true
+      if (seen.has(current.parent_task_id)) return false
+      seen.add(current.parent_task_id)
+      current = this.db.getTask(current.parent_task_id)
+    }
+    return false
+  }
+
+  /** Today's human push/OS notification path, reused for a question/approval that must (or had to) go to the human instead of the parent. */
+  private notifyHumanAboutChildQuestion(childTaskId: string, record: { kind: ChildQuestionKind; questionText: string }): void {
+    const task = this.db.getTask(childTaskId)
+    const title = record.kind === 'approval' ? 'Agent needs approval' : 'Agent has a question'
+    const body = task?.title ? `"${task.title}": ${record.questionText}` : record.questionText
+    void sendMobilePush(this.db, record.kind === 'approval' ? 'approval' : 'question', childTaskId, task?.title ?? 'Task').catch((error) =>
+      console.error('[MobilePush] Send failed:', error)
+    )
+    try {
+      if (Notification.isSupported() && (!this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused())) {
+        const notification = new Notification({ title, body })
+        notification.on('click', () => {
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.show()
+            this.mainWindow.focus()
+          }
+        })
+        notification.show()
+      }
+    } catch (err) {
+      console.error('[AgentManager] Failed to show OS notification for child question:', err)
+    }
+  }
+
+  /**
+   * Raises a subtask's pending approval (Codex/ACP/OpenCode/Pi permission
+   * request) with its parent, when it has one. Duck-types `getPendingApproval`
+   * the same way the rest of this file already does (line ~3537) — every
+   * adapter that supports approvals converges on the same
+   * `{ requestId|toolCallId, question, options }` shape.
+   */
+  private async raiseChildApprovalIfNeeded(taskId: string, sessionId: string, adapter: CodingAgentAdapter): Promise<void> {
+    const task = this.db.getTask(taskId)
+    if (!task?.parent_task_id) return
+    if (!('getPendingApproval' in adapter) || typeof (adapter as unknown as { getPendingApproval?: unknown }).getPendingApproval !== 'function') return
+
+    const pending = (
+      adapter as unknown as {
+        getPendingApproval: (sid: string) => {
+          requestId?: string | number
+          toolCallId?: string
+          question: string
+          options?: Array<{ optionId: string; name: string }>
+        } | null
+      }
+    ).getPendingApproval(sessionId)
+    if (!pending) return
+
+    const questionId = String(pending.requestId ?? pending.toolCallId ?? `${sessionId}:${pending.question}`)
+    const options: ChildQuestionOption[] | null = pending.options?.length
+      ? pending.options.map((o) => ({ optionId: o.optionId, label: o.name }))
+      : null
+
+    try {
+      await this.getChildQuestionService().raise({
+        childTaskId: taskId,
+        questionId,
+        kind: 'approval',
+        questionText: pending.question,
+        options
+      })
+    } catch (err) {
+      console.error(`[AgentManager] Failed to raise child approval for task ${taskId}:`, err)
+    }
+  }
+
+  /**
+   * Raises a subtask's AskUserQuestion / `question` tool call with its
+   * parent, when it has one. Mirrors the shape `AgentTranscriptPanel`'s
+   * `QuestionMessage` renders (`message.tool.questions[]`, each with
+   * `header`/`question`/`options[].label`) so the same question the human
+   * would see is the one the parent sees.
+   */
+  private async raiseChildQuestionIfNeeded(taskId: string, part: ChildQuestionToolPart): Promise<void> {
+    const task = this.db.getTask(taskId)
+    if (!task?.parent_task_id) return
+
+    const questions = part.tool?.questions ?? []
+    if (questions.length === 0) return
+    const questionId = String(part.tool?.requestId ?? part.id)
+    // Multiple sub-questions in one call are combined into one text block —
+    // the parent answers them the same way the human does (one message).
+    const questionText = questions.map((q) => [q.header, q.question].filter(Boolean).join(': ')).join('\n')
+    const options: ChildQuestionOption[] | null =
+      questions.length === 1 && questions[0].options?.length
+        ? questions[0].options.map((o, i) => ({ optionId: String(i), label: o.label }))
+        : null
+
+    try {
+      await this.getChildQuestionService().raise({
+        childTaskId: taskId,
+        questionId,
+        kind: 'question',
+        questionText,
+        options
+      })
+    } catch (err) {
+      console.error(`[AgentManager] Failed to raise child question for task ${taskId}:`, err)
+    }
   }
 
   /** Tasks whose projection backfill is in flight (dedupe guard). */
@@ -4958,7 +5198,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       // polling for child status — it can go idle (or even have its runtime
       // released) and is resumed exactly when there is something to act on.
       if (task.parent_task_id) {
-        this.notifyParentOfSubtaskCompletion(task.parent_task_id, session.taskId).catch((err) => {
+        this.notifyParentOfSubtaskCompletion(task.parent_task_id, session.taskId, endReason).catch((err) => {
           console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${session.taskId} ended (${endReason}):`, err)
         })
       }
@@ -7103,6 +7343,13 @@ Important:
       if (output.taskId && newQuestions.length > 0) {
         const task = this.db.getTask(output.taskId)
         const parentCompleted = task?.parent_task_id && this.db.getTask(task.parent_task_id)?.status === TaskStatus.Completed
+        // A subtask's question goes to its parent first (see
+        // child-questions.ts) before the human push notification below.
+        if (task) {
+          for (const part of newQuestions) {
+            void this.raiseChildQuestionIfNeeded(output.taskId, part as unknown as ChildQuestionToolPart)
+          }
+        }
         if (task && !parentCompleted && !task.id.startsWith('heartbeat-') && task.id !== 'mastermind-session') {
           const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
           if (isWindowInactive) {

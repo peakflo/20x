@@ -8,6 +8,7 @@ import type { Artifact, ArtifactContent, PullRequestDetails } from '@shared/arti
 import type { VoiceCapabilities } from '@shared/voice'
 import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageParallelismPeriod, UsageParallelismResponse, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
+import type { ChildQuestionRecord } from '@shared/child-questions'
 import type { PushPreferences } from '@shared/push-notifications'
 import type { HarnessInstanceView } from '@shared/harness-instances'
 import type { AcpAgentInstanceView } from '@shared/acp-registry'
@@ -124,6 +125,25 @@ export const api = {
   },
   harnessInstances: {
     list: () => get<HarnessInstanceView[]>('/api/harness-instances')
+  },
+  childQuestions: {
+    list: (taskId: string) =>
+      get<{ as_parent: ChildQuestionRecord[]; as_child: ChildQuestionRecord[] }>(`/api/tasks/${encodeURIComponent(taskId)}/child-questions`),
+    answer: (
+      parentTaskId: string,
+      childTaskId: string,
+      questionId: string,
+      input: { approved?: boolean; answer?: string; optionId?: string }
+    ) =>
+      post<{ success: true; record: ChildQuestionRecord } | { error: string }>(
+        `/api/tasks/${encodeURIComponent(parentTaskId)}/child-questions/answer`,
+        { child_task_id: childTaskId, question_id: questionId, approved: input.approved, answer: input.answer, option_id: input.optionId }
+      ),
+    escalate: (parentTaskId: string, childTaskId: string, questionId: string, note?: string) =>
+      post<{ success: true; record: ChildQuestionRecord } | { error: string }>(
+        `/api/tasks/${encodeURIComponent(parentTaskId)}/child-questions/escalate`,
+        { child_task_id: childTaskId, question_id: questionId, note }
+      )
   },
   acpInstances: {
     list: () => get<AcpAgentInstanceView[]>('/api/acp-instances')

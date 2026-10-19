@@ -103,6 +103,7 @@ function makeAgents(overrides: Record<string, unknown> = {}) {
     ),
     getSessionStatus: vi.fn(() => ({ status: 'waiting_approval', agentId: 'a1', taskId: 't1' })),
     getActiveSessionsForTask: vi.fn(() => ['s1']),
+    getChildQuestionService: vi.fn(() => ({ cancelLatestPendingForChild: vi.fn() })),
     ...overrides,
   }
 }

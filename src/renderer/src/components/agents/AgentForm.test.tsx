@@ -120,6 +120,59 @@ describe('AgentForm — permission_mode default', () => {
   })
 })
 
+describe('AgentForm — route child questions to parent (per-agent override)', () => {
+  function getRouteSelect(): HTMLSelectElement {
+    return screen.getByLabelText(/subtasks' questions/) as HTMLSelectElement
+  }
+
+  it('defaults to "Use the global setting" for a new agent', () => {
+    render(<AgentForm onSubmit={vi.fn()} onCancel={vi.fn()} />)
+    selectCodingAgent()
+
+    expect(getRouteSelect()).toHaveValue('default')
+    expect(screen.getByLabelText(/Escalate to the human after/)).toBeInTheDocument()
+  })
+
+  it('pre-fills true/false from a stored override, and hides the timeout field once set to always escalate', () => {
+    const { unmount } = render(
+      <AgentForm
+        agent={makeAgent({ coding_agent: CodingAgentType.OPENCODE, route_child_questions_to_parent: true, child_question_escalation_timeout_ms: 15 * 60_000 })}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    expect(getRouteSelect()).toHaveValue('true')
+    expect(screen.getByLabelText(/Escalate to the human after/)).toHaveValue(15)
+    unmount()
+
+    render(
+      <AgentForm
+        agent={makeAgent({ coding_agent: CodingAgentType.OPENCODE, route_child_questions_to_parent: false })}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    )
+    expect(getRouteSelect()).toHaveValue('false')
+    expect(screen.queryByLabelText(/Escalate to the human after/)).not.toBeInTheDocument()
+  })
+
+  it('submits undefined for the global default, and a boolean override otherwise', async () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm onSubmit={onSubmit} onCancel={vi.fn()} />)
+    selectCodingAgent()
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'My Agent' } })
+    fireEvent.change(getRouteSelect(), { target: { value: 'false' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+    })
+    expect(onSubmit.mock.calls[0][0].config.route_child_questions_to_parent).toBe(false)
+    expect(onSubmit.mock.calls[0][0].config.child_question_escalation_timeout_ms).toBeUndefined()
+  })
+})
+
 describe('AgentForm server URL', () => {
   it('asks for the coding agent right after the name, with no server URL until OpenCode is chosen', () => {
     render(<AgentForm onSubmit={vi.fn()} onCancel={vi.fn()} />)

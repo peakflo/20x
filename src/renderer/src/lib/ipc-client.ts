@@ -1,4 +1,4 @@
-import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
+import type { WorkfloTask, ChildQuestionRecord, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
@@ -473,6 +473,50 @@ export const onTaskCreated = (callback: (event: { task: WorkfloTask }) => void):
 
 export const onTaskDeleted = (callback: (event: { taskId: string }) => void): (() => void) => {
   return window.electronAPI.onTaskDeleted(callback)
+}
+
+// ── Children's questions go to the parent first ──────────────────────────
+// (see src/main/orchestration/child-questions.ts for the routing/escalation rules)
+
+export const onChildQuestionRaised = (
+  callback: (event: { taskId: string; question: ChildQuestionRecord }) => void
+): (() => void) => {
+  return window.electronAPI.onChildQuestionRaised(callback)
+}
+
+export const onChildQuestionAnswered = (callback: (event: { taskId: string; questionId: string }) => void): (() => void) => {
+  return window.electronAPI.onChildQuestionAnswered(callback)
+}
+
+export const onChildQuestionEscalated = (
+  callback: (event: { taskId: string; question: ChildQuestionRecord }) => void
+): (() => void) => {
+  return window.electronAPI.onChildQuestionEscalated(callback)
+}
+
+export const childQuestionsApi = {
+  listForParent: (parentTaskId: string): Promise<ChildQuestionRecord[]> => {
+    return window.electronAPI.childQuestions.listForParent(parentTaskId)
+  },
+  listForChild: (childTaskId: string): Promise<ChildQuestionRecord[]> => {
+    return window.electronAPI.childQuestions.listForChild(childTaskId)
+  },
+  answer: (
+    parentTaskId: string,
+    childTaskId: string,
+    questionId: string,
+    input: { approved?: boolean; answer?: string; optionId?: string }
+  ): Promise<{ success: true; record: ChildQuestionRecord } | { error: string }> => {
+    return window.electronAPI.childQuestions.answer(parentTaskId, childTaskId, questionId, input)
+  },
+  escalate: (
+    parentTaskId: string,
+    childTaskId: string,
+    questionId: string,
+    note?: string
+  ): Promise<{ success: true; record: ChildQuestionRecord } | { error: string }> => {
+    return window.electronAPI.childQuestions.escalate(parentTaskId, childTaskId, questionId, note)
+  }
 }
 
 export const settingsApi = {

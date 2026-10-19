@@ -666,6 +666,10 @@ export function registerIpcHandlers(
     async (_, taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
       agentManager.noteUserTaskActivity(taskId)
       const result = await agentManager.sendByTaskId(taskId, message, attachments)
+      // The human answered directly (the same path a question's "answer"
+      // button uses) — cancel the parent's pending item, if any. A no-op
+      // when this task has no pending child question.
+      agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, message)
       return { success: true, ...result }
     }
   )
@@ -675,14 +679,41 @@ export function registerIpcHandlers(
     async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
       agentManager.noteUserTaskActivity(taskId, sessionId)
       const result = await agentManager.sendMessage(sessionId, message, taskId, agentId, attachments)
+      if (taskId) agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, message)
       return { success: true, ...result }
     }
   )
 
   ipcMain.handle('agentSession:approve', async (_, sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string) => {
+    const taskId = agentManager.getSessionStatus(sessionId)?.taskId
     await agentManager.respondToPermission(sessionId, approved, message, undefined, responseType, requestId)
+    // The human answered directly — cancel the parent's pending item, if any.
+    if (taskId) agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, approved ? 'approved' : 'rejected')
     return { success: true }
   })
+
+  // Children's questions go to the parent first (see orchestration/child-questions.ts).
+  // The desktop renderer talks to AgentManager's ChildQuestionService directly,
+  // the same way agentSession:* above does — never through the Task API server,
+  // which exists for MCP/mobile callers.
+  ipcMain.handle('childQuestions:listForParent', (_, parentTaskId: string) => {
+    return agentManager.getChildQuestionService().listForParent(parentTaskId)
+  })
+  ipcMain.handle('childQuestions:listForChild', (_, childTaskId: string) => {
+    return agentManager.getChildQuestionService().listForChild(childTaskId)
+  })
+  ipcMain.handle(
+    'childQuestions:answer',
+    async (_, parentTaskId: string, childTaskId: string, questionId: string, input: { approved?: boolean; answer?: string; optionId?: string }) => {
+      return agentManager.getChildQuestionService().answerFromParent(parentTaskId, childTaskId, questionId, input)
+    }
+  )
+  ipcMain.handle(
+    'childQuestions:escalate',
+    (_, parentTaskId: string, childTaskId: string, questionId: string, note?: string) => {
+      return agentManager.getChildQuestionService().escalateToUser(parentTaskId, childTaskId, questionId, note)
+    }
+  )
 
   ipcMain.handle('agentSession:syncSkills', (_, sessionId: string) => {
     return agentManager.syncSkillsFromWorkspace(sessionId)

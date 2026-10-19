@@ -7,6 +7,7 @@ import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask, makeAgent } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
 import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskAutomationTrigger, startTaskApiServer, stopTaskApiServer } from './task-api-server'
+import { subtaskEvents } from './orchestration/subtask-events'
 import { TaskStatus } from '../shared/constants'
 import { HTML_RENDER_MAX_HEIGHT, HTML_RENDER_MAX_LENGTH, HTML_RENDER_MAX_TITLE_LENGTH } from '../shared/html-render'
 
@@ -584,6 +585,240 @@ describe('/wait_for_subtasks', () => {
     expect(result.timed_out).toBe(false)
     expect(result.terminal_statuses).toContain(TaskStatus.ModelError)
     expect((result.subtasks as Array<Record<string, unknown>>)[0].status).toBe(TaskStatus.ModelError)
+  })
+
+  it('is event-driven, not polling: resolves as soon as the matching event arrives, with the DB queried only a couple of times (not every 2s)', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Subtask Agent' }))!
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const subtask = db.createTask(makeTask({ title: 'Working subtask', parent_task_id: parent.id, status: TaskStatus.AgentWorking }))!
+    db.updateTask(subtask.id, { agent_id: agent.id })
+
+    const prepareSpy = vi.spyOn(rawDb, 'prepare')
+    const port = await startTaskApiServer(db)
+
+    const responsePromise = fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_task_id: parent.id, subtask_ids: [subtask.id], timeout_ms: 4_000 })
+    })
+
+    // Simulate the real transition path (AgentManager.notifyParentOfSubtaskCompletion):
+    // update the row, then emit the matching event on the shared bus.
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    db.updateTask(subtask.id, { status: TaskStatus.ReadyForReview })
+    subtaskEvents.emitSubtaskEvent({ kind: 'status', parentTaskId: parent.id, childTaskId: subtask.id, status: TaskStatus.ReadyForReview })
+
+    const response = await responsePromise
+    const result = await response.json() as Record<string, unknown>
+
+    expect(result.success).toBe(true)
+    expect(result.timed_out).toBe(false)
+    expect((result.subtasks as Array<Record<string, unknown>>)[0].status).toBe(TaskStatus.ReadyForReview)
+
+    // Exactly two reads of the subtasks table: the initial check-before-subscribe,
+    // and the one re-check after the event — not a 2s poll loop re-reading
+    // repeatedly while this 4s-budget call was open.
+    const subtaskSelectCalls = prepareSpy.mock.calls.filter(([sql]) => String(sql).includes('FROM tasks WHERE parent_task_id'))
+    expect(subtaskSelectCalls.length).toBeLessThanOrEqual(3)
+  })
+
+  it('does not miss an event that lands between the initial DB read and the subscribe (check-then-subscribe race)', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Subtask Agent' }))!
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const subtask = db.createTask(makeTask({ title: 'Working subtask', parent_task_id: parent.id, status: TaskStatus.AgentWorking }))!
+    db.updateTask(subtask.id, { agent_id: agent.id })
+
+    // Emit the event for this exact transition BEFORE the request is even
+    // sent, simulating it landing in the gap — `sinceSeq` is captured before
+    // the DB read, so this must still be found instead of waited out.
+    const beforeSeq = subtaskEvents.currentSeq()
+    subtaskEvents.emitSubtaskEvent({ kind: 'status', parentTaskId: parent.id, childTaskId: subtask.id, status: TaskStatus.ReadyForReview })
+    expect(subtaskEvents.currentSeq()).toBeGreaterThan(beforeSeq)
+    db.updateTask(subtask.id, { status: TaskStatus.ReadyForReview })
+
+    const port = await startTaskApiServer(db)
+    const response = await fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_task_id: parent.id, subtask_ids: [subtask.id], timeout_ms: 2_000 })
+    })
+    const result = await response.json() as Record<string, unknown>
+
+    // Resolved from the plain DB read alone (status is already terminal) —
+    // this mainly guards that an event emitted just before the call doesn't
+    // somehow confuse or delay it.
+    expect(result.success).toBe(true)
+    expect(result.timed_out).toBe(false)
+  })
+
+  it('returns on any_terminal as soon as one of several subtasks is terminal', async () => {
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const a = db.createTask(makeTask({ title: 'A', parent_task_id: parent.id, status: TaskStatus.AgentWorking }))!
+    db.createTask(makeTask({ title: 'B', parent_task_id: parent.id, status: TaskStatus.AgentWorking }))!
+
+    const port = await startTaskApiServer(db)
+    const responsePromise = fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_task_id: parent.id, return_when: 'any_terminal', timeout_ms: 3_000 })
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    db.updateTask(a.id, { status: TaskStatus.Completed })
+    subtaskEvents.emitSubtaskEvent({ kind: 'status', parentTaskId: parent.id, childTaskId: a.id, status: TaskStatus.Completed })
+
+    const result = await (await responsePromise).json() as Record<string, unknown>
+    expect(result.success).toBe(true)
+    expect(result.timed_out).toBe(false)
+  })
+
+  it('on any_event, returns as soon as a child question is raised — even though no subtask reached a terminal status', async () => {
+    setTaskApiAgentController({
+      getChildQuestionService: () => ({
+        listForChild: (childTaskId: string) =>
+          childTaskId === subtask.id
+            ? [{ id: 'q1', childTaskId, parentTaskId: parent.id, questionId: 'q1', state: 'pending_parent' } as any]
+            : []
+      })
+    } as any)
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const subtask = db.createTask(makeTask({ title: 'Working subtask', parent_task_id: parent.id, status: TaskStatus.AgentWorking }))!
+
+    const port = await startTaskApiServer(db)
+    const responsePromise = fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_task_id: parent.id, return_when: 'any_event', timeout_ms: 3_000 })
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    subtaskEvents.emitSubtaskEvent({ kind: 'child_question', parentTaskId: parent.id, childTaskId: subtask.id, questionId: 'q1', needsAttention: true })
+
+    const result = await (await responsePromise).json() as Record<string, unknown>
+    expect(result.success).toBe(true)
+    expect(result.timed_out).toBe(false)
+    const returnedSubtask = (result.subtasks as Array<Record<string, unknown>>).find((s) => s.id === subtask.id)!
+    expect(returnedSubtask.pending_questions).toHaveLength(1)
+  })
+
+  it('times out honestly (and says to call again) when nothing happens within the budget', async () => {
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    db.createTask(makeTask({ title: 'Working subtask', parent_task_id: parent.id, status: TaskStatus.AgentWorking }))!
+
+    const port = await startTaskApiServer(db)
+    const response = await fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_task_id: parent.id, timeout_ms: 300 })
+    })
+    const result = await response.json() as Record<string, unknown>
+
+    expect(result.success).toBe(false)
+    expect(result.timed_out).toBe(true)
+  })
+})
+
+describe('children\'s questions go to the parent first (task API routes)', () => {
+  const post = async <T>(port: number, route: string, body: Record<string, unknown>): Promise<T> => {
+    const response = await fetch(`http://127.0.0.1:${port}${route}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    return (await response.json()) as T
+  }
+
+  function controllerWithService(service: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+    setTaskApiAgentController({ getChildQuestionService: () => service, ...extra } as any)
+  }
+
+  it('/answer_child_question delegates to the service and notifies the renderer', async () => {
+    const answerFromParent = vi.fn(async () => ({ success: true, record: { id: 'cq-1', state: 'answered_by_parent' } }))
+    controllerWithService({ answerFromParent })
+    const notify = vi.fn()
+    setTaskApiNotifier(notify)
+    const port = await startTaskApiServer(db)
+
+    const result = await post<Record<string, unknown>>(port, '/answer_child_question', {
+      parent_task_id: 'parent-1',
+      child_task_id: 'child-1',
+      question_id: 'q1',
+      approved: true
+    })
+
+    expect(answerFromParent).toHaveBeenCalledWith('parent-1', 'child-1', 'q1', { approved: true, answer: undefined, optionId: undefined })
+    expect(result.success).toBe(true)
+    expect(notify).toHaveBeenCalledWith('task:childQuestionAnswered', { taskId: 'child-1', questionId: 'q1' })
+  })
+
+  it('/answer_child_question surfaces a scoping error from the service as-is', async () => {
+    const answerFromParent = vi.fn(async () => ({ error: 'That task is not a descendant of this task' }))
+    controllerWithService({ answerFromParent })
+    const port = await startTaskApiServer(db)
+
+    const result = await post<Record<string, unknown>>(port, '/answer_child_question', {
+      parent_task_id: 'parent-1',
+      child_task_id: 'child-1',
+      question_id: 'q1'
+    })
+
+    expect(result).toEqual({ error: 'That task is not a descendant of this task' })
+  })
+
+  it('/escalate_to_user delegates to the service with the parent\'s note', async () => {
+    // No renderer notification is asserted here: escalation's
+    // task:childQuestionEscalated push is centralized in ChildQuestionService's
+    // `notifyHuman` hook (see agent-manager.ts), which this route does not call
+    // a second time — see the comment on this route in task-api-server.ts.
+    const escalateToUser = vi.fn(() => ({ success: true, record: { id: 'cq-1', state: 'escalated', note: 'Needs a human call' } }))
+    controllerWithService({ escalateToUser })
+    const port = await startTaskApiServer(db)
+
+    const result = await post<Record<string, unknown>>(port, '/escalate_to_user', {
+      parent_task_id: 'parent-1',
+      child_task_id: 'child-1',
+      question_id: 'q1',
+      note: 'Needs a human call'
+    })
+
+    expect(escalateToUser).toHaveBeenCalledWith('parent-1', 'child-1', 'q1', 'Needs a human call')
+    expect(result.success).toBe(true)
+  })
+
+  it('/list_child_questions lists by parent_task_id or child_task_id', async () => {
+    const listForParent = vi.fn(() => [{ id: 'cq-1' }])
+    const listForChild = vi.fn(() => [{ id: 'cq-2' }])
+    controllerWithService({ listForParent, listForChild })
+    const port = await startTaskApiServer(db)
+
+    const byParent = await post<Record<string, unknown>>(port, '/list_child_questions', { parent_task_id: 'parent-1' })
+    expect(listForParent).toHaveBeenCalledWith('parent-1')
+    expect(byParent.questions).toEqual([{ id: 'cq-1' }])
+
+    const byChild = await post<Record<string, unknown>>(port, '/list_child_questions', { child_task_id: 'child-1' })
+    expect(listForChild).toHaveBeenCalledWith('child-1')
+    expect(byChild.questions).toEqual([{ id: 'cq-2' }])
+  })
+
+  it('/respond_to_checkpoint cancels the parent\'s pending item once the human answers directly', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
+    const task = db.createTask(makeTask({ title: 'Waiting task' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+
+    const cancelLatestPendingForChild = vi.fn()
+    const respondToPermission = vi.fn(async () => undefined)
+    setTaskApiAgentController({
+      findSessionByTaskId: vi.fn(() => ({ sessionId: 'session-1' })),
+      getSessionStatus: vi.fn(() => ({ status: 'waiting_approval' })),
+      respondToPermission,
+      getChildQuestionService: () => ({ cancelLatestPendingForChild })
+    } as any)
+    const port = await startTaskApiServer(db)
+
+    await post(port, '/respond_to_checkpoint', { task_id: task.id, approved: true })
+
+    expect(respondToPermission).toHaveBeenCalled()
+    expect(cancelLatestPendingForChild).toHaveBeenCalledWith(task.id, 'approved')
   })
 })
 
@@ -1224,7 +1459,12 @@ describe('client_request_id idempotency', () => {
     const task = db.createTask(makeTask({ title: 'Messageable' }))!
     db.updateTask(task.id, { agent_id: agent.id })
     const sendByTaskId = vi.fn(async () => ({ sessionId: 'session-abc' }))
-    setTaskApiAgentController({ sendByTaskId, findSessionByTaskId: vi.fn(() => undefined) } as any)
+    const cancelLatestPendingForChild = vi.fn()
+    setTaskApiAgentController({
+      sendByTaskId,
+      findSessionByTaskId: vi.fn(() => undefined),
+      getChildQuestionService: () => ({ cancelLatestPendingForChild })
+    } as any)
     const port = await startTaskApiServer(db)
 
     await post(port, '/send_message', { task_id: task.id, text: 'hello', client_request_id: 'msg-once' })

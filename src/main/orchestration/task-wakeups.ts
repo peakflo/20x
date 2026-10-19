@@ -181,6 +181,22 @@ export class TaskWakeupStore {
       .run(nowMs - olderThanMs)
     return result.changes
   }
+
+  /**
+   * Drops still-undelivered rows for one child→parent transition. Used when
+   * the thing the wake-up was about is resolved by another path before the
+   * parent ever saw it (e.g. a human answered a child's question directly) —
+   * so the parent isn't nudged about something that's already settled.
+   * No-op (and harmless) once the row has been delivered.
+   */
+  cancelPending(parentTaskId: string, childTaskId: string, reason: WakeupReason): number {
+    const result = this.db
+      .prepare(
+        `DELETE FROM task_wakeups WHERE parent_task_id = ? AND child_task_id = ? AND reason = ? AND delivered_at IS NULL`
+      )
+      .run(parentTaskId, childTaskId, reason)
+    return result.changes
+  }
 }
 
 export interface SubtaskSnapshot {
@@ -287,10 +303,16 @@ export class TaskWakeupQueue {
     if (!ctx.exists || ctx.completed) return
     if (ctx.sessionBusy) return
 
-    const deliverable = pending
+    let deliverable = pending
     if (this.mode === 'wait-for-all') {
       const stillWorking = ctx.subtasks.some((s) => s.status === 'agent_working' || s.status === 'triaging')
-      if (stillWorking) return
+      if (stillWorking) {
+        // A child's question is time-sensitive — it auto-escalates to the
+        // human on its own timeout — so it must not wait behind siblings
+        // that are still working. Every other reason keeps batching until
+        // the whole cohort is done.
+        deliverable = pending.filter((w) => w.reason === 'child_question')
+      }
     }
     if (deliverable.length === 0) return
 
@@ -345,5 +367,10 @@ export class TaskWakeupQueue {
   /** Drops delivered rows older than 7 days. Safe to call on a timer or on startup. */
   pruneOldDelivered(): number {
     return this.deps.store.pruneDelivered(this.now(), DELIVERED_RETENTION_MS)
+  }
+
+  /** Drops a still-undelivered wake-up for one child→parent transition — see `TaskWakeupStore.cancelPending`. */
+  cancelPending(parentTaskId: string, childTaskId: string, reason: WakeupReason): number {
+    return this.deps.store.cancelPending(parentTaskId, childTaskId, reason)
   }
 }

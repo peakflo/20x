@@ -18,6 +18,7 @@ import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager } from './database'
 import { TASK_MCP_PATH, handleTaskMcpRequest } from './task-mcp-endpoint'
 import { withIdempotency, pruneExpiredOrchestrationReceiptsOnce } from './orchestration/idempotency'
+import { subtaskEvents } from './orchestration/subtask-events'
 import { TaskStatus } from '../shared/constants'
 import { desktopBrandName } from './brand'
 import { ArtifactType } from '../shared/artifacts'
@@ -75,6 +76,7 @@ type TaskApiAgentController = Pick<
   | 'findSessionByTaskId'
   | 'getSessionStatus'
   | 'getActiveSessionsForTask'
+  | 'getChildQuestionService'
 >
 
 let agentController: TaskApiAgentController | null = null
@@ -1211,6 +1213,11 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         // The message is attributed to the user, because that is who spoke it.
         // A transcript that credited the agent would misreport who asked.
         const result = await sendController.sendByTaskId(taskId, String(params.text))
+        // The human answered directly (the same path a question's "answer"
+        // button uses) — cancel the parent's pending item, if any, so it
+        // isn't nudged about something already settled. A no-op when this
+        // task has no pending child question.
+        sendController.getChildQuestionService().cancelLatestPendingForChild(taskId, String(params.text))
         return { success: true, task_id: taskId, session_id: result.sessionId ?? result.newSessionId ?? null }
       })
     }
@@ -1237,8 +1244,63 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         approved,
         params.message ? String(params.message) : undefined
       )
+      // The human answered directly — cancel the parent's pending item, if
+      // any (a no-op when this task has no pending child question).
+      agentController.getChildQuestionService().cancelLatestPendingForChild(taskId, approved ? 'approved' : 'rejected')
       notifyRenderer?.('task:checkpointAnswered', { taskId, approved })
       return { success: true, task_id: taskId, approved }
+    }
+
+    // ── Children's questions/approvals go to the parent first ──────────
+    // (see orchestration/child-questions.ts for the routing/escalation rules)
+
+    case '/list_child_questions': {
+      if (!agentController) return { error: 'Agent controller not available' }
+      const service = agentController.getChildQuestionService()
+      if (params.parent_task_id) return { questions: service.listForParent(String(params.parent_task_id)) }
+      if (params.child_task_id) return { questions: service.listForChild(String(params.child_task_id)) }
+      return { error: 'parent_task_id or child_task_id is required' }
+    }
+
+    case '/answer_child_question': {
+      if (!agentController) return { error: 'Agent controller not available' }
+      if (!params.parent_task_id) return { error: 'parent_task_id is required' }
+      if (!params.child_task_id) return { error: 'child_task_id is required' }
+      if (!params.question_id) return { error: 'question_id is required' }
+      const result = await agentController.getChildQuestionService().answerFromParent(
+        String(params.parent_task_id),
+        String(params.child_task_id),
+        String(params.question_id),
+        {
+          approved: params.approved === undefined ? undefined : params.approved === true,
+          answer: params.answer !== undefined ? String(params.answer) : undefined,
+          optionId: params.option_id !== undefined ? String(params.option_id) : undefined
+        }
+      )
+      if ('error' in result) return result
+      notifyRenderer?.('task:childQuestionAnswered', { taskId: String(params.child_task_id), questionId: String(params.question_id) })
+      return { success: true, question: result.record }
+    }
+
+    case '/escalate_to_user': {
+      if (!agentController) return { error: 'Agent controller not available' }
+      if (!params.parent_task_id) return { error: 'parent_task_id is required' }
+      if (!params.child_task_id) return { error: 'child_task_id is required' }
+      if (!params.question_id) return { error: 'question_id is required' }
+      const result = agentController.getChildQuestionService().escalateToUser(
+        String(params.parent_task_id),
+        String(params.child_task_id),
+        String(params.question_id),
+        params.note !== undefined ? String(params.note) : undefined
+      )
+      if ('error' in result) return result
+      // No manual notifyRenderer here: ChildQuestionService.escalateToUser already
+      // goes through the service's `notifyHuman` hook, which the AgentManager
+      // wiring uses as the one spot that pushes task:childQuestionEscalated for
+      // every escalation path (this one, the automatic-timeout sweep, and an
+      // immediate out-of-authority escalation) — a second push here would
+      // double-fire the renderer event for this path specifically.
+      return { success: true, question: result.record }
     }
 
     case '/stop_task': {
@@ -1344,10 +1406,24 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
     case '/wait_for_subtasks': {
       if (!params.parent_task_id) return { error: 'parent_task_id is required' }
+      const parentTaskId = String(params.parent_task_id)
 
-      const timeoutMs = typeof params.timeout_ms === 'number' ? Math.max(1_000, params.timeout_ms) : 300_000
-      const pollMs = 2_000
-      const returnWhen = params.return_when === 'any_terminal' ? 'any_terminal' : 'all_terminal'
+      // Event-driven: no SQLite polling loop. Blocks on `subtaskEvents` (see
+      // orchestration/subtask-events.ts) — one event per subtask status
+      // transition, run end, or child question — instead of re-reading every
+      // subtask row on a timer. `timeout_ms` is honoured but capped per call:
+      // this server replies with one plain JSON response per MCP request (no
+      // SSE progress/heartbeat frame), so a call is kept open only as long as
+      // is safe for an MCP client's own request timeout. A call that times
+      // out says so and expects to be called again — it is not a failure.
+      const DEFAULT_TIMEOUT_MS = 55_000
+      const MAX_TIMEOUT_MS = 110_000
+      const requestedTimeoutMs = typeof params.timeout_ms === 'number' && params.timeout_ms > 0 ? params.timeout_ms : DEFAULT_TIMEOUT_MS
+      const timeoutMs = Math.min(Math.max(1_000, requestedTimeoutMs), MAX_TIMEOUT_MS)
+      const cappedTimeout = requestedTimeoutMs > MAX_TIMEOUT_MS
+
+      const returnWhen: 'all_terminal' | 'any_terminal' | 'any_event' =
+        params.return_when === 'any_terminal' ? 'any_terminal' : params.return_when === 'any_event' ? 'any_event' : 'all_terminal'
       // model_error is terminal-for-waiting by default: a subtask whose
       // session stopped on a model/provider error will not move itself to
       // ready_for_review/completed on its own, so an orchestrator waiting on
@@ -1360,44 +1436,92 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         ? new Set((params.subtask_ids as string[]).map(String))
         : null
 
-      const readSubtasks = () => {
+      const readSubtasks = (): Record<string, unknown>[] => {
         const subtasks = rawDb.prepare(
           'SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY sort_order ASC, created_at ASC'
-        ).all(params.parent_task_id) as Record<string, unknown>[]
+        ).all(parentTaskId) as Record<string, unknown>[]
         subtasks.forEach(parseTask)
         return targetIds ? subtasks.filter((task) => targetIds.has(String(task.id))) : subtasks
       }
 
-      const startedAt = Date.now()
-      while (Date.now() - startedAt < timeoutMs) {
-        const subtasks = readSubtasks()
+      const pendingQuestionsFor = (childTaskId: string) =>
+        (agentController?.getChildQuestionService().listForChild(childTaskId) ?? []).filter(
+          (q) => q.state === 'pending_parent' || q.state === 'escalated'
+        )
+
+      const snapshot = (subtasks: Record<string, unknown>[]) =>
+        subtasks.map((task) => ({
+          id: task.id,
+          title: task.title,
+          status: task.status,
+          resolution: task.resolution ?? null,
+          output_fields: task.output_fields ?? null,
+          pending_questions: pendingQuestionsFor(String(task.id))
+        }))
+
+      const isDone = (subtasks: Record<string, unknown>[]): boolean => {
+        if (subtasks.length === 0) return false
         const matches = subtasks.filter((task) => terminalStatuses.includes(String(task.status)))
+        if (returnWhen === 'any_terminal') return matches.length > 0
+        if (returnWhen === 'all_terminal') return matches.length === subtasks.length
+        // any_event: any terminal status (including a "needs attention" end,
+        // which already reuses model_error — see run-finalization.ts), OR any
+        // child question still waiting on the parent or escalated.
+        if (matches.length > 0) return true
+        return subtasks.some((task) => pendingQuestionsFor(String(task.id)).length > 0)
+      }
 
-        if (subtasks.length > 0) {
-          const done = returnWhen === 'any_terminal'
-            ? matches.length > 0
-            : matches.length === subtasks.length
+      // Check current DB state BEFORE subscribing, remembering the event
+      // sequence as of that read — so an event landing in the gap between
+      // this read and the subscribe below can never be missed (see
+      // `SubtaskEventBus.waitFor`'s `sinceSeq`, covered in subtask-events.test.ts).
+      let sinceSeq = subtaskEvents.currentSeq()
+      let subtasks = readSubtasks()
+      if (isDone(subtasks)) {
+        return { success: true, timed_out: false, return_when: returnWhen, terminal_statuses: terminalStatuses, subtasks: snapshot(subtasks) }
+      }
 
-          if (done) {
-            return {
-              success: true,
-              timed_out: false,
-              return_when: returnWhen,
-              terminal_statuses: terminalStatuses,
-              subtasks
-            }
+      // Best-effort early return if the parent's own session — the one
+      // presumably blocked on this very call — is interrupted or stopped
+      // while waiting. A live session for this task when the wait begins
+      // that later disappears is treated as "stopped mid-wait".
+      const parentHadLiveSession = (agentController?.getActiveSessionsForTask(parentTaskId).length ?? 0) > 0
+      const startedAt = Date.now()
+
+      while (Date.now() - startedAt < timeoutMs) {
+        if (parentHadLiveSession && agentController?.getActiveSessionsForTask(parentTaskId).length === 0) {
+          return {
+            success: false,
+            timed_out: false,
+            interrupted: true,
+            return_when: returnWhen,
+            terminal_statuses: terminalStatuses,
+            subtasks: snapshot(readSubtasks())
           }
         }
 
-        await new Promise((resolve) => setTimeout(resolve, pollMs))
+        const remainingMs = timeoutMs - (Date.now() - startedAt)
+        // Re-checked at least every 5s even with no matching event, so the
+        // interrupted-session check above stays responsive during a long wait.
+        const event = await subtaskEvents.waitFor(
+          (e) => e.parentTaskId === parentTaskId && (!targetIds || targetIds.has(e.childTaskId)),
+          { sinceSeq, timeoutMs: Math.max(0, Math.min(remainingMs, 5_000)) }
+        )
+        if (event) sinceSeq = event.seq
+
+        subtasks = readSubtasks()
+        if (isDone(subtasks)) {
+          return { success: true, timed_out: false, return_when: returnWhen, terminal_statuses: terminalStatuses, subtasks: snapshot(subtasks) }
+        }
       }
 
       return {
         success: false,
         timed_out: true,
+        ...(cappedTimeout ? { capped_timeout: true, note: `timeout_ms was capped to ${MAX_TIMEOUT_MS}ms for this call — call wait_for_subtasks again to keep waiting.` } : {}),
         return_when: returnWhen,
         terminal_statuses: terminalStatuses,
-        subtasks: readSubtasks()
+        subtasks: snapshot(readSubtasks())
       }
     }
 
