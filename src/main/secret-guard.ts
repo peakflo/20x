@@ -122,15 +122,26 @@ const CHAIN_SPLIT = /[;&\n]+/
 // (`./--password-stdin`) no longer matches either — defense in depth for
 // these named patterns too, not just the dropped generic one.
 //
+// Matches `flag` (or `flag=value`) as a whole, token-bounded argument —
+// followed by whitespace or end-of-string, never by more non-whitespace
+// characters. Re-review (round 5, Nit): `--with-token\b` alone matched
+// `--with-token-x` too — `\b` only checks for a word/non-word transition
+// (the "n" in "token" to the "-" in "-x" satisfies that on its own), not
+// that nothing else follows. `flagToken` requires the flag to actually
+// END there (or be immediately followed by `=value`), closing that gap.
+function flagToken(flag: string): string {
+  return `${flag}(?:=\\S*)?(?:\\s|$)`
+}
+
 // Single source of truth: these are SOURCE STRINGS, not compiled
 // RegExps, specifically so `buildGuardFunctionSource()` below can embed
 // the exact same list into OpenCode's generated plugin via
 // `JSON.stringify` instead of a hand-duplicated copy that could drift.
 const SAFE_CREDENTIAL_SINK_SOURCES: string[] = [
-  'gh\\s+auth\\s+login\\b(?:\\s+\\S+)*\\s+--with-token\\b',
-  'docker\\s+login\\b(?:\\s+\\S+)*\\s+--password-stdin\\b',
-  'npm\\s+(?:login|adduser)\\b(?:\\s+\\S+)*\\s+--authtoken\\b',
-  'helm\\s+registry\\s+login\\b(?:\\s+\\S+)*\\s+--password-stdin\\b',
+  `gh\\s+auth\\s+login\\b(?:\\s+\\S+)*\\s+${flagToken('--with-token')}`,
+  `docker\\s+login\\b(?:\\s+\\S+)*\\s+${flagToken('--password-stdin')}`,
+  `npm\\s+(?:login|adduser)\\b(?:\\s+\\S+)*\\s+${flagToken('--authtoken')}`,
+  `helm\\s+registry\\s+login\\b(?:\\s+\\S+)*\\s+${flagToken('--password-stdin')}`,
   'aws\\s+ecr(?:-public)?\\s+get-login-password\\b'
 ]
 const SAFE_CREDENTIAL_SINK_PATTERNS: RegExp[] = SAFE_CREDENTIAL_SINK_SOURCES.map((src) => cmdPattern(src))
