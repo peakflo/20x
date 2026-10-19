@@ -94,6 +94,43 @@ const SEGMENT_SPLIT = /[;&|\n]+/
 // isolation) and "gh auth login --with-token" (unrelated on its own).
 const CHAIN_SPLIT = /[;&\n]+/
 
+// Known-safe credential HANDOFF sinks for the echo/printf-of-known-secret
+// check below. Re-review (round 3, P2): the first fix allowed ANY `|`
+// after a matched echo/printf — `echo $X | cat`, `echo $X | tee f`,
+// `echo $X | rev` all slipped through too, which is just the same dump
+// guard bypassed via one extra pipe stage. Narrowed to the specific,
+// standard credential-handoff idioms the review named: `gh`/`docker`/
+// `npm`/`helm`'s own login subcommands (consuming a secret via THEIR
+// stdin, not printing it), `aws ecr(-public) get-login-password`-style
+// targets, and a generic fallback for any other CLI using the same
+// well-known `--with-token`/`--password-stdin` flag idiom for its own
+// login/auth subcommand.
+const SAFE_CREDENTIAL_SINK_PATTERNS: RegExp[] = [
+  cmdPattern('gh\\s+auth\\s+login\\b[^\\n]*--with-token\\b'),
+  cmdPattern('docker\\s+login\\b[^\\n]*--password-stdin\\b'),
+  cmdPattern('npm\\s+(?:login|adduser)\\b[^\\n]*--authtoken\\b'),
+  cmdPattern('helm\\s+registry\\s+login\\b[^\\n]*--password-stdin\\b'),
+  cmdPattern('aws\\s+ecr(?:-public)?\\s+get-login-password\\b'),
+  cmdPattern('\\S+\\s+(?:login|auth\\s+login)\\b[^\\n]*--(?:with-token|password-stdin)\\b')
+]
+
+/**
+ * True when EVERY `|`-delimited stage after the matched echo/printf is a
+ * recognized credential-handoff sink. One unsafe stage anywhere in the
+ * pipeline (even after an otherwise-safe one) is enough to block — e.g.
+ * `echo $X | gh auth login --with-token | tee leaked.txt` still ends with
+ * the value reaching a plain file/stdout sink.
+ */
+function allStagesAreSafeCredentialSinks(restOfChain: string): boolean {
+  const stages = restOfChain
+    .split('|')
+    .slice(1) // stage 0 is whatever immediately follows the echo/printf match, before the first `|` — not a sink itself
+    .map((s) => stripWrapperPrefixes(s.trim()))
+    .filter(Boolean)
+  if (stages.length === 0) return false
+  return stages.every((stage) => SAFE_CREDENTIAL_SINK_PATTERNS.some((pattern) => pattern.test(stage)))
+}
+
 const DENY_MESSAGE =
   "Secrets are injected automatically — you don't need to print them; use $VAR_NAME directly in your command. "
 
@@ -104,8 +141,10 @@ function segmentsOf(command: string): string[] {
 /**
  * Checks one Bash command against the guard rules, plus (when given) a
  * targeted check for `echo`/`printf` of a specific known secret var name —
- * `$MY_SECRET` or `${MY_SECRET}` on the same segment, UNLESS its output is
- * piped into another command (re-review, P2 — see CHAIN_SPLIT above).
+ * `$MY_SECRET` or `${MY_SECRET}` on the same segment, UNLESS every stage
+ * it's piped into is a recognized credential-handoff sink (re-review,
+ * P2 — see CHAIN_SPLIT and SAFE_CREDENTIAL_SINK_PATTERNS above; a bare
+ * `| cat`/`| tee`/`| rev` etc. is still blocked, same as no pipe at all).
  */
 export function checkSecretDumpGuard(command: string, knownSecretVarNames: string[] = []): GuardResult {
   for (const segment of segmentsOf(command)) {
@@ -122,7 +161,7 @@ export function checkSecretDumpGuard(command: string, knownSecretVarNames: strin
       const match = echoPattern.exec(chain)
       if (!match) continue
       const restOfChain = chain.slice(match.index + match[0].length)
-      if (restOfChain.includes('|')) continue // piped into another command's stdin — not a dump
+      if (restOfChain.includes('|') && allStagesAreSafeCredentialSinks(restOfChain)) continue // recognized credential handoff, not a dump
       return { blocked: true, reason: `${DENY_MESSAGE}Blocked: this would print the value of $${varName}.` }
     }
   }
@@ -176,6 +215,19 @@ export function buildGuardFunctionSource(): string {
     '    return s;',
     '  }',
     '  function cmdPattern(src) { return new RegExp("^" + src); }',
+    '  var safeSinkPatterns = [',
+    '    cmdPattern("gh\\\\s+auth\\\\s+login\\\\b[^\\\\n]*--with-token\\\\b"),',
+    '    cmdPattern("docker\\\\s+login\\\\b[^\\\\n]*--password-stdin\\\\b"),',
+    '    cmdPattern("npm\\\\s+(?:login|adduser)\\\\b[^\\\\n]*--authtoken\\\\b"),',
+    '    cmdPattern("helm\\\\s+registry\\\\s+login\\\\b[^\\\\n]*--password-stdin\\\\b"),',
+    '    cmdPattern("aws\\\\s+ecr(?:-public)?\\\\s+get-login-password\\\\b"),',
+    '    cmdPattern("\\\\S+\\\\s+(?:login|auth\\\\s+login)\\\\b[^\\\\n]*--(?:with-token|password-stdin)\\\\b")',
+    '  ];',
+    '  function allStagesAreSafeCredentialSinks(restOfChain) {',
+    '    var stages = restOfChain.split("|").slice(1).map(function(s) { return stripWrapperPrefixes(s.trim()); }).filter(Boolean);',
+    '    if (stages.length === 0) return false;',
+    '    return stages.every(function(stage) { return safeSinkPatterns.some(function(p) { return p.test(stage); }); });',
+    '  }',
     '  var rules = [',
     '    { name: "env (environment dump)", pattern: cmdPattern("env(\\\\s+-[a-zA-Z0-9]+)*\\\\s*$") },',
     '    { name: "printenv", pattern: cmdPattern("printenv\\\\b") },',
@@ -213,7 +265,7 @@ export function buildGuardFunctionSource(): string {
     '      var match = echoPattern.exec(chain);',
     '      if (!match) continue;',
     '      var restOfChain = chain.slice(match.index + match[0].length);',
-    '      if (restOfChain.indexOf("|") !== -1) continue;',
+    '      if (restOfChain.indexOf("|") !== -1 && allStagesAreSafeCredentialSinks(restOfChain)) continue;',
     '      return { blocked: true, reason: DENY + "Blocked: this would print the value of $" + varName + "." };',
     '    }',
     '  }',

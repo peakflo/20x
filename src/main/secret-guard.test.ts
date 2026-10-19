@@ -102,13 +102,27 @@ describe('checkSecretDumpGuard', () => {
     expect(checkSecretDumpGuard('printf %s "$TOKEN"', ['TOKEN']).blocked).toBe(true)
   })
 
-  it('still blocks an echo of a secret piped only into an output-revealing command', () => {
-    // Piping is allowed in general (see above), but this backstop only
-    // exists to catch the "print it to stdout" case — a pipe to e.g. `cat`
-    // still ends up on stdout, so this is intentionally a blunt allow-list,
-    // not a semantic analysis of the downstream command. Documented here so
-    // the trade-off is explicit, not accidental.
-    expect(checkSecretDumpGuard('echo "$TOKEN" | cat', ['TOKEN']).blocked).toBe(false)
+  // Re-review (round 3, P2): the first version of this fix allowed ANY `|`
+  // after the matched echo/printf — `| cat`, `| tee file`, `| rev` all
+  // slipped through too, which is just the dump guard bypassed via one
+  // extra pipe stage. Only a recognized credential-handoff sink is allowed
+  // now; anything else piped into is still blocked.
+  it('still blocks an echo of a secret piped into a plain output-revealing command', () => {
+    expect(checkSecretDumpGuard('echo "$TOKEN" | cat', ['TOKEN']).blocked).toBe(true)
+    expect(checkSecretDumpGuard('echo "$TOKEN" | tee leaked.txt', ['TOKEN']).blocked).toBe(true)
+    expect(checkSecretDumpGuard('echo "$TOKEN" | rev', ['TOKEN']).blocked).toBe(true)
+  })
+
+  it('still blocks when a later pipeline stage is unsafe, even after a safe one', () => {
+    expect(
+      checkSecretDumpGuard('echo "$TOKEN" | gh auth login --with-token | tee leaked.txt', ['TOKEN']).blocked
+    ).toBe(true)
+  })
+
+  it('recognizes the other named safe sinks too (npm, helm, aws ecr, and the generic --with-token/--password-stdin idiom)', () => {
+    expect(checkSecretDumpGuard('echo "$TOKEN" | npm login --authtoken', ['TOKEN']).blocked).toBe(false)
+    expect(checkSecretDumpGuard('echo "$TOKEN" | helm registry login --password-stdin', ['TOKEN']).blocked).toBe(false)
+    expect(checkSecretDumpGuard('echo "$TOKEN" | glab auth login --with-token', ['TOKEN']).blocked).toBe(false)
   })
 })
 

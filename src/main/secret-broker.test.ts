@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { execFile } from 'child_process'
+import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
 import { existsSync, readFileSync, statSync } from 'fs'
 import {
@@ -145,6 +145,31 @@ describe('shellQuote', () => {
   it('wraps a plain value in single quotes', () => {
     expect(shellQuote('plain-token-123')).toBe(`'plain-token-123'`)
   })
+
+  // P1, re-review (round 3): the loader is now always the POSIX script
+  // (the Windows .ps1 branch was removed — Git Bash can't run a PowerShell
+  // script), so on Windows the loader invocation claude-code-adapter.ts
+  // builds is run by Git Bash's own POSIX `sh`, with a WINDOWS-STYLE path
+  // (drive letter, backslashes) as the argument shellQuote() wraps. There
+  // is no Windows+Git Bash runner available to actually execute that here
+  // — this instead verifies the one thing that's environment-independent:
+  // shellQuote()'s single-quoting is POSIX-shell-correct for a path shaped
+  // like a real Windows userData path, parsed back out as exactly one
+  // argument by a real POSIX shell (Git Bash's `sh` included — it isn't a
+  // different quoting dialect, just a real POSIX shell on Windows).
+  it.skipIf(process.platform === 'win32')(
+    'quotes a Windows-style loader path so a POSIX shell parses it back as exactly one argument',
+    () => {
+      const windowsPath = String.raw`C:\Users\dev test\AppData\Roaming\20x\secret-loader\secret-loader.sh`
+      const quoted = shellQuote(windowsPath)
+      // printf '%s\n' "$@" prints one line per argv entry it actually
+      // received — if quoting were broken (e.g. the embedded space split
+      // it into two args, or a backslash were interpreted), this would
+      // print more than one line, or a mangled path.
+      const stdout = execFileSync('sh', ['-c', `printf '%s\\n' ${quoted}`], { encoding: 'utf-8' })
+      expect(stdout.split('\n').filter(Boolean)).toEqual([windowsPath])
+    }
+  )
 })
 
 // Integration: actually run the generated loader script against a live
