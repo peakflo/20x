@@ -227,6 +227,8 @@ export interface AgentConfig {
     anthropic?: string  // For Claude Code
     cursor?: string  // For Cursor
   }
+  /** Opt-in: pass credential-shaped shell env vars (GH_TOKEN, AWS keys, ...) through to this agent's process env. Off by default. */
+  pass_shell_credentials?: boolean
 }
 
 export interface Agent {

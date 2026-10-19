@@ -180,3 +180,59 @@ describe('AgentForm speed mode', () => {
     expect(onSubmit.mock.calls[0][0].config.speed_mode).toBeUndefined()
   })
 })
+
+// Major finding, re-review (M8): the per-agent "pass shell credentials"
+// opt-in needs a form control — off by default, with a one-line note
+// explaining what it does.
+describe('AgentForm — pass_shell_credentials opt-in', () => {
+  it('defaults to off (unchecked) for a new agent, and submits undefined (not false)', async () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm onSubmit={onSubmit} onCancel={vi.fn()} />)
+    selectCodingAgent()
+
+    const checkbox = screen.getByText('Pass shell credentials (GH_TOKEN, AWS, …)').closest('label')!.querySelector('button, input')!
+    expect(checkbox).toHaveAttribute('aria-checked', 'false')
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'My Agent' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].config.pass_shell_credentials).toBeUndefined()
+  })
+
+  it('pre-fills a checked box when editing an agent that already opted in, and submits true', async () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm
+      agent={makeAgent({ coding_agent: CodingAgentType.CLAUDE_CODE, pass_shell_credentials: true })}
+      onSubmit={onSubmit}
+      onCancel={vi.fn()}
+    />)
+
+    const checkbox = screen.getByText('Pass shell credentials (GH_TOKEN, AWS, …)').closest('label')!.querySelector('button, input')!
+    expect(checkbox).toHaveAttribute('aria-checked', 'true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].config.pass_shell_credentials).toBe(true)
+  })
+
+  it('turning the checkbox on submits pass_shell_credentials: true', async () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm onSubmit={onSubmit} onCancel={vi.fn()} />)
+    selectCodingAgent()
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'My Agent' } })
+
+    const checkbox = screen.getByText('Pass shell credentials (GH_TOKEN, AWS, …)').closest('label')!.querySelector('button, input')!
+    fireEvent.click(checkbox)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].config.pass_shell_credentials).toBe(true)
+  })
+
+  it('shows the explanatory note', () => {
+    render(<AgentForm onSubmit={vi.fn()} onCancel={vi.fn()} />)
+    selectCodingAgent()
+    expect(screen.getByText(/credentials like GH_TOKEN and AWS keys are stripped/)).toBeTruthy()
+  })
+})

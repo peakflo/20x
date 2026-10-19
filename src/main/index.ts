@@ -1120,6 +1120,17 @@ app.whenReady().then(async () => {
     console.warn('[Main] MCP auth proxy failed to start (MCP tokens will use static headers):', proxyErr)
   }
 
+  // Nothing persists local-MCP env-file registrations across a restart —
+  // every session re-resolves its MCP config on its first prompt — so
+  // anything left in that directory now is stale, most likely from a force
+  // quit or crash that skipped the per-session cleanup in stopSession().
+  try {
+    const { cleanupStaleLocalMcpEnvFiles } = await import('./mcp-env-wrapper')
+    cleanupStaleLocalMcpEnvFiles()
+  } catch (cleanupErr) {
+    console.warn('[Main] Failed to clean up stale local-MCP env files:', cleanupErr)
+  }
+
   pluginRegistry = new PluginRegistry()
   pluginRegistry.register(new PeakfloPlugin())
   pluginRegistry.register(new LinearPlugin())

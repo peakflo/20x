@@ -23,7 +23,15 @@ import type { DatabaseManager, TaskRecord, TranscriptPartInput } from './databas
 import { SecretScrubber } from './secret-scrubber'
 import { buildAllKnownSecretEntries } from './secret-entries'
 
-export const SECRET_SCRUB_MIGRATION_SETTING = 'secret-scrub-migration-completed-v1'
+// Bumped to v2 (was v1): v1 scoped its scrubber to each task's CURRENT
+// agent_id and never touched the `payload` column (Major finding 4, fixed
+// in the same PR as this bump — see buildAllKnownSecretEntries and
+// scrubTaskTranscript's `payload` handling above). A dev build that ran v1
+// to completion needs to run the full v2 pass too, not skip it forever
+// because the OLD flag is already set — using a new key, rather than
+// clearing the old one, means this never re-triggers for an install that's
+// never seen v1 at all either (no flag at all is still "needs v2").
+export const SECRET_SCRUB_MIGRATION_SETTING = 'secret-scrub-migration-completed-v2'
 
 export interface SecretScrubMigrationResult {
   tasksScanned: number

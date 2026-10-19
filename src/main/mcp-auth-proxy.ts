@@ -146,6 +146,20 @@ export function registerMcpProxyTarget(
   return `http://127.0.0.1:${port}/${id}`
 }
 
+function unregisterById(id: string): void {
+  if (!targets.has(id)) return
+  targets.delete(id)
+  const key = keyById.get(id)
+  if (key) {
+    targetsByKey.delete(key)
+    keyById.delete(id)
+  }
+  targetLabels.delete(id)
+  tokenProviders.delete(id)
+  staticHeaders.delete(id)
+  console.log(`[McpAuthProxy] Unregistered target ${id}`)
+}
+
 /**
  * Remove a previously registered target (cleanup on session end).
  */
@@ -154,21 +168,34 @@ export function unregisterMcpProxyTarget(proxyUrl: string): void {
   try {
     const url = new URL(proxyUrl)
     const id = url.pathname.split('/')[1]
-    if (id && targets.has(id)) {
-      targets.delete(id)
-      const key = keyById.get(id)
-      if (key) {
-        targetsByKey.delete(key)
-        keyById.delete(id)
-      }
-      targetLabels.delete(id)
-      tokenProviders.delete(id)
-      staticHeaders.delete(id)
-      console.log(`[McpAuthProxy] Unregistered target ${id}`)
-    }
+    if (id) unregisterById(id)
   } catch {
     // Ignore malformed URLs
   }
+}
+
+/**
+ * Same cleanup as `unregisterMcpProxyTarget`, but by the caller's own
+ * `registrationKey` (the MCP server row id) instead of a proxy URL — no
+ * caller currently keeps the ephemeral proxy URL around after
+ * `buildMcpServersForAdapter` returns, so `unregisterMcpProxyTarget` had no
+ * callers at all and every registration lived until the proxy itself
+ * restarted. Call this when a session ends, for every MCP server row that
+ * session's agent was configured with.
+ *
+ * Safe to call even when ANOTHER live session (the same agent running a
+ * second concurrent task, say) still uses the same server row: that
+ * session's own next `buildMcpServersForAdapter` call (every prompt
+ * re-resolves MCP config) re-registers it under a fresh id — the same
+ * self-healing behavior `writeLocalMcpEnvWrapper`'s per-call overwrite
+ * already relies on. The only cost is a possible single forwarded request
+ * failing with `unknown_proxy_target` in the narrow window between this
+ * unregister and that session's next re-registration, which the MCP
+ * client's own retry/reconnect handles.
+ */
+export function unregisterMcpProxyTargetByKey(registrationKey: string): void {
+  const id = targetsByKey.get(registrationKey)
+  if (id) unregisterById(id)
 }
 
 /**

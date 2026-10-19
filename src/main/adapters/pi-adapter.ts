@@ -31,7 +31,7 @@ import type {
 import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
 import type { AdapterUsageReport } from './coding-agent-adapter'
 import { normalizePiSessionStats } from '../usage/usage-normalize'
-import { buildHarnessBaseEnv } from './harness-env'
+import { buildHarnessBaseEnv, applyShellCredentialsOptIn } from './harness-env'
 
 const execFileAsync = promisify(execFile)
 const RPC_TIMEOUT_MS = 15_000
@@ -429,6 +429,13 @@ export class PiAdapter implements CodingAgentAdapter {
     // precedence over its config, which would undo `directTools: false` and
     // recreate overlong provider-facing names.
     delete env.MCP_DIRECT_TOOLS
+    // Pi itself never reads any of these (see the comment above), but an
+    // advanced setup running a third-party provider through Pi outside
+    // 20x's own gateway/subscription modes might still rely on inheriting
+    // one ambiently — the same per-agent opt-in every other harness gets,
+    // rather than a Pi-specific named re-add for a credential 20x's own
+    // design doesn't actually use.
+    applyShellCredentialsOptIn(env as Record<string, string>, config.allowShellCredentials, config.getLiveScrubber?.())
     return env
   }
 

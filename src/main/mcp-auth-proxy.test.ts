@@ -20,6 +20,7 @@ import {
   stopMcpAuthProxy,
   registerMcpProxyTarget,
   unregisterMcpProxyTarget,
+  unregisterMcpProxyTargetByKey,
   getMcpAuthProxyPort
 } from './mcp-auth-proxy'
 
@@ -269,6 +270,49 @@ describe('MCP Auth Proxy', () => {
     // Target no longer exists at all → 404, not a 503/leaked-header response.
     const response = await fetch(proxyUrl, { method: 'POST', body: '{}' })
     expect(response.status).toBe(404)
+  })
+
+  // Minor finding, re-review: unregisterMcpProxyTarget had no callers at
+  // all — nothing kept the ephemeral proxyUrl it needs around after
+  // buildMcpServersForAdapter returns, so every registration lived until
+  // the proxy itself restarted. unregisterMcpProxyTargetByKey looks a
+  // registration up by the caller's OWN registrationKey (the MCP server
+  // row id, which the caller DOES still have at session-end) instead.
+  it('unregisterMcpProxyTargetByKey removes a registration by the caller\'s own key, with no proxy URL needed', async () => {
+    await startMcpAuthProxy()
+    const targetUrl = `http://127.0.0.1:${upstream.port}`
+    const proxyUrl = registerMcpProxyTarget('server-row-id-1', targetUrl, undefined, undefined, {
+      'X-API-Key': 'to-be-cleared'
+    })!
+
+    unregisterMcpProxyTargetByKey('server-row-id-1')
+
+    const response = await fetch(proxyUrl, { method: 'POST', body: '{}' })
+    expect(response.status).toBe(404)
+
+    // Re-registering under the SAME key afterward works normally (not left
+    // in some half-cleaned state) — gets a fresh id, not the stale one.
+    const newProxyUrl = registerMcpProxyTarget('server-row-id-1', targetUrl, undefined, undefined, {})!
+    expect(newProxyUrl).not.toBe(proxyUrl)
+  })
+
+  it('unregisterMcpProxyTargetByKey is a no-op for a key that was never registered', async () => {
+    await startMcpAuthProxy()
+    expect(() => unregisterMcpProxyTargetByKey('never-registered')).not.toThrow()
+  })
+
+  it('unregisterMcpProxyTargetByKey only removes the ONE key given, leaving a different session sharing the same URL untouched', async () => {
+    await startMcpAuthProxy()
+    const targetUrl = `http://127.0.0.1:${upstream.port}`
+    const urlA = registerMcpProxyTarget('account-a', targetUrl, undefined, async () => 'token-a')!
+    const urlB = registerMcpProxyTarget('account-b', targetUrl, undefined, async () => 'token-b')!
+
+    unregisterMcpProxyTargetByKey('account-a')
+
+    expect((await fetch(urlA, { method: 'POST', body: '{}' })).status).toBe(404)
+    const bResponse = await fetch(urlB, { method: 'POST', body: '{}' })
+    expect(bResponse.status).not.toBe(404)
+    expect(upstream.lastHeaders().authorization).toBe('Bearer token-b')
   })
 
   it('forwards POST requests with fresh JWT to upstream', async () => {
