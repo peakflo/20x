@@ -1,4 +1,4 @@
-import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, Puzzle, Cable, Mic, Gauge, Terminal, X, Palette } from 'lucide-react'
+import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, Puzzle, Cable, Mic, Gauge, Terminal, X, Palette, BrainCircuit } from 'lucide-react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { useUIStore } from '@/stores/ui-store'
 import { SettingsTab } from '@/types'
@@ -17,6 +17,7 @@ import { AdvancedSettings } from './tabs/AdvancedSettings'
 import { ConnectorsSettings } from './tabs/ConnectorsSettings'
 import { PluginsSettings } from './tabs/PluginsSettings'
 import { UsageSettings } from './tabs/UsageSettings'
+import { MemorySettings } from './tabs/MemorySettings'
 
 const ICON_MAP = {
   Settings,
@@ -24,6 +25,7 @@ const ICON_MAP = {
   Users,
   Server,
   KeyRound,
+  BrainCircuit,
   Mic,
   Workflow,
   Cable,
@@ -44,6 +46,7 @@ export function SettingsWorkspace() {
     { value: SettingsTab.HARNESSES, label: 'Harnesses', iconName: 'Terminal' },
     { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', iconName: 'Server' },
     { value: SettingsTab.SECRETS, label: 'Secrets', iconName: 'KeyRound' },
+    { value: SettingsTab.MEMORY, label: 'Memory', iconName: 'BrainCircuit' },
     { value: SettingsTab.VOICE, label: 'Voice', iconName: 'Mic' },
     { value: SettingsTab.INTEGRATIONS, label: 'Task sources', iconName: 'Workflow' },
     { value: SettingsTab.CONNECTORS, label: 'Connectors', iconName: 'Cable' },
@@ -126,6 +129,10 @@ export function SettingsWorkspace() {
 
             <Tabs.Content value={SettingsTab.SECRETS} className="focus-visible:outline-none space-y-6">
               <SecretsSettings />
+            </Tabs.Content>
+
+            <Tabs.Content value={SettingsTab.MEMORY} className="focus-visible:outline-none space-y-6">
+              <MemorySettings />
             </Tabs.Content>
 
             <Tabs.Content value={SettingsTab.VOICE} className="focus-visible:outline-none space-y-6">

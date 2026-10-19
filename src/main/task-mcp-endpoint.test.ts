@@ -41,7 +41,8 @@ describe('buildTaskMcpUrl and parseScopeFromUrl', () => {
     expect(parseScopeFromUrl(new URL(url))).toEqual({
       parentTaskId: null,
       taskId: null,
-      artifactTaskId: null
+      artifactTaskId: null,
+      memoryAccess: false
     })
   })
 
@@ -51,7 +52,29 @@ describe('buildTaskMcpUrl and parseScopeFromUrl', () => {
       parentTaskId: 'task-parent',
       taskId: 'task-child',
       // Artifact writes fall back to the session's own task.
-      artifactTaskId: 'task-child'
+      artifactTaskId: 'task-child',
+      memoryAccess: false
+    })
+  })
+
+  it('round-trips memory access for the Mastermind session (or a trusted agent)', () => {
+    const url = buildTaskMcpUrl(1234, { memoryAccess: true })
+    expect(url).toContain('memory=1')
+    expect(parseScopeFromUrl(new URL(url))).toEqual({
+      parentTaskId: null,
+      taskId: null,
+      artifactTaskId: null,
+      memoryAccess: true
+    })
+  })
+
+  it('round-trips memory access together with a scoped subtask session (a trusted subtask agent)', () => {
+    const url = buildTaskMcpUrl(1234, { taskId: 'task-child', parentTaskId: 'task-parent', memoryAccess: true })
+    expect(parseScopeFromUrl(new URL(url))).toEqual({
+      parentTaskId: 'task-parent',
+      taskId: 'task-child',
+      artifactTaskId: 'task-child',
+      memoryAccess: true
     })
   })
 

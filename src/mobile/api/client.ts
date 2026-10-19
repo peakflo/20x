@@ -12,6 +12,7 @@ import type { PushPreferences } from '@shared/push-notifications'
 import type { HarnessInstanceView } from '@shared/harness-instances'
 import type { TranscriptSyncResult } from '@shared/transcript-stream'
 import type { AcpAgentInstanceView } from '@shared/acp-registry'
+import type { MastermindMemoryRecord } from '@shared/mastermind-memory'
 import type {
   HarnessKey,
   HarnessMaintenanceStatus,
@@ -88,6 +89,11 @@ export const api = {
     markReviewSeen: (id: string) => post<unknown>(`/api/tasks/${encodeURIComponent(id)}/review-seen`),
     markReviewUnseen: (id: string) => post<unknown>(`/api/tasks/${encodeURIComponent(id)}/review-unseen`),
     markAllReviewSeen: () => post<unknown[]>('/api/tasks/review-seen-all')
+  },
+  memories: {
+    // Read-only + delete on mobile — add/edit/pin/export/import stay desktop-only.
+    list: () => get<MastermindMemoryRecord[]>('/api/memories'),
+    delete: (id: string) => post<{ success: boolean; id: string }>('/api/memories/delete', { id })
   },
   taskSources: {
     list: () => get<unknown[]>('/api/task-sources'),
