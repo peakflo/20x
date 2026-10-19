@@ -64,6 +64,45 @@ describe('/get_messages scrubs persisted secret values', () => {
     const result = await handleRoute(db, '/get_messages', { task_id: task.id }) as { messages: Array<{ content: string }> }
     expect(result.messages[0].content).toBe('nothing secret here')
   })
+
+  it('still scrubs when the task was reassigned to a different agent than the one that leaked the value', async () => {
+    // task's transcript was produced while agent-with-secret was assigned;
+    // it's since been reassigned to a plain agent with no secrets of its
+    // own. A scrubber scoped to the task's CURRENT agent_id would see no
+    // secrets and let the old leak through.
+    const leakyAgent = createAgentWithSecret()
+    const task = db.createTask(makeTask({ title: 'Reassigned task' }))!
+    db.updateTask(task.id, { agent_id: leakyAgent.id })
+    db.upsertTranscriptParts(task.id, [
+      { id: 'p1', role: 'assistant', content: `the key is ${SECRET_VALUE} ok`, partType: 'text' }
+    ])
+
+    const plainAgent = db.createAgent(makeAgent({ config: {} }))!
+    db.updateTask(task.id, { agent_id: plainAgent.id })
+
+    const result = await handleRoute(db, '/get_messages', { task_id: task.id }) as { messages: Array<{ content: string }> }
+    expect(result.messages[0].content).not.toContain(SECRET_VALUE)
+    expect(result.messages[0].content).toContain('«$MY_SECRET»')
+  })
+
+  it('still scrubs when the task\'s agent_id no longer resolves to any agent (deleted agent)', async () => {
+    const agent = createAgentWithSecret()
+    const task = db.createTask(makeTask({ title: 'Orphaned task' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+    db.upsertTranscriptParts(task.id, [
+      { id: 'p1', role: 'assistant', content: `the key is ${SECRET_VALUE} ok`, partType: 'text' }
+    ])
+
+    // tasks.agent_id is ON DELETE SET NULL — deleting the agent row doesn't
+    // leave a dangling id, it nulls the column. Either way, a scrubber
+    // scoped to the task's (now nonexistent/null) agent_id would see no
+    // secrets; the fix is that get_messages no longer scopes to it at all.
+    db.deleteAgent(agent.id)
+    expect(db.getTask(task.id)?.agent_id).toBeFalsy()
+
+    const result = await handleRoute(db, '/get_messages', { task_id: task.id }) as { messages: Array<{ content: string }> }
+    expect(result.messages[0].content).not.toContain(SECRET_VALUE)
+  })
 })
 
 describe('artifact file writes scrub secret values', () => {
@@ -124,5 +163,102 @@ describe('artifact file writes scrub secret values', () => {
       encoding: 'base64'
     }) as { error?: string }
     expect(written.error).toBeUndefined()
+  })
+})
+
+describe('/create_task and /create_subtask scrub title and description', () => {
+  it('scrubs a secret value out of a new task created for an agent that has one', async () => {
+    const agent = createAgentWithSecret()
+
+    const result = await handleRoute(db, '/create_task', {
+      title: `Rotate key ${SECRET_VALUE}`,
+      description: `Current value is ${SECRET_VALUE}`,
+      agent_id: agent.id
+    }) as { success: boolean; task: { title: string; description: string } }
+
+    expect(result.success).toBe(true)
+    expect(result.task.title).not.toContain(SECRET_VALUE)
+    expect(result.task.description).not.toContain(SECRET_VALUE)
+    expect(result.task.title).toContain('«$MY_SECRET»')
+    expect(result.task.description).toContain('«$MY_SECRET»')
+  })
+
+  it('scrubs a secret value out of a new subtask created for an agent that has one', async () => {
+    const agent = createAgentWithSecret()
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+
+    const result = await handleRoute(db, '/create_subtask', {
+      parent_task_id: parent.id,
+      title: `Child task ${SECRET_VALUE}`,
+      description: `Uses ${SECRET_VALUE}`,
+      agent_id: agent.id
+    }) as { success: boolean; task: { title: string; description: string } }
+
+    expect(result.success).toBe(true)
+    expect(result.task.title).not.toContain(SECRET_VALUE)
+    expect(result.task.description).not.toContain(SECRET_VALUE)
+  })
+
+  it('leaves title/description untouched when no agent_id is given (nothing to scrub against)', async () => {
+    const result = await handleRoute(db, '/create_task', {
+      title: `No agent ${SECRET_VALUE}`,
+      description: 'plain'
+    }) as { success: boolean; task: { title: string } }
+
+    expect(result.success).toBe(true)
+    // No agent_id means no scrubber is available — the value isn't a known
+    // secret from 20x's point of view, so it passes through unchanged.
+    expect(result.task.title).toContain(SECRET_VALUE)
+  })
+
+  it('scrubs a secret value out of a new subtask\'s output_fields', async () => {
+    const agent = createAgentWithSecret()
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+
+    const result = await handleRoute(db, '/create_subtask', {
+      parent_task_id: parent.id,
+      title: 'Child task',
+      agent_id: agent.id,
+      output_fields: [{ name: 'summary', value: `Found ${SECRET_VALUE} in config` }]
+    }) as { success: boolean; task: { output_fields: Array<{ value: string }> } }
+
+    expect(result.success).toBe(true)
+    expect(result.task.output_fields[0].value).not.toContain(SECRET_VALUE)
+    expect(result.task.output_fields[0].value).toContain('«$MY_SECRET»')
+  })
+})
+
+describe('/update_task scrubs title, description, and output_fields', () => {
+  it('scrubs a secret value out of output_fields before persisting', async () => {
+    const agent = createAgentWithSecret()
+    const task = db.createTask(makeTask({ title: 'Output fields task' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+
+    const result = await handleRoute(db, '/update_task', {
+      task_id: task.id,
+      output_fields: [{ name: 'summary', value: `Found ${SECRET_VALUE} in config` }]
+    }) as { success: boolean; task: { output_fields: Array<{ value: string }> } }
+
+    expect(result.success).toBe(true)
+    expect(result.task.output_fields[0].value).not.toContain(SECRET_VALUE)
+    expect(result.task.output_fields[0].value).toContain('«$MY_SECRET»')
+  })
+
+  it('scrubs a secret value out of title and description before persisting', async () => {
+    const agent = createAgentWithSecret()
+    const task = db.createTask(makeTask({ title: 'Original title' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+
+    const result = await handleRoute(db, '/update_task', {
+      task_id: task.id,
+      title: `Rotate key ${SECRET_VALUE}`,
+      description: `Current value is ${SECRET_VALUE}`
+    }) as { success: boolean; task: { title: string; description: string } }
+
+    expect(result.success).toBe(true)
+    expect(result.task.title).not.toContain(SECRET_VALUE)
+    expect(result.task.description).not.toContain(SECRET_VALUE)
+    expect(result.task.title).toContain('«$MY_SECRET»')
+    expect(result.task.description).toContain('«$MY_SECRET»')
   })
 })

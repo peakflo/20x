@@ -327,6 +327,16 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * sessions get none of it, matching how Claude Code itself authenticates.
    *
    * Also removes CLAUDECODE to prevent nested session errors.
+   *
+   * `authMethod` is `'api_key' | 'subscription' | undefined` — older agents
+   * (created before auth_method existed, or with it left unset) have
+   * `undefined`. Before the allowlist rewrite, these agents got Claude's
+   * ambient `ANTHROPIC_API_KEY` for free (the env was spread wholesale from
+   * `process.env`). Treating `undefined` as "no key" silently broke them.
+   * Mirror Codex's own legacy handling (`codex-app-server-adapter.ts`
+   * `buildEnvironment`): only `'subscription'` is a hard no; `undefined`
+   * falls back to "use a key if one is actually available" the same as
+   * `'api_key'` would, instead of discarding it.
    */
   private buildClaudeEnvironment(config: Pick<SessionConfig, 'harnessHome' | 'authMethod' | 'apiKeys'>): Record<string, string> {
     const env = buildHarnessBaseEnv()
@@ -338,7 +348,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     const harnessHome = config.harnessHome ?? this.harnessHome
     if (harnessHome) env.CLAUDE_CONFIG_DIR = harnessHome
 
-    if (config.authMethod === 'api_key') {
+    if (config.authMethod !== 'subscription') {
       const key = config.apiKeys?.anthropic || process.env.ANTHROPIC_API_KEY
       if (key) env.ANTHROPIC_API_KEY = key
     }
@@ -347,23 +357,67 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   }
 
   /**
-   * Build PreToolUse hooks for secret injection.
-   * Registers a hook that prepends `export KEY='value'` lines to each Bash command.
-   * The LLM never sees the modified command — only the original tool call and
-   * the output appear in conversation context.
+   * Forces a Bash command's OVERALL exit status to 0, regardless of the
+   * original command's real exit code, and reports that real code as text
+   * inside the output instead.
+   *
+   * Why: a command that exits non-zero is delivered to the model via
+   * `PostToolUseFailure`, not `PostToolUse` — confirmed against the pinned
+   * SDK (0.3.285) by actually running `env | head -1 ; false` through it:
+   * the literal env var text came back in `PostToolUseFailure`'s `error`
+   * field. `PostToolUseFailureHookSpecificOutput` has no output-rewriting
+   * field (only `additionalContext`), so a secret in a failing command's
+   * output (`curl -v` against a down host after `echo $SECRET`, a script
+   * that logs its own config then exits 1, etc.) would reach the model
+   * un-scrubbed despite buildScrubHooks below. Forcing the wrapped
+   * command's own exit status to 0 makes Claude Code's Bash tool always
+   * perceive success, so it always routes through the one hook event
+   * (`PostToolUse`) whose output CAN be rewritten — closing that gap for
+   * every failure that happens inside the command this wrapper actually
+   * runs. A failure in the harness itself (the Bash tool failing to start
+   * at all) happens before this wrapper runs and is not covered — see
+   * buildPostToolUseFailureHook below for that residual case.
    */
-  private buildSecretHooks(config: SessionConfig): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
+  private static wrapCommandForScrubbableFailure(command: string): string {
+    return [
+      '{',
+      command,
+      '}',
+      '__20x_ec=$?',
+      'if [ "$__20x_ec" -ne 0 ]; then printf \'\\n[20x] command exited with status %s\\n\' "$__20x_ec" >&2; fi',
+      'exit 0'
+    ].join('\n')
+  }
+
+  /**
+   * Build the PreToolUse hook for Bash calls. Two independent jobs, applied
+   * in this order, only to the agent's own original command text:
+   *
+   * 1. Secret injection — prepends `export KEY='value'` lines (PR B replaces
+   *    this with a broker+loader call so no literal value sits in the
+   *    command text at all; kept as direct exports here since this is the
+   *    first PR and nothing downstream reads config.secretEnvVars yet).
+   * 2. wrapCommandForScrubbableFailure (above) — applied whenever this
+   *    session has ANYTHING for buildScrubHooks to scrub, independent of
+   *    whether secretEnvVars is set (a provider API key or MCP token can
+   *    leak through a failing command too).
+   */
+  private buildSecretHooks(config: SessionConfig, scrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
     const secretEnvVars = config.secretEnvVars
-    if (!secretEnvVars || Object.keys(secretEnvVars).length === 0) {
+    const hasExports = !!secretEnvVars && Object.keys(secretEnvVars).length > 0
+    if (!hasExports && scrubber.isEmpty) {
       return undefined
     }
 
-    // Build shell export lines — single-quote values, escape embedded quotes
-    const exportLines = Object.entries(secretEnvVars)
-      .map(([k, v]) => `export ${k}='${v.replace(/'/g, "'\\''")}'`)
-      .join('\n')
+    const exportLines = hasExports
+      ? Object.entries(secretEnvVars!)
+        .map(([k, v]) => `export ${k}='${v.replace(/'/g, "'\\''")}'`)
+        .join('\n')
+      : ''
 
-    console.log(`[ClaudeCodeAdapter] Registering PreToolUse hook for secrets: [${Object.keys(secretEnvVars).join(', ')}]`)
+    if (hasExports) {
+      console.log(`[ClaudeCodeAdapter] Registering PreToolUse hook for secrets: [${Object.keys(secretEnvVars!).join(', ')}]`)
+    }
 
     const hook: HookCallback = async (input) => {
       const toolInput = ('tool_input' in input ? input.tool_input : undefined) as Record<string, unknown> | undefined
@@ -371,9 +425,13 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         return {}
       }
 
-      // Prepend secret exports to the bash command
       const originalCommand = toolInput.command as string
-      const modifiedCommand = exportLines + '\n' + originalCommand
+      const wrapped = scrubber.isEmpty
+        ? originalCommand
+        : ClaudeCodeAdapter.wrapCommandForScrubbableFailure(originalCommand)
+      const modifiedCommand = hasExports ? `${exportLines}\n${wrapped}` : wrapped
+
+      if (modifiedCommand === originalCommand) return {}
 
       return {
         hookSpecificOutput: {
@@ -392,6 +450,26 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         hooks: [hook]
       }]
     }
+  }
+
+  /**
+   * Residual case wrapCommandForScrubbableFailure can't cover: the Bash
+   * tool failing before our wrapped command ever runs (the harness itself
+   * erroring, a permission/setup failure, an interrupt). There is no
+   * output-rewrite field on PostToolUseFailureHookSpecificOutput — only
+   * `additionalContext` — so this cannot scrub the error text itself. It
+   * tells the model not to trust or repeat it, as the best available
+   * mitigation, and is documented as a known limitation in the PR.
+   */
+  private buildPostToolUseFailureHook(scrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
+    if (scrubber.isEmpty) return undefined
+    const hook: HookCallback = async () => ({
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUseFailure' as const,
+        additionalContext: 'This tool call failed before producing scrubbed output. If the error text above contains anything that looks like a secret or token, do not repeat, log, or echo it.'
+      }
+    })
+    return { PostToolUseFailure: [{ hooks: [hook] }] }
   }
 
   /**
@@ -863,10 +941,16 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     const abortController = new AbortController()
     session.abortController = abortController
 
-    // Build options
-    const secretHooks = this.buildSecretHooks(config)
-    const scrubHooks = this.buildScrubHooks(new SecretScrubber(buildSecretEntriesFromSessionConfig(config)))
-    const hooks = secretHooks || scrubHooks ? { ...secretHooks, ...scrubHooks } : undefined
+    // Build options. One scrubber, shared by all three hooks below, so the
+    // command-wrapping decision (buildSecretHooks) and what actually gets
+    // redacted (buildScrubHooks, buildPostToolUseFailureHook) always agree.
+    const scrubber = new SecretScrubber(buildSecretEntriesFromSessionConfig(config))
+    const secretHooks = this.buildSecretHooks(config, scrubber)
+    const scrubHooks = this.buildScrubHooks(scrubber)
+    const failureHooks = this.buildPostToolUseFailureHook(scrubber)
+    const hooks = secretHooks || scrubHooks || failureHooks
+      ? { ...secretHooks, ...scrubHooks, ...failureHooks }
+      : undefined
     const effort = config.reasoningEffort === 'minimal' ? undefined : config.reasoningEffort
     const options: Options = {
       cwd: config.workspaceDir,

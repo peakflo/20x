@@ -1534,7 +1534,26 @@ export class AgentManager extends EventEmitter {
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
-  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
+  /**
+   * `scrubber`, when provided, is fed every secret value this function
+   * resolves as it builds the MCP config — local stdio env, static remote
+   * headers, and (via a wrapped `getToken`) every OAuth/enterprise token as
+   * it's actually fetched, including later refreshes.
+   *
+   * Why this is needed at all: before the auth-proxy/env-wrapper
+   * indirection (fix 4), these values lived directly in `config.mcpServers`,
+   * so `buildSecretEntriesFromSessionConfig(config)` could read them
+   * straight off that object to build the session scrubber. Now that a
+   * routed server's config entry carries only a loopback URL or a wrapper
+   * file path, that read finds nothing — the scrubber would never learn
+   * these values exist unless this function hands them over directly at the
+   * point it resolves them.
+   */
+  private async buildMcpServersForAdapter(
+    agentId: string,
+    opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string },
+    scrubber?: SecretScrubber
+  ): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
     const result: Record<string, McpServerConfig> = {}
@@ -1569,6 +1588,9 @@ export class AgentManager extends EventEmitter {
         if (envEntries.length > 0 && mcpServer.command) {
           const wrapped = writeLocalMcpEnvWrapper(mcpServer.id, mcpServer.command, mcpServer.args || [], Object.fromEntries(envEntries))
           result[mcpRuntimeName(mcpServer)] = { type: 'stdio', command: wrapped.command, args: wrapped.args }
+          // These values no longer appear anywhere in `result` (just a path
+          // to the wrapper's env file) — hand them to the scrubber directly.
+          scrubber?.addEntries(envEntries.map(([name, value]) => ({ name, value })))
         } else {
           result[mcpRuntimeName(mcpServer)] = {
             type: 'stdio',
@@ -1577,54 +1599,74 @@ export class AgentManager extends EventEmitter {
           }
         }
       } else if (mcpServer.type === 'remote') {
-        // Inject OAuth Bearer token if the server has one — routed through the
-        // local auth proxy so the token itself never lands in the mcpServers
-        // config (see fix 4: that config is serialized onto argv for at least
-        // one harness). Only falls back to a static header when the proxy
-        // isn't running.
-        let finalHeaders = { ...mcpServer.headers }
-        let routedThroughProxy = false
-        if (this.oauthManager && mcpServer.oauth_metadata && 'resource_url' in mcpServer.oauth_metadata) {
-          const proxyPort = getMcpAuthProxyPort()
-          const serverId = mcpServer.id
-          const proxyUrl = proxyPort
-            ? registerMcpProxyTarget(mcpServer.url, mcpServer.name, () => this.oauthManager!.getValidMcpServerToken(serverId))
-            : null
-          if (proxyUrl) {
-            result[mcpRuntimeName(mcpServer)] = { type: 'http', url: proxyUrl, headers: finalHeaders }
-            routedThroughProxy = true
-          } else {
-            const token = await this.oauthManager.getValidMcpServerToken(mcpServer.id)
-            if (token) {
-              finalHeaders = { ...finalHeaders, Authorization: `Bearer ${token}` }
-            }
-          }
-        }
-        if (routedThroughProxy) continue
-
-        // Inject enterprise JWT for Workflo MCP Dev Server — route through auth proxy
+        // Every header-bearing remote MCP server — whether its auth is a
+        // refreshable OAuth/enterprise token or a plain header the user
+        // typed into the server form (Authorization, X-API-Key, …) — is
+        // routed through the local auth proxy so the value itself never
+        // lands in the mcpServers config object (see fix 4: that config is
+        // serialized onto argv for at least one harness, readable by any
+        // local `ps -ef`/`ps eww`). Only falls back to inlining the header
+        // when the proxy isn't running (residual leak, documented, not
+        // reachable in normal operation since the proxy starts unconditionally
+        // at app startup).
         let finalUrl = mcpServer.url
-        if (
-          this.enterpriseAuth &&
+        let finalHeaders = { ...mcpServer.headers }
+        let rawGetToken: (() => Promise<string | null | undefined>) | undefined
+
+        const oauthManager = this.oauthManager
+        const enterpriseAuth = this.enterpriseAuth
+        if (oauthManager && mcpServer.oauth_metadata && 'resource_url' in mcpServer.oauth_metadata) {
+          const serverId = mcpServer.id
+          rawGetToken = () => oauthManager.getValidMcpServerToken(serverId)
+          // The proxy injects a fresh bearer token per request — never pass a
+          // stale static one through too.
+          delete finalHeaders['Authorization']
+        } else if (
+          enterpriseAuth &&
           isEnterpriseMcpDevServer({ source: mcpServer.source, url: mcpServer.url, headers: finalHeaders })
         ) {
-          finalUrl = resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())
-          const proxyPort = getMcpAuthProxyPort()
-          const proxyUrl = proxyPort ? registerMcpProxyTarget(finalUrl, mcpServer.name) : null
-          if (proxyUrl) {
-            finalUrl = proxyUrl
-            // Don't send static Authorization — proxy injects fresh JWT per request
-            delete finalHeaders['Authorization']
-            console.log(`[AgentManager] MCP Dev Server routed through auth proxy: ${proxyUrl} -> ${resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())}`)
-          } else {
-            // Fallback: static JWT (proxy not running)
-            try {
-              const jwt = await this.enterpriseAuth.getJwt()
-              finalHeaders = { ...finalHeaders, Authorization: `Bearer ${jwt}` }
-              console.log('[AgentManager] MCP Dev Server using static JWT (proxy not available)')
-            } catch (err) {
-              console.warn('[AgentManager] Failed to inject enterprise JWT for MCP Dev Server:', err)
+          finalUrl = resolveEnterpriseMcpDevUrl(mcpServer.url, enterpriseAuth.getApiUrl())
+          rawGetToken = () => enterpriseAuth.getJwt()
+          delete finalHeaders['Authorization']
+        }
+
+        // These values no longer appear anywhere in `result` (the proxy
+        // injects them server-side; the config carries only a loopback URL)
+        // — hand the static ones to the scrubber now, and wrap the dynamic
+        // one so every future fetch (including a refresh mid-session) is
+        // registered too, not just whatever value happened to exist here.
+        scrubber?.addEntries(Object.values(finalHeaders).map((value) => ({ value })))
+        const getToken = rawGetToken
+          ? async () => {
+              const token = await rawGetToken!()
+              if (token) scrubber?.addEntries([{ value: token }])
+              return token
             }
+          : undefined
+
+        // Nothing to protect (no refreshable token, no static headers at
+        // all) — skip the proxy hop entirely rather than pointlessly routing
+        // a plain unauthenticated remote server's traffic through loopback.
+        const needsProxy = !!getToken || Object.keys(finalHeaders).length > 0
+        const proxyPort = needsProxy ? getMcpAuthProxyPort() : null
+        const proxyUrl = proxyPort
+          ? registerMcpProxyTarget(mcpServer.id, finalUrl, mcpServer.name, getToken, finalHeaders)
+          : null
+
+        if (proxyUrl) {
+          // Headers (static or dynamic) are injected by the proxy itself —
+          // the config handed to the harness carries only the loopback URL.
+          result[mcpRuntimeName(mcpServer)] = { type: 'http', url: proxyUrl }
+          continue
+        }
+
+        // Proxy not running — fall back to inlining whatever we have.
+        if (getToken) {
+          try {
+            const token = await getToken()
+            if (token) finalHeaders = { ...finalHeaders, Authorization: `Bearer ${token}` }
+          } catch (err) {
+            console.warn('[AgentManager] Failed to obtain fallback auth token for MCP server (proxy unavailable):', err)
           }
         }
 
@@ -1729,7 +1771,18 @@ export class AgentManager extends EventEmitter {
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
+    // Looked up before building MCP servers (not just after, as before) so
+    // its scrubber can be handed in — a local MCP env value or remote header
+    // resolved while building the config needs to reach this live session's
+    // scrubber at the moment it's known, not just via the config-level
+    // addEntries call below (which can't see values that never end up in
+    // `config.mcpServers` once they're routed through the proxy/wrapper).
+    const session = this.findSessionByTask(agentId, taskId)
+    const mcpServers = await this.buildMcpServersForAdapter(
+      agentId,
+      { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined },
+      session?.scrubber
+    )
 
     // systemPrompt is intentionally task-agnostic and identical every time this
     // is called for a given agent — it must stay byte-for-byte frozen for the
@@ -1757,7 +1810,6 @@ export class AgentManager extends EventEmitter {
     }
 
     // Attach secret broker info if agent session has an active secret token
-    const session = this.findSessionByTask(agentId, taskId)
     if (session?.secretSessionToken) {
       const brokerPort = getSecretBrokerPort()
       if (brokerPort) {
@@ -2443,7 +2495,14 @@ export class AgentManager extends EventEmitter {
     // per-agent MCP configuration.
     const isMastermind = taskId === 'mastermind-session'
     const ensureTaskManagement = isMastermind || isTriageSession || isSubtask || !!task
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined })
+    // Created now (before the session object exists) and reused as-is for
+    // `newSession.scrubber` below, instead of building a second scrubber
+    // from scratch afterward — so a local MCP env value or remote header
+    // resolved while building `mcpServers` (never present in the config
+    // object itself once routed through the proxy/wrapper) still reaches
+    // this session's scrubber.
+    const scrubber = new SecretScrubber()
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined }, scrubber)
 
     // Write SKILL.md files and the session documentation (async to avoid
     // blocking the event loop). This runs AFTER the MCP map is built so the
@@ -2571,8 +2630,12 @@ export class AgentManager extends EventEmitter {
       isTriageSession,
       secretSessionToken: secretToken,
       taskContextMode,
-      scrubber: new SecretScrubber(buildSecretEntriesFromSessionConfig(sessionConfig))
+      // Reuses the SAME scrubber instance buildMcpServersForAdapter was
+      // handed above (already carrying any MCP secret values it resolved),
+      // extended with everything else the full session config carries.
+      scrubber
     }
+    scrubber.addEntries(buildSecretEntriesFromSessionConfig(sessionConfig))
     this.sessions.set(adapterSessionId, newSession)
 
     // Store session ID in database
@@ -3816,7 +3879,14 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     await yieldEL()
 
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
+    // Created now and reused as-is for the new session's scrubber below —
+    // see the matching comment in startAdapterSession.
+    const scrubber = new SecretScrubber()
+    const mcpServers = await this.buildMcpServersForAdapter(
+      agentId,
+      { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined },
+      scrubber
+    )
 
     // Rewrite the memory file before the harness reads it. A resumed session
     // otherwise keeps the catalog written at start, and that file is reloaded
@@ -4021,6 +4091,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     // Store session in sessions map — idle until user sends a message
     this.schedulePowerSaveBlockerUpdate()
+    // Reuses the SAME scrubber instance buildMcpServersForAdapter was handed
+    // above, extended with everything else the full session config carries.
+    scrubber.addEntries(buildSecretEntriesFromSessionConfig(sessionConfig))
     this.sessions.set(adapterSessionId, {
       id: adapterSessionId,
       agentId,
@@ -4040,7 +4113,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       secretSessionToken: secretToken,
       taskContextMode: resumeTaskContextMode,
       nativeResumeAwaitingAck: !!pendingMarker,
-      scrubber: new SecretScrubber(buildSecretEntriesFromSessionConfig(sessionConfig))
+      scrubber
     })
 
     // Persist the resumed session binding and tell the renderer BEFORE any
