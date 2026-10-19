@@ -263,7 +263,17 @@ export class VoiceActionService {
         // concurrent parent answer can't also reach the harness.
         try {
           const claimed = await this.deps.agents.getChildQuestionService().answerAsHumanViaMessage(task.id, intent.message)
-          if (claimed && !('error' in claimed)) {
+          if (claimed) {
+            // Unlike "nothing live to claim" (claimed === null, which falls
+            // through to an ordinary send below), an error here means there
+            // WAS something live and the claim itself failed (e.g. answered
+            // another way a moment ago) — the reply did NOT reach the agent,
+            // so silently falling through and sending it as a plain message
+            // too would be a surprising double-delivery. Surface the error,
+            // the same way the desktop/mobile "reply" paths do.
+            if ('error' in claimed) {
+              return { status: 'rejected', turnId, reason: 'failed', message: claimed.error }
+            }
             return {
               status: 'executed',
               turnId,
@@ -303,20 +313,32 @@ export class VoiceActionService {
         // respondToPermission alone has no notion of the child-question
         // state machine at all) instead of calling respondToPermission
         // directly and leaving that state stale. No exact harness request
-        // id is available for a spoken approval — falls back to the single
-        // current live question for this task, same as the chat path.
+        // id is available for a spoken approval, so this targets the live
+        // record EXPLICITLY by checking its kind first — answerAsHuman's own
+        // fallback (the single current live record for the task) is not
+        // enough on its own: the task could ALSO have a live `question` (not
+        // an approval), and `validatePendingApproval` above already
+        // confirms there IS a real pending approval at the adapter level, so
+        // blindly claiming "whatever is live" could answer the wrong one.
+        // Only attempt the claim when the live record is actually the
+        // approval the human meant; otherwise skip straight to
+        // respondToPermission, same as the catch below does for any other
+        // claim failure.
         try {
-          const claimed = await this.deps.agents.getChildQuestionService().answerAsHuman(pending.taskId, undefined, { approved, answer: intent.message })
-          if (claimed) {
-            if ('error' in claimed) {
-              return { status: 'rejected', turnId, reason: 'no_pending_approval', message: claimed.error }
-            }
-            return {
-              status: 'executed',
-              turnId,
-              intent: intent.type,
-              message: approved ? 'Checkpoint approved.' : 'Checkpoint rejected.',
-              taskId: pending.taskId,
+          const live = this.deps.agents.getChildQuestionService().getLiveForChild(pending.taskId)
+          if (live && live.kind === 'approval') {
+            const claimed = await this.deps.agents.getChildQuestionService().answerAsHuman(pending.taskId, live.questionId, { approved, answer: intent.message })
+            if (claimed) {
+              if ('error' in claimed) {
+                return { status: 'rejected', turnId, reason: 'no_pending_approval', message: claimed.error }
+              }
+              return {
+                status: 'executed',
+                turnId,
+                intent: intent.type,
+                message: approved ? 'Checkpoint approved.' : 'Checkpoint rejected.',
+                taskId: pending.taskId,
+              }
             }
           }
         } catch (err) {

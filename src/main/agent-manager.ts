@@ -71,7 +71,7 @@ import {
   type ContinuationPlan
 } from './context-handoff'
 import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
-import { isSystemGeneratedMessage } from '../shared/system-authority'
+import { computeDeliveryId, isSystemGeneratedMessage } from '../shared/system-authority'
 import { TaskWakeupQueue, TaskWakeupStore, computeWakeupDeliveryId, reasonForChildStatus, type WakeupReason } from './orchestration/task-wakeups'
 import { classifyIdleEnd, statusForEndReason, describeEndReason, lastMeaningfulPart } from './orchestration/run-finalization'
 import {
@@ -171,7 +171,7 @@ interface PendingApprovalShape {
  * structured exists at all — then, if even that's empty, the authority
  * classifier's own default-deny takes over (see command-authority.ts).
  */
-function extractApprovalAuthorityInput(pending: PendingApprovalShape): { toolName: string | null; command: string | null } {
+function extractApprovalAuthorityInput(pending: PendingApprovalShape): { toolName: string | null; command: string | null; commands?: string[] | null } {
   // Codex: responseKind classifies the kind; the real command/paths are
   // separate fields (see summarizeApproval/extractFileChangePaths there).
   if (pending.responseKind) {
@@ -187,11 +187,22 @@ function extractApprovalAuthorityInput(pending: PendingApprovalShape): { toolNam
     return { toolName: pending.toolCallKind, command: pending.command ?? pending.path ?? null }
   }
 
-  // OpenCode: permission type + pattern(s) — for `bash` the pattern(s) ARE
-  // the command; for path-ish permissions (edit, external_directory, ...)
-  // they're the path/glob being requested.
+  // OpenCode: permission type + pattern(s). `patterns` can be MULTIPLE
+  // independent entries — for `bash` specifically, that means one entry
+  // PER PARSED SUB-COMMAND (`ls && python evil.py` arrives as `["ls",
+  // "python evil.py"]`, not one joined string), so those are classified
+  // individually (`commands`) rather than joined into `command` — joining
+  // first would let `python evil.py` hide behind the safe-looking `ls`
+  // prefix. For path-ish permissions (edit, external_directory, ...) the
+  // patterns are glob/paths, not command syntax — joining is fine there,
+  // since the path-escape check scans every absolute-path token in the
+  // combined text regardless of position, not just a start-anchored prefix.
   if (pending.permission) {
-    return { toolName: pending.permission, command: pending.patterns?.length ? pending.patterns.join(' ') : null }
+    const patterns = pending.patterns?.filter(Boolean) ?? []
+    if (pending.permission === 'bash' && patterns.length > 1) {
+      return { toolName: pending.permission, command: patterns.join(', '), commands: patterns }
+    }
+    return { toolName: pending.permission, command: patterns.length ? patterns.join(' ') : null }
   }
 
   // Pi: our own permission extension's tool name + JSON-parsed input.
@@ -4814,7 +4825,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const options: ChildQuestionOption[] | null = pending.options?.length
       ? pending.options.map((o) => ({ optionId: o.optionId, label: o.name }))
       : null
-    const { toolName, command } = extractApprovalAuthorityInput(pending)
+    const { toolName, command, commands } = extractApprovalAuthorityInput(pending)
 
     // The adapter is now showing a DIFFERENT pending request than whatever we
     // last raised for this child — the old one was superseded (answered some
@@ -4835,6 +4846,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         options,
         toolName,
         command,
+        commands,
         workspaceDir
       })
     } catch (err) {
@@ -4855,10 +4867,20 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     const questions = part.tool?.questions ?? []
     if (questions.length === 0) return
-    const questionId = String(part.tool?.requestId ?? part.id)
     // Multiple sub-questions in one call are combined into one text block —
     // the parent answers them the same way the human does (one message).
     const questionText = questions.map((q) => [q.header, q.question].filter(Boolean).join(': ')).join('\n')
+    // Neither requestId nor part.id is guaranteed present on every harness's
+    // transcript part shape. Falling back to the LITERAL string "undefined"
+    // (String(undefined ?? undefined)) would give every such question the
+    // SAME id for this child — `raise()`'s own idempotency check
+    // (getByChildAndQuestionId) would then read the second, genuinely
+    // different question as a duplicate of the first and silently drop it.
+    // A content-derived id (taskId + the question text) is still STABLE
+    // across repeat emissions of the identical question (matching how a
+    // real requestId/part.id would behave), while two different questions
+    // for the same child get different ids.
+    const questionId = String(part.tool?.requestId ?? part.id ?? `synthetic:${computeDeliveryId(taskId, questionText)}`)
     const options: ChildQuestionOption[] | null =
       questions.length === 1 && questions[0].options?.length
         ? questions[0].options.map((o, i) => ({ optionId: String(i), label: o.label }))

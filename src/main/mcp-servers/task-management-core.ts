@@ -425,13 +425,13 @@ const mastermindTools: Tool[] = [
   {
     name: 'wait_for_subtasks',
     description:
-      'Blocks until children change — prefer this over polling get_session_status or list_subtasks. Event-driven: returns the instant a subtask reaches a terminal status, a child question is raised, or (with return_when: "any_event") either happens — not on a fixed interval. A call may return with timed_out: true before anything changed, simply because the wait budget for one call is capped; that is not a failure — call it again to keep waiting.',
+      'Blocks until children change — prefer this over polling get_session_status or list_subtasks. Event-driven, not on a fixed interval: with the default all_terminal/any_terminal, it returns the instant the relevant subtask(s) reach a terminal status. With return_when: "any_event", it ALSO returns the instant a child question is raised (waiting for the parent or escalated) or a subtask ends needing attention, even if none are fully terminal yet — a raised question does not end the wait under all_terminal/any_terminal. A call may return with timed_out: true before anything changed, simply because the wait budget for one call is capped (see timeout_ms); that is not a failure — call it again to keep waiting.',
     inputSchema: {
       type: 'object',
       properties: {
         parent_task_id: { type: 'string', description: 'Parent task ID whose subtasks should be monitored' },
         subtask_ids: { type: 'array', items: { type: 'string' }, description: 'Optional subset of subtask IDs to wait for' },
-        timeout_ms: { type: 'number', description: 'How long to wait before returning the current subtask state. Long waits are fine — the call will say timed_out and should simply be called again. Capped per call for transport safety.' },
+        timeout_ms: { type: 'number', description: 'How long to wait before returning the current subtask state, in milliseconds. Defaults to 55000 (55s) when omitted, and is capped at 110000 (110s) per call for transport safety — a longer value is silently capped, and the result says capped_timeout: true. Long waits are fine regardless — the call will say timed_out and should simply be called again to keep waiting.' },
         return_when: {
           type: 'string',
           enum: ['all_terminal', 'any_terminal', 'any_event'],
@@ -1203,7 +1203,15 @@ export async function callToolForScope(
     // parentTaskId against before attributing an answer to "the parent".
     // Without it, any session that merely knows a child's task_id could
     // answer its pending question and be credited as that child's parent.
-    if ((name === 'send_message' || name === 'respond_to_checkpoint') && scope.taskId) {
+    //
+    // list_child_questions gets the same treatment, for a different reason:
+    // it can be called with EITHER parent_task_id or child_task_id, and
+    // unlike answer_child_question/escalate_to_user (which only ever mean
+    // "my own task"), a legitimate child_task_id call names a DESCENDANT,
+    // not the caller itself — a simple override-to-scope.taskId would break
+    // that mode. The Task API route verifies the caller is that task (or an
+    // ancestor of it) before returning any of its private question data.
+    if ((name === 'send_message' || name === 'respond_to_checkpoint' || name === 'list_child_questions') && scope.taskId) {
       normalizedArgs.caller_task_id = scope.taskId
     }
 

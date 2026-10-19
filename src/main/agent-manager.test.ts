@@ -4186,6 +4186,54 @@ describe('AgentManager child questions go to the parent first', () => {
     )
   })
 
+  it('escalates an OpenCode bash permission whose patterns array hides a dangerous sub-command behind a safe one', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parent, 'child-1': child })
+    // OpenCode's bash permission can report one array entry PER PARSED
+    // SUB-COMMAND — "ls && python evil.py" arrives as ["ls", "python
+    // evil.py"], not one joined string. Joining them first would read as a
+    // single harmless "ls python evil.py" and wrongly route to the parent.
+    const fakeAdapter = {
+      getPendingApproval: vi.fn(() => ({
+        requestId: 'req-1',
+        question: 'Allow bash access to: ls, python evil.py',
+        options: [],
+        permission: 'bash',
+        patterns: ['ls', 'python evil.py']
+      }))
+    }
+
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+
+    expect(notificationInstances).toHaveLength(1)
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    expect((mgr as any).sendToRenderer).toHaveBeenCalledWith(
+      'task:childQuestionEscalated',
+      expect.objectContaining({ taskId: 'child-1', question: expect.objectContaining({ state: 'escalated' }) })
+    )
+  })
+
+  it('routes an OpenCode bash permission to the parent when every pattern in the array is independently safe', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const fakeAdapter = {
+      getPendingApproval: vi.fn(() => ({
+        requestId: 'req-1',
+        question: 'Allow bash access to: git add ., git commit -m "x"',
+        options: [],
+        permission: 'bash',
+        patterns: ['git add .', 'git commit -m "x"']
+      }))
+    }
+
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+
+    expect(notificationInstances).toHaveLength(0)
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    expect((mgr as any).sendToRenderer).toHaveBeenCalledWith(
+      'task:childQuestionRaised',
+      expect.objectContaining({ taskId: 'child-1', question: expect.objectContaining({ state: 'pending_parent' }) })
+    )
+  })
+
   it('raises a subtask AskUserQuestion with its parent', async () => {
     const { mgr, wakeSpy } = buildManager({ 'parent-1': parent, 'child-1': child })
     const part = { id: 'part-1', tool: { name: 'AskUserQuestion', questions: [{ header: 'Env', question: 'Which environment?', options: [{ label: 'staging' }, { label: 'production' }] }] } }
@@ -4194,6 +4242,36 @@ describe('AgentManager child questions go to the parent first', () => {
 
     expect(wakeSpy).toHaveBeenCalledOnce()
     expect(wakeSpy.mock.calls[0][0]).toBe('parent-1')
+  })
+
+  it('two different questions with NEITHER requestId nor a part id get different ids, instead of both collapsing to "undefined"', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    // Neither `tool.requestId` nor `id` is set on either part — a harness
+    // whose transcript part shape doesn't carry either. Without a
+    // content-derived fallback, String(undefined ?? undefined) would give
+    // both the SAME literal id "undefined", and raise()'s own idempotency
+    // check (getByChildAndQuestionId) would read the second as a duplicate
+    // of the first and silently drop it.
+    const partA = { tool: { name: 'AskUserQuestion', questions: [{ header: 'Env', question: 'Which environment?' }] } }
+    const partB = { tool: { name: 'AskUserQuestion', questions: [{ header: 'Region', question: 'Which region?' }] } }
+
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', partA)
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', partB)
+
+    const questions = mgr.getChildQuestionService().listForChild('child-1')
+    expect(questions).toHaveLength(2)
+    expect(questions[0].questionId).not.toBe(questions[1].questionId)
+    expect(new Set(questions.map((q) => q.questionText))).toEqual(new Set(['Env: Which environment?', 'Region: Which region?']))
+  })
+
+  it('the SAME id-less question raised twice (e.g. re-rendered from a transcript batch) still collapses to one record, not two', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const part = { tool: { name: 'AskUserQuestion', questions: [{ header: 'Env', question: 'Which environment?' }] } }
+
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', part)
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', { ...part })
+
+    expect(mgr.getChildQuestionService().listForChild('child-1')).toHaveLength(1)
   })
 
   it('escalates an out-of-authority approval straight to the human, as an OS notification', async () => {

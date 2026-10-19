@@ -393,6 +393,8 @@ export interface RaiseChildQuestionInput {
   options?: ChildQuestionOption[] | null
   toolName?: string | null
   command?: string | null
+  /** Multiple independent command patterns for ONE approval (see `CommandAuthorityInput.commands`) — classified individually instead of joined into `command`, which would hide a dangerous one behind a safe-looking first pattern. `command` is still set (for storage/display) to a human-readable join of these. */
+  commands?: string[] | null
   contextExcerpt?: string | null
   /** The child's workspace directory, when known — lets the authority classifier tell a workspace-local file write from one that escapes it. */
   workspaceDir?: string | null
@@ -492,13 +494,22 @@ export class ChildQuestionService {
    */
   private computeRouting(
     childTask: { id: string; parent_task_id: string | null },
-    authorityInput: { kind: ChildQuestionKind; toolName?: string | null; command?: string | null; questionText: string; workspaceDir?: string | null }
+    authorityInput: {
+      kind: ChildQuestionKind
+      toolName?: string | null
+      command?: string | null
+      commands?: string[] | null
+      questionText: string
+      workspaceDir?: string | null
+    }
   ): { mustEscalate: boolean; requiresHuman: boolean; authorityCategories: string[]; parentTaskId: string | null; parentReachable: boolean; timeoutMs: number } {
     const parentTaskId = childTask.parent_task_id
     const parentTask = parentTaskId ? this.deps.getTask(parentTaskId) : undefined
     const policy = parentTaskId ? this.deps.getParentPolicy(parentTaskId) : {}
 
-    const authoritySourceText = [authorityInput.toolName, authorityInput.command, authorityInput.questionText].filter(Boolean).join(' ')
+    const authoritySourceText = [authorityInput.toolName, authorityInput.command, ...(authorityInput.commands ?? []), authorityInput.questionText]
+      .filter(Boolean)
+      .join(' ')
     const proseAuthority = evaluateAuthorityGate(scrubSecretsForExcerpt(authoritySourceText, 4000))
     // The prose gate scans English findings and misses raw command syntax
     // entirely (`git push --force origin main` reads nothing like "merge the
@@ -520,6 +531,7 @@ export class ChildQuestionService {
         ? classifyCommandAuthority({
             toolName: authorityInput.toolName,
             command: authorityInput.command,
+            commands: authorityInput.commands,
             workspaceDir: authorityInput.workspaceDir
           })
         : { requiresHuman: false, categories: [] as string[] }
@@ -654,6 +666,11 @@ export class ChildQuestionService {
   /** The current live (pending_parent/answering/escalated) question for one child, if any. */
   getLiveForChild(childTaskId: string): ChildQuestionRecord | null {
     return this.deps.store.latestLiveForChild(childTaskId)
+  }
+
+  /** True when `taskId` is `ancestorTaskId` itself or somewhere below it in the parent_task_id chain — the same check `answerFromParent`/`escalateToUser` use to verify a caller may act on a descendant, exposed so callers like `list_child_questions` (read-only, but just as much "this is someone else's private data" as answering is) can bind access to the caller's own descendants too. */
+  isDescendant(ancestorTaskId: string, taskId: string): boolean {
+    return ancestorTaskId === taskId || this.deps.isDescendant(ancestorTaskId, taskId)
   }
 
   /** The parent answers within its own authority. Scoped to its own descendants. */

@@ -455,6 +455,32 @@ describe('children\'s questions go to the parent first — tool set', () => {
       })
     }
   })
+
+  describe('list_child_questions gets caller_task_id injected from the calling session\'s own scope', () => {
+    it('injects caller_task_id alongside whatever parent_task_id/child_task_id the call itself passed — neither is overwritten', async () => {
+      const calls: Array<[string, Record<string, unknown>]> = []
+      const invoke = async (route: string, params: Record<string, unknown>) => {
+        calls.push([route, params])
+        return { success: true }
+      }
+
+      await callToolForScope('list_child_questions', { parent_task_id: 'parent-1' }, COORDINATOR, invoke)
+
+      expect(calls).toEqual([['/list_child_questions', { parent_task_id: 'parent-1', caller_task_id: 'parent-1' }]])
+    })
+
+    it('a caller with no task at all (e.g. the desktop\'s own in-process scope) gets no caller_task_id injected', async () => {
+      const calls: Array<[string, Record<string, unknown>]> = []
+      const invoke = async (route: string, params: Record<string, unknown>) => {
+        calls.push([route, params])
+        return { success: true }
+      }
+
+      await callToolForScope('list_child_questions', { parent_task_id: 'parent-1' }, FULL_ACCESS_SCOPE, invoke)
+
+      expect(calls).toEqual([['/list_child_questions', { parent_task_id: 'parent-1' }]])
+    })
+  })
 })
 
 describe('wait_for_subtasks schema', () => {
@@ -464,5 +490,17 @@ describe('wait_for_subtasks schema', () => {
     expect(schema.properties.return_when.enum).toEqual(['all_terminal', 'any_terminal', 'any_event'])
     expect(tool.description).toMatch(/prefer this over polling/i)
     expect((tool.description ?? '').toLowerCase()).toContain('call it again')
+  })
+
+  it('states that a raised child question only ends the wait under any_event, not all_terminal/any_terminal', () => {
+    const tool = toolByName(FULL_ACCESS_SCOPE, 'wait_for_subtasks')!
+    expect(tool.description).toMatch(/does not end the wait under all_terminal\/any_terminal/i)
+  })
+
+  it("timeout_ms documents the real default (55s) and cap (110s)", () => {
+    const tool = toolByName(FULL_ACCESS_SCOPE, 'wait_for_subtasks')!
+    const schema = tool.inputSchema as { properties: Record<string, { description?: string }> }
+    expect(schema.properties.timeout_ms.description).toContain('55000')
+    expect(schema.properties.timeout_ms.description).toContain('110000')
   })
 })

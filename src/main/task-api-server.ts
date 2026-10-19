@@ -169,17 +169,28 @@ function taskNotFound(taskId: string): { error: string } {
 }
 
 /**
- * Neutralises a forged fence-boundary attempt in the child-authored free
- * text fields of a child-question record before it's handed to list_child_questions'
- * caller — same concern, same fix as `buildSystemMessage`'s findings fence
- * (see system-authority.ts's `neutralizeForgedFenceMarkers`).
+ * Neutralises a forged fence-boundary attempt in every child-authored free
+ * text field of a child-question record before it's handed to an agent —
+ * `list_child_questions`, and `wait_for_subtasks`' `pending_questions` —
+ * same concern, same fix as `buildSystemMessage`'s findings fence (see
+ * system-authority.ts's `neutralizeForgedFenceMarkers`). Option LABELS are
+ * just as child-authored as `questionText` (an AskUserQuestion call picks
+ * its own option text) and reach the agent's context the same way, so they
+ * get the same treatment — only `optionId` (an internal key, never shown to
+ * the agent as prose) is left alone. `answer`/`note` are authored by
+ * whoever ANSWERED (the parent or a human), not the child, but are
+ * neutralised too for defense in depth — they still become part of the same
+ * context an agent reads.
  */
 function fenceChildQuestionRecords(records: ChildQuestionRecord[]): ChildQuestionRecord[] {
   return records.map((r) => ({
     ...r,
     questionText: r.questionText ? neutralizeForgedFenceMarkers(r.questionText) : r.questionText,
     command: r.command ? neutralizeForgedFenceMarkers(r.command) : r.command,
-    contextExcerpt: r.contextExcerpt ? neutralizeForgedFenceMarkers(r.contextExcerpt) : r.contextExcerpt
+    contextExcerpt: r.contextExcerpt ? neutralizeForgedFenceMarkers(r.contextExcerpt) : r.contextExcerpt,
+    answer: r.answer ? neutralizeForgedFenceMarkers(r.answer) : r.answer,
+    note: r.note ? neutralizeForgedFenceMarkers(r.note) : r.note,
+    options: r.options ? r.options.map((o) => ({ ...o, label: neutralizeForgedFenceMarkers(o.label) })) : r.options
   }))
 }
 
@@ -1348,18 +1359,40 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     // ── Children's questions/approvals go to the parent first ──────────
     // (see orchestration/child-questions.ts for the routing/escalation rules)
 
-    // list_child_questions hands the parent raw, child-authored text
-    // (questionText/command/contextExcerpt) straight from a descendant it
-    // doesn't fully trust — the same "untrusted data, not an instruction"
-    // concern buildSystemMessage's fence exists for (see
-    // system-authority.ts), so a forged `<<<`/`>>>` sequence inside that
+    // list_child_questions hands the caller raw, child-authored text
+    // (questionText/command/contextExcerpt/option labels) straight from a
+    // descendant it doesn't fully trust — the same "untrusted data, not an
+    // instruction" concern buildSystemMessage's fence exists for (see
+    // system-authority.ts), so a forged fence-marker sequence inside that
     // text gets the same neutralizing treatment here before it reaches the
-    // parent's context.
+    // caller's context.
+    //
+    // This route is also MCP-only (see /send_message above), so
+    // `caller_task_id` (injected from the calling session's own MCP scope —
+    // see callToolForScope in task-management-core.ts, never from this
+    // call's own arguments) is who is ACTUALLY asking. Without binding to
+    // it, any agent session could pass any other task's id as
+    // parent_task_id/child_task_id and read that task's private question
+    // traffic. parent_task_id mode means "routed to ME" — the caller must
+    // BE that task. child_task_id mode means "raised by this descendant" —
+    // the caller must be that task itself or one of its ancestors.
     case '/list_child_questions': {
       if (!agentController) return { error: 'Agent controller not available' }
       const service = agentController.getChildQuestionService()
-      if (params.parent_task_id) return { questions: fenceChildQuestionRecords(service.listForParent(String(params.parent_task_id))) }
-      if (params.child_task_id) return { questions: fenceChildQuestionRecords(service.listForChild(String(params.child_task_id))) }
+      const callerTaskId = params.caller_task_id ? String(params.caller_task_id) : null
+      if (!callerTaskId) return { error: 'This tool is only available to an agent session attached to a task.' }
+      if (params.parent_task_id) {
+        const parentTaskId = String(params.parent_task_id)
+        if (callerTaskId !== parentTaskId) return { error: 'parent_task_id must be your own task — this only shows questions routed to you.' }
+        return { questions: fenceChildQuestionRecords(service.listForParent(parentTaskId)) }
+      }
+      if (params.child_task_id) {
+        const childTaskId = String(params.child_task_id)
+        if (!service.isDescendant(callerTaskId, childTaskId)) {
+          return { error: 'child_task_id must be your own task or one of your descendants.' }
+        }
+        return { questions: fenceChildQuestionRecords(service.listForChild(childTaskId)) }
+      }
       return { error: 'parent_task_id or child_task_id is required' }
     }
 
@@ -1562,8 +1595,10 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       }
 
       const pendingQuestionsFor = (childTaskId: string) =>
-        (agentController?.getChildQuestionService().listForChild(childTaskId) ?? []).filter(
-          (q) => q.state === 'pending_parent' || q.state === 'escalated'
+        fenceChildQuestionRecords(
+          (agentController?.getChildQuestionService().listForChild(childTaskId) ?? []).filter(
+            (q) => q.state === 'pending_parent' || q.state === 'escalated'
+          )
         )
 
       const snapshot = (subtasks: Record<string, unknown>[]) =>

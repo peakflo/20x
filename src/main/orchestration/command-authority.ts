@@ -23,6 +23,17 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 export interface CommandAuthorityInput {
   toolName?: string | null
   command?: string | null
+  /**
+   * When an adapter reports MULTIPLE independent patterns for one approval
+   * (OpenCode's `bash` permission can send one array entry per parsed
+   * sub-command — `ls && python evil.py` arrives as `["ls", "python
+   * evil.py"]`, not the one joined string), classify each entry on its own
+   * and require every one to be safe, instead of joining them with spaces
+   * first (`"ls python evil.py"` reads as one harmless-looking `ls`
+   * invocation to the anchored safe-list, which is exactly the bypass this
+   * is for). Takes priority over `command` when non-empty.
+   */
+  commands?: string[] | null
   /** The free-text question/description — used only as a fallback source of command-like text when `command` itself is empty. */
   questionText?: string | null
   /** Absolute path of the child's workspace, when known — used to tell a workspace-local file write from one that escapes it. */
@@ -56,7 +67,25 @@ const DANGEROUS_PATTERNS: Array<{ category: string; pattern: RegExp }> = [
   { category: 'package-publish', pattern: /\b(npm\s+publish|yarn\s+publish|pnpm\s+publish|twine\s+upload|cargo\s+publish|docker\s+push)\b/i },
   { category: 'external-http-mutation', pattern: /\b(curl|wget|http|httpie)\b[^\n]*(-X\s*(POST|PUT|DELETE|PATCH)|--request[=\s]+(POST|PUT|DELETE|PATCH))/i },
   { category: 'external-http-mutation', pattern: /\b(curl|wget)\b[^\n]*-d\b/i },
-  { category: 'payment-operation', pattern: /\b(stripe|paypal|braintree)\.com\b[^\n]*\/(v\d+\/)?(charges|payment_intents|payouts|transfers)\b/i }
+  { category: 'payment-operation', pattern: /\b(stripe|paypal|braintree)\.com\b[^\n]*\/(v\d+\/)?(charges|payment_intents|payouts|transfers)\b/i },
+  // `git ... --upload-pack=<cmd>` / `--receive-pack=<cmd>` is a well-known
+  // arbitrary-command-execution vector (git invokes whatever binary this
+  // names as the remote helper) — not specific to `fetch`, since several
+  // git subcommands accept it. `-c core.*` can override config git itself
+  // later shells out through (pager, editor, fsmonitor, sshCommand, ...),
+  // which is just as dangerous even on an otherwise read-only subcommand
+  // like `git -c core.pager=... log`.
+  { category: 'git-arbitrary-command', pattern: /\bgit\b[^\n]*--(upload-pack|receive-pack)\b/i },
+  { category: 'git-arbitrary-command', pattern: /\bgit\s+(?:[^\n]*\s)?-c\s+core\./i },
+  // ripgrep's `--pre <program>` runs an arbitrary program on every searched
+  // file before matching — not a read, an execution.
+  { category: 'command-execution-flag', pattern: /\brg\b[^\n]*--pre\b/i },
+  // `find`'s action primaries beyond the already-excluded -exec/--exec:
+  // -execdir/-okdir run a command too (just cwd'd into the found dir
+  // first), -ok prompts then runs one, and -fprint/-fprintf/-fls write
+  // arbitrary (possibly absolute, possibly outside-workspace) file content
+  // — these are write/execute primitives, not a read.
+  { category: 'command-execution-flag', pattern: /\bfind\b[^\n]*-(execdir|okdir|ok|fprintf|fprint|fls)\b/i }
 ]
 
 /**
@@ -76,7 +105,15 @@ const COMPOUND_OR_SHELL_PATTERNS: RegExp[] = [
   /`/, // `...` command substitution
   /\bxargs\b/i,
   /\b(?:bash|sh|zsh)\s+-c\b/i,
-  /\beval\b/i
+  /\beval\b/i,
+  // A newline (or carriage return) is just as much a command separator to a
+  // real shell as `;` is — `ls\npython evil.py` or `git status\ncurl …`
+  // reads as a single safe-looking prefix line to the anchored SAFE
+  // patterns below (which only look at the first line), but a shell
+  // executing this text runs BOTH lines as separate commands. Any other C0
+  // control character is equally outside what a reasonable command line
+  // ever legitimately contains.
+  /[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]/
 ]
 
 /**
@@ -140,13 +177,28 @@ function isOutsideWorkspace(candidate: string, workspaceDir: string): boolean {
 }
 
 /**
+ * `--output=/abs/path` and `-o/abs/path` both put an absolute path right
+ * next to a flag with no whitespace in between — `=` for a long option,
+ * nothing at all for a single-letter short one — so the absolute-path scan
+ * below (which requires the `/` to start right after whitespace or the
+ * string start) would otherwise walk straight past them. Inserting a space
+ * in those two spots turns them into the whitespace-preceded form it
+ * already recognises, without touching any `/` that's already fine (one
+ * genuinely preceded by whitespace is untouched by either replacement).
+ */
+function normalizeForPathScan(text: string): string {
+  return text.replace(/=(?=\/)/g, ' ').replace(/(-[a-zA-Z])(?=\/)/g, '$1 ')
+}
+
+/**
  * True when a path argument plainly escapes a workspace directory —
  * home-dir shorthand, `..` traversal, a well-known system path, or (when
  * `workspaceDir` is known) an absolute path that resolves outside it. Only
  * genuine absolute-path tokens count — a relative path like `src/main/x.ts`
  * contains slashes too but is never mistaken for one, since the match
- * requires the `/` to start the token (string start or preceded by
- * whitespace), not just appear mid-string.
+ * requires the `/` to start the token (string start, preceded by
+ * whitespace, or glued directly onto a flag — see `normalizeForPathScan`),
+ * not just appear mid-string.
  *
  * When there IS an absolute path token but NO `workspaceDir` is known at
  * all, this can't verify containment either way — an absolute path could
@@ -154,15 +206,29 @@ function isOutsideWorkspace(candidate: string, workspaceDir: string): boolean {
  * "escapes": requires a human.
  */
 function pathEscapesWorkspace(text: string, workspaceDir?: string | null): boolean {
-  if (/(?:^|\s)~\//.test(text) || /\.\.\//.test(text)) return true
-  if (/(?:^|\s)\/(etc|usr|System|Library|private)\//.test(text)) return true
-  const absolutePaths = (text.match(/(?:^|\s)(\/[^\s'"]+)/g) ?? []).map((m) => m.trimStart())
+  const normalized = normalizeForPathScan(text)
+  if (/(?:^|\s)~\//.test(normalized) || /\.\.\//.test(normalized)) return true
+  if (/(?:^|\s)\/(etc|usr|System|Library|private)\//.test(normalized)) return true
+  const absolutePaths = (normalized.match(/(?:^|\s)(\/[^\s'"]+)/g) ?? []).map((m) => m.trimStart())
   if (absolutePaths.length === 0) return false
   if (!workspaceDir) return true
   return absolutePaths.some((p) => isOutsideWorkspace(p, workspaceDir))
 }
 
 export function classifyCommandAuthority(input: CommandAuthorityInput): CommandAuthorityResult {
+  // Multiple independent patterns (see CommandAuthorityInput.commands'
+  // doc comment) — classify each on its own against the SAME toolName/
+  // workspaceDir and combine: any one requiring a human means the whole
+  // approval does, same as if they'd been run as separate commands (which,
+  // from the adapter's own split, they are).
+  const commands = (input.commands ?? []).map((c) => c.trim()).filter(Boolean)
+  if (commands.length > 0) {
+    const results = commands.map((command) => classifyCommandAuthority({ toolName: input.toolName, command, workspaceDir: input.workspaceDir }))
+    const requiresHuman = results.some((r) => r.requiresHuman)
+    const categories = [...new Set(results.flatMap((r) => r.categories))]
+    return { requiresHuman, categories }
+  }
+
   const toolName = (input.toolName ?? '').trim()
   const command = (input.command ?? '').trim()
   // Dangerous-pattern and safe-allowlist matching both look at the command

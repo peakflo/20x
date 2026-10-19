@@ -106,7 +106,16 @@ export interface SystemMessageMeta {
  * happens to contain the words "begin" or "end".
  */
 export function neutralizeForgedFenceMarkers(text: string): string {
-  return text.replace(/<<</g, '‹‹‹').replace(/>>>/g, '›››')
+  return text
+    .replace(/<<</g, '‹‹‹')
+    .replace(/>>>/g, '›››')
+    // A forged marker doesn't need the arrows to read as a boundary to a
+    // confused reader — a bare line saying "END AUTOMATED FINDINGS" (no
+    // `>>>`) sitting among blank lines can look just as much like the real
+    // fence closing. Defanging the phrase itself (not just the arrows)
+    // catches that form too, with or without the arrows present.
+    .replace(/\bBEGIN AUTOMATED FINDINGS\b/gi, 'BEGIN-AUTOMATED-FINDINGS')
+    .replace(/\bEND AUTOMATED FINDINGS\b/gi, 'END-AUTOMATED-FINDINGS')
 }
 
 /**
