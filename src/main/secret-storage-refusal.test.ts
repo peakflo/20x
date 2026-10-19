@@ -236,8 +236,11 @@ describe('reencryptPlaintextFallbackRows', () => {
   // "these are never real secrets," every plaintext row's real secret
   // value sat there in base64 forever. Each row now gets its OWN backup
   // file, which this test intercepts mid-migration (before the UPDATE
-  // commits) to prove it genuinely existed and held the right bytes —
-  // and the next test proves it's gone again once the migration finishes.
+  // commits) to prove it genuinely existed and held the right bytes — and
+  // the next test proves it's still there right after the migration
+  // finishes (round 4: backups now outlive the run that created them, on
+  // purpose — see cleanupPriorReencryptBackups's docstring — and are only
+  // swept up at the START of the NEXT run).
   it('backs up the original bytes to disk before re-encrypting a genuinely legacy plaintext row', () => {
     vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false)
     const now = new Date().toISOString()
@@ -268,10 +271,13 @@ describe('reencryptPlaintextFallbackRows', () => {
     expect(Buffer.from(backupContentsAtEncryptTime!, 'base64').toString('utf8')).toBe('leaked-secret-123456')
   })
 
-  // P1, re-review (round 3): "remove the file once the migration ends" —
-  // once every row's own backup has been individually deleted right after
-  // its UPDATE commits, nothing should remain on disk at all.
-  it('leaves no backup file behind once the migration completes successfully', () => {
+  // Round 4, residual-risk fix: a backup is NOT deleted at the end of the
+  // same run that created it — a mistaken re-encrypt (see
+  // cleanupPriorReencryptBackups's docstring for the scenario: a real,
+  // currently-undecryptable ciphertext row whose bytes coincidentally pass
+  // the UTF-8 fallback check) needs at least one full restart's worth of
+  // time to be noticed before its only backup disappears.
+  it('keeps the backup file on disk after the migration that created it completes (deliberately, not a leak — see round 4)', () => {
     vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false)
     const now = new Date().toISOString()
     rawDb.prepare(`
@@ -282,8 +288,31 @@ describe('reencryptPlaintextFallbackRows', () => {
     vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true)
     expect(db.reencryptPlaintextFallbackRows().secrets).toBe(1)
 
-    // Not just "no file with the old shared name" — the whole directory
-    // is gone (cleaned up once it had nothing left in it).
+    expect(existsSync(BACKUP_DIR)).toBe(true)
+    const files = readdirSync(BACKUP_DIR)
+    expect(files.some((f) => f.startsWith('secrets-legacy-backup-2-value-'))).toBe(true)
+  })
+
+  // P1, re-review (round 3, still honored): the backup from a PRIOR run is
+  // swept away at the start of the NEXT run — so it doesn't accumulate
+  // forever, just survives one extra restart's worth of time compared to
+  // the immediate-delete version (round 4 tightened the timing, not the
+  // "eventually cleaned up" guarantee).
+  it('sweeps up a PRIOR run\'s backup at the start of the next run, once nothing from that run still needs it', () => {
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false)
+    const now = new Date().toISOString()
+    rawDb.prepare(`
+      INSERT INTO secrets (id, name, description, env_var_name, value, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('legacy-backup-3', 'Legacy', '', 'MY_SECRET', Buffer.from('leaked-secret-123456', 'utf8'), now, now)
+
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true)
+    expect(db.reencryptPlaintextFallbackRows().secrets).toBe(1) // "run 1" — leaves its backup behind
+    expect(existsSync(BACKUP_DIR)).toBe(true)
+
+    expect(db.reencryptPlaintextFallbackRows().secrets).toBe(0) // "run 2" (next app start) — nothing new to do
+    // Run 1's leftover backup is swept up at the START of run 2, and run 2
+    // itself created none (idempotent — the row is already encrypted).
     expect(existsSync(BACKUP_DIR)).toBe(false)
   })
 })
