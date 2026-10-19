@@ -33,7 +33,7 @@ import {
   normalizeCodexThreadTokenUsage
 } from '../usage/usage-normalize'
 import { mergeUsageLimits } from '../../shared/usage'
-import { buildHarnessBaseEnv } from './harness-env'
+import { buildHarnessBaseEnv, applyShellCredentialsOptIn } from './harness-env'
 
 const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-6-astra'
 const MAX_IPC_TOOL_INPUT_CHARS = 20_000
@@ -877,6 +877,12 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     // authenticates with one. Everything else (PATH, locale, proxy, etc.)
     // passes through unchanged.
     const env: NodeJS.ProcessEnv = buildHarnessBaseEnv()
+
+    // Per-agent "pass shell credentials" opt-in (off by default) — the
+    // escape hatch for an agent that drives `gh`/`aws` CLIs via ambient
+    // shell credentials. Applied before secretEnvVars below so an agent's
+    // own explicit secret still wins on a name collision.
+    applyShellCredentialsOptIn(env as Record<string, string>, config.allowShellCredentials, config.getLiveScrubber?.())
 
     for (const [key, value] of Object.entries(config.secretEnvVars || {})) {
       env[key] = value

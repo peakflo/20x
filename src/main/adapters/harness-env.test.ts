@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { buildHarnessBaseEnv, isKnownProviderCredentialVar, KNOWN_PROVIDER_CREDENTIAL_ENV_VARS } from './harness-env'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  buildHarnessBaseEnv,
+  isKnownProviderCredentialVar,
+  KNOWN_PROVIDER_CREDENTIAL_ENV_VARS,
+  reAddAmbientCredentials,
+  applyShellCredentialsOptIn
+} from './harness-env'
 
 describe('buildHarnessBaseEnv', () => {
   const fakeSource = {
@@ -114,5 +120,55 @@ describe('buildHarnessBaseEnv', () => {
       if (prev === undefined) delete process.env.ANTHROPIC_API_KEY
       else process.env.ANTHROPIC_API_KEY = prev
     }
+  })
+})
+
+describe('reAddAmbientCredentials', () => {
+  it('re-adds only the named vars that are actually present in the source, and registers each with the scrubber', () => {
+    const env: Record<string, string> = {}
+    const scrubber = { addEntries: vi.fn() }
+    const source = { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-token-value', NOT_REQUESTED: 'should-not-appear' }
+    reAddAmbientCredentials(env, ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_AUTH_TOKEN'], scrubber, source)
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('oauth-token-value')
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined() // not present in source
+    expect(env.NOT_REQUESTED).toBeUndefined() // not in the requested names list
+    expect(scrubber.addEntries).toHaveBeenCalledWith([{ name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'oauth-token-value' }])
+    expect(scrubber.addEntries).toHaveBeenCalledTimes(1)
+  })
+
+  it('works with no scrubber provided (no-op registration, value still re-added)', () => {
+    const env: Record<string, string> = {}
+    reAddAmbientCredentials(env, ['AWS_BEARER_TOKEN_BEDROCK'], undefined, { AWS_BEARER_TOKEN_BEDROCK: 'bedrock-token' })
+    expect(env.AWS_BEARER_TOKEN_BEDROCK).toBe('bedrock-token')
+  })
+})
+
+describe('applyShellCredentialsOptIn', () => {
+  const source = {
+    GH_TOKEN: 'gh-token-value',
+    AWS_SECRET_ACCESS_KEY: 'aws-secret-value',
+    PATH: '/usr/bin',
+    SOME_UNRELATED_VAR: 'keep-me'
+  }
+
+  it('does nothing when not allowed (the safer default)', () => {
+    const env: Record<string, string> = {}
+    const scrubber = { addEntries: vi.fn() }
+    applyShellCredentialsOptIn(env, false, scrubber, source)
+    applyShellCredentialsOptIn(env, undefined, scrubber, source)
+    expect(env).toEqual({})
+    expect(scrubber.addEntries).not.toHaveBeenCalled()
+  })
+
+  it('re-adds every credential-shaped var from the source when allowed, registering each with the scrubber, and leaves non-credential vars alone', () => {
+    const env: Record<string, string> = {}
+    const scrubber = { addEntries: vi.fn() }
+    applyShellCredentialsOptIn(env, true, scrubber, source)
+    expect(env.GH_TOKEN).toBe('gh-token-value')
+    expect(env.AWS_SECRET_ACCESS_KEY).toBe('aws-secret-value')
+    expect(env.PATH).toBeUndefined() // not credential-shaped — this function doesn't touch it
+    expect(env.SOME_UNRELATED_VAR).toBeUndefined()
+    expect(scrubber.addEntries).toHaveBeenCalledWith([{ name: 'GH_TOKEN', value: 'gh-token-value' }])
+    expect(scrubber.addEntries).toHaveBeenCalledWith([{ name: 'AWS_SECRET_ACCESS_KEY', value: 'aws-secret-value' }])
   })
 })

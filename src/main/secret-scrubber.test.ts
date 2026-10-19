@@ -114,6 +114,35 @@ describe('SecretScrubber', () => {
     expect(input.tool.input.command).toBe(`echo ${value}`) // original untouched
   })
 
+  // Minor finding, re-review: scrubDeep treated ANY object (`typeof value
+  // === 'object'`) as a plain record to decompose via `Object.entries` and
+  // rebuild as `{}` — silently corrupting a Date (no own enumerable
+  // properties → became `{}`) and a Buffer/typed array (its numeric byte
+  // indices got enumerated and rebuilt as a plain object, destroying the
+  // binary value) instead of passing them through unchanged.
+  it('passes a Date through unchanged instead of corrupting it into {}', () => {
+    const s = new SecretScrubber([{ name: 'X', value: 'nestedsecretvalue123' }])
+    const date = new Date('2026-01-01T00:00:00.000Z')
+    const result = s.scrubDeep({ when: date })
+    expect(result.when).toBeInstanceOf(Date)
+    expect((result.when as Date).toISOString()).toBe('2026-01-01T00:00:00.000Z')
+  })
+
+  it('passes a Buffer through unchanged instead of rebuilding it as a plain object of numeric keys', () => {
+    const s = new SecretScrubber([{ name: 'X', value: 'nestedsecretvalue123' }])
+    const buf = Buffer.from([1, 2, 3, 4])
+    const result = s.scrubDeep({ data: buf })
+    expect(Buffer.isBuffer(result.data)).toBe(true)
+    expect(result.data as Buffer).toEqual(buf)
+  })
+
+  it('still recurses into a genuinely plain object nested anywhere, Date/Buffer handling notwithstanding', () => {
+    const value = 'nestedsecretvalue123'
+    const s = new SecretScrubber([{ name: 'X', value }])
+    const result = s.scrubDeep({ when: new Date(), meta: { note: `leak: ${value}` } })
+    expect((result.meta as { note: string }).note).toBe('leak: «$X»')
+  })
+
   it('NOOP_SCRUBBER passes text through unchanged', () => {
     expect(NOOP_SCRUBBER.scrub('anything at all')).toBe('anything at all')
     expect(NOOP_SCRUBBER.isEmpty).toBe(true)

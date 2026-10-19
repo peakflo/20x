@@ -12,7 +12,8 @@ vi.mock('electron', () => ({
   }
 }))
 
-import { writeLocalMcpEnvWrapper } from './mcp-env-wrapper'
+import { writeLocalMcpEnvWrapper, cleanupLocalMcpEnvFile, cleanupStaleLocalMcpEnvFiles } from './mcp-env-wrapper'
+import { existsSync, mkdirSync } from 'fs'
 
 describe('writeLocalMcpEnvWrapper', () => {
   const realPlatform = process.platform
@@ -161,5 +162,95 @@ describe('writeLocalMcpEnvWrapper', () => {
     // But the spawned child actually receives it via the sourced env file.
     const output = execFileSync(result.command, result.args, { encoding: 'utf-8' })
     expect(output).toBe('end-to-end-secret-value')
+  })
+
+  it('refuses an unexpected serverId (defense in depth against path construction)', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' })
+    expect(() => writeLocalMcpEnvWrapper('../escape', 'node', [], { KEY: 'value123456' })).toThrow(/unexpected server id/)
+    expect(() => writeLocalMcpEnvWrapper('has a space', 'node', [], { KEY: 'value123456' })).toThrow(/unexpected server id/)
+  })
+})
+
+// Minor finding, re-review: env files were never deleted anywhere — neither
+// per-session nor at startup — so a secret written once to this directory
+// outlived its session indefinitely.
+describe('cleanupLocalMcpEnvFile and cleanupStaleLocalMcpEnvFiles', () => {
+  const realPlatform = process.platform
+
+  beforeEach(() => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'mcp-env-wrapper-cleanup-test-'))
+  })
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: realPlatform })
+    rmSync(userDataDir, { recursive: true, force: true })
+  })
+
+  it('cleanupLocalMcpEnvFile deletes the one server\'s env file and leaves others alone', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' })
+    writeLocalMcpEnvWrapper('server-a', 'node', [], { KEY: 'value123456' })
+    writeLocalMcpEnvWrapper('server-b', 'node', [], { KEY: 'value123456' })
+    const dir = join(userDataDir, 'mcp-env')
+    expect(existsSync(join(dir, 'server-a.env.sh'))).toBe(true)
+    expect(existsSync(join(dir, 'server-b.env.sh'))).toBe(true)
+
+    cleanupLocalMcpEnvFile('server-a')
+    expect(existsSync(join(dir, 'server-a.env.sh'))).toBe(false)
+    expect(existsSync(join(dir, 'server-b.env.sh'))).toBe(true)
+  })
+
+  it('cleanupLocalMcpEnvFile ignores an unexpected serverId instead of touching the filesystem', () => {
+    expect(() => cleanupLocalMcpEnvFile('../escape')).not.toThrow()
+  })
+
+  it('cleanupLocalMcpEnvFile is a no-op when the file never existed', () => {
+    expect(() => cleanupLocalMcpEnvFile('never-existed')).not.toThrow()
+  })
+
+  it('cleanupStaleLocalMcpEnvFiles removes every leftover env file but keeps the shared loader script', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' })
+    writeLocalMcpEnvWrapper('server-a', 'node', [], { KEY: 'value123456' })
+    writeLocalMcpEnvWrapper('server-b', 'node', [], { KEY: 'value123456' })
+    const dir = join(userDataDir, 'mcp-env')
+    expect(existsSync(join(dir, 'mcp-env-loader.sh'))).toBe(true)
+
+    cleanupStaleLocalMcpEnvFiles()
+
+    expect(existsSync(join(dir, 'server-a.env.sh'))).toBe(false)
+    expect(existsSync(join(dir, 'server-b.env.sh'))).toBe(false)
+    expect(existsSync(join(dir, 'mcp-env-loader.sh'))).toBe(true) // shared, not per-session — untouched
+  })
+
+  it('cleanupStaleLocalMcpEnvFiles is a no-op when the directory does not exist yet', () => {
+    rmSync(join(userDataDir, 'mcp-env'), { recursive: true, force: true })
+    expect(() => cleanupStaleLocalMcpEnvFiles()).not.toThrow()
+  })
+})
+
+// Minor finding, re-review: rewriting the loader ONLY when the file is
+// missing meant a fix to the loader's own source (e.g. the Windows
+// arg-slicing fix in this same PR) would never reach a user whose app had
+// already written an older version of the file once.
+describe('ensureLoaderScript rewrites on content change, not just on missing', () => {
+  beforeEach(() => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'mcp-env-wrapper-rewrite-test-'))
+  })
+
+  afterEach(() => {
+    rmSync(userDataDir, { recursive: true, force: true })
+  })
+
+  it('rewrites a stale/modified loader script to the current content', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin' })
+    const dir = join(userDataDir, 'mcp-env')
+    mkdirSync(dir, { recursive: true })
+    const loaderPath = join(dir, 'mcp-env-loader.sh')
+    writeFileSync(loaderPath, '#!/bin/bash\n# an old/stale version of the loader\necho stale\n', 'utf-8')
+
+    writeLocalMcpEnvWrapper('server-a', 'node', [], { KEY: 'value123456' })
+
+    const rewritten = readFileSync(loaderPath, 'utf-8')
+    expect(rewritten).not.toContain('stale')
+    expect(rewritten).toContain('#!/bin/bash')
   })
 })

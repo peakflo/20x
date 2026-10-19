@@ -147,6 +147,18 @@ export class SecretScrubber {
     if (typeof value === 'string') return this.scrub(value)
     if (Array.isArray(value)) return value.map((v) => this.scrubDeepInner(v))
     if (value && typeof value === 'object') {
+      // Minor finding, re-review: this used to treat ANY object (`value &&
+      // typeof value === 'object'`) as a plain record to decompose via
+      // `Object.entries` and rebuild as `{}` — which corrupts a `Date`
+      // (no own enumerable properties, so it silently became `{}`), a
+      // `Buffer`/typed array (its numeric byte indices got enumerated and
+      // rebuilt as `{0: ..., 1: ..., ...}`, destroying the binary value),
+      // or any other class instance with real behavior/private state.
+      // Only recurse into values that are ACTUALLY plain objects — anything
+      // else passes through unchanged, exactly as scrubDeep's own docstring
+      // already promised ("other primitives pass through unchanged").
+      const proto = Object.getPrototypeOf(value)
+      if (proto !== Object.prototype && proto !== null) return value
       const out: Record<string, unknown> = {}
       for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
         out[k] = this.scrubDeepInner(v)

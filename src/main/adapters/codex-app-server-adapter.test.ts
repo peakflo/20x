@@ -31,6 +31,8 @@ interface AppServerAdapterPrivate {
     authMethod?: 'subscription' | 'api_key'
     apiKeys?: { openai?: string }
     secretEnvVars?: Record<string, string>
+    allowShellCredentials?: boolean
+    getLiveScrubber?: () => { addEntries: (entries: Array<{ name?: string; value: string }>) => void } | undefined
   }): {
     env: NodeJS.ProcessEnv
     usesApiKey: boolean
@@ -1248,6 +1250,30 @@ describe('CodexAppServerAdapter', () => {
       else process.env.OPENAI_API_KEY = originalOpenAI
       if (originalCodex === undefined) delete process.env.CODEX_API_KEY
       else process.env.CODEX_API_KEY = originalCodex
+    }
+  })
+
+  // Major finding, re-review (M8): the generic per-agent "pass shell
+  // credentials" opt-in must apply to Codex too.
+  it('does not pass ambient GH_TOKEN through by default, but does once the agent opts in, registering it with the live scrubber', () => {
+    const adapter = adapterPrivate(new CodexAppServerAdapter())
+    const prev = process.env.GH_TOKEN
+    process.env.GH_TOKEN = 'gh-token-value-123456'
+    try {
+      const withoutOptIn = adapter.buildEnvironment({ authMethod: 'subscription' })
+      expect(withoutOptIn.env.GH_TOKEN).toBeUndefined()
+
+      const addEntries = vi.fn()
+      const withOptIn = adapter.buildEnvironment({
+        authMethod: 'subscription',
+        allowShellCredentials: true,
+        getLiveScrubber: () => ({ addEntries })
+      })
+      expect(withOptIn.env.GH_TOKEN).toBe('gh-token-value-123456')
+      expect(addEntries).toHaveBeenCalledWith([{ name: 'GH_TOKEN', value: 'gh-token-value-123456' }])
+    } finally {
+      if (prev === undefined) delete process.env.GH_TOKEN
+      else process.env.GH_TOKEN = prev
     }
   })
 })
