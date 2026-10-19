@@ -77,6 +77,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [skillIds, setSkillIds] = useState<string[] | undefined>(agent?.config.skill_ids)
   const [showSkillSelector, setShowSkillSelector] = useState(false)
   const [secretIds, setSecretIds] = useState<string[]>(agent?.config.secret_ids ?? [])
+  const [passShellCredentials, setPassShellCredentials] = useState(agent?.config.pass_shell_credentials ?? false)
   const [mcpSelection, setMcpSelection] = useState<Map<string, string[] | undefined>>(
     () => parseMcpSelection(agent?.config.mcp_servers)
   )
@@ -295,6 +296,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
         skill_ids: skillIds,
         secret_ids: secretIds.length > 0 ? secretIds : undefined,
+        pass_shell_credentials: passShellCredentials || undefined,
         api_keys: {
           // Only persist the OpenAI key when Codex is in api_key mode
           openai: (codingAgent === CodingAgentType.CODEX && authMethod === 'api_key')
@@ -878,6 +880,23 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           Select secrets to inject into the agent's shell environment
         </p>
         <SecretSelector selectedIds={secretIds} onChange={setSecretIds} />
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="flex items-center gap-2.5 cursor-pointer">
+          <Checkbox
+            checked={passShellCredentials}
+            onCheckedChange={(checked) => setPassShellCredentials(checked === true)}
+          />
+          <span className="text-sm">Pass shell credentials (GH_TOKEN, AWS, …)</span>
+        </label>
+        <p className="text-xs text-muted-foreground pl-[26px]">
+          Off by default: credentials like GH_TOKEN and AWS keys are stripped from
+          this agent's environment. Turn this on if the agent needs to run{' '}
+          <code className="text-[11px]">gh</code> or <code className="text-[11px]">aws</code>{' '}
+          CLI commands using credentials already in your shell — any command this
+          agent runs can read them.
+        </p>
       </div>
 
       <div className="flex justify-end gap-2 pt-2">

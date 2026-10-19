@@ -57,6 +57,58 @@ describe('/get_messages scrubs persisted secret values', () => {
     expect(joined).toContain('«$MY_SECRET»')
   })
 
+  // Minor finding, re-review: get_messages used to page the RAW tool output
+  // (via toolOutputPage, which slices at a fixed character offset) BEFORE
+  // scrubbing, so a secret straddling the page boundary split into two
+  // halves, neither of which matched the scrubber's literal-substring
+  // search — leaking both halves across two page fetches. Scrubbing the
+  // FULL output once, before paging, closes this: by the time paging runs,
+  // the secret is already gone, so no boundary can split it.
+  it('scrubs a secret even when it straddles the output pagination boundary', async () => {
+    const agent = createAgentWithSecret()
+    const task = db.createTask(makeTask({ title: 'Boundary task' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+
+    // TOOL_OUTPUT_PAGE_CHARS is 20_000 — place the secret exactly straddling
+    // that boundary, split precisely in half, so each raw half ends up on a
+    // different page under the OLD (page-before-scrub) behavior.
+    const half = Math.floor(SECRET_VALUE.length / 2)
+    const firstHalf = SECRET_VALUE.slice(0, half)
+    const secondHalf = SECRET_VALUE.slice(half)
+    const before = 'x'.repeat(20_000 - half)
+    const after = 'y'.repeat(50)
+    db.upsertTranscriptParts(task.id, [
+      {
+        id: 'p1',
+        role: 'assistant',
+        content: 'Tool completed',
+        partType: 'tool',
+        tool: { name: 'Bash', output: `${before}${SECRET_VALUE}${after}` }
+      }
+    ])
+
+    const page1 = await handleRoute(db, '/get_messages', { task_id: task.id, include_tools: true }) as {
+      messages: Array<{ content: string; output_next_offset?: number }>
+    }
+    expect(page1.messages[0].content).not.toContain(SECRET_VALUE)
+    // Neither half of the secret leaks either — under the OLD bug, page 1's
+    // raw slice ends exactly at the boundary, so it WOULD contain this
+    // first half as a plain, unredacted substring.
+    expect(page1.messages[0].content).not.toContain(firstHalf)
+
+    const nextOffset = page1.messages[0].output_next_offset
+    expect(nextOffset).toBeDefined()
+    const page2 = await handleRoute(db, '/get_messages', {
+      task_id: task.id,
+      include_tools: true,
+      output_offset: nextOffset
+    }) as { messages: Array<{ content: string }> }
+    expect(page2.messages[0].content).not.toContain(SECRET_VALUE)
+    // Under the OLD bug, page 2's raw slice starts exactly at the boundary,
+    // so it WOULD contain this second half as a plain, unredacted substring.
+    expect(page2.messages[0].content).not.toContain(secondHalf)
+  })
+
   it('does not scrub (and does not break) when the task has no agent with secrets', async () => {
     const task = db.createTask(makeTask({ title: 'No agent' }))!
     db.upsertTranscriptParts(task.id, [{ id: 'p1', role: 'assistant', content: 'nothing secret here', partType: 'text' }])
@@ -199,14 +251,60 @@ describe('/create_task and /create_subtask scrub title and description', () => {
     expect(result.task.description).not.toContain(SECRET_VALUE)
   })
 
-  it('leaves title/description untouched when no agent_id is given (nothing to scrub against)', async () => {
+  // Major finding, re-review: create_task/create_subtask used to scrub
+  // against the NEW row's TARGET agent_id — but the text being scrubbed is
+  // the CALLING agent's own writing (an agent creating a sibling/follow-up
+  // task), and the target is very often a DIFFERENT agent (or none yet).
+  // Scrubbing against the target's secrets missed the actual leak whenever
+  // caller and target differ, which is the common case for a task handed
+  // off between agents.
+  it("scrubs the CALLER's secret even when the new task is assigned to a DIFFERENT agent that has no secrets of its own", async () => {
+    const callerAgentWithSecret = createAgentWithSecret()
+    const targetAgentNoSecrets = db.createAgent(makeAgent({ config: {} }))!
+    expect(callerAgentWithSecret.id).not.toBe(targetAgentNoSecrets.id)
+
+    const result = await handleRoute(db, '/create_task', {
+      title: `Rotate key ${SECRET_VALUE}`,
+      description: `Current value is ${SECRET_VALUE}`,
+      // Assigned to the agent with NO secrets — a scrubber scoped to this
+      // target would see nothing and let the caller's leaked value through.
+      agent_id: targetAgentNoSecrets.id
+    }) as { success: boolean; task: { title: string; description: string } }
+
+    expect(result.success).toBe(true)
+    expect(result.task.title).not.toContain(SECRET_VALUE)
+    expect(result.task.description).not.toContain(SECRET_VALUE)
+    expect(result.task.title).toContain('«$MY_SECRET»')
+  })
+
+  it("scrubs a subtask's output_fields against the global secret set even when its target agent has none of its own", async () => {
+    createAgentWithSecret() // some OTHER agent in the system has the secret
+    const targetAgentNoSecrets = db.createAgent(makeAgent({ config: {} }))!
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+
+    const result = await handleRoute(db, '/create_subtask', {
+      parent_task_id: parent.id,
+      title: 'Child task',
+      agent_id: targetAgentNoSecrets.id,
+      output_fields: [{ name: 'summary', value: `Found ${SECRET_VALUE} in config` }]
+    }) as { success: boolean; task: { output_fields: Array<{ value: string }> } }
+
+    expect(result.success).toBe(true)
+    expect(result.task.output_fields[0].value).not.toContain(SECRET_VALUE)
+    expect(result.task.output_fields[0].value).toContain('«$MY_SECRET»')
+  })
+
+  it('leaves title/description untouched when this installation has no secrets registered anywhere (nothing to scrub against)', async () => {
     const result = await handleRoute(db, '/create_task', {
       title: `No agent ${SECRET_VALUE}`,
       description: 'plain'
     }) as { success: boolean; task: { title: string } }
 
     expect(result.success).toBe(true)
-    // No agent_id means no scrubber is available — the value isn't a known
+    // Scrubbing is against the GLOBAL secret set now, not `agent_id` — this
+    // test has no agent_id AND no secret created anywhere in the DB, so
+    // there's genuinely nothing to scrub against either way. The value
+    // isn't a known
     // secret from 20x's point of view, so it passes through unchanged.
     expect(result.task.title).toContain(SECRET_VALUE)
   })

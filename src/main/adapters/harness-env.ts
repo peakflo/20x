@@ -140,3 +140,55 @@ export function buildHarnessBaseEnv(source: NodeJS.ProcessEnv = process.env): Re
   }
   return env
 }
+
+/** Minimal shape needed to register a value with a session's scrubber — avoids importing the concrete `SecretScrubber` class here just for a type. */
+export interface ScrubberLike {
+  addEntries(entries: Array<{ name?: string; value: string }>): void
+}
+
+/**
+ * Re-adds back, from `source` (defaults to `process.env`), each of `names`
+ * that's actually present — for the specific ambient env vars a harness's
+ * OWN auth mode needs that `buildHarnessBaseEnv` stripped as "just another
+ * credential" (a Bedrock bearer token, a gateway auth token, a setup-token
+ * flow, ...). Each re-added value is registered with `scrubber` too, so an
+ * accidental echo of it is still caught — unlike the silent, unscrubbed
+ * `{...process.env}` passthrough this whole module replaced.
+ */
+export function reAddAmbientCredentials(
+  env: Record<string, string>,
+  names: readonly string[],
+  scrubber?: ScrubberLike,
+  source: NodeJS.ProcessEnv = process.env
+): void {
+  for (const name of names) {
+    const value = source[name]
+    if (!value) continue
+    env[name] = value
+    scrubber?.addEntries([{ name, value }])
+  }
+}
+
+/**
+ * The per-agent "Pass shell credentials" opt-in (`AgentConfigRecord.pass_shell_credentials`,
+ * threaded through as `SessionConfig.allowShellCredentials`) — a no-op
+ * unless `allowed` is true. When the agent has opted in, re-adds EVERY
+ * credential-shaped var the login shell has (not just the harness's own
+ * named auth vars) — the escape hatch for an agent that genuinely drives
+ * `gh`/`aws` CLIs (or anything else) via ambient shell credentials instead
+ * of an explicit per-agent secret. Every value passed this way is
+ * registered with `scrubber` too.
+ */
+export function applyShellCredentialsOptIn(
+  env: Record<string, string>,
+  allowed: boolean | undefined,
+  scrubber?: ScrubberLike,
+  source: NodeJS.ProcessEnv = process.env
+): void {
+  if (!allowed) return
+  for (const [name, value] of Object.entries(source)) {
+    if (!value || !isKnownProviderCredentialVar(name)) continue
+    env[name] = value
+    scrubber?.addEntries([{ name, value }])
+  }
+}

@@ -47,7 +47,7 @@ import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-
 import type { ProviderUsageLimits } from '../../shared/usage'
 import { acpUsageUpdateCostUsd, normalizeAcpPromptUsage } from '../usage/usage-normalize'
 import { getWrapperHooks, type AcpWrapperHooks, type AcpErrorClass } from '../acp-registry/wrapper-hooks'
-import { buildHarnessBaseEnv } from './harness-env'
+import { buildHarnessBaseEnv, reAddAmbientCredentials, applyShellCredentialsOptIn } from './harness-env'
 
 // Type-only imports: real ACP wire shapes for v1 ("stable") and the
 // experimental v2 generation. Never imported as values — the package ships
@@ -397,7 +397,29 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       ...buildHarnessBaseEnv(),
       ...this.processConfig.env
     }
-    if (config.apiKeys?.anthropic) env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
+    const scrubber = config.getLiveScrubber?.()
+    if (config.apiKeys?.anthropic) {
+      env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
+      scrubber?.addEntries([{ name: 'ANTHROPIC_API_KEY', value: config.apiKeys.anthropic }])
+    }
+    // The agent's OWN configured Cursor key — same pattern as `anthropic`
+    // above, previously never re-added at all for ACP (cursor-agent runs
+    // through this same adapter).
+    if (config.apiKeys?.cursor) {
+      // CURSOR_AUTH_TOKEN, not CURSOR_API_KEY — matches the name
+      // `secret-entries.ts`'s `buildSecretEntriesFromSessionConfig` already
+      // uses for this same `apiKeys.cursor` value, and the established
+      // `KNOWN_PROVIDER_CREDENTIAL_ENV_VARS` entry for it.
+      env.CURSOR_AUTH_TOKEN = config.apiKeys.cursor
+      scrubber?.addEntries([{ name: 'CURSOR_AUTH_TOKEN', value: config.apiKeys.cursor }])
+    }
+    // Gemini CLI (a registry ACP agent) authenticates via ambient
+    // GEMINI_API_KEY — there's no `config.apiKeys.gemini` field for it (ACP
+    // runs many different third-party agent binaries, not one 20x
+    // explicitly manages auth for), so this is a re-add from the login
+    // shell, not from an explicit per-agent secret.
+    reAddAmbientCredentials(env as Record<string, string>, ['GEMINI_API_KEY'], scrubber)
+    applyShellCredentialsOptIn(env as Record<string, string>, config.allowShellCredentials, scrubber)
     if (config.secretEnvVars) {
       for (const [key, value] of Object.entries(config.secretEnvVars)) env[key] = value
     }

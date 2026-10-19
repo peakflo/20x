@@ -13,7 +13,7 @@
  * The config (and argv) then carries only a file path, never a value.
  */
 
-import { writeFileSync, chmodSync, mkdirSync, existsSync } from 'fs'
+import { writeFileSync, chmodSync, mkdirSync, existsSync, readFileSync, readdirSync, unlinkSync, statSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 
@@ -107,13 +107,87 @@ if ($rest.Count -gt 1) {
 exit $LASTEXITCODE
 `
 
+/**
+ * Minor finding, re-review: writing the loader only when the file is
+ * MISSING means a user who already had an older version of 20x write this
+ * file once never gets a fix to the loader's own source — including fixes
+ * like the Windows arg-slicing bug fixed in this same PR — since the file
+ * already exists and is never re-examined. Compare content instead of just
+ * presence, and rewrite whenever it doesn't match exactly (covers "missing"
+ * and "changed" in the same check, with nothing extra to version by hand).
+ */
 function ensureLoaderScript(dir: string, isWin: boolean): string {
   const wrapperPath = join(dir, isWin ? 'mcp-env-loader.ps1' : 'mcp-env-loader.sh')
-  if (!existsSync(wrapperPath)) {
-    writeFileSync(wrapperPath, isWin ? WINDOWS_LOADER : POSIX_LOADER, 'utf-8')
+  const expected = isWin ? WINDOWS_LOADER : POSIX_LOADER
+  const current = existsSync(wrapperPath) ? readFileSync(wrapperPath, 'utf-8') : null
+  if (current !== expected) {
+    writeFileSync(wrapperPath, expected, 'utf-8')
     if (!isWin) chmodSync(wrapperPath, 0o755)
   }
   return wrapperPath
+}
+
+/**
+ * `serverId` shape 20x's own `createId()` always produces — validated
+ * before use in a filename as defense in depth (every call site today
+ * passes a DB row id, never raw user input, but a malformed/unexpected id
+ * must not be allowed to construct a path outside `envDir()`, e.g. via a
+ * `../` segment).
+ */
+const VALID_SERVER_ID_RE = /^[A-Za-z0-9_-]+$/
+
+function envFilePaths(dir: string, serverId: string): string[] {
+  return [join(dir, `${serverId}.env.sh`), join(dir, `${serverId}.env.txt`)]
+}
+
+/**
+ * Deletes the env file for one MCP server row (both the POSIX and Windows
+ * variants, in case the platform changed since it was written) — call when
+ * that server's last live session ends. Best-effort: if another live
+ * session still uses the same server row, its own next
+ * `writeLocalMcpEnvWrapper` call (every prompt rebuilds the MCP config)
+ * recreates the file — the same self-healing behavior the per-call
+ * overwrite below already relies on for secret rotation.
+ */
+export function cleanupLocalMcpEnvFile(serverId: string): void {
+  if (!VALID_SERVER_ID_RE.test(serverId)) return
+  const dir = join(app.getPath('userData'), 'mcp-env')
+  for (const path of envFilePaths(dir, serverId)) {
+    try {
+      if (existsSync(path)) unlinkSync(path)
+    } catch {
+      // Best-effort — a locked/missing file here isn't worth failing over.
+    }
+  }
+}
+
+/**
+ * Deletes every leftover local-MCP env file from a previous run — call once
+ * at app startup, before any session starts. Nothing persists these
+ * registrations across an app restart (every session re-resolves and
+ * rewrites its MCP config on its first prompt), so anything already on disk
+ * at startup is definitely stale — most commonly left behind by a force
+ * quit or crash that skipped the per-session cleanup above. The loader
+ * scripts themselves (`mcp-env-loader.sh`/`.ps1`) are untouched — shared,
+ * content-checked and rewritten on demand by `ensureLoaderScript`.
+ */
+export function cleanupStaleLocalMcpEnvFiles(): void {
+  const dir = join(app.getPath('userData'), 'mcp-env')
+  if (!existsSync(dir)) return
+  let removed = 0
+  for (const entry of readdirSync(dir)) {
+    if (!entry.endsWith('.env.sh') && !entry.endsWith('.env.txt')) continue
+    try {
+      const path = join(dir, entry)
+      if (statSync(path).isFile()) {
+        unlinkSync(path)
+        removed += 1
+      }
+    } catch {
+      // Best-effort.
+    }
+  }
+  if (removed > 0) console.log(`[McpEnvWrapper] Removed ${removed} stale local-MCP env file(s) from a previous run`)
 }
 
 /**
@@ -131,6 +205,9 @@ export function writeLocalMcpEnvWrapper(
   env: Record<string, string>
 ): WrappedLocalMcpCommand {
   if (Object.keys(env).length === 0) return { command, args }
+  if (!VALID_SERVER_ID_RE.test(serverId)) {
+    throw new Error(`[McpEnvWrapper] Refusing to build a local MCP env wrapper for an unexpected server id: ${JSON.stringify(serverId)}`)
+  }
 
   const isWin = process.platform === 'win32'
   const dir = envDir()

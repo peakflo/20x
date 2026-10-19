@@ -8,6 +8,7 @@ import type { SpeedMode } from '../../shared/ultrafast'
 import type { ProviderUsageLimits, ProviderUsageLimitsUpdate, UsageProvider } from '../../shared/usage'
 import type { UsageBucket } from '../usage/usage-normalize'
 import type { DiscreteUsageItem } from '../usage/usage-store'
+import type { SecretScrubber } from '../secret-scrubber'
 
 export enum SessionStatusType {
   IDLE = 'idle',
@@ -82,6 +83,20 @@ export interface SessionConfig {
   secretEnvVars?: Record<string, string>
   /** Whether the OpenCode tillDone runtime plugin should enforce todo completion for this session. */
   tillDone?: boolean
+  /** Agent's `pass_shell_credentials` opt-in — see `AgentConfigRecord` for the full explanation. Off (undefined/false) is the default, safer posture. */
+  allowShellCredentials?: boolean
+  /**
+   * Returns the LIVE agent-manager session scrubber — the same object
+   * `agent-manager.ts`'s `AgentSession.scrubber` keeps extending via
+   * `addEntries()` as the session runs (an MCP token obtained after the
+   * underlying process started, a secret added mid-session, a rotated
+   * OAuth token). A harness whose hooks are built once per underlying
+   * process (not re-built on every prompt) must call this INSIDE each hook
+   * invocation, not close over a one-time scrubber snapshot taken from this
+   * `SessionConfig` object at process-start time — that snapshot can never
+   * see anything learned after the process started.
+   */
+  getLiveScrubber?: () => SecretScrubber | undefined
 }
 
 /**

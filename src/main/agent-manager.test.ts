@@ -93,12 +93,14 @@ vi.mock('./mcp-auth-proxy', () => ({
   registerMcpProxyTarget: vi.fn(),
   getMcpAuthProxyPort: vi.fn(),
   unregisterMcpProxyTarget: vi.fn(),
+  unregisterMcpProxyTargetByKey: vi.fn(),
 }))
 vi.mock('./mcp-env-wrapper', () => ({
   writeLocalMcpEnvWrapper: vi.fn((serverId: string, command: string, args: string[]) => ({
     command: '/fake/mcp-env-loader.sh',
     args: [`/fake/mcp-env/${serverId}.env.sh`, command, ...args]
   })),
+  cleanupLocalMcpEnvFile: vi.fn(),
 }))
 
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
@@ -1894,6 +1896,104 @@ describe('AgentManager MCP server routing', () => {
     expect(scrubber.scrub('leaked: remote-static-header-value')).toBe('leaked: «secret»')
   })
 
+  // Major finding, re-review: addEntries(Object.values(finalHeaders)) used to
+  // register the WHOLE header value ("Bearer xyz"), so the bare token never
+  // matched, and registered every header indiscriminately, including
+  // completely non-secret ones (Content-Type, Anthropic-Version) — which
+  // then got redacted everywhere those common strings showed up.
+  it('registers the BARE token (Bearer/Basic prefix stripped) from a static Authorization header, and skips non-credential headers entirely', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    vi.mocked(registerMcpProxyTarget).mockReturnValue('http://127.0.0.1:5555/mixed-headers-id')
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['mixed-header-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'mixed-header-server',
+        name: 'Mixed Header MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {
+          Authorization: 'Bearer bare-bearer-token-value',
+          'X-Api-Key': 'plain-api-key-value',
+          'Content-Type': 'application/json',
+          'Anthropic-Version': '2022-06-28'
+        },
+        oauth_metadata: {},
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const scrubber = new SecretScrubber()
+    await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubber)
+
+    // The BARE token matches, not just the "Bearer <token>" string.
+    expect(scrubber.scrub('token is bare-bearer-token-value')).toBe('token is «secret»')
+    expect(scrubber.scrub('Authorization: Bearer bare-bearer-token-value')).toBe('Authorization: Bearer «secret»')
+    // A non-Authorization credential-shaped header is covered too.
+    expect(scrubber.scrub('key=plain-api-key-value')).toBe('key=«secret»')
+    // Non-credential header values are NOT registered — these common
+    // strings must still pass through completely untouched everywhere else
+    // in every other transcript.
+    expect(scrubber.scrub('Content-Type: application/json')).toBe('Content-Type: application/json')
+    expect(scrubber.scrub('Anthropic-Version: 2022-06-28')).toBe('Anthropic-Version: 2022-06-28')
+  })
+
+  it('fans a refreshed OAuth token out to EVERY live session sharing the same MCP server row, not just the last one registered', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    let capturedGetToken: (() => Promise<string | null | undefined>) | undefined
+    vi.mocked(registerMcpProxyTarget).mockImplementation((_key, _url, _label, getToken) => {
+      // Simulates the proxy's own dedup-by-key behavior: only the MOST
+      // RECENTLY registered caller's getToken survives as the one that
+      // actually gets invoked on a forwarded request.
+      capturedGetToken = getToken as (() => Promise<string | null | undefined>) | undefined
+      return 'http://127.0.0.1:5555/shared-oauth-id'
+    })
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['shared-oauth-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'shared-oauth-server',
+        name: 'Shared OAuth MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {},
+        oauth_metadata: { resource_url: 'https://example.com' },
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    ;(manager as any).oauthManager = { getValidMcpServerToken: vi.fn(async () => 'shared-token-v1') }
+
+    // Two different sessions (two different tasks/agents, say) both resolve
+    // the SAME MCP server row — each with its OWN scrubber.
+    const scrubberA = new SecretScrubber()
+    const scrubberB = new SecretScrubber()
+    await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubberA)
+    await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubberB)
+
+    // Only ONE getToken survives registration (the proxy's own dedup), but
+    // calling it must still reach BOTH sessions' scrubbers.
+    await capturedGetToken!()
+    expect(scrubberA.scrub('leaked: shared-token-v1')).toBe('leaked: «secret»')
+    expect(scrubberB.scrub('leaked: shared-token-v1')).toBe('leaked: «secret»')
+
+    // A later refresh reaches both too.
+    ;(manager as any).oauthManager.getValidMcpServerToken = vi.fn(async () => 'shared-token-v2')
+    await capturedGetToken!()
+    expect(scrubberA.scrub('leaked: shared-token-v2')).toBe('leaked: «secret»')
+    expect(scrubberB.scrub('leaked: shared-token-v2')).toBe('leaked: «secret»')
+  })
+
   it("hands a dynamic OAuth token to the scrubber the moment the proxy's getToken wrapper actually fetches it — including a later refresh", async () => {
     vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
     let capturedGetToken: (() => Promise<string | null | undefined>) | undefined
@@ -2741,6 +2841,49 @@ describe('AgentManager session ID re-keying redirect', () => {
     // Redirect should be cleaned up
     expect((mgr as any).sessionIdRedirects.has('temp-id')).toBe(false)
     expect((mgr as any).sessions.has('real-id')).toBe(false)
+  })
+
+  // Minor finding, re-review: nothing cleaned up MCP auth-proxy registrations
+  // or local-MCP env files when a session ended — both lived indefinitely.
+  it('stopSession unregisters the proxy target for a remote MCP server and deletes the env file for a local one', async () => {
+    const remoteServer = { id: 'remote-server-1', type: 'remote', name: 'Remote MCP' }
+    const localServer = { id: 'local-server-1', type: 'local', name: 'Local MCP' }
+    const mockDb = {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test', agent_id: 'agent-1' })),
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'Agent',
+        config: { mcp_servers: ['remote-server-1', 'local-server-1'] }
+      })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn((id: string) => (id === 'remote-server-1' ? remoteServer : id === 'local-server-1' ? localServer : null)),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+    ;(mgr as any).sessions.set('session-1', {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+    })
+
+    const { unregisterMcpProxyTargetByKey } = await import('./mcp-auth-proxy')
+    const { cleanupLocalMcpEnvFile } = await import('./mcp-env-wrapper')
+
+    await mgr.stopSession('session-1')
+
+    expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
+    expect(cleanupLocalMcpEnvFile).toHaveBeenCalledWith('local-server-1')
   })
 
   it('cleanupHeartbeatSession fully tears down heartbeat sessions without resetting task status', async () => {

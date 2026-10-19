@@ -29,7 +29,7 @@ import {
   latestResetAt,
   normalizeClaudeModelUsage
 } from '../usage/usage-normalize'
-import { buildHarnessBaseEnv } from './harness-env'
+import { buildHarnessBaseEnv, reAddAmbientCredentials, applyShellCredentialsOptIn, type ScrubberLike } from './harness-env'
 import { buildSecretEntriesFromSessionConfig } from '../secret-entries'
 import { SecretScrubber } from '../secret-scrubber'
 
@@ -337,9 +337,39 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * `buildEnvironment`): only `'subscription'` is a hard no; `undefined`
    * falls back to "use a key if one is actually available" the same as
    * `'api_key'` would, instead of discarding it.
+   *
+   * Also re-adds, ambiently, the credentials Claude Code's OWN alternate
+   * auth modes use that the generic denylist strips like any other
+   * credential-shaped var: `CLAUDE_CODE_OAUTH_TOKEN` (the long-lived token
+   * from `claude setup-token`), `ANTHROPIC_AUTH_TOKEN` (a custom gateway,
+   * used together with `ANTHROPIC_BASE_URL`), and the AWS Bedrock
+   * credentials (`AWS_BEARER_TOKEN_BEDROCK`, or full `AWS_ACCESS_KEY_ID`/
+   * `AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`) Claude Code natively
+   * supports via `CLAUDE_CODE_USE_BEDROCK`. All of these, when present, are
+   * registered with `scrubber` too. Finally applies the per-agent "pass
+   * shell credentials" opt-in (`config.allowShellCredentials`) as the
+   * generic fallback for anything not named here.
    */
-  private buildClaudeEnvironment(config: Pick<SessionConfig, 'harnessHome' | 'authMethod' | 'apiKeys'>): Record<string, string> {
+  private buildClaudeEnvironment(
+    config: Pick<SessionConfig, 'harnessHome' | 'authMethod' | 'apiKeys' | 'allowShellCredentials'>,
+    scrubber?: ScrubberLike
+  ): Record<string, string> {
     const env = buildHarnessBaseEnv()
+
+    // ANTHROPIC_BASE_URL (the gateway endpoint ANTHROPIC_AUTH_TOKEN pairs
+    // with) and CLAUDE_CODE_USE_BEDROCK (the Bedrock-mode flag) are not
+    // credential-shaped and were never stripped by buildHarnessBaseEnv in
+    // the first place — nothing to re-add for either, and not worth
+    // registering with the scrubber (a URL/flag, not a secret).
+    reAddAmbientCredentials(env, [
+      'CLAUDE_CODE_OAUTH_TOKEN',
+      'ANTHROPIC_AUTH_TOKEN',
+      'AWS_BEARER_TOKEN_BEDROCK',
+      'AWS_ACCESS_KEY_ID',
+      'AWS_SECRET_ACCESS_KEY',
+      'AWS_SESSION_TOKEN'
+    ], scrubber)
+    applyShellCredentialsOptIn(env, config.allowShellCredentials, scrubber)
 
     // Remove CLAUDECODE to prevent nested session error
     delete env.CLAUDECODE
@@ -377,15 +407,63 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * runs. A failure in the harness itself (the Bash tool failing to start
    * at all) happens before this wrapper runs and is not covered — see
    * buildPostToolUseFailureHook below for that residual case.
+   *
+   * MUST end with `true` (or `:`), never `exit 0` / `exit <n>`. The pinned
+   * SDK runs the whole command text as `eval <cmd> && pwd -P >| <cwdfile>` —
+   * `eval` runs in the CURRENT shell, not a subshell, so an `exit` inside our
+   * wrapper terminates that shell immediately and `&& pwd -P >| <cwdfile>`
+   * never runs. That silently breaks `cd`-persistence across Bash calls in
+   * the SAME session (reproduced: a `cd subdir` from a wrapped command no
+   * longer carried over to the next call), which applies to almost every
+   * session since the wrapper is installed whenever the scrubber is
+   * non-empty. `true`/`:` sets the block's own exit status to 0 as the last
+   * executed command WITHOUT exiting the shell, so `&& pwd -P ...` still
+   * runs. (Empirically verified both ways: a real `query()` run with
+   * `exit 0` lost a `cd subdir` done in a prior Bash call; the same run
+   * with `true` kept it.)
+   *
+   * The agent's own command runs inside a `( … )` subshell, not a `{ … }`
+   * group — a literal `exit N` or a `set -e` failure inside the agent's
+   * command would otherwise terminate the group (which runs in the SAME
+   * shell as this whole wrapper), skipping `__20x_ec=$?` and `true` and
+   * making the Bash tool's overall exit status non-zero again — exactly
+   * the PostToolUseFailure gap this wrapper exists to close. A subshell
+   * contains `exit`/`set -e` to itself; its own exit status is still
+   * captured correctly as `$?` right after it closes.
+   *
+   * Subshelling the command would, on its own, ALSO swallow any `cd` the
+   * agent's command does — a subshell's directory changes don't propagate
+   * to the parent shell the SDK's `pwd -P >| <cwdfile>` runs in. To keep
+   * `cd`-persistence working (see above) without losing the exit/set-e
+   * containment, the subshell writes its OWN final `pwd -P` to a temp
+   * marker file right before it exits (capturing the command's real exit
+   * status first, since `pwd` would otherwise clobber `$?`), and the
+   * parent shell `cd`s itself there afterward — so the SDK's own cwd
+   * tracking still sees wherever the agent's command actually left the
+   * directory, exactly as if no subshell were involved.
+   *
+   * Known, documented, NOT covered by this wrapper: the harness itself
+   * killing the Bash tool's process on a timeout. A SIGTERM/SIGKILL from
+   * outside stops this whole script wherever it happens to be, including
+   * before `true` ever runs — there is no way to guarantee a wrapper's own
+   * cleanup code runs after an external kill signal. That failure still
+   * routes through PostToolUseFailure un-scrubbed; buildPostToolUseFailureHook
+   * below is the only mitigation available for it.
    */
   private static wrapCommandForScrubbableFailure(command: string): string {
     return [
-      '{',
+      '__20x_cwdmark="$(mktemp 2>/dev/null || echo /tmp/.20x-cwd-$$)"',
+      '(',
       command,
-      '}',
+      '__20x_inner_ec=$?',
+      'pwd -P > "$__20x_cwdmark" 2>/dev/null',
+      'exit "$__20x_inner_ec"',
+      ')',
       '__20x_ec=$?',
+      'if [ -s "$__20x_cwdmark" ]; then cd "$(cat "$__20x_cwdmark")" 2>/dev/null; fi',
+      'rm -f "$__20x_cwdmark" 2>/dev/null',
       'if [ "$__20x_ec" -ne 0 ]; then printf \'\\n[20x] command exited with status %s\\n\' "$__20x_ec" >&2; fi',
-      'exit 0'
+      'true'
     ].join('\n')
   }
 
@@ -401,11 +479,22 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    *    session has ANYTHING for buildScrubHooks to scrub, independent of
    *    whether secretEnvVars is set (a provider API key or MCP token can
    *    leak through a failing command too).
+   *
+   * `fallbackScrubber` is only the snapshot taken when this hook was built
+   * (process start). The hook body below resolves `config.getLiveScrubber?.()`
+   * FRESH on every call instead — hooks here are built once per underlying
+   * `claude` process, not re-built per prompt, so a secret discovered mid-
+   * session (an MCP OAuth token obtained after the first prompt, a secret
+   * added via settings) would never be reflected in a one-time snapshot.
+   * `fallbackScrubber` still matters for sessions with no live getter at all
+   * (tests, or a harness invocation outside agent-manager's session model).
    */
-  private buildSecretHooks(config: SessionConfig, scrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
+  private buildSecretHooks(config: SessionConfig, fallbackScrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
     const secretEnvVars = config.secretEnvVars
     const hasExports = !!secretEnvVars && Object.keys(secretEnvVars).length > 0
-    if (!hasExports && scrubber.isEmpty) {
+    // Skip registering entirely only when there's nothing now AND no way
+    // for that to change later (no live getter to re-check against).
+    if (!hasExports && fallbackScrubber.isEmpty && !config.getLiveScrubber) {
       return undefined
     }
 
@@ -425,6 +514,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         return {}
       }
 
+      const scrubber = config.getLiveScrubber?.() ?? fallbackScrubber
       const originalCommand = toolInput.command as string
       const wrapped = scrubber.isEmpty
         ? originalCommand
@@ -461,14 +551,18 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * tells the model not to trust or repeat it, as the best available
    * mitigation, and is documented as a known limitation in the PR.
    */
-  private buildPostToolUseFailureHook(scrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
-    if (scrubber.isEmpty) return undefined
-    const hook: HookCallback = async () => ({
-      hookSpecificOutput: {
-        hookEventName: 'PostToolUseFailure' as const,
-        additionalContext: 'This tool call failed before producing scrubbed output. If the error text above contains anything that looks like a secret or token, do not repeat, log, or echo it.'
+  private buildPostToolUseFailureHook(config: SessionConfig, fallbackScrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
+    if (fallbackScrubber.isEmpty && !config.getLiveScrubber) return undefined
+    const hook: HookCallback = async () => {
+      const scrubber = config.getLiveScrubber?.() ?? fallbackScrubber
+      if (scrubber.isEmpty) return {}
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUseFailure' as const,
+          additionalContext: 'This tool call failed before producing scrubbed output. If the error text above contains anything that looks like a secret or token, do not repeat, log, or echo it.'
+        }
       }
-    })
+    }
     return { PostToolUseFailure: [{ hooks: [hook] }] }
   }
 
@@ -486,12 +580,14 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * can show up in a command's stdout/stderr (`env`, a verbose curl, a
    * misconfigured script).
    */
-  private buildScrubHooks(scrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
-    if (scrubber.isEmpty) return undefined
+  private buildScrubHooks(config: SessionConfig, fallbackScrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
+    if (fallbackScrubber.isEmpty && !config.getLiveScrubber) return undefined
 
     const hook: HookCallback = async (input) => {
       const toolResponse = 'tool_response' in input ? input.tool_response : undefined
       if (toolResponse === undefined || toolResponse === null) return {}
+      const scrubber = config.getLiveScrubber?.() ?? fallbackScrubber
+      if (scrubber.isEmpty) return {}
       const scrubbed = scrubber.scrubDeep(toolResponse)
       // Only return a rewrite when something actually changed — an identity
       // rewrite would needlessly compete last-write-wins with any other
@@ -945,9 +1041,21 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // command-wrapping decision (buildSecretHooks) and what actually gets
     // redacted (buildScrubHooks, buildPostToolUseFailureHook) always agree.
     const scrubber = new SecretScrubber(buildSecretEntriesFromSessionConfig(config))
+    // buildClaudeEnvironment must run BEFORE the hook builders below — it
+    // registers Claude Code's own alternate-auth-mode credentials (a
+    // setup-token, a gateway token, Bedrock) and the shell-credentials
+    // opt-in with this SAME scrubber instance. The hook builders decide
+    // whether to register a hook AT ALL based on `scrubber.isEmpty` at the
+    // moment they're called — if buildClaudeEnvironment ran afterward
+    // instead, a session whose ONLY scrub-worthy value is one of those
+    // env-only credentials would see an empty scrubber at hook-registration
+    // time and skip registering PostToolUse/PostToolUseFailure entirely,
+    // even though the scrubber it closed over would have had something by
+    // the time any hook actually fired.
+    const env = this.buildClaudeEnvironment(config, config.getLiveScrubber?.() ?? scrubber)
     const secretHooks = this.buildSecretHooks(config, scrubber)
-    const scrubHooks = this.buildScrubHooks(scrubber)
-    const failureHooks = this.buildPostToolUseFailureHook(scrubber)
+    const scrubHooks = this.buildScrubHooks(config, scrubber)
+    const failureHooks = this.buildPostToolUseFailureHook(config, scrubber)
     const hooks = secretHooks || scrubHooks || failureHooks
       ? { ...secretHooks, ...scrubHooks, ...failureHooks }
       : undefined
@@ -955,7 +1063,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     const options: Options = {
       cwd: config.workspaceDir,
       pathToClaudeCodeExecutable: claudePath,
-      env: this.buildClaudeEnvironment(config),
+      env,
       mcpServers: config.mcpServers as Record<string, McpServerConfig> | undefined,
       model: config.model,
       effort,

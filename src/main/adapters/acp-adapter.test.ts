@@ -839,3 +839,50 @@ describe('AcpAgentAdapter spawn failures', () => {
     await expect(result).rejects.not.toThrow(/CURSOR_CLI_MISSING/)
   })
 })
+
+// Major finding, re-review (M8): the generic provider-credential denylist
+// strips credentials ACP agents need for THEIR OWN auth — the agent's own
+// configured Cursor key (never re-added at all before this fix) and ambient
+// GEMINI_API_KEY (the Gemini CLI registry agent's usual auth var) — with no
+// re-add. Also covers the generic per-agent "pass shell credentials" opt-in.
+describe('AcpAgentAdapter buildEnv — credential re-adds and the shell-credentials opt-in', () => {
+  function buildEnv(adapter: AcpAgentAdapter, config: Partial<SessionConfig>): Record<string, string | undefined> {
+    return (adapter as unknown as { buildEnv: (c: SessionConfig) => Record<string, string | undefined> }).buildEnv(
+      { agentId: 'a1', taskId: 't1', workspaceDir: '/tmp', ...config } as SessionConfig
+    )
+  }
+
+  it('re-adds the agent\'s own configured Cursor key as CURSOR_AUTH_TOKEN (never re-added before this fix)', () => {
+    const adapter = new AcpAgentAdapter({ command: 'cursor-agent', args: [] })
+    const env = buildEnv(adapter, { apiKeys: { cursor: 'cursor-key-value-123456' } })
+    expect(env.CURSOR_AUTH_TOKEN).toBe('cursor-key-value-123456')
+  })
+
+  it('re-adds ambient GEMINI_API_KEY for the Gemini CLI registry agent, and registers it with the live scrubber', () => {
+    const prev = process.env.GEMINI_API_KEY
+    process.env.GEMINI_API_KEY = 'gemini-key-value-123456'
+    try {
+      const adapter = new AcpAgentAdapter({ command: 'gemini', args: ['--acp'] })
+      const addEntries = vi.fn()
+      const env = buildEnv(adapter, { getLiveScrubber: () => ({ addEntries }) as unknown as ReturnType<NonNullable<SessionConfig['getLiveScrubber']>> })
+      expect(env.GEMINI_API_KEY).toBe('gemini-key-value-123456')
+      expect(addEntries).toHaveBeenCalledWith([{ name: 'GEMINI_API_KEY', value: 'gemini-key-value-123456' }])
+    } finally {
+      if (prev === undefined) delete process.env.GEMINI_API_KEY
+      else process.env.GEMINI_API_KEY = prev
+    }
+  })
+
+  it('does not pass ambient GH_TOKEN through by default, but does once the agent opts in', () => {
+    const prev = process.env.GH_TOKEN
+    process.env.GH_TOKEN = 'gh-token-value-123456'
+    try {
+      const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [] })
+      expect(buildEnv(adapter, {}).GH_TOKEN).toBeUndefined()
+      expect(buildEnv(adapter, { allowShellCredentials: true }).GH_TOKEN).toBe('gh-token-value-123456')
+    } finally {
+      if (prev === undefined) delete process.env.GH_TOKEN
+      else process.env.GH_TOKEN = prev
+    }
+  })
+})

@@ -67,6 +67,17 @@ export interface AgentConfigRecord {
     anthropic?: string
     cursor?: string
   }
+  /**
+   * Opt-in escape hatch: pass every credential-shaped var the login shell
+   * has (GH_TOKEN, AWS_SECRET_ACCESS_KEY, ...) through to this agent's
+   * process env, undoing the default strip (`harness-env.ts`'s pattern-based
+   * denylist). Off by default — stripping these is the safer default, but
+   * an agent that genuinely drives `gh`/`aws` CLIs via ambient shell
+   * credentials (rather than an explicit per-agent secret) needs this to
+   * keep working. Every value passed this way is still registered with the
+   * session's scrubber, so it's redacted if it's ever echoed.
+   */
+  pass_shell_credentials?: boolean
 }
 
 /** A stored harness instance. The implicit defaults ("Claude Code", "Codex") are not rows. */

@@ -38,7 +38,7 @@ import {
 import { buildSimilarTasksQuery } from './task-search'
 import { limitsByInstance, summarizeAgentUsage } from './usage/agent-usage-summary'
 import { agentInstanceId } from '../shared/harness-instances'
-import { isSameHarness, toolOutputPage } from './context-handoff'
+import { isSameHarness, toolOutputPage, toolOutputFull } from './context-handoff'
 import { SecretScrubber, NOOP_SCRUBBER } from './secret-scrubber'
 import { buildSecretEntriesForAgent, buildAllKnownSecretEntries } from './secret-entries'
 import {
@@ -377,15 +377,26 @@ function scrubForTask(db: DatabaseManager, taskId: string, text: string): string
 }
 
 /**
- * Scrubs a string an MCP caller is about to write into a NEW task/subtask row
- * (`create_task`/`create_subtask` title+description) against the agent the
- * new row is being assigned to. The row doesn't exist yet, so there's no
- * `taskId` to look the agent up from — the caller already supplied the
- * target `agentId` directly (`params.agent_id`).
+ * Scrubs a string an MCP caller is about to write into a NEW task/subtask
+ * row (`create_task`/`create_subtask` title+description) against EVERY
+ * secret this installation has ever stored (`buildAllKnownSecretEntries`) —
+ * not the row's own target `agent_id`.
+ *
+ * The text being scrubbed here is the CALLER's own writing — an agent
+ * creating a sibling/follow-up task can echo one of ITS OWN secret values
+ * into the title/description — but the target `agent_id` is whoever the
+ * NEW row is being assigned to, which is very often a DIFFERENT agent (or
+ * no agent at all yet). Scrubbing against the target's secrets missed the
+ * actual leak entirely whenever caller and target differ. This handler has
+ * no reliable way to know which agent is actually calling (no caller
+ * identity is threaded through the MCP request), so — same reasoning as
+ * `secret-scrub-migration.ts` and `get_messages`' backfill — scrub against
+ * the global set instead of guessing an agent.
  */
-function scrubForAgent(db: DatabaseManager, agentId: unknown, text: string): string {
-  if (typeof agentId !== 'string' || !agentId) return text
-  return scrubberForAgent(db, agentId).scrub(text) ?? text
+function scrubForAgent(db: DatabaseManager, _agentId: unknown, text: string): string {
+  const entries = buildAllKnownSecretEntries(db)
+  if (entries.length === 0) return text
+  return new SecretScrubber(entries).scrub(text) ?? text
 }
 
 /** Deep-scrubs every `output_fields` entry's `value` with an already-built scrubber. Mirrors secret-scrub-migration.ts's scrubTaskOutputFields. */
@@ -406,13 +417,13 @@ function scrubOutputFieldsForTask(db: DatabaseManager, taskId: string, fields: u
 }
 
 /**
- * Deep-scrubs every `output_fields` entry's `value` against the agent a NEW
- * task/subtask row is being assigned to (`create_task`/`create_subtask`) —
- * same "row doesn't exist yet" reasoning as `scrubForAgent` above.
+ * Deep-scrubs every `output_fields` entry's `value` for a NEW task/subtask
+ * row (`create_task`/`create_subtask`) against EVERY secret this
+ * installation has ever stored — same "caller, not target, wrote this; no
+ * reliable caller identity available" reasoning as `scrubForAgent` above.
  */
-function scrubOutputFieldsForAgent(db: DatabaseManager, agentId: unknown, fields: unknown): unknown {
-  if (typeof agentId !== 'string' || !agentId) return fields
-  return scrubOutputFieldsDeep(scrubberForAgent(db, agentId), fields)
+function scrubOutputFieldsForAgent(db: DatabaseManager, _agentId: unknown, fields: unknown): unknown {
+  return scrubOutputFieldsDeep(new SecretScrubber(buildAllKnownSecretEntries(db)), fields)
 }
 
 /** Exported so the routes can be tested without starting an HTTP server. */
@@ -1077,12 +1088,32 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         messages: page.map((part) => {
           // Tool parts carry their real output in `tool`; `content` is often a placeholder.
           // Output is returned in pages, so a long result can be read in full.
-          const output = part.partType === 'tool' ? toolOutputPage(part, outputOffset) : null
+          //
+          // Minor finding, re-review: scrubbing used to run AFTER paging —
+          // toolOutputPage() sliced the RAW, unscrubbed full output at a
+          // character offset, and only the resulting page's text was
+          // scrubbed. A secret value straddling a page boundary (its first
+          // half on one page, second half on the next) would never match
+          // the scrubber's literal-substring search on EITHER page alone,
+          // leaking through both. Scrub the FULL output once, THEN page the
+          // already-scrubbed text — a secret can no longer be split in two
+          // by a page boundary that was chosen before it was redacted.
+          let output: { text: string; total: number; next: number | null } | null = null
+          if (part.partType === 'tool') {
+            const rawFull = toolOutputFull(part)
+            const scrubbedFull = scrubber.scrub(rawFull) ?? rawFull
+            output = toolOutputPage({ content: scrubbedFull, tool: undefined }, outputOffset)
+          }
           const rawContent = output ? output.text : part.content
           return {
             seq: part.seq,
             role: part.role,
             type: part.partType ?? 'text',
+            // `output.text` is already scrubbed (it was paged from the
+            // pre-scrubbed full string above) — scrubbing it again is a
+            // harmless no-op (the placeholder text doesn't match any known
+            // secret value) for the tool-output case, and is still exactly
+            // right for the non-tool (plain content) case.
             content: scrubber.scrub(rawContent) ?? rawContent,
             ...(output ? { output_total_chars: output.total } : {}),
             ...(output && output.next !== null ? { output_next_offset: output.next } : {}),
