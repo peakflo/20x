@@ -30,6 +30,7 @@ vi.mock('@/lib/ipc-client', () => ({
 }))
 
 import { MemorySettings } from './MemorySettings'
+import { settingsApi } from '@/lib/ipc-client'
 
 function makeMemory(overrides: Partial<MastermindMemory> = {}): MastermindMemory {
   return {
@@ -191,5 +192,23 @@ describe('MemorySettings', () => {
     })
 
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ content: 'New preference', kind: 'preference' }))
+  })
+
+  it('reads the "Save what I learned" setting on mount and reflects it off by default', async () => {
+    render(<MemorySettings />)
+    await waitFor(() => expect(settingsApi.get).toHaveBeenCalledWith('mastermind-save-what-i-learned'))
+
+    const toggle = await screen.findByRole('checkbox', { name: /Save what I learned/ })
+    expect(toggle).not.toBeChecked()
+  })
+
+  it('toggling "Save what I learned" persists the setting', async () => {
+    render(<MemorySettings />)
+    const toggle = await screen.findByRole('checkbox', { name: /Save what I learned/ })
+
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(settingsApi.set).toHaveBeenCalledWith('mastermind-save-what-i-learned', 'true'))
+    expect(toggle).toBeChecked()
   })
 })
