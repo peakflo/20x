@@ -7,6 +7,7 @@ let pushRaised: ((event: { taskId: string; question: ChildQuestionRecord }) => v
 const listForParent = vi.fn()
 const listForChild = vi.fn()
 const answerMock = vi.fn()
+const answerAsHumanMock = vi.fn()
 const escalateMock = vi.fn()
 
 vi.mock('@/lib/ipc-client', () => ({
@@ -14,6 +15,7 @@ vi.mock('@/lib/ipc-client', () => ({
     listForParent: (...args: unknown[]) => listForParent(...args),
     listForChild: (...args: unknown[]) => listForChild(...args),
     answer: (...args: unknown[]) => answerMock(...args),
+    answerAsHuman: (...args: unknown[]) => answerAsHumanMock(...args),
     escalate: (...args: unknown[]) => escalateMock(...args)
   },
   onChildQuestionRaised: (cb: (event: { taskId: string; question: ChildQuestionRecord }) => void) => {
@@ -59,6 +61,7 @@ beforeEach(() => {
   listForParent.mockReset()
   listForChild.mockReset()
   answerMock.mockReset()
+  answerAsHumanMock.mockReset()
   escalateMock.mockReset()
   pushRaised = null
 })
@@ -94,20 +97,41 @@ describe('ChildQuestionsBanner', () => {
     expect(screen.queryByRole('button', { name: 'Escalate to me' })).not.toBeInTheDocument()
   })
 
-  it('answers a question and shows it was answered by Mastermind', async () => {
+  it('answers a question from the desktop app and attributes it to the human, not the parent', async () => {
+    // A human clicking this button in the desktop app is a human decision —
+    // even though the card is shown on the parent task — so it must claim
+    // through answerAsHuman (attributed "Answered by you"), never `answer`
+    // (which speaks for the parent agent itself).
     listForParent.mockResolvedValue([record()])
     listForChild.mockResolvedValue([])
-    answerMock.mockResolvedValue({
+    answerAsHumanMock.mockResolvedValue({
       success: true,
-      record: record({ state: 'answered_by_parent', answeredBy: 'parent', answer: null, optionId: null })
+      record: record({ state: 'answered_by_human', answeredBy: 'human', answer: 'Approved', optionId: null })
     })
     render(<ChildQuestionsBanner taskId="parent-1" />)
 
     const approveButton = await screen.findByRole('button', { name: 'Approve' })
     fireEvent.click(approveButton)
 
-    await waitFor(() => expect(answerMock).toHaveBeenCalledWith('parent-1', 'child-1', 'question-1', { approved: true }))
-    expect(await screen.findByText('Answered by Mastermind')).toBeInTheDocument()
+    await waitFor(() => expect(answerAsHumanMock).toHaveBeenCalledWith('child-1', 'question-1', { approved: true }))
+    expect(answerMock).not.toHaveBeenCalled()
+    expect(await screen.findByText('Answered by you: Approved')).toBeInTheDocument()
+  })
+
+  it('answers an already-escalated question from the desktop app too (answer, parent-only, would refuse this one)', async () => {
+    listForParent.mockResolvedValue([record({ state: 'escalated' })])
+    listForChild.mockResolvedValue([])
+    answerAsHumanMock.mockResolvedValue({
+      success: true,
+      record: record({ state: 'answered_by_human', answeredBy: 'human', answer: 'Approved', optionId: null })
+    })
+    render(<ChildQuestionsBanner taskId="parent-1" />)
+
+    const approveButton = await screen.findByRole('button', { name: 'Approve' })
+    fireEvent.click(approveButton)
+
+    await waitFor(() => expect(answerAsHumanMock).toHaveBeenCalledWith('child-1', 'question-1', { approved: true }))
+    expect(await screen.findByText('Answered by you: Approved')).toBeInTheDocument()
   })
 
   it('refreshes the list on a live push event without a manual reload', async () => {

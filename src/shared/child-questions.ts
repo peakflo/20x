@@ -10,7 +10,15 @@
 
 export type ChildQuestionKind = 'approval' | 'question'
 
-export type ChildQuestionState = 'pending_parent' | 'escalated' | 'answered_by_parent' | 'answered_by_human' | 'cancelled'
+/**
+ * `answering` is a brief, internal transient state: a claim held for the
+ * duration of the one adapter call that actually answers the question, so a
+ * concurrent second answer (the parent and a human, or two parent calls)
+ * can't both reach the harness. It reverts back to `pending_parent` /
+ * `escalated` if the adapter call fails, and is never shown to a human or an
+ * agent as a question's resting state.
+ */
+export type ChildQuestionState = 'pending_parent' | 'answering' | 'escalated' | 'answered_by_parent' | 'answered_by_human' | 'cancelled'
 
 export type ChildQuestionAnsweredBy = 'parent' | 'human'
 
@@ -58,6 +66,8 @@ export function childQuestionStateLabel(state: ChildQuestionState): string {
   switch (state) {
     case 'pending_parent':
       return 'Waiting for parent'
+    case 'answering':
+      return 'Waiting for parent'
     case 'escalated':
       return 'Escalated to you'
     case 'answered_by_parent':
@@ -67,4 +77,9 @@ export function childQuestionStateLabel(state: ChildQuestionState): string {
     case 'cancelled':
       return 'Cancelled'
   }
+}
+
+/** States a question can still be acted on in — anything else is resolved or moot. */
+export function isLiveChildQuestionState(state: ChildQuestionState): boolean {
+  return state === 'pending_parent' || state === 'answering' || state === 'escalated'
 }

@@ -2,9 +2,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ChildQuestionRecord } from '@shared/child-questions'
 
-const { listMock, answerMock, escalateMock, eventHandlers } = vi.hoisted(() => ({
+const { listMock, answerMock, answerAsHumanMock, escalateMock, eventHandlers } = vi.hoisted(() => ({
   listMock: vi.fn(),
   answerMock: vi.fn(),
+  answerAsHumanMock: vi.fn(),
   escalateMock: vi.fn(),
   eventHandlers: new Map<string, Set<(payload: unknown) => void>>()
 }))
@@ -14,6 +15,7 @@ vi.mock('../api/client', () => ({
     childQuestions: {
       list: (...args: unknown[]) => listMock(...args),
       answer: (...args: unknown[]) => answerMock(...args),
+      answerAsHuman: (...args: unknown[]) => answerAsHumanMock(...args),
       escalate: (...args: unknown[]) => escalateMock(...args)
     }
   }
@@ -66,6 +68,7 @@ beforeEach(() => {
   cleanup()
   listMock.mockReset()
   answerMock.mockReset()
+  answerAsHumanMock.mockReset()
   escalateMock.mockReset()
   eventHandlers.clear()
 })
@@ -98,19 +101,39 @@ describe('ChildQuestionsNotice', () => {
     expect(screen.queryByRole('button', { name: 'Escalate to me' })).toBeNull()
   })
 
-  it('answers a question and shows it was answered by Mastermind', async () => {
+  it('answers a question from the phone and attributes it to the human, not the parent', async () => {
+    // A human tapping this button on the phone is a human decision — even
+    // though the card is shown on the parent task — so it must claim
+    // through answerAsHuman (attributed "Answered by you"), never `answer`
+    // (which speaks for the parent agent itself).
     listMock.mockResolvedValue({ as_parent: [record()], as_child: [] })
-    answerMock.mockResolvedValue({
+    answerAsHumanMock.mockResolvedValue({
       success: true,
-      record: record({ state: 'answered_by_parent', answeredBy: 'parent', answer: null, optionId: null })
+      record: record({ state: 'answered_by_human', answeredBy: 'human', answer: 'Approved', optionId: null })
     })
     render(<ChildQuestionsNotice taskId="parent-1" />)
 
     const approveButton = await screen.findByRole('button', { name: 'Approve' })
     fireEvent.click(approveButton)
 
-    await waitFor(() => expect(answerMock).toHaveBeenCalledWith('parent-1', 'child-1', 'question-1', { approved: true }))
-    expect(await screen.findByText('Answered by Mastermind')).toBeTruthy()
+    await waitFor(() => expect(answerAsHumanMock).toHaveBeenCalledWith('child-1', 'question-1', { approved: true }))
+    expect(answerMock).not.toHaveBeenCalled()
+    expect(await screen.findByText('Answered by you: Approved')).toBeTruthy()
+  })
+
+  it('answers an already-escalated question from the phone too (answer, parent-only, would refuse this one)', async () => {
+    listMock.mockResolvedValue({ as_parent: [record({ state: 'escalated' })], as_child: [] })
+    answerAsHumanMock.mockResolvedValue({
+      success: true,
+      record: record({ state: 'answered_by_human', answeredBy: 'human', answer: 'Approved', optionId: null })
+    })
+    render(<ChildQuestionsNotice taskId="parent-1" />)
+
+    const approveButton = await screen.findByRole('button', { name: 'Approve' })
+    fireEvent.click(approveButton)
+
+    await waitFor(() => expect(answerAsHumanMock).toHaveBeenCalledWith('child-1', 'question-1', { approved: true }))
+    expect(await screen.findByText('Answered by you: Approved')).toBeTruthy()
   })
 
   it('refreshes the list on a live push event without a manual reload', async () => {

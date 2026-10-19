@@ -139,6 +139,16 @@ export const api = {
         `/api/tasks/${encodeURIComponent(parentTaskId)}/child-questions/answer`,
         { child_task_id: childTaskId, question_id: questionId, approved: input.approved, answer: input.answer, option_id: input.optionId }
       ),
+    /** A human answering directly from the phone — attributed to the human, not the parent, whether the item is still pending_parent or already escalated. */
+    answerAsHuman: (
+      childTaskId: string,
+      questionId: string | undefined,
+      input: { approved?: boolean; answer?: string; optionId?: string }
+    ) =>
+      post<{ success: true; record: ChildQuestionRecord } | { error: string }>(
+        `/api/tasks/${encodeURIComponent(childTaskId)}/child-questions/answer-as-human`,
+        { question_id: questionId, approved: input.approved, answer: input.answer, option_id: input.optionId }
+      ),
     escalate: (parentTaskId: string, childTaskId: string, questionId: string, note?: string) =>
       post<{ success: true; record: ChildQuestionRecord } | { error: string }>(
         `/api/tasks/${encodeURIComponent(parentTaskId)}/child-questions/escalate`,

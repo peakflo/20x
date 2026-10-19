@@ -1163,6 +1163,22 @@ describe('AgentManager OS notifications', () => {
     expect(notificationInstances[0].opts.body).toContain('Test Task')
   })
 
+  it('does NOT send the generic question push for a subtask\'s question — that is the children\'s-questions flow\'s call', () => {
+    const { mgr } = createManagerWithWindow({ isFocused: false })
+    vi.spyOn(mgr as any, 'persistTranscriptEvent').mockImplementation(() => undefined)
+    // getTask is called with whatever taskId sendToRenderer is given — here
+    // that's always 'task-1', so stub it to report a subtask for this test.
+    vi.spyOn((mgr as any).db, 'getTask').mockReturnValue({ id: 'task-1', title: 'Test Task', parent_task_id: 'parent-1' })
+    vi.spyOn(mgr as any, 'raiseChildQuestionIfNeeded').mockResolvedValue(undefined)
+
+    ;(mgr as any).sendToRenderer('agent:status', { sessionId: 's1', taskId: 'task-1', status: SessionStatus.WORKING })
+    const question = { id: 'tool-1', partType: 'question', tool: { name: 'AskUserQuestion', status: 'pending' } }
+    ;(mgr as any).sendToRenderer('agent:output-batch', { sessionId: 's1', taskId: 'task-1', messages: [question] })
+
+    expect(sendMobilePush).not.toHaveBeenCalled()
+    expect((mgr as any).raiseChildQuestionIfNeeded).toHaveBeenCalledWith('task-1', question)
+  })
+
   it('keeps phone notifications quiet while the desktop window is focused', () => {
     const { mgr } = createManagerWithWindow({ isFocused: true })
     vi.spyOn(mgr as any, 'persistTranscriptEvent').mockImplementation(() => undefined)
@@ -1186,6 +1202,26 @@ describe('AgentManager OS notifications', () => {
     expect(notificationInstances[0].opts.title).toBe('Agent needs approval')
     expect(notificationInstances[0].opts.body).toContain('Test Task')
     expect(notificationInstances[0].show).toHaveBeenCalled()
+  })
+
+  it('does NOT show the generic approval notification (or mobile push) when a subtask\'s approval is already owned by the children\'s-questions flow', () => {
+    // Children's questions go to the parent first: raiseChildApprovalIfNeeded
+    // owns the human-notification decision for this transition entirely
+    // (silence if routed to the parent, exactly one notification via
+    // notifyHumanAboutChildQuestion if it escalates) — the generic path here
+    // must stand down, or the child would get a duplicate/wrong notification.
+    const { mgr } = createManagerWithWindow({ isFocused: false })
+
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.WORKING
+    })
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.WAITING_APPROVAL,
+      childQuestionOwnsNotification: true
+    })
+
+    expect(notificationInstances).toHaveLength(0)
+    expect(sendMobilePush).not.toHaveBeenCalled()
   })
 
   it('does NOT show notification when window is focused', () => {
@@ -4068,7 +4104,10 @@ describe('AgentManager child questions go to the parent first', () => {
 
   it('raises a subtask approval with its parent and wakes it, instead of going to the human', async () => {
     const { mgr, wakeSpy } = buildManager({ 'parent-1': parent, 'child-1': child })
-    const fakeAdapter = { getPendingApproval: vi.fn(() => ({ requestId: 'req-1', question: 'Run `rm -rf tmp/`?', options: [{ optionId: 'allow', name: 'Yes' }] })) }
+    // A safe, workspace-local command — not one of the always-escalate
+    // dangerous patterns (see command-authority.ts) — so this exercises the
+    // "routes to parent" path rather than the default-deny one.
+    const fakeAdapter = { getPendingApproval: vi.fn(() => ({ requestId: 'req-1', question: 'Run `npm test`?', options: [{ optionId: 'allow', name: 'Yes' }] })) }
 
     await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
 
@@ -4130,7 +4169,7 @@ describe('AgentManager child questions go to the parent first', () => {
     const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'req-1', { approved: true })
 
     expect(result).toMatchObject({ success: true })
-    expect(mgr.respondToPermission).toHaveBeenCalledWith('child-session', true, undefined, undefined, 'permission')
+    expect(mgr.respondToPermission).toHaveBeenCalledWith('child-session', true, undefined, undefined, 'permission', 'req-1')
     expect((mgr as any).sendToRenderer).toHaveBeenCalledWith('agent:output', expect.objectContaining({ taskId: 'child-1' }))
   })
 

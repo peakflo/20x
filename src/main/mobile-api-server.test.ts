@@ -288,7 +288,7 @@ describe('mobile-api-server: POST /api/tasks/:id coordinator wake-up', () => {
   })
 })
 
-describe('mobile-api-server: a human answering directly cancels the parent\'s pending child question', () => {
+describe('mobile-api-server: a human answering directly claims the live child question first (answerAsHuman)', () => {
   afterEach(() => {
     stopMobileApiServer()
     vi.restoreAllMocks()
@@ -308,12 +308,13 @@ describe('mobile-api-server: a human answering directly cancels the parent\'s pe
     return token
   }
 
-  it('POST /api/sessions/:id/send cancels the pending item for the given task', async () => {
-    const cancelLatestPendingForChild = vi.fn()
+  it('POST /api/sessions/:id/send claims the live question for the given task instead of sending directly', async () => {
+    const answerAsHuman = vi.fn(async () => ({ success: true, record: { id: 'cq-1' } }))
+    const sendMessage = vi.fn(async () => ({ success: true }))
     const agentManager = {
       noteUserTaskActivity: vi.fn(),
-      sendMessage: vi.fn(async () => ({ success: true })),
-      getChildQuestionService: vi.fn(() => ({ cancelLatestPendingForChild }))
+      sendMessage,
+      getChildQuestionService: vi.fn(() => ({ answerAsHuman }))
     }
     const { db, portPromise } = startServer(agentManager)
     const port = await portPromise
@@ -325,15 +326,60 @@ describe('mobile-api-server: a human answering directly cancels the parent\'s pe
       body: JSON.stringify({ message: 'hello', taskId: 'task-1' })
     })
 
-    expect(cancelLatestPendingForChild).toHaveBeenCalledWith('task-1', 'hello')
+    expect(answerAsHuman).toHaveBeenCalledWith('task-1', undefined, { approved: true, answer: 'hello' })
+    expect(sendMessage).not.toHaveBeenCalled()
   })
 
-  it('POST /api/sessions/:id/approve resolves the task from the session and cancels the pending item', async () => {
-    const cancelLatestPendingForChild = vi.fn()
+  it('POST /api/sessions/:id/send falls through to a direct send when there is nothing live to claim', async () => {
+    const answerAsHuman = vi.fn(async () => null)
+    const sendMessage = vi.fn(async () => ({ success: true }))
     const agentManager = {
-      respondToPermission: vi.fn(async () => undefined),
+      noteUserTaskActivity: vi.fn(),
+      sendMessage,
+      getChildQuestionService: vi.fn(() => ({ answerAsHuman }))
+    }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    await fetch(`http://127.0.0.1:${port}/api/sessions/session-1/send`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'hello', taskId: 'task-1' })
+    })
+
+    expect(sendMessage).toHaveBeenCalledWith('session-1', 'hello', 'task-1', undefined, undefined)
+  })
+
+  it('POST /api/sessions/:id/approve resolves the task from the session and claims it by the exact requestId', async () => {
+    const answerAsHuman = vi.fn(async () => ({ success: true, record: { id: 'cq-1' } }))
+    const respondToPermission = vi.fn(async () => undefined)
+    const agentManager = {
+      respondToPermission,
       getSessionStatus: vi.fn(() => ({ status: 'waiting_approval', agentId: 'agent-1', taskId: 'task-1' })),
-      getChildQuestionService: vi.fn(() => ({ cancelLatestPendingForChild }))
+      getChildQuestionService: vi.fn(() => ({ answerAsHuman }))
+    }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    await fetch(`http://127.0.0.1:${port}/api/sessions/session-1/approve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: true, requestId: 'req-7' })
+    })
+
+    expect(answerAsHuman).toHaveBeenCalledWith('task-1', 'req-7', { approved: true, answer: undefined })
+    expect(respondToPermission).not.toHaveBeenCalled()
+  })
+
+  it('POST /api/sessions/:id/approve falls through to respondToPermission when there is nothing live to claim', async () => {
+    const answerAsHuman = vi.fn(async () => null)
+    const respondToPermission = vi.fn(async () => undefined)
+    const agentManager = {
+      respondToPermission,
+      getSessionStatus: vi.fn(() => ({ status: 'waiting_approval', agentId: 'agent-1', taskId: 'task-1' })),
+      getChildQuestionService: vi.fn(() => ({ answerAsHuman }))
     }
     const { db, portPromise } = startServer(agentManager)
     const port = await portPromise
@@ -345,7 +391,7 @@ describe('mobile-api-server: a human answering directly cancels the parent\'s pe
       body: JSON.stringify({ approved: true })
     })
 
-    expect(cancelLatestPendingForChild).toHaveBeenCalledWith('task-1', 'approved')
+    expect(respondToPermission).toHaveBeenCalledWith('session-1', true, undefined, undefined, undefined, undefined)
   })
 })
 
@@ -402,6 +448,43 @@ describe('mobile-api-server: child-questions routes', () => {
 
     expect(res.status).toBe(200)
     expect(answerFromParent).toHaveBeenCalledWith('parent-1', 'child-1', 'q1', { approved: true, answer: undefined, optionId: undefined })
+  })
+
+  it('POST /api/tasks/:id/child-questions/answer-as-human delegates to answerAsHuman — :id is the CHILD task', async () => {
+    const answerAsHuman = vi.fn(async () => ({ success: true, record: { id: 'cq-1', answeredBy: 'human' } }))
+    const agentManager = { getChildQuestionService: () => ({ answerAsHuman }) }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/child-1/child-questions/answer-as-human`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question_id: 'q1', approved: true })
+    })
+    const body = await res.json() as Record<string, unknown>
+
+    expect(res.status).toBe(200)
+    expect(answerAsHuman).toHaveBeenCalledWith('child-1', 'q1', { approved: true, answer: undefined, optionId: undefined })
+    expect(body).toMatchObject({ success: true, record: { answeredBy: 'human' } })
+  })
+
+  it('POST /api/tasks/:id/child-questions/answer-as-human reports when nothing is left to claim', async () => {
+    const answerAsHuman = vi.fn(async () => null)
+    const agentManager = { getChildQuestionService: () => ({ answerAsHuman }) }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/child-1/child-questions/answer-as-human`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: true })
+    })
+    const body = await res.json() as Record<string, unknown>
+
+    expect(answerAsHuman).toHaveBeenCalledWith('child-1', undefined, { approved: true, answer: undefined, optionId: undefined })
+    expect(body).toEqual({ error: 'That question is no longer waiting for an answer.' })
   })
 
   it('POST /api/tasks/:id/child-questions/escalate delegates to escalateToUser with the note', async () => {

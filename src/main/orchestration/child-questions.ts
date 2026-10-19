@@ -11,29 +11,41 @@
  * shouldn't.
  *
  * Routing, in order:
- * 1. No parent, parent completed, the "route to parent" setting is off, the
+ * 1. No parent, parent completed, the parent's own session can't reach these
+ *    tools (nested scoped), the "route to parent" setting is off, the
  *    parent's own `permission_mode` is `ask` (it has no standing authority to
- *    grant), or the question needs an operation the authority gate reserves
- *    for a human (deploys, merges, destructive commands, payments, external
- *    messages) → straight to the human (today's push/OS notification), with
- *    the parent still told, for information.
+ *    grant), or the request needs an operation the authority gate reserves
+ *    for a human (default-deny: see `command-authority.ts` for the shell/
+ *    network/file-write side, `system-authority.ts` for the free-text side)
+ *    → straight to the human (today's push/OS notification), with the
+ *    parent still told, for information. None of these wait for the
+ *    escalation timeout — they escalate immediately.
  * 2. Otherwise → a durable, deduplicated wake-up to the parent (reusing
  *    `task_wakeups`/`TaskWakeupQueue` — reason `child_question`), with an
  *    escalation deadline. If the parent hasn't answered by then (or was never
  *    reachable), an idle sweep escalates to the human automatically.
  *
- * The parent answers through `answerFromParent`, which drives the exact same
- * adapter call the human UI's `respond_to_checkpoint`/`send_message` use —
- * so every harness (Claude Code, Codex, OpenCode, Pi, ACP) is answered the
- * same way regardless of who answered. A human who answers directly (through
- * the existing path) cancels the parent's pending item via
- * `cancelLatestPendingForChild`.
+ * Concurrency: every transition out of `pending_parent`/`escalated` goes
+ * through `ChildQuestionStore.claim`, an atomic `UPDATE ... WHERE state IN
+ * (...)` — only one caller's claim can ever succeed for a given question, so
+ * the parent and a human (or two parent calls) can never both reach the
+ * harness for the same request. A failed adapter call reverts the claim.
+ *
+ * The parent answers through `answerFromParent`, and a human answers directly
+ * through `answerAsHuman` — both drive the exact same adapter call
+ * (`answerChildSession`, passing the question's own id as the harness's
+ * `requestId` so a stale/mismatched request is refused rather than silently
+ * answering whatever happens to be pending right now) — so every harness
+ * (Claude Code, Codex, OpenCode, Pi, ACP) is answered the same way regardless
+ * of who answered.
  */
 
 import type Database from 'better-sqlite3'
 import { randomUUID } from 'crypto'
 import { evaluateAuthorityGate } from '../../shared/system-authority'
+import { classifyCommandAuthority } from './command-authority'
 import { subtaskEvents } from './subtask-events'
+import { isLiveChildQuestionState } from '../../shared/child-questions'
 import type {
   ChildQuestionAnsweredBy,
   ChildQuestionKind,
@@ -158,6 +170,8 @@ export interface UpdateChildQuestionStatePatch {
   answeredAt?: number | null
 }
 
+const LIVE_STATES = ['pending_parent', 'answering', 'escalated']
+
 export class ChildQuestionStore {
   constructor(private readonly db: Database.Database) {
     this.db.exec(SCHEMA_SQL)
@@ -226,6 +240,16 @@ export class ChildQuestionStore {
     ).map(fromRow)
   }
 
+  /** The single live (pending_parent/answering/escalated) row for a child, if any — used when an exact question id isn't available (e.g. a plain chat answer to a "question"-kind request). */
+  latestLiveForChild(childTaskId: string): ChildQuestionRecord | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM child_questions WHERE child_task_id = ? AND state IN (${LIVE_STATES.map(() => '?').join(',')}) ORDER BY created_at DESC LIMIT 1`
+      )
+      .get(childTaskId, ...LIVE_STATES) as ChildQuestionRow | undefined
+    return row ? fromRow(row) : null
+  }
+
   /** Rows still waiting on the parent whose deadline has passed — the automatic-escalation sweep's input. */
   listPendingPastEscalateAt(nowMs: number): ChildQuestionRecord[] {
     return (
@@ -233,6 +257,36 @@ export class ChildQuestionStore {
         .prepare(`SELECT * FROM child_questions WHERE state = 'pending_parent' AND escalate_at IS NOT NULL AND escalate_at <= ?`)
         .all(nowMs) as ChildQuestionRow[]
     ).map(fromRow)
+  }
+
+  /**
+   * Atomically claims a live row for answering — `UPDATE ... WHERE state IN
+   * (pending_parent, escalated)`, so exactly one concurrent caller's claim
+   * succeeds. Returns false (does nothing) when the row is already being
+   * answered or is already resolved.
+   */
+  claim(id: string, nowMs: number): boolean {
+    const result = this.db
+      .prepare(`UPDATE child_questions SET state = 'answering', updated_at = ? WHERE id = ? AND state IN ('pending_parent', 'escalated')`)
+      .run(nowMs, id)
+    return result.changes === 1
+  }
+
+  /** Reverts a claim after the adapter call it was held for failed — back to `escalated` if it had been escalated, `pending_parent` otherwise. */
+  revertClaim(id: string, nowMs: number): void {
+    this.db
+      .prepare(
+        `UPDATE child_questions SET state = CASE WHEN escalated_at IS NOT NULL THEN 'escalated' ELSE 'pending_parent' END, updated_at = ? WHERE id = ? AND state = 'answering'`
+      )
+      .run(nowMs, id)
+  }
+
+  /** Escalates a row atomically, only from `pending_parent` — races safely against a concurrent claim/answer. */
+  claimAndEscalate(id: string, note: string | null, nowMs: number): boolean {
+    const result = this.db
+      .prepare(`UPDATE child_questions SET state = 'escalated', note = COALESCE(?, note), escalated_at = ?, updated_at = ? WHERE id = ? AND state = 'pending_parent'`)
+      .run(note, nowMs, nowMs, id)
+    return result.changes === 1
   }
 
   updateState(id: string, patch: UpdateChildQuestionStatePatch, nowMs: number): void {
@@ -260,6 +314,21 @@ export class ChildQuestionStore {
         nowMs,
         id
       )
+  }
+
+  /** Marks every still-live row for a child `cancelled` — the child's turn ended, its session stopped, its task completed, or a newer request superseded it. Not "answered" by anyone; just moot. */
+  cancelLive(childTaskId: string, nowMs: number, exceptQuestionId?: string): number {
+    const clause = exceptQuestionId
+      ? `AND question_id != ?`
+      : ''
+    const args: unknown[] = [nowMs, childTaskId, ...LIVE_STATES]
+    if (exceptQuestionId) args.push(exceptQuestionId)
+    const result = this.db
+      .prepare(
+        `UPDATE child_questions SET state = 'cancelled', updated_at = ? WHERE child_task_id = ? AND state IN (${LIVE_STATES.map(() => '?').join(',')}) ${clause}`
+      )
+      .run(...args)
+    return result.changes
   }
 }
 
@@ -290,6 +359,8 @@ export interface ChildQuestionParentPolicy {
   routeToParent?: boolean
   permissionMode?: 'ask' | 'allow'
   escalationTimeoutMs?: number
+  /** False when the parent's own session can't reach answer_child_question/escalate_to_user at all (e.g. it is itself a nested scoped subtask session) — such a question escalates immediately, never waiting out the timeout. Defaults to true. */
+  canAnswer?: boolean
 }
 
 export interface RaiseChildQuestionInput {
@@ -301,6 +372,14 @@ export interface RaiseChildQuestionInput {
   toolName?: string | null
   command?: string | null
   contextExcerpt?: string | null
+  /** The child's workspace directory, when known — lets the authority classifier tell a workspace-local file write from one that escapes it. */
+  workspaceDir?: string | null
+}
+
+export interface AnswerChildSessionInput {
+  approved: boolean
+  answer?: string
+  optionId?: string
 }
 
 export interface ChildQuestionDeps {
@@ -320,12 +399,14 @@ export interface ChildQuestionDeps {
   }) => Promise<unknown>
   /** Drops a still-undelivered child_question wake-up — used once the question is resolved another way. */
   cancelParentWakeup: (parentTaskId: string, childTaskId: string) => void
-  /** Drives the same adapter call the human UI's respond_to_checkpoint/send_message use. */
-  answerChildSession: (
-    childTaskId: string,
-    kind: ChildQuestionKind,
-    input: { approved: boolean; answer?: string; optionId?: string }
-  ) => Promise<void>
+  /**
+   * Drives the same adapter call the human UI's respond_to_checkpoint/
+   * send_message use. `requestId` (the question's own id) is passed through
+   * to the harness so a stale/superseded request is refused rather than
+   * silently answering whatever happens to be pending right now — throw to
+   * signal that (the claim is reverted and the caller gets an error).
+   */
+  answerChildSession: (childTaskId: string, kind: ChildQuestionKind, input: AnswerChildSessionInput, requestId: string) => Promise<void>
   /** Today's human push/OS notification path. */
   notifyHuman: (childTaskId: string, record: ChildQuestionRecord) => void
   /** Records who answered in the child's transcript. */
@@ -363,6 +444,78 @@ export class ChildQuestionService {
   }
 
   /**
+   * The routing/authority decision `raise()` makes, factored out so a
+   * caller (the immediate human-notification suppression in agent-manager.ts,
+   * item 11) can preview "would this go to the parent?" synchronously,
+   * without writing a row — using the exact same rules `raise()` itself
+   * uses, so the preview can never drift out of sync with reality.
+   */
+  private computeRouting(
+    childTask: { id: string; parent_task_id: string | null },
+    authorityInput: { toolName?: string | null; command?: string | null; questionText: string; workspaceDir?: string | null }
+  ): { mustEscalate: boolean; requiresHuman: boolean; authorityCategories: string[]; parentTaskId: string | null; parentReachable: boolean; timeoutMs: number } {
+    const parentTaskId = childTask.parent_task_id
+    const parentTask = parentTaskId ? this.deps.getTask(parentTaskId) : undefined
+    const policy = parentTaskId ? this.deps.getParentPolicy(parentTaskId) : {}
+
+    const authoritySourceText = [authorityInput.toolName, authorityInput.command, authorityInput.questionText].filter(Boolean).join(' ')
+    const proseAuthority = evaluateAuthorityGate(scrubSecretsForExcerpt(authoritySourceText, 4000))
+    // The prose gate scans English findings and misses raw command syntax
+    // entirely (`git push --force origin main` reads nothing like "merge the
+    // PR") — the command gate is default-deny for anything that looks like a
+    // shell/network/file-write action, independent of wording.
+    // Only fed a real `toolName`/`command` — NOT `questionText`. questionText
+    // is an English sentence ("Run tests?"), not command syntax, and feeding
+    // it to the command classifier's default-deny allowlist would just
+    // misclassify ordinary approvals as unrecognized. When there's no
+    // structured command at all, this returns requiresHuman: false and the
+    // prose gate above is what's actually doing the classifying.
+    const commandAuthority = classifyCommandAuthority({
+      toolName: authorityInput.toolName,
+      command: authorityInput.command,
+      workspaceDir: authorityInput.workspaceDir
+    })
+    const requiresHuman = proseAuthority.requiresHumanAuthorization || commandAuthority.requiresHuman
+    const authorityCategories = [...new Set([...proseAuthority.categories, ...commandAuthority.categories])]
+
+    // A parent under its own `ask` permission mode has no standing authority
+    // of its own to grant — it must ask a human for everything, so it cannot
+    // grant a child more than that either. A parent whose own session can't
+    // even reach these tools (nested scoped) can never answer regardless of
+    // authority — both escalate immediately, same as an out-of-authority
+    // request, never waiting out the timeout.
+    const parentUnderAskMode = policy.permissionMode === 'ask'
+    const parentCanAnswer = policy.canAnswer ?? true
+    const routeToParent = policy.routeToParent ?? true
+    const parentReachable = !!parentTaskId && !!parentTask && parentTask.status !== 'completed'
+
+    const mustEscalate =
+      !parentReachable || !routeToParent || parentUnderAskMode || !parentCanAnswer || requiresHuman
+
+    return {
+      mustEscalate,
+      requiresHuman,
+      authorityCategories,
+      parentTaskId: parentTaskId ?? null,
+      parentReachable,
+      timeoutMs: policy.escalationTimeoutMs ?? DEFAULT_CHILD_QUESTION_ESCALATION_TIMEOUT_MS
+    }
+  }
+
+  /**
+   * Preview-only: would raising this question right now escalate straight
+   * to the human, or go to the parent? Used to suppress the immediate
+   * human push/OS notification for a subtask question that is about to be
+   * routed to its parent instead (item 11) — writes nothing, raises
+   * nothing.
+   */
+  wouldEscalate(childTaskId: string, authorityInput: { toolName?: string | null; command?: string | null; questionText: string; workspaceDir?: string | null }): boolean {
+    const childTask = this.deps.getTask(childTaskId)
+    if (!childTask) return true
+    return this.computeRouting(childTask, authorityInput).mustEscalate
+  }
+
+  /**
    * Raises a question/approval for one child session. Idempotent: raising
    * the same (childTaskId, questionId) twice returns the original record
    * instead of creating a second one or re-notifying anybody.
@@ -374,26 +527,11 @@ export class ChildQuestionService {
     const childTask = this.deps.getTask(input.childTaskId)
     if (!childTask) return null
 
-    const parentTaskId = childTask.parent_task_id
-    const parentTask = parentTaskId ? this.deps.getTask(parentTaskId) : undefined
-    const policy = parentTaskId ? this.deps.getParentPolicy(parentTaskId) : {}
-
-    const authoritySourceText = [input.toolName, input.command, input.questionText].filter(Boolean).join(' ')
-    const authority = evaluateAuthorityGate(scrubSecretsForExcerpt(authoritySourceText, 4000))
-    const contextExcerpt = scrubSecretsForExcerpt(input.contextExcerpt ?? authoritySourceText)
-
-    // A parent under its own `ask` permission mode has no standing authority
-    // of its own to grant — it must ask a human for everything, so it cannot
-    // grant a child more than that either.
-    const parentUnderAskMode = policy.permissionMode === 'ask'
-    const routeToParent = policy.routeToParent ?? true
-    const parentReachable = !!parentTaskId && !!parentTask && parentTask.status !== 'completed'
-
-    const mustEscalate =
-      !parentReachable || !routeToParent || parentUnderAskMode || authority.requiresHumanAuthorization
-
+    const { mustEscalate, requiresHuman, authorityCategories, parentTaskId, parentReachable, timeoutMs } = this.computeRouting(childTask, input)
+    const contextExcerpt = scrubSecretsForExcerpt(
+      input.contextExcerpt ?? [input.toolName, input.command, input.questionText].filter(Boolean).join(' ')
+    )
     const now = this.now()
-    const timeoutMs = policy.escalationTimeoutMs ?? DEFAULT_CHILD_QUESTION_ESCALATION_TIMEOUT_MS
 
     const record = this.deps.store.create(
       {
@@ -406,8 +544,8 @@ export class ChildQuestionService {
         toolName: input.toolName ?? null,
         command: input.command ?? null,
         contextExcerpt,
-        requiresHuman: authority.requiresHumanAuthorization,
-        authorityCategories: authority.categories,
+        requiresHuman,
+        authorityCategories,
         state: mustEscalate ? 'escalated' : 'pending_parent',
         escalateAt: mustEscalate ? null : now + timeoutMs
       },
@@ -439,6 +577,9 @@ export class ChildQuestionService {
             childStatus: 'escalated_to_human',
             questionId: input.questionId,
             questionText: input.questionText,
+            options: input.options ?? null,
+            toolName: input.toolName ?? null,
+            command: input.command ?? null,
             informational: true
           }
         })
@@ -453,6 +594,9 @@ export class ChildQuestionService {
           childStatus: 'waiting_for_parent',
           questionId: input.questionId,
           questionText: input.questionText,
+          options: input.options ?? null,
+          toolName: input.toolName ?? null,
+          command: input.command ?? null,
           kind: input.kind
         }
       })
@@ -471,6 +615,11 @@ export class ChildQuestionService {
     return [...this.deps.store.listForParent(parentTaskId)].reverse()
   }
 
+  /** The current live (pending_parent/answering/escalated) question for one child, if any. */
+  getLiveForChild(childTaskId: string): ChildQuestionRecord | null {
+    return this.deps.store.latestLiveForChild(childTaskId)
+  }
+
   /** The parent answers within its own authority. Scoped to its own descendants. */
   async answerFromParent(
     callerTaskId: string,
@@ -486,12 +635,26 @@ export class ChildQuestionService {
     if (record.state !== 'pending_parent') {
       return { error: `That question is already "${record.state}", not waiting for the parent` }
     }
+    if (record.kind === 'approval' && typeof input.approved !== 'boolean') {
+      return { error: 'approved (true or false) is required for an approval' }
+    }
 
-    await this.deps.answerChildSession(childTaskId, record.kind, {
-      approved: input.approved ?? true,
-      answer: input.answer,
-      optionId: input.optionId
-    })
+    const claimedAt = this.now()
+    if (!this.deps.store.claim(record.id, claimedAt)) {
+      return { error: 'That question was just answered another way' }
+    }
+
+    try {
+      await this.deps.answerChildSession(
+        childTaskId,
+        record.kind,
+        { approved: input.approved ?? false, answer: input.answer, optionId: input.optionId },
+        record.questionId
+      )
+    } catch (err) {
+      this.deps.store.revertClaim(record.id, this.now())
+      return { error: err instanceof Error ? err.message : 'Failed to deliver the answer' }
+    }
 
     const now = this.now()
     this.deps.store.updateState(
@@ -512,6 +675,74 @@ export class ChildQuestionService {
     return { success: true, record: this.deps.store.get(record.id)! }
   }
 
+  /**
+   * A human answers directly — through the dedicated UI (the banner), or
+   * through the same claim-first path the existing generic
+   * respond_to_checkpoint/send_message surfaces now use before falling
+   * through to their original direct call. Works from EITHER
+   * `pending_parent` or `escalated` (a human can always answer, whichever
+   * state it's in) — unlike `answerFromParent`, which only works from
+   * `pending_parent`.
+   *
+   * `questionId` is optional: when the caller doesn't have the harness's
+   * exact pending-request id (the plain "answer a question via chat" case
+   * has no such id), falls back to the single current live question for
+   * that child. Returns `null` — not an error — when there's nothing live to
+   * claim, so a generic caller can tell "nothing to do here" from "that
+   * failed" and fall through to its own default behavior.
+   */
+  async answerAsHuman(
+    childTaskId: string,
+    questionId: string | undefined,
+    input: { approved?: boolean; answer?: string; optionId?: string }
+  ): Promise<AnswerChildQuestionResult | null> {
+    const record = questionId
+      ? this.deps.store.getByChildAndQuestionId(childTaskId, questionId)
+      : this.deps.store.latestLiveForChild(childTaskId)
+    // Not live at all (never existed, or already resolved/cancelled) — nothing
+    // to do here, not an error; lets a generic caller fall through to its own
+    // default behavior. A row that IS live but currently `answering` (someone
+    // else's claim is in flight right now) falls through to the claim below,
+    // which fails properly with an error instead of silently no-opping.
+    if (!record || !isLiveChildQuestionState(record.state)) return null
+    if (record.kind === 'approval' && typeof input.approved !== 'boolean') {
+      return { error: 'approved (true or false) is required for an approval' }
+    }
+
+    const claimedAt = this.now()
+    if (!this.deps.store.claim(record.id, claimedAt)) {
+      return { error: 'That question was just answered another way' }
+    }
+
+    try {
+      await this.deps.answerChildSession(
+        childTaskId,
+        record.kind,
+        { approved: input.approved ?? false, answer: input.answer, optionId: input.optionId },
+        record.questionId
+      )
+    } catch (err) {
+      this.deps.store.revertClaim(record.id, this.now())
+      return { error: err instanceof Error ? err.message : 'Failed to deliver the answer' }
+    }
+
+    const now = this.now()
+    this.deps.store.updateState(
+      record.id,
+      { state: 'answered_by_human', answer: input.answer ?? null, optionId: input.optionId ?? null, answeredBy: 'human', answeredAt: now },
+      now
+    )
+    if (record.parentTaskId) this.deps.cancelParentWakeup(record.parentTaskId, childTaskId)
+    subtaskEvents.emitSubtaskEvent({
+      kind: 'child_question',
+      parentTaskId: record.parentTaskId ?? childTaskId,
+      childTaskId,
+      questionId: record.questionId,
+      needsAttention: false
+    })
+    return { success: true, record: this.deps.store.get(record.id)! }
+  }
+
   /** The parent explicitly hands a question to the human instead of answering it. */
   escalateToUser(callerTaskId: string, childTaskId: string, questionId: string, note?: string): AnswerChildQuestionResult {
     if (!this.deps.isDescendant(callerTaskId, childTaskId)) {
@@ -524,7 +755,9 @@ export class ChildQuestionService {
     }
 
     const now = this.now()
-    this.deps.store.updateState(record.id, { state: 'escalated', note: note ?? null, escalatedAt: now }, now)
+    if (!this.deps.store.claimAndEscalate(record.id, note ?? null, now)) {
+      return { error: 'That question was just answered another way' }
+    }
     const updated = this.deps.store.get(record.id)!
     this.deps.notifyHuman(childTaskId, updated)
     subtaskEvents.emitSubtaskEvent({
@@ -547,7 +780,7 @@ export class ChildQuestionService {
     const due = this.deps.store.listPendingPastEscalateAt(now)
     const escalated: ChildQuestionRecord[] = []
     for (const record of due) {
-      this.deps.store.updateState(record.id, { state: 'escalated', escalatedAt: now }, now)
+      if (!this.deps.store.claimAndEscalate(record.id, null, now)) continue
       const updated = this.deps.store.get(record.id)!
       this.deps.notifyHuman(record.childTaskId, updated)
       subtaskEvents.emitSubtaskEvent({
@@ -563,32 +796,30 @@ export class ChildQuestionService {
   }
 
   /**
-   * A human answered directly, through the existing respond_to_checkpoint /
-   * send_message path. Cancels the parent's pending item (if any) so it
-   * isn't nudged about a question that's already settled, and shows
-   * "Answered by you" instead of leaving it looking unresolved.
+   * The child's turn ended, its session stopped, or its task reached a
+   * terminal state without the question ever being answered — whatever was
+   * still live for it is moot now, not actionable by anyone. Marks it
+   * `cancelled` rather than leaving it `pending_parent`/`escalated` forever
+   * (which would otherwise keep `wait_for_subtasks`'s `any_event` returning
+   * instantly on every call, and keep showing a stale item as if it still
+   * needed an answer).
    */
-  cancelLatestPendingForChild(childTaskId: string, answerSummary?: string): ChildQuestionRecord | null {
-    const candidates = this.deps.store
-      .listForChild(childTaskId)
-      .filter((r) => r.state === 'pending_parent' || r.state === 'escalated')
-    if (candidates.length === 0) return null
-    const latest = candidates.reduce((a, b) => (a.createdAt >= b.createdAt ? a : b))
-
+  cancelLiveForChild(childTaskId: string, exceptQuestionId?: string): number {
     const now = this.now()
-    this.deps.store.updateState(
-      latest.id,
-      { state: 'answered_by_human', answer: answerSummary ?? null, answeredBy: 'human', answeredAt: now },
-      now
-    )
-    if (latest.parentTaskId) this.deps.cancelParentWakeup(latest.parentTaskId, childTaskId)
-    subtaskEvents.emitSubtaskEvent({
-      kind: 'child_question',
-      parentTaskId: latest.parentTaskId ?? childTaskId,
-      childTaskId,
-      questionId: latest.questionId,
-      needsAttention: false
-    })
-    return this.deps.store.get(latest.id)
+    const live = this.deps.store
+      .listForChild(childTaskId)
+      .filter((r) => isLiveChildQuestionState(r.state) && r.questionId !== exceptQuestionId)
+    const cancelled = this.deps.store.cancelLive(childTaskId, now, exceptQuestionId)
+    for (const record of live) {
+      if (record.parentTaskId) this.deps.cancelParentWakeup(record.parentTaskId, childTaskId)
+      subtaskEvents.emitSubtaskEvent({
+        kind: 'child_question',
+        parentTaskId: record.parentTaskId ?? childTaskId,
+        childTaskId,
+        questionId: record.questionId,
+        needsAttention: false
+      })
+    }
+    return cancelled
   }
 }

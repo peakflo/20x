@@ -82,9 +82,9 @@ describe('ChildQuestionService.raise', () => {
       childTaskId: 'child-1',
       questionId: 'q1',
       kind: 'approval',
-      questionText: 'Run `npm install left-pad`?',
+      questionText: 'Run `npm test`?',
       toolName: 'exec',
-      command: 'npm install left-pad'
+      command: 'npm test'
     })
 
     expect(record?.state).toBe('pending_parent')
@@ -150,6 +150,18 @@ describe('ChildQuestionService.raise', () => {
     expect(record?.state).toBe('escalated')
   })
 
+  it('escalates immediately — no escalation timeout — when the parent session cannot reach the answering tools at all (nested scoped)', async () => {
+    task({ id: 'parent-1' })
+    task({ id: 'child-1', parent_task_id: 'parent-1' })
+    policies.set('parent-1', { canAnswer: false })
+
+    const record = await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Run the build?' })
+
+    expect(record?.state).toBe('escalated')
+    expect(record?.escalateAt).toBeNull()
+    expect(notifyHuman).toHaveBeenCalledTimes(1)
+  })
+
   it('escalates approvals outside the parent\'s authority (e.g. a production deploy) straight to the human', async () => {
     task({ id: 'parent-1' })
     task({ id: 'child-1', parent_task_id: 'parent-1' })
@@ -181,6 +193,55 @@ describe('ChildQuestionService.raise', () => {
 
     expect(record?.state).toBe('escalated')
     expect(record?.authorityCategories).toContain('payment-operation')
+  })
+
+  describe('command-level authority (default-deny) — the actual commands a harness would ask to run', () => {
+    const dangerousCommands = [
+      'git push --force origin main',
+      'rm -rf ~/project',
+      'kubectl apply -f k8s/prod.yaml',
+      'gh pr merge 650 --admin',
+      'curl -X POST https://api.stripe.com/v1/charges',
+      'terraform destroy',
+      'npm publish'
+    ]
+
+    for (const command of dangerousCommands) {
+      it(`escalates "${command}" straight to the human, never leaving it for the parent alone`, async () => {
+        task({ id: 'parent-1' })
+        task({ id: 'child-1', parent_task_id: 'parent-1' })
+
+        const record = await service.raise({
+          childTaskId: 'child-1',
+          questionId: 'q1',
+          kind: 'approval',
+          questionText: `Run \`${command}\`?`,
+          toolName: 'exec',
+          command
+        })
+
+        expect(record?.state).toBe('escalated')
+        expect(record?.requiresHuman).toBe(true)
+        expect(notifyHuman).toHaveBeenCalledTimes(1)
+      })
+    }
+
+    it('routes a safe, workspace-local command to the parent as usual', async () => {
+      task({ id: 'parent-1' })
+      task({ id: 'child-1', parent_task_id: 'parent-1' })
+
+      const record = await service.raise({
+        childTaskId: 'child-1',
+        questionId: 'q1',
+        kind: 'approval',
+        questionText: 'Run the test suite?',
+        toolName: 'exec',
+        command: 'npm test'
+      })
+
+      expect(record?.state).toBe('pending_parent')
+      expect(record?.requiresHuman).toBe(false)
+    })
   })
 
   it('scrubs secret-shaped text out of the stored context excerpt', async () => {
@@ -235,7 +296,7 @@ describe('ChildQuestionService.sweepEscalations', () => {
 })
 
 describe('ChildQuestionService.answerFromParent', () => {
-  it('answers an approval through the same adapter call the human UI uses, and cancels the pending wake-up', async () => {
+  it('answers an approval through the same adapter call the human UI uses, passing the question id as the harness requestId, and cancels the pending wake-up', async () => {
     task({ id: 'parent-1' })
     task({ id: 'child-1', parent_task_id: 'parent-1' })
     await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Run tests?' })
@@ -243,12 +304,24 @@ describe('ChildQuestionService.answerFromParent', () => {
     const result = await service.answerFromParent('parent-1', 'child-1', 'q1', { approved: true })
 
     expect(result).toMatchObject({ success: true })
-    expect(answerChildSession).toHaveBeenCalledWith('child-1', 'approval', { approved: true, answer: undefined, optionId: undefined })
+    expect(answerChildSession).toHaveBeenCalledWith('child-1', 'approval', { approved: true, answer: undefined, optionId: undefined }, 'q1')
     expect(cancelParentWakeup).toHaveBeenCalledWith('parent-1', 'child-1')
     expect(appendTranscriptNote).toHaveBeenCalledTimes(1)
     const record = store.getByChildAndQuestionId('child-1', 'q1')
     expect(record?.state).toBe('answered_by_parent')
     expect(record?.answeredBy).toBe('parent')
+  })
+
+  it('requires `approved` for an approval — it does not default to approve', async () => {
+    task({ id: 'parent-1' })
+    task({ id: 'child-1', parent_task_id: 'parent-1' })
+    await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Run tests?' })
+
+    const result = await service.answerFromParent('parent-1', 'child-1', 'q1', {})
+
+    expect(result).toMatchObject({ error: expect.any(String) })
+    expect(answerChildSession).not.toHaveBeenCalled()
+    expect(store.getByChildAndQuestionId('child-1', 'q1')?.state).toBe('pending_parent')
   })
 
   it('rejects answering a question that is not a descendant of the caller', async () => {
@@ -284,6 +357,115 @@ describe('ChildQuestionService.answerFromParent', () => {
     const second = await service.answerFromParent('parent-1', 'child-1', 'q1', { approved: false })
     expect(second).toMatchObject({ error: expect.any(String) })
   })
+
+  it('reverts the claim when the adapter call itself fails, so the question is answerable again', async () => {
+    task({ id: 'parent-1' })
+    task({ id: 'child-1', parent_task_id: 'parent-1' })
+    await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Run tests?' })
+    answerChildSession.mockRejectedValueOnce(new Error('session gone'))
+
+    const first = await service.answerFromParent('parent-1', 'child-1', 'q1', { approved: true })
+    expect(first).toMatchObject({ error: expect.stringContaining('session gone') })
+    expect(store.getByChildAndQuestionId('child-1', 'q1')?.state).toBe('pending_parent')
+
+    answerChildSession.mockResolvedValueOnce(undefined)
+    const second = await service.answerFromParent('parent-1', 'child-1', 'q1', { approved: true })
+    expect(second).toMatchObject({ success: true })
+  })
+
+  it('two concurrent answerFromParent calls for the same question: only one reaches the adapter', async () => {
+    task({ id: 'parent-1' })
+    task({ id: 'child-1', parent_task_id: 'parent-1' })
+    await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Run tests?' })
+
+    let resolveAdapterCall: (() => void) | undefined
+    answerChildSession.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolveAdapterCall = resolve })
+    )
+
+    const callA = service.answerFromParent('parent-1', 'child-1', 'q1', { approved: true })
+    // Give callA's claim a chance to land before callB starts.
+    await new Promise((r) => setTimeout(r, 0))
+    const callB = service.answerFromParent('parent-1', 'child-1', 'q1', { approved: false })
+
+    const resultB = await callB
+    expect(resultB).toMatchObject({ error: expect.any(String) })
+
+    resolveAdapterCall?.()
+    const resultA = await callA
+    expect(resultA).toMatchObject({ success: true })
+
+    expect(answerChildSession).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ChildQuestionService.answerAsHuman', () => {
+  it('answers a pending_parent question as the human, attributing "human" (not "parent")', async () => {
+    task({ id: 'parent-1' })
+    task({ id: 'child-1', parent_task_id: 'parent-1' })
+    await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Run tests?' })
+
+    const result = await service.answerAsHuman('child-1', 'q1', { approved: true })
+
+    expect(result).toMatchObject({ success: true })
+    expect(answerChildSession).toHaveBeenCalledWith('child-1', 'approval', { approved: true }, 'q1')
+    const record = store.getByChildAndQuestionId('child-1', 'q1')
+    expect(record?.state).toBe('answered_by_human')
+    expect(record?.answeredBy).toBe('human')
+  })
+
+  it('also answers an already-escalated question — a human can always answer, unlike the parent', async () => {
+    task({ id: 'parent-1' })
+    task({ id: 'child-1', parent_task_id: 'parent-1' })
+    await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Deploy this change to production now?' })
+    expect(store.getByChildAndQuestionId('child-1', 'q1')?.state).toBe('escalated')
+
+    const result = await service.answerAsHuman('child-1', 'q1', { approved: true })
+
+    expect(result).toMatchObject({ success: true })
+  })
+
+  it('falls back to the latest live question when no exact id is given', async () => {
+    task({ id: 'parent-1' })
+    task({ id: 'child-1', parent_task_id: 'parent-1' })
+    await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'question', questionText: 'Which env?' })
+
+    const result = await service.answerAsHuman('child-1', undefined, { approved: true, answer: 'staging' })
+
+    expect(result).toMatchObject({ success: true })
+    expect(answerChildSession).toHaveBeenCalledWith('child-1', 'question', { approved: true, answer: 'staging' }, 'q1')
+  })
+
+  it('returns null (not an error) when there is nothing live to answer — lets a generic caller fall through to its own default behavior', async () => {
+    const result = await service.answerAsHuman('no-such-child', undefined, { approved: true })
+    expect(result).toBeNull()
+    expect(answerChildSession).not.toHaveBeenCalled()
+  })
+
+  it('a concurrent parent answer and human answer: only one reaches the adapter', async () => {
+    task({ id: 'parent-1' })
+    task({ id: 'child-1', parent_task_id: 'parent-1' })
+    await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Run tests?' })
+
+    let resolveAdapterCall: (() => void) | undefined
+    answerChildSession.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { resolveAdapterCall = resolve })
+    )
+
+    const parentCall = service.answerFromParent('parent-1', 'child-1', 'q1', { approved: true })
+    await new Promise((r) => setTimeout(r, 0))
+    const humanCall = service.answerAsHuman('child-1', 'q1', { approved: false })
+
+    const humanResult = await humanCall
+    expect(humanResult).toMatchObject({ error: expect.any(String) })
+
+    resolveAdapterCall?.()
+    const parentResult = await parentCall
+    expect(parentResult).toMatchObject({ success: true })
+
+    expect(answerChildSession).toHaveBeenCalledTimes(1)
+    expect(store.getByChildAndQuestionId('child-1', 'q1')?.answeredBy).toBe('parent')
+  })
 })
 
 describe('ChildQuestionService.escalateToUser', () => {
@@ -302,22 +484,47 @@ describe('ChildQuestionService.escalateToUser', () => {
   })
 })
 
-describe('ChildQuestionService.cancelLatestPendingForChild', () => {
-  it('cancels the pending item once a human answers directly, so the parent is not nudged about it', async () => {
+describe('ChildQuestionService.getLiveForChild / cancelLiveForChild', () => {
+  it('returns the current live question for a child', async () => {
     task({ id: 'parent-1' })
     task({ id: 'child-1', parent_task_id: 'parent-1' })
     await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Run tests?' })
 
-    const cancelled = service.cancelLatestPendingForChild('child-1', 'approved')
-
-    expect(cancelled?.state).toBe('answered_by_human')
-    expect(cancelled?.answeredBy).toBe('human')
-    expect(cancelParentWakeup).toHaveBeenCalledWith('parent-1', 'child-1')
+    expect(service.getLiveForChild('child-1')?.questionId).toBe('q1')
   })
 
-  it('is a no-op when there is nothing pending for that child', () => {
-    const cancelled = service.cancelLatestPendingForChild('no-such-child')
-    expect(cancelled).toBeNull()
-    expect(cancelParentWakeup).not.toHaveBeenCalled()
+  it('cancels a stale live question when the child turn ends without it ever being answered', async () => {
+    task({ id: 'parent-1' })
+    task({ id: 'child-1', parent_task_id: 'parent-1' })
+    await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Run tests?' })
+
+    const cancelledCount = service.cancelLiveForChild('child-1')
+
+    expect(cancelledCount).toBe(1)
+    expect(store.getByChildAndQuestionId('child-1', 'q1')?.state).toBe('cancelled')
+    expect(cancelParentWakeup).toHaveBeenCalledWith('parent-1', 'child-1')
+    expect(service.getLiveForChild('child-1')).toBeNull()
+  })
+
+  it('cancelling leaves a just-raised newer question (exceptQuestionId) alone — a superseded request id does not cancel the new one', async () => {
+    task({ id: 'parent-1' })
+    task({ id: 'child-1', parent_task_id: 'parent-1' })
+    await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Old request' })
+    await service.raise({ childTaskId: 'child-1', questionId: 'q2', kind: 'approval', questionText: 'New request' })
+
+    service.cancelLiveForChild('child-1', 'q2')
+
+    expect(store.getByChildAndQuestionId('child-1', 'q1')?.state).toBe('cancelled')
+    expect(store.getByChildAndQuestionId('child-1', 'q2')?.state).toBe('pending_parent')
+  })
+
+  it('a stale cancelled row no longer makes wait_for_subtasks-style "any live question" checks return true', async () => {
+    task({ id: 'parent-1' })
+    task({ id: 'child-1', parent_task_id: 'parent-1' })
+    await service.raise({ childTaskId: 'child-1', questionId: 'q1', kind: 'approval', questionText: 'Run tests?' })
+    service.cancelLiveForChild('child-1')
+
+    const live = service.listForChild('child-1').filter((r) => r.state === 'pending_parent' || r.state === 'escalated')
+    expect(live).toHaveLength(0)
   })
 })

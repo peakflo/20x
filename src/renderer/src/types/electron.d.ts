@@ -602,6 +602,11 @@ interface ElectronAPI {
       questionId: string,
       input: { approved?: boolean; answer?: string; optionId?: string }
     ) => Promise<{ success: true; record: ChildQuestionRecord } | { error: string }>
+    answerAsHuman: (
+      childTaskId: string,
+      questionId: string | undefined,
+      input: { approved?: boolean; answer?: string; optionId?: string }
+    ) => Promise<{ success: true; record: ChildQuestionRecord } | { error: string }>
     escalate: (
       parentTaskId: string,
       childTaskId: string,

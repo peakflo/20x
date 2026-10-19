@@ -343,6 +343,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
       questionId: string,
       input: { approved?: boolean; answer?: string; optionId?: string }
     ): Promise<unknown> => ipcRenderer.invoke('childQuestions:answer', parentTaskId, childTaskId, questionId, input),
+    // Distinct from `answer` above: that one speaks FOR the parent agent
+    // (attributed "Answered by Mastermind"). This is a human using the
+    // desktop app clicking the same buttons — it must be attributed to the
+    // human, whether the question is still pending_parent or has already
+    // been escalated, so it claims through answerAsHuman instead.
+    answerAsHuman: (
+      childTaskId: string,
+      questionId: string | undefined,
+      input: { approved?: boolean; answer?: string; optionId?: string }
+    ): Promise<unknown> => ipcRenderer.invoke('childQuestions:answerAsHuman', childTaskId, questionId, input),
     escalate: (parentTaskId: string, childTaskId: string, questionId: string, note?: string): Promise<unknown> =>
       ipcRenderer.invoke('childQuestions:escalate', parentTaskId, childTaskId, questionId, note)
   },

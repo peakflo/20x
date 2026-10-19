@@ -1216,20 +1216,32 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       pruneExpiredOrchestrationReceiptsOnce(db)
       const sendController = agentController
       return withIdempotency(db, `send_message:task:${taskId}`, params.client_request_id as string | undefined, async () => {
+        // This route is MCP-only (desktop/mobile answer directly through
+        // their own IPC/HTTP paths, never through here) — so any caller
+        // reaching it is an agent session, not a human. If this task has a
+        // LIVE child question, that agent can only be the parent answering
+        // within its own authority, through the exact same claim/requestId
+        // machinery answer_child_question uses, never bypassing the
+        // authority gate by going through the generic send instead. A
+        // question already escalated to the human, or outside any agent's
+        // authority, is refused here — only the human (or escalate_to_user)
+        // can resolve it.
+        const live = sendController.getChildQuestionService().getLiveForChild(taskId)
+        if (live && live.parentTaskId) {
+          if (live.state !== 'pending_parent') {
+            return { error: `This needs the human, not a generic send_message — the question is already "${live.state}". Use escalate_to_user if you haven't, or wait for the human to answer it.` }
+          }
+          const result = await sendController.getChildQuestionService().answerFromParent(live.parentTaskId, taskId, live.questionId, {
+            approved: true,
+            answer: String(params.text)
+          })
+          if ('error' in result) return result
+          return { success: true, task_id: taskId, session_id: null }
+        }
+
         // The message is attributed to the user, because that is who spoke it.
         // A transcript that credited the agent would misreport who asked.
         const result = await sendController.sendByTaskId(taskId, String(params.text))
-        // The human answered directly (the same path a question's "answer"
-        // button uses) — cancel the parent's pending item, if any, so it
-        // isn't nudged about something already settled. A no-op when this
-        // task has no pending child question. Best-effort: the send already
-        // succeeded, so a failure here must never turn a successful send
-        // into a reported error.
-        try {
-          sendController.getChildQuestionService().cancelLatestPendingForChild(taskId, String(params.text))
-        } catch (err) {
-          console.error(`[TaskAPI] Failed to cancel a pending child question for task ${taskId} after /send_message:`, err)
-        }
         return { success: true, task_id: taskId, session_id: result.sessionId ?? result.newSessionId ?? null }
       })
     }
@@ -1251,20 +1263,30 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       }
 
       const approved = params.approved === true
+
+      // Same MCP-only gating as /send_message above: a LIVE child question
+      // can only be answered here by the parent, within its own authority —
+      // never a bypass around answer_child_question's refuse-if-human-only
+      // rule.
+      const liveQuestion = agentController.getChildQuestionService().getLiveForChild(taskId)
+      if (liveQuestion && liveQuestion.parentTaskId) {
+        if (liveQuestion.state !== 'pending_parent') {
+          return { error: `This needs the human, not respond_to_checkpoint — the question is already "${liveQuestion.state}". Use escalate_to_user if you haven't, or wait for the human to answer it.` }
+        }
+        const result = await agentController.getChildQuestionService().answerFromParent(liveQuestion.parentTaskId, taskId, liveQuestion.questionId, {
+          approved,
+          answer: params.message ? String(params.message) : undefined
+        })
+        if ('error' in result) return result
+        notifyRenderer?.('task:checkpointAnswered', { taskId, approved })
+        return { success: true, task_id: taskId, approved }
+      }
+
       await agentController.respondToPermission(
         found.sessionId,
         approved,
         params.message ? String(params.message) : undefined
       )
-      // The human answered directly — cancel the parent's pending item, if
-      // any (a no-op when this task has no pending child question). The
-      // checkpoint was already answered, so a failure here must never turn
-      // that success into a reported error.
-      try {
-        agentController.getChildQuestionService().cancelLatestPendingForChild(taskId, approved ? 'approved' : 'rejected')
-      } catch (err) {
-        console.error(`[TaskAPI] Failed to cancel a pending child question for task ${taskId} after /respond_to_checkpoint:`, err)
-      }
       notifyRenderer?.('task:checkpointAnswered', { taskId, approved })
       return { success: true, task_id: taskId, approved }
     }
@@ -1487,16 +1509,37 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
           pending_questions: pendingQuestionsFor(String(task.id))
         }))
 
-      const isDone = (subtasks: Record<string, unknown>[]): boolean => {
+      // The caller's own bookmark from a previous call, if it passed one
+      // back — see the `since_seq` handling below for why this matters: an
+      // `any_event` wait must not re-trigger forever on the SAME still-live
+      // question a caller already saw and is presumably already acting on.
+      const callerSinceSeq = typeof params.since_seq === 'number' ? params.since_seq : null
+
+      const isDone = (subtasks: Record<string, unknown>[], questionCheckSinceSeq: number | null): boolean => {
         if (subtasks.length === 0) return false
         const matches = subtasks.filter((task) => terminalStatuses.includes(String(task.status)))
         if (returnWhen === 'any_terminal') return matches.length > 0
         if (returnWhen === 'all_terminal') return matches.length === subtasks.length
         // any_event: any terminal status (including a "needs attention" end,
-        // which already reuses model_error — see run-finalization.ts), OR any
-        // child question still waiting on the parent or escalated.
+        // which already reuses model_error — see run-finalization.ts) always
+        // ends the wait.
         if (matches.length > 0) return true
-        return subtasks.some((task) => pendingQuestionsFor(String(task.id)).length > 0)
+        // A child question is the trickier case: a question/approval that's
+        // STILL pending_parent/escalated from before this call even started
+        // must only end the wait ONCE, not on every subsequent call — a
+        // caller that keeps calling wait_for_subtasks without ever answering
+        // it would otherwise get an instant "done" forever (a hot loop that
+        // burns tokens without making progress). When the caller passed back
+        // a `since_seq` from an earlier call, only a child_question event
+        // NEWER than that counts. On a caller's very first call (no
+        // since_seq yet), fall back to the live DB check — it has no
+        // history to compare against, so "there's currently a live question"
+        // is the only meaningful signal available.
+        if (questionCheckSinceSeq === null) {
+          return subtasks.some((task) => pendingQuestionsFor(String(task.id)).length > 0)
+        }
+        const subtaskIds = new Set(subtasks.map((task) => String(task.id)))
+        return subtaskEvents.eventsSince(questionCheckSinceSeq).some((e) => e.kind === 'child_question' && subtaskIds.has(e.childTaskId))
       }
 
       // This route is MCP-tool-only (never called from the renderer, IPC, or
@@ -1520,9 +1563,14 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       // `SubtaskEventBus.waitFor`'s `sinceSeq`, covered in subtask-events.test.ts).
       let sinceSeq = subtaskEvents.currentSeq()
       let subtasks = readSubtasks()
-      if (isDone(subtasks)) {
+      // The FIRST check uses the CALLER's own bookmark (if it passed one
+      // back from an earlier call) for the child-question edge-trigger —
+      // every check after this point (inside the loop) uses the internal
+      // `sinceSeq` instead, since by then we're only reacting to events that
+      // arrive DURING this call, not to history from before it started.
+      if (isDone(subtasks, callerSinceSeq)) {
         markObserved(subtasks)
-        return { success: true, timed_out: false, return_when: returnWhen, terminal_statuses: terminalStatuses, subtasks: snapshot(subtasks) }
+        return { success: true, timed_out: false, return_when: returnWhen, terminal_statuses: terminalStatuses, since_seq: subtaskEvents.currentSeq(), subtasks: snapshot(subtasks) }
       }
 
       // Best-effort early return if the parent's own session — the one
@@ -1540,6 +1588,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
             interrupted: true,
             return_when: returnWhen,
             terminal_statuses: terminalStatuses,
+            since_seq: subtaskEvents.currentSeq(),
             subtasks: snapshot(readSubtasks())
           }
         }
@@ -1551,13 +1600,13 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
           (e) => e.parentTaskId === parentTaskId && (!targetIds || targetIds.has(e.childTaskId)),
           { sinceSeq, timeoutMs: Math.max(0, Math.min(remainingMs, 5_000)) }
         )
-        if (event) sinceSeq = event.seq
 
         subtasks = readSubtasks()
-        if (isDone(subtasks)) {
+        if (isDone(subtasks, sinceSeq)) {
           markObserved(subtasks)
-          return { success: true, timed_out: false, return_when: returnWhen, terminal_statuses: terminalStatuses, subtasks: snapshot(subtasks) }
+          return { success: true, timed_out: false, return_when: returnWhen, terminal_statuses: terminalStatuses, since_seq: subtaskEvents.currentSeq(), subtasks: snapshot(subtasks) }
         }
+        if (event) sinceSeq = event.seq
       }
 
       const finalSubtasks = readSubtasks()
@@ -1568,6 +1617,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         ...(cappedTimeout ? { capped_timeout: true, note: `timeout_ms was capped to ${MAX_TIMEOUT_MS}ms for this call — call wait_for_subtasks again to keep waiting.` } : {}),
         return_when: returnWhen,
         terminal_statuses: terminalStatuses,
+        since_seq: subtaskEvents.currentSeq(),
         subtasks: snapshot(finalSubtasks)
       }
     }

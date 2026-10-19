@@ -509,6 +509,14 @@ export const childQuestionsApi = {
   ): Promise<{ success: true; record: ChildQuestionRecord } | { error: string }> => {
     return window.electronAPI.childQuestions.answer(parentTaskId, childTaskId, questionId, input)
   },
+  /** A human answering directly — attributed to the human, not the parent, whether the item is still pending_parent or already escalated. */
+  answerAsHuman: (
+    childTaskId: string,
+    questionId: string | undefined,
+    input: { approved?: boolean; answer?: string; optionId?: string }
+  ): Promise<{ success: true; record: ChildQuestionRecord } | { error: string }> => {
+    return window.electronAPI.childQuestions.answerAsHuman(childTaskId, questionId, input)
+  },
   escalate: (
     parentTaskId: string,
     childTaskId: string,

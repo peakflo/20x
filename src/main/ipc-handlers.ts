@@ -665,16 +665,22 @@ export function registerIpcHandlers(
     'agentSession:sendByTaskId',
     async (_, taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
       agentManager.noteUserTaskActivity(taskId)
-      const result = await agentManager.sendByTaskId(taskId, message, attachments)
-      // The human answered directly (the same path a question's "answer"
-      // button uses) — cancel the parent's pending item, if any. A no-op
-      // when this task has no pending child question. Best-effort: the send
-      // already succeeded, so a failure here must never turn it into an error.
+      // Claim-first: if there's a live child question for this task, answer
+      // it THROUGH the claim (so a concurrent parent answer can't also reach
+      // the harness) instead of sending directly and reconciling after.
+      // `questionId` is omitted — a plain chat answer has no exact harness
+      // request id to match against — falling back to the single current
+      // live question for this child.
       try {
-        agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, message)
+        const claimed = await agentManager.getChildQuestionService().answerAsHuman(taskId, undefined, { approved: true, answer: message })
+        if (claimed) {
+          if ('error' in claimed) return claimed
+          return { success: true, sessionId: null }
+        }
       } catch (err) {
-        console.error(`[IPC] Failed to cancel a pending child question for task ${taskId} after sendByTaskId:`, err)
+        console.error(`[IPC] Child-question claim check failed for task ${taskId} before sendByTaskId, falling through to a direct send:`, err)
       }
+      const result = await agentManager.sendByTaskId(taskId, message, attachments)
       return { success: true, ...result }
     }
   )
@@ -683,29 +689,41 @@ export function registerIpcHandlers(
     'agentSession:send',
     async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
       agentManager.noteUserTaskActivity(taskId, sessionId)
-      const result = await agentManager.sendMessage(sessionId, message, taskId, agentId, attachments)
       if (taskId) {
         try {
-          agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, message)
+          const claimed = await agentManager.getChildQuestionService().answerAsHuman(taskId, undefined, { approved: true, answer: message })
+          if (claimed) {
+            if ('error' in claimed) return claimed
+            return { success: true }
+          }
         } catch (err) {
-          console.error(`[IPC] Failed to cancel a pending child question for task ${taskId} after send:`, err)
+          console.error(`[IPC] Child-question claim check failed for task ${taskId} before send, falling through to a direct send:`, err)
         }
       }
+      const result = await agentManager.sendMessage(sessionId, message, taskId, agentId, attachments)
       return { success: true, ...result }
     }
   )
 
   ipcMain.handle('agentSession:approve', async (_, sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string) => {
     const taskId = agentManager.getSessionStatus(sessionId)?.taskId
-    await agentManager.respondToPermission(sessionId, approved, message, undefined, responseType, requestId)
-    // The human answered directly — cancel the parent's pending item, if any.
     if (taskId) {
+      // Claim-first, matched by the exact harness request id when the UI has
+      // one (it does, for a permission-style approval card) — so a
+      // concurrent parent answer for the SAME request can't also reach the
+      // harness. Falls through to the direct call below only when there is
+      // nothing live to claim (the overwhelming majority of approvals have
+      // nothing to do with this feature at all).
       try {
-        agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, approved ? 'approved' : 'rejected')
+        const claimed = await agentManager.getChildQuestionService().answerAsHuman(taskId, requestId, { approved, answer: message })
+        if (claimed) {
+          return 'error' in claimed ? claimed : { success: true }
+        }
       } catch (err) {
-        console.error(`[IPC] Failed to cancel a pending child question for task ${taskId} after approve:`, err)
+        console.error(`[IPC] Child-question claim check failed for task ${taskId} before approve, falling through to a direct response:`, err)
       }
     }
+    await agentManager.respondToPermission(sessionId, approved, message, undefined, responseType, requestId)
     return { success: true }
   })
 
@@ -723,6 +741,18 @@ export function registerIpcHandlers(
     'childQuestions:answer',
     async (_, parentTaskId: string, childTaskId: string, questionId: string, input: { approved?: boolean; answer?: string; optionId?: string }) => {
       return agentManager.getChildQuestionService().answerFromParent(parentTaskId, childTaskId, questionId, input)
+    }
+  )
+  // A human answering directly from the desktop app — claims the live item
+  // (whether it's still pending_parent or already escalated) and is
+  // attributed to the human, never the parent. See the comment on
+  // `childQuestions:answer` above, and answerAsHuman's doc comment.
+  ipcMain.handle(
+    'childQuestions:answerAsHuman',
+    async (_, childTaskId: string, questionId: string | undefined, input: { approved?: boolean; answer?: string; optionId?: string }) => {
+      const result = await agentManager.getChildQuestionService().answerAsHuman(childTaskId, questionId, input)
+      if (!result) return { error: 'That question is no longer waiting for an answer.' }
+      return result
     }
   )
   ipcMain.handle(

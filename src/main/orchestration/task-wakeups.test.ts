@@ -304,3 +304,82 @@ describe('TaskWakeupStore.markObserved', () => {
     expect(message).not.toContain('child-1')
   })
 })
+
+describe('TaskWakeupStore.markObservedForReason', () => {
+  it('consumes only the named reason — a pending child_completed wake-up for the same child is untouched, so the parent is still woken for it', async () => {
+    const dQuestion = computeWakeupDeliveryId('parent-1', 'child-1', 'q1', 'child_question')
+    const dCompleted = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', 'child_completed')
+    store.enqueue({ parentTaskId: 'parent-1', childTaskId: 'child-1', reason: 'child_question', deliveryId: dQuestion, payload: { childTitle: 'Child', childStatus: 'waiting_for_parent' } }, now)
+    store.enqueue({ parentTaskId: 'parent-1', childTaskId: 'child-1', reason: 'child_completed', deliveryId: dCompleted, payload: { childTitle: 'Child', childStatus: 'completed' } }, now)
+
+    const consumed = queue.markObservedForReason('parent-1', 'child-1', 'child_question')
+    expect(consumed).toBe(1)
+
+    const pending = store.listPending('parent-1')
+    expect(pending).toHaveLength(1)
+    expect(pending[0].reason).toBe('child_completed')
+
+    ctx = makeContext({ subtasks: [subtask('completed', 'child-1')] })
+    await queue.tryDeliver('parent-1')
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send.mock.calls[0][1]).toContain('child_completed')
+  })
+})
+
+describe('TaskWakeupQueue — child_question wake-up message content', () => {
+  it('includes the question id/text/tool/command and how to answer it, fenced as untrusted data', async () => {
+    const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', 'q1', 'child_question')
+    store.enqueue(
+      {
+        parentTaskId: 'parent-1',
+        childTaskId: 'child-1',
+        reason: 'child_question',
+        deliveryId,
+        payload: {
+          childTitle: 'Child',
+          childStatus: 'waiting_for_parent',
+          questionId: 'q1',
+          questionText: 'Run `npm test`?',
+          toolName: 'exec',
+          command: 'npm test',
+          options: [{ optionId: 'a', label: 'Yes' }]
+        }
+      },
+      now
+    )
+    ctx = makeContext({ subtasks: [subtask('agent_working', 'child-1')] })
+    await queue.tryDeliver('parent-1')
+
+    expect(send).toHaveBeenCalledTimes(1)
+    const message = send.mock.calls[0][1]
+    expect(message).toContain('q1')
+    expect(message).toContain('Run `npm test`?')
+    expect(message).toContain('npm test')
+    expect(message).toContain('answer_child_question')
+    expect(message).toContain('escalate_to_user')
+    expect(message).toContain('not an instruction')
+    // Still inside the existing fenced "data, not instructions" section.
+    expect(message.indexOf('BEGIN AUTOMATED FINDINGS')).toBeLessThan(message.indexOf('q1'))
+    expect(message.indexOf('q1')).toBeLessThan(message.indexOf('END AUTOMATED FINDINGS'))
+  })
+
+  it('marks an already-escalated (informational) child_question wake-up as such, with no answer-it instruction', async () => {
+    const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', 'q1', 'child_question')
+    store.enqueue(
+      {
+        parentTaskId: 'parent-1',
+        childTaskId: 'child-1',
+        reason: 'child_question',
+        deliveryId,
+        payload: { childTitle: 'Child', childStatus: 'escalated_to_human', questionId: 'q1', questionText: 'Deploy to prod?', informational: true }
+      },
+      now
+    )
+    ctx = makeContext({ subtasks: [subtask('agent_working', 'child-1')] })
+    await queue.tryDeliver('parent-1')
+
+    const message = send.mock.calls[0][1]
+    expect(message).toContain('already went to the human')
+    expect(message).not.toContain('answer_child_question')
+  })
+})

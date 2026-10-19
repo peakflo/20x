@@ -347,50 +347,90 @@ describe('db:updateTask heartbeat cascade on parent completion', () => {
   })
 })
 
-describe('child questions — a human answering directly cancels the parent\'s pending item', () => {
+describe('child questions — a human answering directly claims the live item first (answerAsHuman)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  function setupAgentManager() {
-    const cancelLatestPendingForChild = vi.fn()
+  function setupAgentManager(answerAsHumanImpl?: (...args: unknown[]) => unknown) {
+    const answerAsHuman = vi.fn(answerAsHumanImpl ?? (async () => null))
+    const sendByTaskId = vi.fn(async () => ({ success: true, sessionId: 'session-1' }))
+    const sendMessage = vi.fn(async () => ({ success: true }))
+    const respondToPermission = vi.fn(async () => undefined)
     const agentManager = {
       noteUserTaskActivity: vi.fn(),
-      sendByTaskId: vi.fn(async () => ({ success: true, sessionId: 'session-1' })),
-      sendMessage: vi.fn(async () => ({ success: true })),
-      respondToPermission: vi.fn(async () => undefined),
+      sendByTaskId,
+      sendMessage,
+      respondToPermission,
       getSessionStatus: vi.fn(() => ({ status: 'waiting_approval', agentId: 'agent-1', taskId: 'task-1' })),
-      getChildQuestionService: vi.fn(() => ({ cancelLatestPendingForChild }))
+      getChildQuestionService: vi.fn(() => ({ answerAsHuman }))
     } as unknown as Parameters<typeof registerIpcHandlers>[1]
     registerIpcHandlers({} as never, agentManager, {} as never, {} as never, {} as never, {} as never)
     const handlers = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls as [string, (...args: unknown[]) => unknown][]
-    return { cancelLatestPendingForChild, handlers }
+    return { answerAsHuman, sendByTaskId, sendMessage, respondToPermission, handlers }
   }
 
-  it('agentSession:sendByTaskId cancels the pending item for that task', async () => {
-    const { cancelLatestPendingForChild, handlers } = setupAgentManager()
+  it('agentSession:sendByTaskId claims the live question for that task instead of sending directly', async () => {
+    const { answerAsHuman, sendByTaskId, handlers } = setupAgentManager(async () => ({ success: true, record: { id: 'cq-1' } }))
     const handler = handlers.find(([channel]) => channel === 'agentSession:sendByTaskId')![1]
 
-    await handler({}, 'task-1', 'hello')
+    const result = await handler({}, 'task-1', 'hello')
 
-    expect(cancelLatestPendingForChild).toHaveBeenCalledWith('task-1', 'hello')
+    expect(answerAsHuman).toHaveBeenCalledWith('task-1', undefined, { approved: true, answer: 'hello' })
+    expect(sendByTaskId).not.toHaveBeenCalled()
+    expect(result).toEqual({ success: true, sessionId: null })
   })
 
-  it('agentSession:send cancels the pending item when a taskId is given', async () => {
-    const { cancelLatestPendingForChild, handlers } = setupAgentManager()
+  it('agentSession:sendByTaskId falls through to a direct send when there is nothing live to claim', async () => {
+    const { answerAsHuman, sendByTaskId, handlers } = setupAgentManager(async () => null)
+    const handler = handlers.find(([channel]) => channel === 'agentSession:sendByTaskId')![1]
+
+    const result = await handler({}, 'task-1', 'hello')
+
+    expect(answerAsHuman).toHaveBeenCalledWith('task-1', undefined, { approved: true, answer: 'hello' })
+    expect(sendByTaskId).toHaveBeenCalledWith('task-1', 'hello', undefined)
+    expect(result).toEqual({ success: true, sessionId: 'session-1' })
+  })
+
+  it('agentSession:send claims the live question when a taskId is given', async () => {
+    const { answerAsHuman, sendMessage, handlers } = setupAgentManager(async () => ({ success: true, record: { id: 'cq-1' } }))
     const handler = handlers.find(([channel]) => channel === 'agentSession:send')![1]
 
-    await handler({}, 'session-1', 'hello', 'task-1', 'agent-1')
+    const result = await handler({}, 'session-1', 'hello', 'task-1', 'agent-1')
 
-    expect(cancelLatestPendingForChild).toHaveBeenCalledWith('task-1', 'hello')
+    expect(answerAsHuman).toHaveBeenCalledWith('task-1', undefined, { approved: true, answer: 'hello' })
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(result).toEqual({ success: true })
   })
 
-  it('agentSession:approve resolves the task from the session and cancels the pending item', async () => {
-    const { cancelLatestPendingForChild, handlers } = setupAgentManager()
+  it('agentSession:send skips the claim path entirely when no taskId is given', async () => {
+    const { answerAsHuman, sendMessage, handlers } = setupAgentManager()
+    const handler = handlers.find(([channel]) => channel === 'agentSession:send')![1]
+
+    await handler({}, 'session-1', 'hello')
+
+    expect(answerAsHuman).not.toHaveBeenCalled()
+    expect(sendMessage).toHaveBeenCalledWith('session-1', 'hello', undefined, undefined, undefined)
+  })
+
+  it('agentSession:approve resolves the task from the session and claims it by the exact requestId', async () => {
+    const { answerAsHuman, respondToPermission, handlers } = setupAgentManager(async () => ({ success: true, record: { id: 'cq-1' } }))
+    const handler = handlers.find(([channel]) => channel === 'agentSession:approve')![1]
+
+    const result = await handler({}, 'session-1', true, 'ok', 'permission', 'req-7')
+
+    expect(answerAsHuman).toHaveBeenCalledWith('task-1', 'req-7', { approved: true, answer: 'ok' })
+    expect(respondToPermission).not.toHaveBeenCalled()
+    expect(result).toEqual({ success: true })
+  })
+
+  it('agentSession:approve falls through to respondToPermission when there is nothing live to claim', async () => {
+    const { answerAsHuman, respondToPermission, handlers } = setupAgentManager(async () => null)
     const handler = handlers.find(([channel]) => channel === 'agentSession:approve')![1]
 
     await handler({}, 'session-1', true, 'ok')
 
-    expect(cancelLatestPendingForChild).toHaveBeenCalledWith('task-1', 'approved')
+    expect(answerAsHuman).toHaveBeenCalledWith('task-1', undefined, { approved: true, answer: 'ok' })
+    expect(respondToPermission).toHaveBeenCalledWith('session-1', true, 'ok', undefined, undefined, undefined)
   })
 })

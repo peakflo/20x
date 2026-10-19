@@ -850,25 +850,78 @@ describe('children\'s questions go to the parent first (task API routes)', () =>
     expect(byChild.questions).toEqual([{ id: 'cq-2' }])
   })
 
-  it('/respond_to_checkpoint cancels the parent\'s pending item once the human answers directly', async () => {
+  it('/respond_to_checkpoint answers directly when there is no live child question', async () => {
     const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
     const task = db.createTask(makeTask({ title: 'Waiting task' }))!
     db.updateTask(task.id, { agent_id: agent.id })
 
-    const cancelLatestPendingForChild = vi.fn()
+    const getLiveForChild = vi.fn(() => null)
     const respondToPermission = vi.fn(async () => undefined)
     setTaskApiAgentController({
       findSessionByTaskId: vi.fn(() => ({ sessionId: 'session-1' })),
       getSessionStatus: vi.fn(() => ({ status: 'waiting_approval' })),
       respondToPermission,
-      getChildQuestionService: () => ({ cancelLatestPendingForChild })
+      getChildQuestionService: () => ({ getLiveForChild })
     } as any)
     const port = await startTaskApiServer(db)
 
-    await post(port, '/respond_to_checkpoint', { task_id: task.id, approved: true })
+    const result = await post<Record<string, unknown>>(port, '/respond_to_checkpoint', { task_id: task.id, approved: true })
 
+    expect(getLiveForChild).toHaveBeenCalledWith(task.id)
     expect(respondToPermission).toHaveBeenCalled()
-    expect(cancelLatestPendingForChild).toHaveBeenCalledWith(task.id, 'approved')
+    expect(result.success).toBe(true)
+  })
+
+  it('/respond_to_checkpoint routes a live pending_parent question through answerFromParent instead of answering it directly — MCP-only gating', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
+    const task = db.createTask(makeTask({ title: 'Waiting task' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+
+    const respondToPermission = vi.fn(async () => undefined)
+    const answerFromParent = vi.fn(async () => ({ success: true, record: { id: 'cq-1', state: 'answered_by_parent' } }))
+    const getLiveForChild = vi.fn(() => ({
+      questionId: 'q1',
+      parentTaskId: 'parent-1',
+      state: 'pending_parent'
+    }))
+    setTaskApiAgentController({
+      findSessionByTaskId: vi.fn(() => ({ sessionId: 'session-1' })),
+      getSessionStatus: vi.fn(() => ({ status: 'waiting_approval' })),
+      respondToPermission,
+      getChildQuestionService: () => ({ getLiveForChild, answerFromParent })
+    } as any)
+    const port = await startTaskApiServer(db)
+
+    const result = await post<Record<string, unknown>>(port, '/respond_to_checkpoint', { task_id: task.id, approved: true })
+
+    expect(answerFromParent).toHaveBeenCalledWith('parent-1', task.id, 'q1', { approved: true, answer: undefined })
+    expect(respondToPermission).not.toHaveBeenCalled()
+    expect(result.success).toBe(true)
+  })
+
+  it('/respond_to_checkpoint refuses when the live question has already moved past the parent (escalated/answered)', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
+    const task = db.createTask(makeTask({ title: 'Waiting task' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+
+    const respondToPermission = vi.fn(async () => undefined)
+    const getLiveForChild = vi.fn(() => ({
+      questionId: 'q1',
+      parentTaskId: 'parent-1',
+      state: 'escalated'
+    }))
+    setTaskApiAgentController({
+      findSessionByTaskId: vi.fn(() => ({ sessionId: 'session-1' })),
+      getSessionStatus: vi.fn(() => ({ status: 'waiting_approval' })),
+      respondToPermission,
+      getChildQuestionService: () => ({ getLiveForChild })
+    } as any)
+    const port = await startTaskApiServer(db)
+
+    const result = await post<Record<string, unknown>>(port, '/respond_to_checkpoint', { task_id: task.id, approved: true })
+
+    expect(result.error).toMatch(/needs the human/)
+    expect(respondToPermission).not.toHaveBeenCalled()
   })
 })
 
@@ -1509,11 +1562,11 @@ describe('client_request_id idempotency', () => {
     const task = db.createTask(makeTask({ title: 'Messageable' }))!
     db.updateTask(task.id, { agent_id: agent.id })
     const sendByTaskId = vi.fn(async () => ({ sessionId: 'session-abc' }))
-    const cancelLatestPendingForChild = vi.fn()
+    const getLiveForChild = vi.fn(() => null)
     setTaskApiAgentController({
       sendByTaskId,
       findSessionByTaskId: vi.fn(() => undefined),
-      getChildQuestionService: () => ({ cancelLatestPendingForChild })
+      getChildQuestionService: () => ({ getLiveForChild })
     } as any)
     const port = await startTaskApiServer(db)
 
@@ -1533,7 +1586,12 @@ describe('client_request_id idempotency', () => {
     db.updateTask(task.id, { agent_id: agent.id })
     const startTask = vi.fn(async () => ({ action: 'task_started' as const, sessionId: 's-1', startedTaskId: task.id, agentId: agent.id }))
     const sendByTaskId = vi.fn(async () => ({ sessionId: 's-1' }))
-    setTaskApiAgentController({ startTask, sendByTaskId, findSessionByTaskId: vi.fn(() => undefined) } as any)
+    setTaskApiAgentController({
+      startTask,
+      sendByTaskId,
+      findSessionByTaskId: vi.fn(() => undefined),
+      getChildQuestionService: () => ({ getLiveForChild: vi.fn(() => null) })
+    } as any)
     const port = await startTaskApiServer(db)
 
     await post(port, '/start_task', { task_id: task.id, client_request_id: 'req-1' })

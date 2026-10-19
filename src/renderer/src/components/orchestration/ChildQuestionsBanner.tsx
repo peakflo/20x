@@ -49,11 +49,16 @@ function ParentQuestionCard({
   const summary = answerSummary(record)
 
   const submitAnswer = async (input: { approved?: boolean; answer?: string; optionId?: string }): Promise<void> => {
-    if (!record.parentTaskId) return
     setPending(true)
     setError(null)
     try {
-      const result = await childQuestionsApi.answer(record.parentTaskId, record.childTaskId, record.questionId, input)
+      // This card is rendered in the desktop app for a human to click — that
+      // is a human decision, not the parent agent's own, even though it's
+      // shown on the parent's task. Answering "as parent" here (answer,
+      // attributed "Answered by Mastermind") would misreport who actually
+      // decided. answerAsHuman also works on an already-escalated item,
+      // which `answer` (parent-only, pending_parent-only) would refuse.
+      const result = await childQuestionsApi.answerAsHuman(record.childTaskId, record.questionId, input)
       if ('error' in result) setError(result.error)
       else onUpdate(result.record)
     } catch (e) {
