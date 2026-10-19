@@ -319,6 +319,43 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('task:deleted', handler)
     return () => ipcRenderer.removeListener('task:deleted', handler)
   },
+  onChildQuestionRaised: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('task:childQuestionRaised', handler)
+    return () => ipcRenderer.removeListener('task:childQuestionRaised', handler)
+  },
+  onChildQuestionAnswered: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('task:childQuestionAnswered', handler)
+    return () => ipcRenderer.removeListener('task:childQuestionAnswered', handler)
+  },
+  onChildQuestionEscalated: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('task:childQuestionEscalated', handler)
+    return () => ipcRenderer.removeListener('task:childQuestionEscalated', handler)
+  },
+  childQuestions: {
+    listForParent: (parentTaskId: string): Promise<unknown[]> => ipcRenderer.invoke('childQuestions:listForParent', parentTaskId),
+    listForChild: (childTaskId: string): Promise<unknown[]> => ipcRenderer.invoke('childQuestions:listForChild', childTaskId),
+    answer: (
+      parentTaskId: string,
+      childTaskId: string,
+      questionId: string,
+      input: { approved?: boolean; answer?: string; optionId?: string }
+    ): Promise<unknown> => ipcRenderer.invoke('childQuestions:answer', parentTaskId, childTaskId, questionId, input),
+    // Distinct from `answer` above: that one speaks FOR the parent agent
+    // (attributed "Answered by Mastermind"). This is a human using the
+    // desktop app clicking the same buttons — it must be attributed to the
+    // human, whether the question is still pending_parent or has already
+    // been escalated, so it claims through answerAsHuman instead.
+    answerAsHuman: (
+      childTaskId: string,
+      questionId: string | undefined,
+      input: { approved?: boolean; answer?: string; optionId?: string }
+    ): Promise<unknown> => ipcRenderer.invoke('childQuestions:answerAsHuman', childTaskId, questionId, input),
+    escalate: (parentTaskId: string, childTaskId: string, questionId: string, note?: string): Promise<unknown> =>
+      ipcRenderer.invoke('childQuestions:escalate', parentTaskId, childTaskId, questionId, note)
+  },
   settings: {
     get: (key: string): Promise<string | null> => ipcRenderer.invoke('settings:get', key),
     set: (key: string, value: string): Promise<void> => ipcRenderer.invoke('settings:set', key, value),

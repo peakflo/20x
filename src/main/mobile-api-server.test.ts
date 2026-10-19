@@ -288,6 +288,260 @@ describe('mobile-api-server: POST /api/tasks/:id coordinator wake-up', () => {
   })
 })
 
+describe('mobile-api-server: a human answering directly claims the live child question first (answerAsHuman)', () => {
+  afterEach(() => {
+    stopMobileApiServer()
+    vi.restoreAllMocks()
+  })
+
+  function startServer(agentManager: unknown) {
+    const { db } = createTestDb()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const port = 21000 + Math.floor(Math.random() * 40000)
+    return { db, portPromise: startMobileApiServer(db, agentManager as never, {} as never, port) }
+  }
+
+  function pairToken(db: DatabaseManager): string {
+    const token = 'test-pairing-token'
+    const hash = createHash('sha256').update(token).digest('hex')
+    db.createMobileSession('sess-1', hash, 'test-device')
+    return token
+  }
+
+  it('POST /api/sessions/:id/send claims a live QUESTION for the given task instead of sending directly', async () => {
+    const answerAsHumanViaMessage = vi.fn(async () => ({ success: true, record: { id: 'cq-1' } }))
+    const sendMessage = vi.fn(async () => ({ success: true }))
+    const agentManager = {
+      noteUserTaskActivity: vi.fn(),
+      sendMessage,
+      getChildQuestionService: vi.fn(() => ({ answerAsHumanViaMessage }))
+    }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    await fetch(`http://127.0.0.1:${port}/api/sessions/session-1/send`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'hello', taskId: 'task-1' })
+    })
+
+    expect(answerAsHumanViaMessage).toHaveBeenCalledWith('task-1', 'hello')
+    expect(sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('POST /api/sessions/:id/send falls through to a direct send when there is nothing live to claim', async () => {
+    const answerAsHumanViaMessage = vi.fn(async () => null)
+    const sendMessage = vi.fn(async () => ({ success: true }))
+    const agentManager = {
+      noteUserTaskActivity: vi.fn(),
+      sendMessage,
+      getChildQuestionService: vi.fn(() => ({ answerAsHumanViaMessage }))
+    }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    await fetch(`http://127.0.0.1:${port}/api/sessions/session-1/send`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'hello', taskId: 'task-1' })
+    })
+
+    expect(sendMessage).toHaveBeenCalledWith('session-1', 'hello', 'task-1', undefined, undefined)
+  })
+
+  it('POST /api/sessions/:id/send with "no, don\'t" while a live APPROVAL is pending delivers it as a normal message — it must NOT approve the command', async () => {
+    const answerAsHumanViaMessage = vi.fn(async () => null)
+    const sendMessage = vi.fn(async () => ({ success: true }))
+    const agentManager = {
+      noteUserTaskActivity: vi.fn(),
+      sendMessage,
+      getChildQuestionService: vi.fn(() => ({ answerAsHumanViaMessage }))
+    }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    await fetch(`http://127.0.0.1:${port}/api/sessions/session-1/send`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: "no, don't", taskId: 'task-1' })
+    })
+
+    expect(answerAsHumanViaMessage).toHaveBeenCalledWith('task-1', "no, don't")
+    expect(sendMessage).toHaveBeenCalledWith('session-1', "no, don't", 'task-1', undefined, undefined)
+  })
+
+  it('POST /api/sessions/:id/approve resolves the task from the session and claims it by the exact requestId', async () => {
+    const answerAsHuman = vi.fn(async () => ({ success: true, record: { id: 'cq-1' } }))
+    const respondToPermission = vi.fn(async () => undefined)
+    const agentManager = {
+      respondToPermission,
+      getSessionStatus: vi.fn(() => ({ status: 'waiting_approval', agentId: 'agent-1', taskId: 'task-1' })),
+      getChildQuestionService: vi.fn(() => ({ answerAsHuman }))
+    }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    await fetch(`http://127.0.0.1:${port}/api/sessions/session-1/approve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: true, requestId: 'req-7' })
+    })
+
+    expect(answerAsHuman).toHaveBeenCalledWith('task-1', 'req-7', { approved: true, answer: undefined })
+    expect(respondToPermission).not.toHaveBeenCalled()
+  })
+
+  it('POST /api/sessions/:id/approve falls through to respondToPermission when there is nothing live to claim', async () => {
+    const answerAsHuman = vi.fn(async () => null)
+    const respondToPermission = vi.fn(async () => undefined)
+    const agentManager = {
+      respondToPermission,
+      getSessionStatus: vi.fn(() => ({ status: 'waiting_approval', agentId: 'agent-1', taskId: 'task-1' })),
+      getChildQuestionService: vi.fn(() => ({ answerAsHuman }))
+    }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    await fetch(`http://127.0.0.1:${port}/api/sessions/session-1/approve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: true })
+    })
+
+    expect(respondToPermission).toHaveBeenCalledWith('session-1', true, undefined, undefined, undefined, undefined)
+  })
+})
+
+describe('mobile-api-server: child-questions routes', () => {
+  afterEach(() => {
+    stopMobileApiServer()
+    vi.restoreAllMocks()
+  })
+
+  function startServer(agentManager: unknown) {
+    const { db } = createTestDb()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const port = 21000 + Math.floor(Math.random() * 40000)
+    return { db, portPromise: startMobileApiServer(db, agentManager as never, {} as never, port) }
+  }
+
+  function pairToken(db: DatabaseManager): string {
+    const token = 'test-pairing-token'
+    const hash = createHash('sha256').update(token).digest('hex')
+    db.createMobileSession('sess-1', hash, 'test-device')
+    return token
+  }
+
+  it('GET /api/tasks/:id/child-questions returns both directions for that task', async () => {
+    const listForParent = vi.fn(() => [{ id: 'cq-1' }])
+    const listForChild = vi.fn(() => [{ id: 'cq-2' }])
+    const agentManager = { getChildQuestionService: () => ({ listForParent, listForChild }) }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/task-1/child-questions`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+    const body = await res.json() as Record<string, unknown>
+
+    expect(listForParent).toHaveBeenCalledWith('task-1')
+    expect(listForChild).toHaveBeenCalledWith('task-1')
+    expect(body).toEqual({ as_parent: [{ id: 'cq-1' }], as_child: [{ id: 'cq-2' }] })
+  })
+
+  it('POST /api/tasks/:id/child-questions/answer delegates to answerFromParent', async () => {
+    const answerFromParent = vi.fn(async () => ({ success: true, record: { id: 'cq-1' } }))
+    const agentManager = { getChildQuestionService: () => ({ answerFromParent }) }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/parent-1/child-questions/answer`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ child_task_id: 'child-1', question_id: 'q1', approved: true })
+    })
+
+    expect(res.status).toBe(200)
+    expect(answerFromParent).toHaveBeenCalledWith('parent-1', 'child-1', 'q1', { approved: true, answer: undefined, optionId: undefined })
+  })
+
+  it('POST /api/tasks/:id/child-questions/answer-as-human delegates to answerAsHuman — :id is the CHILD task', async () => {
+    const answerAsHuman = vi.fn(async () => ({ success: true, record: { id: 'cq-1', answeredBy: 'human' } }))
+    const agentManager = { getChildQuestionService: () => ({ answerAsHuman }) }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/child-1/child-questions/answer-as-human`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question_id: 'q1', approved: true })
+    })
+    const body = await res.json() as Record<string, unknown>
+
+    expect(res.status).toBe(200)
+    expect(answerAsHuman).toHaveBeenCalledWith('child-1', 'q1', { approved: true, answer: undefined, optionId: undefined })
+    expect(body).toMatchObject({ success: true, record: { answeredBy: 'human' } })
+  })
+
+  it('POST /api/tasks/:id/child-questions/answer-as-human reports when nothing is left to claim', async () => {
+    const answerAsHuman = vi.fn(async () => null)
+    const agentManager = { getChildQuestionService: () => ({ answerAsHuman }) }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/child-1/child-questions/answer-as-human`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ approved: true })
+    })
+    const body = await res.json() as Record<string, unknown>
+
+    expect(answerAsHuman).toHaveBeenCalledWith('child-1', undefined, { approved: true, answer: undefined, optionId: undefined })
+    expect(body).toEqual({ error: 'That question is no longer waiting for an answer.' })
+  })
+
+  it('POST /api/tasks/:id/child-questions/escalate delegates to escalateToUser with the note', async () => {
+    const escalateToUser = vi.fn(() => ({ success: true, record: { id: 'cq-1' } }))
+    const agentManager = { getChildQuestionService: () => ({ escalateToUser }) }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/parent-1/child-questions/escalate`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ child_task_id: 'child-1', question_id: 'q1', note: 'Needs a human' })
+    })
+
+    expect(res.status).toBe(200)
+    expect(escalateToUser).toHaveBeenCalledWith('parent-1', 'child-1', 'q1', 'Needs a human')
+  })
+
+  it('POST /api/tasks/:id/child-questions/answer requires child_task_id and question_id', async () => {
+    const agentManager = { getChildQuestionService: () => ({ answerFromParent: vi.fn() }) }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/tasks/parent-1/child-questions/answer`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    })
+
+    expect(res.status).toBe(400)
+  })
+})
+
 describe('mobile-api-server: source completion action', () => {
   afterEach(() => {
     stopMobileApiServer()

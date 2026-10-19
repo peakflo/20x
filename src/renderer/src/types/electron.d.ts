@@ -4,6 +4,7 @@ import type { UiCommandAck, UiCommandEnvelope } from '@shared/ui-commands'
 import type { TaskRunDuration } from '@shared/task-run-duration'
 import type {
   WorkfloTask,
+  ChildQuestionRecord,
   CreateTaskDTO,
   UpdateTaskDTO,
   FileAttachment,
@@ -589,6 +590,30 @@ interface ElectronAPI {
   onTaskSourceActionFailed: (callback: (event: { taskId: string; taskTitle: string; error: string }) => void) => () => void
   onTaskCreated: (callback: (event: { task: WorkfloTask }) => void) => () => void
   onTaskDeleted: (callback: (event: { taskId: string }) => void) => () => void
+  onChildQuestionRaised: (callback: (event: { taskId: string; question: ChildQuestionRecord }) => void) => () => void
+  onChildQuestionAnswered: (callback: (event: { taskId: string; questionId: string }) => void) => () => void
+  onChildQuestionEscalated: (callback: (event: { taskId: string; question: ChildQuestionRecord }) => void) => () => void
+  childQuestions: {
+    listForParent: (parentTaskId: string) => Promise<ChildQuestionRecord[]>
+    listForChild: (childTaskId: string) => Promise<ChildQuestionRecord[]>
+    answer: (
+      parentTaskId: string,
+      childTaskId: string,
+      questionId: string,
+      input: { approved?: boolean; answer?: string; optionId?: string }
+    ) => Promise<{ success: true; record: ChildQuestionRecord } | { error: string }>
+    answerAsHuman: (
+      childTaskId: string,
+      questionId: string | undefined,
+      input: { approved?: boolean; answer?: string; optionId?: string }
+    ) => Promise<{ success: true; record: ChildQuestionRecord } | { error: string }>
+    escalate: (
+      parentTaskId: string,
+      childTaskId: string,
+      questionId: string,
+      note?: string
+    ) => Promise<{ success: true; record: ChildQuestionRecord } | { error: string }>
+  }
   onHeartbeatAlert: (callback: (event: HeartbeatAlertEvent) => void) => () => void
   onHeartbeatDisabled: (callback: (event: { taskId: string; reason: string }) => void) => () => void
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void

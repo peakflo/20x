@@ -14,6 +14,7 @@ import { TaskHeaderBar, TaskPrimaryAction } from './TaskHeaderBar'
 import { SubtasksTab } from './SubtasksTab'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
 import { UsageLimitRecoveryBanner } from '@/components/usage/UsageLimitRecoveryBanner'
+import { ChildQuestionsBanner } from '@/components/orchestration/ChildQuestionsBanner'
 import { GhCliSetupDialog } from '@/components/github/GhCliSetupDialog'
 import { OrgPickerDialog } from '@/components/github/OrgPickerDialog'
 import { RepoSelectorDialog } from '@/components/github/RepoSelectorDialog'
@@ -1112,6 +1113,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
     <div className="native-backdrop-page flex h-full min-h-0 flex-col bg-background">
       <AgentApprovalBanner request={session.pendingApproval} onApprove={handleApprove} onReject={handleReject} />
       <UsageLimitRecoveryBanner taskId={task.id} floatingHeader={hasSession && panelLayout !== 'task-only'} />
+      <ChildQuestionsBanner taskId={task.id} floatingHeader={hasSession && panelLayout !== 'task-only'} />
       <AgentTranscriptPanel
         embeddedHeader
         externalHeaderHeight={hasSession && panelLayout !== 'task-only' ? 48 : 0}

@@ -534,6 +534,19 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
     return agentRef!.getUsageLimitRecovery(decodeURIComponent(limitRecoveryGet[1]))
   }
 
+  // GET /api/tasks/:id/child-questions — children's questions go to the
+  // parent first (see orchestration/child-questions.ts). Returns both
+  // directions for one task: questions its own subtasks raised (as_parent)
+  // and questions it itself raised, for its own parent (as_child) — a task
+  // detail screen wants both: a banner for its own pending question, and a
+  // list of what its subtasks are asking it.
+  const childQuestionsGet = pathname.match(/^\/api\/tasks\/([^/]+)\/child-questions$/)
+  if (childQuestionsGet) {
+    const taskId = decodeURIComponent(childQuestionsGet[1])
+    const service = agentRef!.getChildQuestionService()
+    return { as_parent: service.listForParent(taskId), as_child: service.listForChild(taskId) }
+  }
+
   // GET /api/harness-instances — subscription logins (read-only on mobile)
   if (pathname === '/api/harness-instances') {
     return agentRef!.listHarnessInstances()
@@ -1014,6 +1027,60 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     )
   }
 
+  // POST /api/tasks/:id/child-questions/answer — :id is the parent task
+  // answering one of its descendants' questions within its own authority.
+  // { child_task_id, question_id, approved?, answer?, option_id? }
+  const childQuestionAnswerPost = pathname.match(/^\/api\/tasks\/([^/]+)\/child-questions\/answer$/)
+  if (childQuestionAnswerPost) {
+    const parentTaskId = decodeURIComponent(childQuestionAnswerPost[1])
+    const body = params as { child_task_id?: unknown; question_id?: unknown; approved?: unknown; answer?: unknown; option_id?: unknown }
+    if (!body.child_task_id || !body.question_id) {
+      throw Object.assign(new Error('child_task_id and question_id are required'), { status: 400 })
+    }
+    return agent.getChildQuestionService().answerFromParent(parentTaskId, String(body.child_task_id), String(body.question_id), {
+      approved: body.approved === undefined ? undefined : body.approved === true,
+      answer: body.answer !== undefined ? String(body.answer) : undefined,
+      optionId: body.option_id !== undefined ? String(body.option_id) : undefined
+    })
+  }
+
+  // POST /api/tasks/:id/child-questions/answer-as-human — :id is the CHILD
+  // task (not the parent): a human answering one of their own descendants'
+  // questions directly from the phone, attributed to the human whether the
+  // item is still pending_parent or has already been escalated. Distinct
+  // from /answer above, which speaks for the parent agent itself.
+  // { question_id?, approved?, answer?, option_id? }
+  const childQuestionAnswerAsHumanPost = pathname.match(/^\/api\/tasks\/([^/]+)\/child-questions\/answer-as-human$/)
+  if (childQuestionAnswerAsHumanPost) {
+    const childTaskId = decodeURIComponent(childQuestionAnswerAsHumanPost[1])
+    const body = params as { question_id?: unknown; approved?: unknown; answer?: unknown; option_id?: unknown }
+    const result = await agent.getChildQuestionService().answerAsHuman(
+      childTaskId,
+      body.question_id !== undefined ? String(body.question_id) : undefined,
+      {
+        approved: body.approved === undefined ? undefined : body.approved === true,
+        answer: body.answer !== undefined ? String(body.answer) : undefined,
+        optionId: body.option_id !== undefined ? String(body.option_id) : undefined
+      }
+    )
+    if (!result) return { error: 'That question is no longer waiting for an answer.' }
+    return result
+  }
+
+  // POST /api/tasks/:id/child-questions/escalate — :id is the parent task
+  // handing a descendant's question to the human. { child_task_id, question_id, note? }
+  const childQuestionEscalatePost = pathname.match(/^\/api\/tasks\/([^/]+)\/child-questions\/escalate$/)
+  if (childQuestionEscalatePost) {
+    const parentTaskId = decodeURIComponent(childQuestionEscalatePost[1])
+    const body = params as { child_task_id?: unknown; question_id?: unknown; note?: unknown }
+    if (!body.child_task_id || !body.question_id) {
+      throw Object.assign(new Error('child_task_id and question_id are required'), { status: 400 })
+    }
+    return agent
+      .getChildQuestionService()
+      .escalateToUser(parentTaskId, String(body.child_task_id), String(body.question_id), body.note !== undefined ? String(body.note) : undefined)
+  }
+
   // POST /api/usage/limits/refresh — re-read plan limits ({ force?: boolean })
   if (pathname === '/api/usage/limits/refresh') {
     return agent.refreshUsageLimits({ force: (params as { force?: unknown }).force === true })
@@ -1096,6 +1163,20 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     }
     if (!message) throw Object.assign(new Error('message is required'), { status: 400 })
     agent.noteUserTaskActivity(taskId, sessionId)
+    // Claim-first: if there's a live child QUESTION (not an approval — see
+    // answerAsHumanViaMessage) for this task, answer it THROUGH the claim
+    // (so a concurrent parent answer can't also reach the harness) instead
+    // of sending directly and reconciling after.
+    if (taskId) {
+      try {
+        const claimed = await agent.getChildQuestionService().answerAsHumanViaMessage(taskId, message)
+        if (claimed) {
+          return 'error' in claimed ? claimed : { success: true }
+        }
+      } catch (err) {
+        console.error(`[MobileAPI] Child-question claim check failed for task ${taskId} before send, falling through to a direct send:`, err)
+      }
+    }
     const result = await agent.sendMessage(sessionId, message, taskId, aid, attachments)
     return { success: true, ...result }
   }
@@ -1111,6 +1192,17 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
       requestId?: string
     }
     if (typeof approved !== 'boolean') throw Object.assign(new Error('approved (boolean) is required'), { status: 400 })
+    const taskId = agent.getSessionStatus(sessionId)?.taskId
+    if (taskId) {
+      try {
+        const claimed = await agent.getChildQuestionService().answerAsHuman(taskId, requestId, { approved, answer: message })
+        if (claimed) {
+          return 'error' in claimed ? claimed : { success: true }
+        }
+      } catch (err) {
+        console.error(`[MobileAPI] Child-question claim check failed for task ${taskId} before approve, falling through to a direct response:`, err)
+      }
+    }
     await agent.respondToPermission(sessionId, approved, message, undefined, responseType, requestId)
     return { success: true }
   }

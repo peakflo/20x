@@ -216,6 +216,10 @@ export interface AgentConfig {
   /** ACP agent instance this agent runs (one row of `acp_agent_instances`). Required when coding_agent is 'acp'. */
   acp_instance_id?: string
   permission_mode?: AgentPermissionMode
+  /** Per-agent override of the global "route subtask questions to the parent agent first" setting. Unset inherits the global default (on). */
+  route_child_questions_to_parent?: boolean
+  /** Per-agent override of how long (ms) a child's question waits for this agent before auto-escalating to the human. Unset inherits the global default (10 minutes). */
+  child_question_escalation_timeout_ms?: number
   sandbox_mode?: AgentSandboxMode
   system_prompt?: string
   mcp_servers?: Array<string | AgentMcpServerEntry>
@@ -323,6 +327,14 @@ export interface RecurrencePatternObject {
 
 /** A cron expression string OR a legacy JSON object */
 export type RecurrencePattern = RecurrencePatternObject | string
+
+/**
+ * A subtask's question or approval request, routed to its parent task first.
+ * The real type lives in `@shared/child-questions` (shared with the main
+ * process and the mobile SPA); re-exported here so renderer code can keep
+ * importing it from `@/types` like everything else.
+ */
+export type { ChildQuestionRecord, ChildQuestionKind, ChildQuestionState, ChildQuestionAnsweredBy, ChildQuestionOption } from '@shared/child-questions'
 
 export interface WorkfloTask {
   server_pending_edits?: Record<string, unknown>

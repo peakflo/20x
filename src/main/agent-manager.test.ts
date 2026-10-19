@@ -1163,6 +1163,22 @@ describe('AgentManager OS notifications', () => {
     expect(notificationInstances[0].opts.body).toContain('Test Task')
   })
 
+  it('does NOT send the generic question push for a subtask\'s question — that is the children\'s-questions flow\'s call', () => {
+    const { mgr } = createManagerWithWindow({ isFocused: false })
+    vi.spyOn(mgr as any, 'persistTranscriptEvent').mockImplementation(() => undefined)
+    // getTask is called with whatever taskId sendToRenderer is given — here
+    // that's always 'task-1', so stub it to report a subtask for this test.
+    vi.spyOn((mgr as any).db, 'getTask').mockReturnValue({ id: 'task-1', title: 'Test Task', parent_task_id: 'parent-1' })
+    vi.spyOn(mgr as any, 'raiseChildQuestionIfNeeded').mockResolvedValue(undefined)
+
+    ;(mgr as any).sendToRenderer('agent:status', { sessionId: 's1', taskId: 'task-1', status: SessionStatus.WORKING })
+    const question = { id: 'tool-1', partType: 'question', tool: { name: 'AskUserQuestion', status: 'pending' } }
+    ;(mgr as any).sendToRenderer('agent:output-batch', { sessionId: 's1', taskId: 'task-1', messages: [question] })
+
+    expect(sendMobilePush).not.toHaveBeenCalled()
+    expect((mgr as any).raiseChildQuestionIfNeeded).toHaveBeenCalledWith('task-1', question)
+  })
+
   it('keeps phone notifications quiet while the desktop window is focused', () => {
     const { mgr } = createManagerWithWindow({ isFocused: true })
     vi.spyOn(mgr as any, 'persistTranscriptEvent').mockImplementation(() => undefined)
@@ -1186,6 +1202,26 @@ describe('AgentManager OS notifications', () => {
     expect(notificationInstances[0].opts.title).toBe('Agent needs approval')
     expect(notificationInstances[0].opts.body).toContain('Test Task')
     expect(notificationInstances[0].show).toHaveBeenCalled()
+  })
+
+  it('does NOT show the generic approval notification (or mobile push) when a subtask\'s approval is already owned by the children\'s-questions flow', () => {
+    // Children's questions go to the parent first: raiseChildApprovalIfNeeded
+    // owns the human-notification decision for this transition entirely
+    // (silence if routed to the parent, exactly one notification via
+    // notifyHumanAboutChildQuestion if it escalates) — the generic path here
+    // must stand down, or the child would get a duplicate/wrong notification.
+    const { mgr } = createManagerWithWindow({ isFocused: false })
+
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.WORKING
+    })
+    ;(mgr as any).sendToRenderer('agent:status', {
+      sessionId: 's1', agentId: 'a1', taskId: 'task-1', status: SessionStatus.WAITING_APPROVAL,
+      childQuestionOwnsNotification: true
+    })
+
+    expect(notificationInstances).toHaveLength(0)
+    expect(sendMobilePush).not.toHaveBeenCalled()
   })
 
   it('does NOT show notification when window is focused', () => {
@@ -4102,6 +4138,298 @@ describe('AgentManager event-driven parent wake-up', () => {
     await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
 
     expect(wakeSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe('AgentManager child questions go to the parent first', () => {
+  function buildManager(tasks: Record<string, Record<string, unknown>>, agents: Record<string, Record<string, unknown>> = {}) {
+    const mockDb = createMockDb({})
+    Object.assign(mockDb as any, {
+      getTask: vi.fn((id: string) => tasks[id]),
+      getAgent: vi.fn((id: string) => agents[id]),
+      db: new Database(':memory:'),
+    })
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    const wakeSpy = vi.spyOn(mgr, 'sendByTaskId').mockResolvedValue({ sessionId: 'parent-session' })
+    // Only the child has a live session — the parent's lookup (used by the
+    // wake-up queue's delivery-context check) must report "no live session"
+    // so delivery isn't blocked as "busy".
+    mgr.findSessionByTaskId = vi.fn((taskId: string) =>
+      taskId === 'child-1' ? { sessionId: 'child-session', session: { status: 'waiting_approval' } } : undefined
+    ) as any
+    mgr.respondToPermission = vi.fn().mockResolvedValue(undefined)
+    notificationInstances.length = 0
+    return { mgr, mockDb, wakeSpy }
+  }
+
+  const parent = { id: 'parent-1', title: 'Parent', status: TaskStatus.AgentWorking, parent_task_id: null, agent_id: 'parent-agent' }
+  const child = { id: 'child-1', title: 'Child', status: TaskStatus.AgentWorking, parent_task_id: 'parent-1', agent_id: 'child-agent' }
+
+  it('raises a subtask approval with its parent and wakes it, instead of going to the human', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parent, 'child-1': child })
+    // A safe, workspace-local command — not one of the always-escalate
+    // dangerous patterns (see command-authority.ts) — so this exercises the
+    // "routes to parent" path rather than the default-deny one.
+    const fakeAdapter = { getPendingApproval: vi.fn(() => ({ requestId: 'req-1', question: 'Run `npm test`?', options: [{ optionId: 'allow', name: 'Yes' }] })) }
+
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    const [taskId, message] = wakeSpy.mock.calls[0]
+    expect(taskId).toBe('parent-1')
+    expect(message).toContain('child_question')
+    expect(notificationInstances).toHaveLength(0)
+    expect((mgr as any).sendToRenderer).toHaveBeenCalledWith(
+      'task:childQuestionRaised',
+      expect.objectContaining({ taskId: 'child-1', question: expect.objectContaining({ state: 'pending_parent' }) })
+    )
+  })
+
+  it('escalates an OpenCode bash permission whose patterns array hides a dangerous sub-command behind a safe one', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parent, 'child-1': child })
+    // OpenCode's bash permission can report one array entry PER PARSED
+    // SUB-COMMAND — "ls && python evil.py" arrives as ["ls", "python
+    // evil.py"], not one joined string. Joining them first would read as a
+    // single harmless "ls python evil.py" and wrongly route to the parent.
+    const fakeAdapter = {
+      getPendingApproval: vi.fn(() => ({
+        requestId: 'req-1',
+        question: 'Allow bash access to: ls, python evil.py',
+        options: [],
+        permission: 'bash',
+        patterns: ['ls', 'python evil.py']
+      }))
+    }
+
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+
+    expect(notificationInstances).toHaveLength(1)
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    expect((mgr as any).sendToRenderer).toHaveBeenCalledWith(
+      'task:childQuestionEscalated',
+      expect.objectContaining({ taskId: 'child-1', question: expect.objectContaining({ state: 'escalated' }) })
+    )
+  })
+
+  it('routes an OpenCode bash permission to the parent when every pattern in the array is independently safe', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const fakeAdapter = {
+      getPendingApproval: vi.fn(() => ({
+        requestId: 'req-1',
+        question: 'Allow bash access to: git add ., git commit -m "x"',
+        options: [],
+        permission: 'bash',
+        patterns: ['git add .', 'git commit -m "x"']
+      }))
+    }
+
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+
+    expect(notificationInstances).toHaveLength(0)
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    expect((mgr as any).sendToRenderer).toHaveBeenCalledWith(
+      'task:childQuestionRaised',
+      expect.objectContaining({ taskId: 'child-1', question: expect.objectContaining({ state: 'pending_parent' }) })
+    )
+  })
+
+  it('raises a subtask AskUserQuestion with its parent', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const part = { id: 'part-1', tool: { name: 'AskUserQuestion', questions: [{ header: 'Env', question: 'Which environment?', options: [{ label: 'staging' }, { label: 'production' }] }] } }
+
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', part)
+
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    expect(wakeSpy.mock.calls[0][0]).toBe('parent-1')
+  })
+
+  it('two different questions with NEITHER requestId nor a part id get different ids, instead of both collapsing to "undefined"', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    // Neither `tool.requestId` nor `id` is set on either part — a harness
+    // whose transcript part shape doesn't carry either. Without a
+    // content-derived fallback, String(undefined ?? undefined) would give
+    // both the SAME literal id "undefined", and raise()'s own idempotency
+    // check (getByChildAndQuestionId) would read the second as a duplicate
+    // of the first and silently drop it.
+    const partA = { tool: { name: 'AskUserQuestion', questions: [{ header: 'Env', question: 'Which environment?' }] } }
+    const partB = { tool: { name: 'AskUserQuestion', questions: [{ header: 'Region', question: 'Which region?' }] } }
+
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', partA)
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', partB)
+
+    const questions = mgr.getChildQuestionService().listForChild('child-1')
+    expect(questions).toHaveLength(2)
+    expect(questions[0].questionId).not.toBe(questions[1].questionId)
+    expect(new Set(questions.map((q) => q.questionText))).toEqual(new Set(['Env: Which environment?', 'Region: Which region?']))
+  })
+
+  it('the SAME id-less question raised twice (e.g. re-rendered from a transcript batch) still collapses to one record, not two', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const part = { tool: { name: 'AskUserQuestion', questions: [{ header: 'Env', question: 'Which environment?' }] } }
+
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', part)
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', { ...part })
+
+    expect(mgr.getChildQuestionService().listForChild('child-1')).toHaveLength(1)
+  })
+
+  it('escalates an out-of-authority approval straight to the human, as an OS notification', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const fakeAdapter = { getPendingApproval: vi.fn(() => ({ requestId: 'req-1', question: 'Deploy this change to production now?', options: [] })) }
+
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+
+    expect(notificationInstances).toHaveLength(1)
+    expect(notificationInstances[0].opts.title).toBe('Agent needs approval')
+    expect(sendMobilePush).toHaveBeenCalledWith(expect.anything(), 'approval', 'child-1', 'Child')
+    // The parent is still told, for information, even though it's not its call to make.
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    expect((mgr as any).sendToRenderer).toHaveBeenCalledWith(
+      'task:childQuestionEscalated',
+      expect.objectContaining({ taskId: 'child-1', question: expect.objectContaining({ state: 'escalated' }) })
+    )
+  })
+
+  it('escalates when the parent agent is under its own "ask" permission mode', async () => {
+    const { mgr } = buildManager(
+      { 'parent-1': parent, 'child-1': child },
+      { 'parent-agent': { id: 'parent-agent', config: { permission_mode: 'ask' } } }
+    )
+    const fakeAdapter = { getPendingApproval: vi.fn(() => ({ requestId: 'req-1', question: 'Install a dependency?', options: [] })) }
+
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+
+    expect(notificationInstances).toHaveLength(1)
+  })
+
+  it('lets the parent answer an approval, which drives respondToPermission and leaves a transcript note', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const fakeAdapter = { getPendingApproval: vi.fn(() => ({ requestId: 'req-1', question: 'Run `npm test`?', options: [{ optionId: 'allow', name: 'Yes' }] })) }
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'req-1', { approved: true })
+
+    expect(result).toMatchObject({ success: true })
+    expect(mgr.respondToPermission).toHaveBeenCalledWith('child-session', true, undefined, undefined, 'permission', 'req-1')
+    expect((mgr as any).sendToRenderer).toHaveBeenCalledWith('agent:output', expect.objectContaining({ taskId: 'child-1' }))
+  })
+
+  it('refuses to answer an approval when the adapter reports one pending but with NO identifiable id — unverifiable is treated as a mismatch, not skipped', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    // getPendingApproval returns a real pending approval, but one with
+    // neither requestId nor toolCallId set — there is nothing here to
+    // verify "is this still request req-1" against, so this must refuse
+    // rather than silently assume it's fine. getAdapter is stubbed directly
+    // (it normally resolves a real harness adapter by the agent's configured
+    // backend, which this minimal test fixture has none of) so the
+    // verification block inside answerChildSession actually runs against a
+    // controlled getPendingApproval, instead of silently no-opping because
+    // there's no adapter to check at all.
+    const fakeAdapter = {
+      getPendingApproval: vi.fn(() => ({ requestId: undefined, toolCallId: undefined, question: 'Run `npm test`?', options: [] }))
+    }
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(fakeAdapter)
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+    // No requestId/toolCallId on the pending approval — raiseChildApprovalIfNeeded
+    // falls back to a synthesized id (session:question) for the RECORD itself,
+    // which is a fine, stable key for storage; the point under test is that
+    // answering with THAT exact id still refuses, because getPendingApproval's
+    // own id (used to verify what's live right now) is unverifiable.
+    const [raised] = mgr.getChildQuestionService().listForChild('child-1')
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', raised.questionId, { approved: true })
+
+    expect(result).toMatchObject({ error: expect.stringContaining('no longer matches') })
+    expect(mgr.respondToPermission).not.toHaveBeenCalled()
+  })
+
+  it('refuses to answer an approval when the adapter now reports NO pending approval at all (already answered some other way)', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    let pending: { requestId: string; question: string; options: unknown[] } | null = { requestId: 'req-1', question: 'Run `npm test`?', options: [] }
+    const fakeAdapter = { getPendingApproval: vi.fn(() => pending) }
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(fakeAdapter)
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+    pending = null // the harness has moved on — nothing pending anymore
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'req-1', { approved: true })
+
+    expect(result).toMatchObject({ error: expect.stringContaining('no pending approval') })
+    expect(mgr.respondToPermission).not.toHaveBeenCalled()
+  })
+
+  it('answers an approval once the adapter\'s own pending-request id matches the one being answered', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const fakeAdapter = { getPendingApproval: vi.fn(() => ({ requestId: 'req-1', question: 'Run `npm test`?', options: [] })) }
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(fakeAdapter)
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'req-1', { approved: true })
+
+    expect(result).toMatchObject({ success: true })
+    expect(mgr.respondToPermission).toHaveBeenCalledWith('child-session', true, undefined, undefined, 'permission', 'req-1')
+  })
+
+  it('lets the parent answer a live QUESTION, gated on the session still having one pending at all', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const part = { id: 'q-part-1', tool: { name: 'AskUserQuestion', questions: [{ header: 'Env', question: 'Which environment?', options: [{ label: 'staging' }, { label: 'production' }] }] } }
+    // The session-level "is a question pending" signal (shared with push
+    // notifications) must actually be set for the answer to go through —
+    // mirrors a real question having been raised in the live transcript.
+    ;(mgr as any).pushEvents.questionStarted('child-session', part)
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', part)
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'q-part-1', { answer: 'staging' })
+
+    expect(result).toMatchObject({ success: true })
+    expect(mgr.sendByTaskId).toHaveBeenCalledWith('child-1', 'staging')
+  })
+
+  it('refuses to answer a QUESTION once the session has already moved on (no question pending anymore)', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const part = { id: 'q-part-1', tool: { name: 'AskUserQuestion', questions: [{ header: 'Env', question: 'Which environment?', options: [{ label: 'staging' }, { label: 'production' }] }] } }
+    // Deliberately do NOT mark the question as pending via pushEvents —
+    // models the session having already resumed working (or never having a
+    // question outstanding for this id in the first place).
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', part)
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'q-part-1', { answer: 'staging' })
+
+    expect(result).toMatchObject({ error: expect.stringContaining('no longer pending') })
+    expect(mgr.sendByTaskId).not.toHaveBeenCalledWith('child-1', 'staging')
+  })
+
+  it('rejects the parent answering a question for a task that is not its descendant', async () => {
+    const other = { id: 'other-parent', title: 'Other', status: TaskStatus.AgentWorking, parent_task_id: null, agent_id: null }
+    const { mgr } = buildManager({ 'parent-1': parent, 'other-parent': other, 'child-1': { ...child, parent_task_id: 'other-parent' } })
+    const fakeAdapter = { getPendingApproval: vi.fn(() => ({ requestId: 'req-1', question: 'Run tests?', options: [] })) }
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'req-1', { approved: true })
+
+    expect(result).toMatchObject({ error: expect.any(String) })
+    expect(mgr.respondToPermission).not.toHaveBeenCalled()
+  })
+
+  describe('isTaskDescendantOf', () => {
+    it('is true for a direct child, true for a grandchild, and false otherwise (with a cycle guard)', () => {
+      const tasks: Record<string, Record<string, unknown>> = {
+        a: { id: 'a', parent_task_id: null },
+        b: { id: 'b', parent_task_id: 'a' },
+        c: { id: 'c', parent_task_id: 'b' },
+        // A corrupt cycle unrelated to the ancestor being checked must fail
+        // closed (false) by terminating via the "seen" guard, not loop forever.
+        x: { id: 'x', parent_task_id: 'y' },
+        y: { id: 'y', parent_task_id: 'x' },
+      }
+      const { mgr } = buildManager(tasks)
+
+      expect((mgr as any).isTaskDescendantOf('a', 'b')).toBe(true)
+      expect((mgr as any).isTaskDescendantOf('a', 'c')).toBe(true)
+      expect((mgr as any).isTaskDescendantOf('b', 'a')).toBe(false)
+      expect((mgr as any).isTaskDescendantOf('c', 'a')).toBe(false)
+      expect((mgr as any).isTaskDescendantOf('q', 'x')).toBe(false)
+    })
   })
 })
 

@@ -213,6 +213,21 @@ const mockElectronAPI = {
     eventCallbacks.onTaskDeleted = cb
     return vi.fn()
   }),
+  onChildQuestionRaised: vi.fn((_cb: (event: unknown) => void) => {
+    return vi.fn()
+  }),
+  onChildQuestionAnswered: vi.fn((_cb: (event: unknown) => void) => {
+    return vi.fn()
+  }),
+  onChildQuestionEscalated: vi.fn((_cb: (event: unknown) => void) => {
+    return vi.fn()
+  }),
+  childQuestions: {
+    listForParent: vi.fn().mockResolvedValue([]),
+    listForChild: vi.fn().mockResolvedValue([]),
+    answer: vi.fn().mockResolvedValue({ error: 'not mocked' }),
+    escalate: vi.fn().mockResolvedValue({ error: 'not mocked' })
+  },
   onGithubDeviceCode: vi.fn((_cb: (code: string) => void) => {
     return vi.fn()
   }),

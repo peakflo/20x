@@ -424,15 +424,25 @@ const mastermindTools: Tool[] = [
   },
   {
     name: 'wait_for_subtasks',
-    description: 'Wait until subtasks under a parent task reach ready_for_review, completed, or model_error. Useful for orchestration loops.',
+    description:
+      'Blocks until children change — prefer this over polling get_session_status or list_subtasks. Event-driven, not on a fixed interval: with the default all_terminal/any_terminal, it returns the instant the relevant subtask(s) reach a terminal status. With return_when: "any_event", it ALSO returns the instant a child question is raised (waiting for the parent or escalated) or a subtask ends needing attention, even if none are fully terminal yet — a raised question does not end the wait under all_terminal/any_terminal. A call may return with timed_out: true before anything changed, simply because the wait budget for one call is capped (see timeout_ms); that is not a failure — call it again to keep waiting.',
     inputSchema: {
       type: 'object',
       properties: {
         parent_task_id: { type: 'string', description: 'Parent task ID whose subtasks should be monitored' },
         subtask_ids: { type: 'array', items: { type: 'string' }, description: 'Optional subset of subtask IDs to wait for' },
-        timeout_ms: { type: 'number', description: 'Maximum time to wait before returning the current subtask state' },
-        return_when: { type: 'string', enum: ['all_terminal', 'any_terminal'], description: 'Return when all selected subtasks are terminal, or as soon as any selected subtask is terminal. Defaults to all_terminal.' },
-        terminal_statuses: { type: 'array', items: { type: 'string' }, description: 'Optional terminal statuses to treat as done. Defaults to ready_for_review + completed.' }
+        timeout_ms: { type: 'number', description: 'How long to wait before returning the current subtask state, in milliseconds. Defaults to 55000 (55s) when omitted, and is capped at 110000 (110s) per call for transport safety — a longer value is silently capped, and the result says capped_timeout: true. Long waits are fine regardless — the call will say timed_out and should simply be called again to keep waiting.' },
+        return_when: {
+          type: 'string',
+          enum: ['all_terminal', 'any_terminal', 'any_event'],
+          description: 'all_terminal: every selected subtask has reached a terminal status. any_terminal: as soon as one has. any_event: also returns the moment a child question is raised (waiting for the parent or escalated) or a subtask ends needing attention, even if none are fully terminal yet. Defaults to all_terminal.'
+        },
+        terminal_statuses: { type: 'array', items: { type: 'string' }, description: 'Optional terminal statuses to treat as done. Defaults to ready_for_review + completed + model_error.' },
+        since_seq: {
+          type: 'number',
+          description:
+            'For return_when: "any_event" — the `since_seq` from a PREVIOUS call\'s result. Pass it back on every retry so a child-question event this call already saw (including one that is still live and unanswered) is not reported as "new" again, which would otherwise return instantly done on every retry. Omit on the first call. Every result (including a timed-out one) includes the current `since_seq` to pass next time.'
+        }
       },
       required: ['parent_task_id']
     }
@@ -446,6 +456,50 @@ const mastermindTools: Tool[] = [
         parent_task_id: { type: 'string', description: 'The ID of the parent task' }
       },
       required: ['parent_task_id']
+    }
+  },
+  {
+    name: 'list_child_questions',
+    description:
+      'Questions and approvals raised by descendant subtasks, routed to this task first (see the "route subtask questions to the parent" setting). Each has a state: waiting for the parent, escalated to the human, answered by the parent, or answered by the human. Use this instead of list_pending_approvals to see what your own subtasks are asking you.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parent_task_id: { type: 'string', description: 'List every question routed to this task from any of its descendants' },
+        child_task_id: { type: 'string', description: 'List every question raised by this one task instead (any state, including ones already answered)' }
+      }
+    }
+  },
+  {
+    name: 'answer_child_question',
+    description:
+      'Answer a descendant\'s question or approval request within your own authority, the same way a human answering it would. Scoped to your own descendants — fails on any other task. Not every question can be answered this way: one that needs a human\'s authorization (a deploy, a merge, a destructive command, a payment, an external message) or that arrived while you are in "ask" permission mode is already escalated instead, and answering it here will fail — use escalate_to_user\'s note to hand it off explicitly, or just let the human answer it directly.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parent_task_id: { type: 'string', description: 'Your own task ID' },
+        child_task_id: { type: 'string', description: 'The descendant task that raised the question' },
+        question_id: { type: 'string', description: 'The question ID from list_child_questions or the wake-up message' },
+        approved: { type: 'boolean', description: 'For an approval: true to approve, false to reject' },
+        answer: { type: 'string', description: 'For a question (not an approval): the free-text answer' },
+        option_id: { type: 'string', description: 'Optional: the specific option id being chosen, when the question offered options' }
+      },
+      required: ['parent_task_id', 'child_task_id', 'question_id']
+    }
+  },
+  {
+    name: 'escalate_to_user',
+    description:
+      'Hand a descendant\'s pending question to the human instead of answering it yourself — for anything outside your judgment or authority. Scoped to your own descendants. Left unanswered long enough, a question escalates to the human on its own; call this to do it immediately, with a note explaining why.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parent_task_id: { type: 'string', description: 'Your own task ID' },
+        child_task_id: { type: 'string', description: 'The descendant task that raised the question' },
+        question_id: { type: 'string', description: 'The question ID from list_child_questions or the wake-up message' },
+        note: { type: 'string', description: 'Why this needs the human — shown alongside the escalation' }
+      },
+      required: ['parent_task_id', 'child_task_id', 'question_id']
     }
   },
   // ── Live state and control (unscoped agents only) ───────────
@@ -1072,6 +1126,59 @@ export function listToolsForScope(scope: TaskMcpScope) {
 }
 
 /**
+ * Binds `parent_task_id` to the actual calling session's own task for the
+ * two tools that let an agent act within its own authority over a
+ * descendant (`answer_child_question`, `escalate_to_user`) — never trusting
+ * whatever `parent_task_id` the tool CALL's arguments merely claim. Without
+ * this, any unscoped session could pass any other task's id as
+ * `parent_task_id` and answer or escalate a question belonging to a task it
+ * has no relationship to, as if it were that task's own session — the
+ * server-side `isDescendant` check further downstream only verifies a path
+ * from the CLAIMED parent to the child, never who is actually calling.
+ *
+ * `scope.taskId` is the one thing here that is NOT caller-supplied — it
+ * comes from the URL this exact session was configured with (see
+ * `buildTaskManagementMcpConfig` in agent-manager.ts), so it is trustworthy
+ * caller identity. When it's known, the caller's own claim is checked
+ * against it (a mismatch is refused) and then overridden to it regardless,
+ * so a caller doesn't even need to supply `parent_task_id` correctly to get
+ * the right, bound behavior.
+ *
+ * When `scope.taskId` is NOT known at all (the mastermind/coordinator
+ * session has no task row of its own, nor does a triage session before one
+ * is assigned — see the callers of `buildTaskManagementMcpConfig` in
+ * agent-manager.ts) there is no task identity here to bind to, and the
+ * claimed `parent_task_id` is NOT trustworthy caller identity — it's just
+ * an argument the call supplied, exactly as forgeable as before. These two
+ * tools are specifically about acting within "your own authority over your
+ * own descendants"; with no task of its own, a caller has no such
+ * authority to exercise, so the call is refused outright rather than
+ * trusting the argument.
+ */
+async function invokeUnscopedWithCallerBinding(
+  name: string,
+  args: Record<string, unknown>,
+  scope: TaskMcpScope,
+  invoke: TaskApiInvoke
+): Promise<unknown> {
+  if (name === 'answer_child_question' || name === 'escalate_to_user') {
+    if (!scope.taskId) {
+      return {
+        error: 'This session has no task of its own, so it has no descendants to answer or escalate for — answer_child_question/escalate_to_user need a task-scoped session.'
+      }
+    }
+    const claimed = typeof args.parent_task_id === 'string' ? args.parent_task_id : undefined
+    if (claimed && claimed !== scope.taskId) {
+      return {
+        error: `parent_task_id must be your own task (${scope.taskId}), not another task's id — this tool only lets you act within your own authority over your own descendants.`
+      }
+    }
+    return invoke(`/${name}`, { ...args, parent_task_id: scope.taskId })
+  }
+  return invoke(`/${name}`, args)
+}
+
+/**
  * Runs one tool call for a scope.
  * Returns an MCP tools/call result, and never throws.
  */
@@ -1103,10 +1210,47 @@ export async function callToolForScope(
     if (browserRecordingToolNames.has(name) && (scope.taskId || scope.artifactTaskId)) {
       normalizedArgs.task_id = scope.taskId || scope.artifactTaskId
     }
+    // send_message/respond_to_checkpoint have no parent_task_id argument to
+    // bind the way answer_child_question/escalate_to_user do (their main
+    // argument names the CHILD, not a claimed parent) — so the caller's own
+    // task is injected here instead, as a trusted field no caller argument
+    // can forge, for the Task API route to check its live question's real
+    // parentTaskId against before attributing an answer to "the parent".
+    // Without it, any session that merely knows a child's task_id could
+    // answer its pending question and be credited as that child's parent.
+    //
+    // list_child_questions gets the same treatment, for a different reason:
+    // it can be called with EITHER parent_task_id or child_task_id, and
+    // unlike answer_child_question/escalate_to_user (which only ever mean
+    // "my own task"), a legitimate child_task_id call names a DESCENDANT,
+    // not the caller itself — a simple override-to-scope.taskId would break
+    // that mode. The Task API route verifies the caller is that task (or an
+    // ancestor of it) before returning any of its private question data.
+    //
+    // `caller_task_id` is NEVER a real argument any of these three tools
+    // declare — it exists purely as this trusted-identity channel — so any
+    // value already sitting in `args` is a forgery attempt, not a
+    // legitimate parameter, regardless of whether `scope.taskId` happens to
+    // be set. It is always stripped first, then replaced with real identity
+    // when there is one. A caller with NO task scope at all (the
+    // mastermind/coordinator session has no task row of its own; same for
+    // a triage session before one is assigned) still gets a caller_task_id
+    // — a fixed, non-forgeable 'mastermind' sentinel that can never equal a
+    // real task's id, so it can never satisfy a parentTaskId/isDescendant
+    // match downstream. That is the explicit, intended behavior: without a
+    // task of its own, this caller is not credited as anyone's parent and
+    // cannot read anyone's child-question traffic through this channel —
+    // it simply falls through to each route's ordinary, non-attributed
+    // behavior (ordinary send, direct respond, or — for list_child_questions,
+    // which has no non-attributed fallback — a refusal).
+    delete normalizedArgs.caller_task_id
+    if (name === 'send_message' || name === 'respond_to_checkpoint' || name === 'list_child_questions') {
+      normalizedArgs.caller_task_id = scope.taskId || 'mastermind'
+    }
 
     const result = isScopedSession(scope)
       ? await handleScopedCall(name, normalizedArgs, scope, invoke) as Record<string, unknown> | null
-      : await invoke(`/${name}`, normalizedArgs) as Record<string, unknown> | null
+      : await invokeUnscopedWithCallerBinding(name, normalizedArgs, scope, invoke) as Record<string, unknown> | null
 
     if (result?.error) {
       return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: true }

@@ -665,6 +665,19 @@ export function registerIpcHandlers(
     'agentSession:sendByTaskId',
     async (_, taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
       agentManager.noteUserTaskActivity(taskId)
+      // Claim-first: if there's a live child QUESTION (not an approval —
+      // see answerAsHumanViaMessage) for this task, answer it THROUGH the
+      // claim (so a concurrent parent answer can't also reach the harness)
+      // instead of sending directly and reconciling after.
+      try {
+        const claimed = await agentManager.getChildQuestionService().answerAsHumanViaMessage(taskId, message)
+        if (claimed) {
+          if ('error' in claimed) return claimed
+          return { success: true, sessionId: null }
+        }
+      } catch (err) {
+        console.error(`[IPC] Child-question claim check failed for task ${taskId} before sendByTaskId, falling through to a direct send:`, err)
+      }
       const result = await agentManager.sendByTaskId(taskId, message, attachments)
       return { success: true, ...result }
     }
@@ -674,15 +687,78 @@ export function registerIpcHandlers(
     'agentSession:send',
     async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
       agentManager.noteUserTaskActivity(taskId, sessionId)
+      if (taskId) {
+        try {
+          const claimed = await agentManager.getChildQuestionService().answerAsHumanViaMessage(taskId, message)
+          if (claimed) {
+            if ('error' in claimed) return claimed
+            return { success: true }
+          }
+        } catch (err) {
+          console.error(`[IPC] Child-question claim check failed for task ${taskId} before send, falling through to a direct send:`, err)
+        }
+      }
       const result = await agentManager.sendMessage(sessionId, message, taskId, agentId, attachments)
       return { success: true, ...result }
     }
   )
 
   ipcMain.handle('agentSession:approve', async (_, sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string) => {
+    const taskId = agentManager.getSessionStatus(sessionId)?.taskId
+    if (taskId) {
+      // Claim-first, matched by the exact harness request id when the UI has
+      // one (it does, for a permission-style approval card) — so a
+      // concurrent parent answer for the SAME request can't also reach the
+      // harness. Falls through to the direct call below only when there is
+      // nothing live to claim (the overwhelming majority of approvals have
+      // nothing to do with this feature at all).
+      try {
+        const claimed = await agentManager.getChildQuestionService().answerAsHuman(taskId, requestId, { approved, answer: message })
+        if (claimed) {
+          return 'error' in claimed ? claimed : { success: true }
+        }
+      } catch (err) {
+        console.error(`[IPC] Child-question claim check failed for task ${taskId} before approve, falling through to a direct response:`, err)
+      }
+    }
     await agentManager.respondToPermission(sessionId, approved, message, undefined, responseType, requestId)
     return { success: true }
   })
+
+  // Children's questions go to the parent first (see orchestration/child-questions.ts).
+  // The desktop renderer talks to AgentManager's ChildQuestionService directly,
+  // the same way agentSession:* above does — never through the Task API server,
+  // which exists for MCP/mobile callers.
+  ipcMain.handle('childQuestions:listForParent', (_, parentTaskId: string) => {
+    return agentManager.getChildQuestionService().listForParent(parentTaskId)
+  })
+  ipcMain.handle('childQuestions:listForChild', (_, childTaskId: string) => {
+    return agentManager.getChildQuestionService().listForChild(childTaskId)
+  })
+  ipcMain.handle(
+    'childQuestions:answer',
+    async (_, parentTaskId: string, childTaskId: string, questionId: string, input: { approved?: boolean; answer?: string; optionId?: string }) => {
+      return agentManager.getChildQuestionService().answerFromParent(parentTaskId, childTaskId, questionId, input)
+    }
+  )
+  // A human answering directly from the desktop app — claims the live item
+  // (whether it's still pending_parent or already escalated) and is
+  // attributed to the human, never the parent. See the comment on
+  // `childQuestions:answer` above, and answerAsHuman's doc comment.
+  ipcMain.handle(
+    'childQuestions:answerAsHuman',
+    async (_, childTaskId: string, questionId: string | undefined, input: { approved?: boolean; answer?: string; optionId?: string }) => {
+      const result = await agentManager.getChildQuestionService().answerAsHuman(childTaskId, questionId, input)
+      if (!result) return { error: 'That question is no longer waiting for an answer.' }
+      return result
+    }
+  )
+  ipcMain.handle(
+    'childQuestions:escalate',
+    (_, parentTaskId: string, childTaskId: string, questionId: string, note?: string) => {
+      return agentManager.getChildQuestionService().escalateToUser(parentTaskId, childTaskId, questionId, note)
+    }
+  )
 
   ipcMain.handle('agentSession:syncSkills', (_, sessionId: string) => {
     return agentManager.syncSkillsFromWorkspace(sessionId)

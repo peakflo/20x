@@ -71,9 +71,17 @@ import {
   type ContinuationPlan
 } from './context-handoff'
 import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
-import { isSystemGeneratedMessage } from '../shared/system-authority'
+import { computeDeliveryId, isSystemGeneratedMessage } from '../shared/system-authority'
 import { TaskWakeupQueue, TaskWakeupStore, computeWakeupDeliveryId, reasonForChildStatus, type WakeupReason } from './orchestration/task-wakeups'
 import { classifyIdleEnd, statusForEndReason, describeEndReason, lastMeaningfulPart } from './orchestration/run-finalization'
+import {
+  ChildQuestionService,
+  ChildQuestionStore,
+  type ChildQuestionKind,
+  type ChildQuestionOption,
+  type ChildQuestionParentPolicy
+} from './orchestration/child-questions'
+import { subtaskEvents } from './orchestration/subtask-events'
 import { sendMobilePush } from './mobile-push'
 import { AgentPushEvents, type QuestionPart } from './agent-push-events'
 import { formatRetryDelay, isOverloadError, MAX_OVERLOAD_RETRY_ATTEMPTS, OverloadRetryTracker } from './overload-retry'
@@ -99,6 +107,120 @@ enum CodingAgentType {
   PI = 'pi',
   /** A configured ACP (Agent Client Protocol) registry or local-command agent instance. */
   ACP = 'acp'
+}
+
+/** Maps Codex app-server's `responseKind` to a toolName the authority classifier recognises — so a raw command approval is actually classified as a command, not just free prose. */
+function responseKindToToolName(responseKind: string | undefined): string | null {
+  switch (responseKind) {
+    case 'execCommand':
+    case 'commandExecution':
+      return 'exec'
+    case 'fileChange':
+      return 'edit'
+    default:
+      return null
+  }
+}
+
+/** Best-effort extraction of a raw command from an approval's human-readable question text (e.g. "Run `npm test`?" → "npm test") — adapters don't all expose a separate structured command field. */
+function extractCommandFromText(text: string): string | null {
+  // Only a backtick-quoted span is trustworthy here — it's the adapter
+  // literally quoting the command it's about to run. A looser heuristic
+  // (e.g. "grab whatever follows the word run/execute") would also match
+  // ordinary English like "Run the migration?" or "Should I run the tests
+  // now?", handing the default-deny command classifier a fake "command" of
+  // "the migration" and forcing an everyday prose question to escalate to
+  // a human for no reason.
+  const backticked = text.match(/`([^`]+)`/)
+  return backticked ? backticked[1] : null
+}
+
+/**
+ * Duck-typed shape of whatever `getPendingApproval()` returns, across every
+ * adapter — a superset of each adapter's OWN real structured fields (see
+ * acp-adapter.ts/opencode-adapter.ts/pi-adapter.ts/codex-app-server-adapter.ts),
+ * never populated together since each adapter only ever sets its own.
+ */
+interface PendingApprovalShape {
+  question: string
+  /** Codex only. */
+  responseKind?: string
+  command?: string
+  fileChangePaths?: string[]
+  /** ACP only. */
+  toolCallKind?: string
+  path?: string
+  /** OpenCode only. */
+  permission?: string
+  patterns?: string[]
+  /** Pi only (also doubles as ACP's/generic `toolName`, but never set alongside ACP's `toolCallKind`). */
+  toolName?: string
+}
+
+/**
+ * Pulls a REAL structured {toolName, command} out of whichever
+ * adapter-specific fields `getPendingApproval()` actually populated, instead
+ * of only ever recognising Codex's `responseKind` (the rest fell through to
+ * free-text question scanning, which rarely has backticks — ACP, OpenCode,
+ * and Pi approvals used to look like "nothing structured here" to the
+ * authority classifier, and with its default-deny-on-empty-input rule that
+ * would wrongly force EVERY one of their approvals to escalate, never
+ * routing even a genuinely safe one to the parent).
+ *
+ * Falls back to a backtick-quoted span in the free text when nothing
+ * structured exists at all — then, if even that's empty, the authority
+ * classifier's own default-deny takes over (see command-authority.ts).
+ */
+function extractApprovalAuthorityInput(pending: PendingApprovalShape): { toolName: string | null; command: string | null; commands?: string[] | null } {
+  // Codex: responseKind classifies the kind; the real command/paths are
+  // separate fields (see summarizeApproval/extractFileChangePaths there).
+  if (pending.responseKind) {
+    const toolName = responseKindToToolName(pending.responseKind)
+    if (pending.responseKind === 'fileChange') {
+      return { toolName, command: pending.fileChangePaths?.length ? pending.fileChangePaths.join(' ') : null }
+    }
+    return { toolName, command: pending.command ?? null }
+  }
+
+  // ACP: toolCall.kind + rawInput.command/path.
+  if (pending.toolCallKind) {
+    return { toolName: pending.toolCallKind, command: pending.command ?? pending.path ?? null }
+  }
+
+  // OpenCode: permission type + pattern(s). `patterns` can be MULTIPLE
+  // independent entries — for `bash` specifically, that means one entry
+  // PER PARSED SUB-COMMAND (`ls && python evil.py` arrives as `["ls",
+  // "python evil.py"]`, not one joined string), so those are classified
+  // individually (`commands`) rather than joined into `command` — joining
+  // first would let `python evil.py` hide behind the safe-looking `ls`
+  // prefix. For path-ish permissions (edit, external_directory, ...) the
+  // patterns are glob/paths, not command syntax — joining is fine there,
+  // since the path-escape check scans every absolute-path token in the
+  // combined text regardless of position, not just a start-anchored prefix.
+  if (pending.permission) {
+    const patterns = pending.patterns?.filter(Boolean) ?? []
+    if (pending.permission === 'bash' && patterns.length > 1) {
+      return { toolName: pending.permission, command: patterns.join(', '), commands: patterns }
+    }
+    return { toolName: pending.permission, command: patterns.length ? patterns.join(' ') : null }
+  }
+
+  // Pi: our own permission extension's tool name + JSON-parsed input.
+  if (pending.toolName) {
+    return { toolName: pending.toolName, command: pending.command ?? pending.path ?? null }
+  }
+
+  return { toolName: null, command: extractCommandFromText(pending.question) }
+}
+
+/** Minimal shape of an AskUserQuestion / `question` tool transcript part — see `AgentTranscriptPanel`'s `QuestionMessage` for the full renderer-side shape this mirrors. */
+interface ChildQuestionToolPart {
+  id?: string
+  tool?: {
+    name?: string
+    requestId?: string
+    questions?: Array<{ header?: string; question: string; options?: Array<{ label: string }> }>
+  }
 }
 
 /** Handoff block ready to send with the next prompt of a session. */
@@ -476,6 +598,9 @@ export class AgentManager extends EventEmitter {
    *  set — dedup now lives in the `task_wakeups` table's `delivery_id` UNIQUE
    *  constraint, so it survives a restart and never silently drops a wake-up. */
   private taskWakeupQueueInstance: TaskWakeupQueue | undefined
+
+  /** Children's questions/approvals routed to their parent first (see `child-questions.ts`). Lazily constructed, same reason as the wake-up queue above. */
+  private childQuestionServiceInstance: ChildQuestionService | undefined
 
   /** Sessions currently being re-registered for polling after late adapter data
    *  (dedupe guard so a burst of buffered messages produces a single wake-up). */
@@ -1536,7 +1661,7 @@ export class AgentManager extends EventEmitter {
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
-  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
+  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId?: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
     const result: Record<string, McpServerConfig> = {}
@@ -1628,7 +1753,7 @@ export class AgentManager extends EventEmitter {
    * the same config, including after a resume.
    */
   private buildTaskManagementMcpConfig(
-    opts?: { taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }
+    opts?: { taskScope?: { taskId: string; parentTaskId?: string }; artifactTaskId?: string }
   ): McpServerConfig | null {
     const apiPort = getTaskApiPort()
     if (!apiPort) {
@@ -1701,7 +1826,15 @@ export class AgentManager extends EventEmitter {
     const task = this.db.getTask(taskId)
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
-    const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
+    // Carries this session's OWN task id even when it isn't a subtask — the
+    // MCP endpoint's `scope.taskId` is the one piece of caller identity that
+    // isn't just whatever the tool call's arguments claim (see
+    // `invokeUnscopedWithCallerBinding` in task-management-core.ts), so
+    // answer_child_question/escalate_to_user can bind `parent_task_id` to
+    // who is ACTUALLY calling instead of trusting the argument. parentTaskId
+    // is still only set for a real subtask — that part continues to gate
+    // `isScopedSession` exactly as before.
+    const taskScope = task ? { taskId, parentTaskId: isSubtask ? (task.parent_task_id ?? undefined) : undefined } : undefined
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
 
     // systemPrompt is intentionally task-agnostic and identical every time this
@@ -2366,7 +2499,15 @@ export class AgentManager extends EventEmitter {
     const task = this.db.getTask(taskId)
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
-    const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
+    // Carries this session's OWN task id even when it isn't a subtask — the
+    // MCP endpoint's `scope.taskId` is the one piece of caller identity that
+    // isn't just whatever the tool call's arguments claim (see
+    // `invokeUnscopedWithCallerBinding` in task-management-core.ts), so
+    // answer_child_question/escalate_to_user can bind `parent_task_id` to
+    // who is ACTUALLY calling instead of trusting the argument. parentTaskId
+    // is still only set for a real subtask — that part continues to gate
+    // `isScopedSession` exactly as before.
+    const taskScope = task ? { taskId, parentTaskId: isSubtask ? (task.parent_task_id ?? undefined) : undefined } : undefined
     await yieldEL()
 
     // Build MCP servers config for adapter
@@ -3403,12 +3544,26 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         }
         if (session.status !== 'waiting_approval') {
           session.status = 'waiting_approval'
+          // When this is a subtask whose approval raiseChildApprovalIfNeeded
+          // will actually pick up, that flow owns the human-notification
+          // decision end to end: silence when it's routed to the parent,
+          // or exactly one notification (via notifyHumanAboutChildQuestion)
+          // when it escalates. The generic OS-notification/mobile-push path
+          // below must not ALSO fire for the same approval — that would be
+          // either a wrong notification (parent's call, not the human's) or
+          // a duplicate one (right call, fired twice).
+          const childQuestionOwnsNotification = this.subtaskApprovalRoutesThroughChildQuestions(config.taskId, sessionId, adapter)
           this.sendToRenderer('agent:status', {
             sessionId,
             agentId: config.agentId,
             taskId: config.taskId,
-            status: 'waiting_approval'
+            status: 'waiting_approval',
+            childQuestionOwnsNotification
           })
+          // A subtask's approval request goes to its parent first (see
+          // child-questions.ts) — only on the transition into waiting_approval,
+          // since raising is idempotent per question id anyway.
+          void this.raiseChildApprovalIfNeeded(config.taskId, sessionId, adapter, config.workspaceDir)
         }
         return
       } else if (status.type === SessionStatusType.BUSY && session) {
@@ -3762,7 +3917,15 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const task = this.db.getTask(taskId)
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
-    const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
+    // Carries this session's OWN task id even when it isn't a subtask — the
+    // MCP endpoint's `scope.taskId` is the one piece of caller identity that
+    // isn't just whatever the tool call's arguments claim (see
+    // `invokeUnscopedWithCallerBinding` in task-management-core.ts), so
+    // answer_child_question/escalate_to_user can bind `parent_task_id` to
+    // who is ACTUALLY calling instead of trusting the argument. parentTaskId
+    // is still only set for a real subtask — that part continues to gate
+    // `isScopedSession` exactly as before.
+    const taskScope = task ? { taskId, parentTaskId: isSubtask ? (task.parent_task_id ?? undefined) : undefined } : undefined
     await yieldEL()
 
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
@@ -4377,6 +4540,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
   /** Starts the wake-up delivery sweep (delivers every pending row from before a restart). */
   startWakeupDelivery(): void {
     this.getTaskWakeupQueue().start()
+    this.getChildQuestionService().startSweep()
   }
 
   /**
@@ -4396,8 +4560,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
    * sibling in `agent_working`/`triaging`), the row stays pending and is
    * delivered on the parent's next idle transition, the periodic sweep, or
    * startup — never dropped.
+   *
+   * Also the single place that emits the `status` event `wait_for_subtasks`
+   * subscribes to (see `orchestration/subtask-events.ts`) — every call site
+   * that moves a subtask to a terminal state already calls this, so this one
+   * spot covers all of them without having to instrument each one.
    */
-  async notifyParentOfSubtaskCompletion(parentTaskId: string, subtaskId: string): Promise<void> {
+  async notifyParentOfSubtaskCompletion(parentTaskId: string, subtaskId: string, endReason?: string): Promise<void> {
     const parentTask = this.db.getTask(parentTaskId)
     if (!parentTask) return
 
@@ -4415,6 +4584,18 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // instead of throwing.
     const statusEnteredAt = subtask.updated_at ?? subtask.created_at ?? new Date().toISOString()
     const deliveryId = computeWakeupDeliveryId(parentTaskId, subtaskId, statusEnteredAt, reason)
+
+    // The subtask's run just ended (terminal status) — any question/approval
+    // still live for it is moot now: nobody is going to answer it into a
+    // session that no longer exists, and leaving it `pending_parent`/
+    // `escalated` forever would keep looking actionable (and keep
+    // `wait_for_subtasks`'s `any_event` returning instantly on every call).
+    try {
+      this.getChildQuestionService().cancelLiveForChild(subtaskId)
+    } catch (err) {
+      console.error(`[AgentManager] Failed to cancel stale child questions for ${subtaskId}:`, err)
+    }
+
     await this.getTaskWakeupQueue().enqueueAndTryDeliver({
       parentTaskId,
       childTaskId: subtaskId,
@@ -4422,6 +4603,300 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       deliveryId,
       payload: { childTitle: subtask.title, childStatus: subtask.status }
     })
+
+    subtaskEvents.emitSubtaskEvent({
+      kind: 'status',
+      parentTaskId,
+      childTaskId: subtaskId,
+      status: subtask.status,
+      endReason,
+      needsAttention: reason === 'child_error'
+    })
+  }
+
+  /** Global setting key: whether a child's question/approval is routed to its parent before the human. Default on. */
+  static readonly ROUTE_CHILD_QUESTIONS_TO_PARENT_SETTING = 'child_questions_route_to_parent'
+  /** Global setting key: how long a question waits for the parent before auto-escalating to the human (ms). */
+  static readonly CHILD_QUESTION_ESCALATION_TIMEOUT_SETTING = 'child_question_escalation_timeout_ms'
+
+  /**
+   * Children's questions/approvals routed to the parent first (see
+   * `child-questions.ts`). Lazily constructed, same reason as the wake-up
+   * queue above — shares this manager's `db` and reuses its wake-up queue for
+   * delivery (reason `child_question`).
+   */
+  getChildQuestionService(): ChildQuestionService {
+    if (!this.childQuestionServiceInstance) {
+      this.childQuestionServiceInstance = new ChildQuestionService({
+        store: new ChildQuestionStore(this.db.db),
+        getTask: (taskId) => {
+          const task = this.db.getTask(taskId)
+          if (!task) return undefined
+          return { id: task.id, title: task.title, status: task.status, parent_task_id: task.parent_task_id ?? null, agent_id: task.agent_id ?? null }
+        },
+        getParentPolicy: (parentTaskId) => this.getChildQuestionParentPolicy(parentTaskId),
+        isDescendant: (ancestorTaskId, taskId) => this.isTaskDescendantOf(ancestorTaskId, taskId),
+        enqueueParentWakeup: async (input) => {
+          await this.getTaskWakeupQueue().enqueueAndTryDeliver({
+            parentTaskId: input.parentTaskId,
+            childTaskId: input.childTaskId,
+            reason: 'child_question',
+            deliveryId: input.deliveryId,
+            payload: input.payload
+          })
+        },
+        cancelParentWakeup: (parentTaskId, childTaskId) => {
+          // Consumes only the child_question wake-up — NOT any other pending
+          // reason (child_ready/child_completed/child_error) for the same
+          // child, which must still wake the parent for its own sake even
+          // though the question on it was just answered another way.
+          this.getTaskWakeupQueue().markObservedForReason(parentTaskId, childTaskId, 'child_question')
+        },
+        answerChildSession: async (childTaskId, kind, input, requestId) => {
+          const found = this.findSessionByTaskId(childTaskId)
+          if (!found) throw new Error(`No live session for task ${childTaskId} — it may need to be started first.`)
+          if (kind === 'approval') {
+            // Verify this is still the exact request we raised — a stale/
+            // superseded approval must never be silently answered, and the
+            // adapter's own pending-approval id is the only reliable source
+            // of truth for "what is pending right now". An EMPTY id (the
+            // adapter reports something pending, but it couldn't be
+            // identified) is just as unverifiable as a mismatched one — it
+            // must refuse, not silently proceed as if it matched.
+            const adapter = this.getAdapter(found.session.agentId)
+            if (adapter && 'getPendingApproval' in adapter && typeof (adapter as unknown as { getPendingApproval?: unknown }).getPendingApproval === 'function') {
+              const pending = (adapter as unknown as { getPendingApproval: (sid: string) => { requestId?: string | number; toolCallId?: string } | null }).getPendingApproval(found.sessionId)
+              if (!pending) {
+                throw new Error('There is no pending approval for this session anymore — it may have already been answered.')
+              }
+              const pendingId = String(pending.requestId ?? pending.toolCallId ?? '')
+              if (!pendingId || pendingId !== requestId) {
+                throw new Error(`This approval no longer matches what is pending for the session (expected ${requestId}, got ${pendingId || 'none'}) — it may have been superseded or already answered.`)
+              }
+            }
+            await this.respondToPermission(found.sessionId, input.approved, input.answer, input.optionId, 'permission', requestId)
+          } else {
+            // The "question" tool / AskUserQuestion: the same path the human
+            // UI's plain send uses — the answer becomes the agent's next
+            // message. There is no adapter-level "is THIS SPECIFIC question
+            // still pending" id (unlike approvals, these harnesses expose no
+            // addressable pending-question id) — but whether the session
+            // still has ANY question outstanding at all is a real,
+            // enforceable proxy (the same signal push notifications already
+            // key off of): if the session has already moved on (resumed
+            // working, or never had a question pending to begin with),
+            // answering now would just inject a stray chat message into
+            // whatever the agent does next, not actually reach the question
+            // this was raised for.
+            if (!this.pushEvents.hasPendingQuestion(found.sessionId)) {
+              throw new Error('This question is no longer pending for the session — it may have already been answered, or the session has moved on.')
+            }
+            await this.sendByTaskId(childTaskId, input.answer ?? input.optionId ?? (input.approved ? 'Yes' : 'No'))
+          }
+        },
+        notifyHuman: (childTaskId, record) => {
+          this.notifyHumanAboutChildQuestion(childTaskId, record)
+          // Centralized here because escalation has three call sites inside
+          // ChildQuestionService (immediate out-of-authority, the explicit
+          // escalate_to_user tool, and the automatic-timeout sweep) — this is
+          // the one spot every one of them already calls.
+          this.sendToRenderer('task:childQuestionEscalated', { taskId: childTaskId, question: record })
+        },
+        appendTranscriptNote: (childTaskId, text) => {
+          this.sendToRenderer('agent:output', {
+            sessionId: this.findSessionByTaskId(childTaskId)?.sessionId ?? null,
+            taskId: childTaskId,
+            type: 'message',
+            data: { role: 'system', partType: 'text', content: text }
+          })
+        },
+        notifyRaised: (childTaskId, record) => {
+          this.sendToRenderer('task:childQuestionRaised', { taskId: childTaskId, question: record })
+        }
+      })
+    }
+    return this.childQuestionServiceInstance
+  }
+
+  /** Effective child-question routing policy for a parent task: its own agent's override, falling back to the global setting. */
+  private getChildQuestionParentPolicy(parentTaskId: string): ChildQuestionParentPolicy {
+    const parentTask = this.db.getTask(parentTaskId)
+    const agent = parentTask?.agent_id ? this.db.getAgent(parentTask.agent_id) : undefined
+    const config = agent?.config
+
+    const globalRoute = this.db.getSetting(AgentManager.ROUTE_CHILD_QUESTIONS_TO_PARENT_SETTING)
+    const routeToParent = config?.route_child_questions_to_parent ?? (globalRoute == null ? true : globalRoute !== 'false')
+
+    const globalTimeout = this.db.getSetting(AgentManager.CHILD_QUESTION_ESCALATION_TIMEOUT_SETTING)
+    const parsedGlobalTimeout = globalTimeout != null ? Number(globalTimeout) : NaN
+    const escalationTimeoutMs =
+      config?.child_question_escalation_timeout_ms ?? (Number.isFinite(parsedGlobalTimeout) && parsedGlobalTimeout > 0 ? parsedGlobalTimeout : undefined)
+
+    // A parent whose own session is itself a scoped subtask (nested
+    // delegation) gets only the sibling tool set — it has no
+    // answer_child_question/escalate_to_user tool to call at all. Such a
+    // question must escalate immediately rather than sit waiting for a
+    // parent that can never answer it. See buildMcpServersForAdapter's
+    // `taskScope` (scoped only when the task itself has a parent_task_id).
+    const canAnswer = !parentTask?.parent_task_id
+
+    return { routeToParent, permissionMode: config?.permission_mode, escalationTimeoutMs, canAnswer }
+  }
+
+  /** Walks the parent_task_id chain. True when `taskId` is somewhere below `ancestorTaskId`. A cycle guard makes a corrupt chain fail closed (false) instead of looping forever. */
+  private isTaskDescendantOf(ancestorTaskId: string, taskId: string): boolean {
+    const seen = new Set<string>()
+    let current = this.db.getTask(taskId)
+    while (current?.parent_task_id) {
+      if (current.parent_task_id === ancestorTaskId) return true
+      if (seen.has(current.parent_task_id)) return false
+      seen.add(current.parent_task_id)
+      current = this.db.getTask(current.parent_task_id)
+    }
+    return false
+  }
+
+  /** Today's human push/OS notification path, reused for a question/approval that must (or had to) go to the human instead of the parent. */
+  private notifyHumanAboutChildQuestion(childTaskId: string, record: { kind: ChildQuestionKind; questionText: string }): void {
+    const task = this.db.getTask(childTaskId)
+    const title = record.kind === 'approval' ? 'Agent needs approval' : 'Agent has a question'
+    const body = task?.title ? `"${task.title}": ${record.questionText}` : record.questionText
+    void sendMobilePush(this.db, record.kind === 'approval' ? 'approval' : 'question', childTaskId, task?.title ?? 'Task').catch((error) =>
+      console.error('[MobilePush] Send failed:', error)
+    )
+    try {
+      if (Notification.isSupported() && (!this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused())) {
+        const notification = new Notification({ title, body })
+        notification.on('click', () => {
+          if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.show()
+            this.mainWindow.focus()
+          }
+        })
+        notification.show()
+      }
+    } catch (err) {
+      console.error('[AgentManager] Failed to show OS notification for child question:', err)
+    }
+  }
+
+  /**
+   * True exactly when `raiseChildApprovalIfNeeded` will actually process this
+   * session's pending approval (same early-return checks it uses: a real
+   * parent, and an adapter that exposes a pending approval right now). Used
+   * to suppress the generic waiting_approval OS-notification/mobile-push
+   * path — see the comment at its call site.
+   */
+  private subtaskApprovalRoutesThroughChildQuestions(taskId: string, sessionId: string, adapter: CodingAgentAdapter): boolean {
+    const task = this.db.getTask(taskId)
+    if (!task?.parent_task_id) return false
+    if (!('getPendingApproval' in adapter) || typeof (adapter as unknown as { getPendingApproval?: unknown }).getPendingApproval !== 'function') return false
+    try {
+      return !!(adapter as unknown as { getPendingApproval: (sid: string) => unknown }).getPendingApproval(sessionId)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Raises a subtask's pending approval (Codex/ACP/OpenCode/Pi permission
+   * request) with its parent, when it has one. Duck-types `getPendingApproval`
+   * the same way the rest of this file already does (line ~3537) — every
+   * adapter that supports approvals converges on the same
+   * `{ requestId|toolCallId, question, options }` shape.
+   */
+  private async raiseChildApprovalIfNeeded(taskId: string, sessionId: string, adapter: CodingAgentAdapter, workspaceDir?: string): Promise<void> {
+    const task = this.db.getTask(taskId)
+    if (!task?.parent_task_id) return
+    if (!('getPendingApproval' in adapter) || typeof (adapter as unknown as { getPendingApproval?: unknown }).getPendingApproval !== 'function') return
+
+    const pending = (
+      adapter as unknown as {
+        getPendingApproval: (sid: string) => (PendingApprovalShape & {
+          requestId?: string | number
+          toolCallId?: string
+          options?: Array<{ optionId: string; name: string }>
+        }) | null
+      }
+    ).getPendingApproval(sessionId)
+    if (!pending) return
+
+    const questionId = String(pending.requestId ?? pending.toolCallId ?? `${sessionId}:${pending.question}`)
+    const options: ChildQuestionOption[] | null = pending.options?.length
+      ? pending.options.map((o) => ({ optionId: o.optionId, label: o.name }))
+      : null
+    const { toolName, command, commands } = extractApprovalAuthorityInput(pending)
+
+    // The adapter is now showing a DIFFERENT pending request than whatever we
+    // last raised for this child — the old one was superseded (answered some
+    // other way the harness knows about, or simply moved on) and must not
+    // keep sitting there looking actionable.
+    try {
+      this.getChildQuestionService().cancelLiveForChild(taskId, questionId)
+    } catch (err) {
+      console.error(`[AgentManager] Failed to cancel a superseded child question for ${taskId}:`, err)
+    }
+
+    try {
+      await this.getChildQuestionService().raise({
+        childTaskId: taskId,
+        questionId,
+        kind: 'approval',
+        questionText: pending.question,
+        options,
+        toolName,
+        command,
+        commands,
+        workspaceDir
+      })
+    } catch (err) {
+      console.error(`[AgentManager] Failed to raise child approval for task ${taskId}:`, err)
+    }
+  }
+
+  /**
+   * Raises a subtask's AskUserQuestion / `question` tool call with its
+   * parent, when it has one. Mirrors the shape `AgentTranscriptPanel`'s
+   * `QuestionMessage` renders (`message.tool.questions[]`, each with
+   * `header`/`question`/`options[].label`) so the same question the human
+   * would see is the one the parent sees.
+   */
+  private async raiseChildQuestionIfNeeded(taskId: string, part: ChildQuestionToolPart): Promise<void> {
+    const task = this.db.getTask(taskId)
+    if (!task?.parent_task_id) return
+
+    const questions = part.tool?.questions ?? []
+    if (questions.length === 0) return
+    // Multiple sub-questions in one call are combined into one text block —
+    // the parent answers them the same way the human does (one message).
+    const questionText = questions.map((q) => [q.header, q.question].filter(Boolean).join(': ')).join('\n')
+    // Neither requestId nor part.id is guaranteed present on every harness's
+    // transcript part shape. Falling back to the LITERAL string "undefined"
+    // (String(undefined ?? undefined)) would give every such question the
+    // SAME id for this child — `raise()`'s own idempotency check
+    // (getByChildAndQuestionId) would then read the second, genuinely
+    // different question as a duplicate of the first and silently drop it.
+    // A content-derived id (taskId + the question text) is still STABLE
+    // across repeat emissions of the identical question (matching how a
+    // real requestId/part.id would behave), while two different questions
+    // for the same child get different ids.
+    const questionId = String(part.tool?.requestId ?? part.id ?? `synthetic:${computeDeliveryId(taskId, questionText)}`)
+    const options: ChildQuestionOption[] | null =
+      questions.length === 1 && questions[0].options?.length
+        ? questions[0].options.map((o, i) => ({ optionId: String(i), label: o.label }))
+        : null
+
+    try {
+      await this.getChildQuestionService().raise({
+        childTaskId: taskId,
+        questionId,
+        kind: 'question',
+        questionText,
+        options
+      })
+    } catch (err) {
+      console.error(`[AgentManager] Failed to raise child question for task ${taskId}:`, err)
+    }
   }
 
   /** Tasks whose projection backfill is in flight (dedupe guard). */
@@ -5044,7 +5519,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       // a child is waiting on an answer — raising a second, generic
       // "finished" wake-up here would double-notify.
       if (task.parent_task_id && endReason !== 'awaiting_input') {
-        this.notifyParentOfSubtaskCompletion(task.parent_task_id, session.taskId).catch((err) => {
+        this.notifyParentOfSubtaskCompletion(task.parent_task_id, session.taskId, endReason).catch((err) => {
           console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${session.taskId} ended (${endReason}):`, err)
         })
       }
@@ -5167,6 +5642,15 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       provider: getAgentProvider(this.db.getAgent(session.agentId)),
       resetTaskStatus
     })
+
+    // The session is going away — any question/approval still live for its
+    // task is moot (idempotent with the terminal-status cancellation in
+    // notifyParentOfSubtaskCompletion; a no-op if already cancelled there).
+    try {
+      this.getChildQuestionService().cancelLiveForChild(session.taskId)
+    } catch (err) {
+      console.error(`[AgentManager] Failed to cancel stale child questions for ${session.taskId}:`, err)
+    }
 
     // Defensive close, independent of the agent:status broadcast hook: this
     // method's own final 'idle' broadcast (below) fires AFTER `this.sessions`
@@ -7196,7 +7680,18 @@ Important:
       if (output.taskId && newQuestions.length > 0) {
         const task = this.db.getTask(output.taskId)
         const parentCompleted = task?.parent_task_id && this.db.getTask(task.parent_task_id)?.status === TaskStatus.Completed
-        if (task && !parentCompleted && !task.id.startsWith('heartbeat-') && task.id !== 'mastermind-session') {
+        // A subtask's question goes to its parent first (see
+        // child-questions.ts) — that flow owns the human-notification
+        // decision entirely for a subtask (silence when it's routed to the
+        // parent, exactly one notification via notifyHumanAboutChildQuestion
+        // when it escalates), so the generic push notification below must
+        // not ALSO fire for it — hence `!task.parent_task_id` there.
+        if (task) {
+          for (const part of newQuestions) {
+            void this.raiseChildQuestionIfNeeded(output.taskId, part as unknown as ChildQuestionToolPart)
+          }
+        }
+        if (task && !task.parent_task_id && !parentCompleted && !task.id.startsWith('heartbeat-') && task.id !== 'mastermind-session') {
           const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
           if (isWindowInactive) {
             for (let i = 0; i < newQuestions.length; i++) {
@@ -7210,7 +7705,7 @@ Important:
     // Show OS notification when agent transitions from working to idle/waiting_approval
     // and the app window is not focused
     if (channel === 'agent:status' && data && typeof data === 'object') {
-      const { sessionId, status, taskId, agentId } = data as { sessionId?: string; status?: string; taskId?: string; agentId?: string }
+      const { sessionId, status, taskId, agentId, childQuestionOwnsNotification } = data as { sessionId?: string; status?: string; taskId?: string; agentId?: string; childQuestionOwnsNotification?: boolean }
       if (sessionId && status) {
         const prevStatus = this.lastSentStatus.get(sessionId)
         this.lastSentStatus.set(sessionId, status)
@@ -7229,7 +7724,13 @@ Important:
 
         const pushEvent = this.pushEvents.statusChanged(sessionId, prevStatus, status)
         const isWindowInactive = !this.mainWindow || this.mainWindow.isDestroyed() || !this.mainWindow.isFocused()
-        if (pushEvent && taskId && isWindowInactive) {
+        // childQuestionOwnsNotification: this transition is a subtask's
+        // approval that raiseChildApprovalIfNeeded is already handling (see
+        // its call site) — that path owns the human-notification decision
+        // completely (silence when routed to the parent, exactly one
+        // notification via notifyHumanAboutChildQuestion when it escalates),
+        // so the generic push/OS-notification below must stand down.
+        if (pushEvent && taskId && isWindowInactive && !childQuestionOwnsNotification) {
           const task = this.db.getTask(taskId)
           const parentCompleted = task?.parent_task_id && this.db.getTask(task.parent_task_id)?.status === TaskStatus.Completed
           if (task && !parentCompleted && !taskId.startsWith('heartbeat-') && taskId !== 'mastermind-session') {
@@ -7245,7 +7746,7 @@ Important:
         const isNotifiableTransition = prevStatus === SessionStatus.WORKING && (status === SessionStatus.IDLE || status === SessionStatus.WAITING_APPROVAL)
         const questionPending = this.pushEvents.hasPendingQuestion(sessionId)
 
-        if (isNotifiableTransition && isWindowInactive) {
+        if (isNotifiableTransition && isWindowInactive && !childQuestionOwnsNotification) {
           try {
             if (Notification.isSupported()) {
               // Only hit the database when we actually need the title for a notification
