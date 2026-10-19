@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { safeStorage } from 'electron'
-import { existsSync, readFileSync, readdirSync, rmSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import type { DatabaseManager } from './database'
@@ -129,6 +129,25 @@ describe('reencryptPlaintextFallbackRows', () => {
     vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false)
     insertLegacyPlaintextSecret('MY_SECRET', 'leaked-secret-123456')
     expect(db.reencryptPlaintextFallbackRows()).toEqual({ secrets: 0, oauthTokens: 0 })
+  })
+
+  // Minor finding, re-review (round 5): the availability check used to run
+  // BEFORE the prior-run backup sweep, so a machine where encryption is
+  // unavailable (Linux with a locked/missing keyring, most commonly) hit
+  // the early return on every launch without ever reaching the cleanup —
+  // a prior run's backup (written back when encryption WAS available)
+  // would then persist on disk indefinitely instead of being swept up on
+  // the very next launch as intended.
+  it("sweeps up a PRIOR run's leftover backup even when encryption is unavailable THIS run", () => {
+    mkdirSync(BACKUP_DIR, { recursive: true, mode: 0o700 })
+    const leftoverBackupPath = join(BACKUP_DIR, 'secrets-some-old-row-value-leftover.bak')
+    writeFileSync(leftoverBackupPath, Buffer.from('a-previous-runs-secret', 'utf8').toString('base64'), 'utf-8')
+    expect(existsSync(leftoverBackupPath)).toBe(true)
+
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false)
+    expect(db.reencryptPlaintextFallbackRows()).toEqual({ secrets: 0, oauthTokens: 0 })
+
+    expect(existsSync(leftoverBackupPath)).toBe(false)
   })
 
   it('re-encrypts a legacy plaintext row once encryption becomes available', () => {

@@ -4280,10 +4280,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   /**
    * Writes the ORIGINAL bytes of a row about to be overwritten to its OWN
    * backup file, before the UPDATE that overwrites them runs — the backup
-   * requirement the re-review asked for. Returns the file's path; the
-   * caller deletes it the moment the row's UPDATE actually succeeds (see
-   * `reencryptPlaintextFallbackRows`) — it only survives on disk if that
-   * specific UPDATE never got to run.
+   * requirement the re-review asked for. Returns the file's path.
    *
    * Re-review (P1): this used to append every row's original bytes to one
    * shared, never-rewritten `backup.jsonl` with a comment claiming "these
@@ -4293,9 +4290,17 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
    * `isPlaintextFallback`); appending it to a log nothing ever trims kept
    * every one of them in plaintext on disk forever, permanently, which is
    * strictly worse than the single bounded window this backup is supposed
-   * to cover. One file per row/column, deleted right after its own UPDATE
-   * commits, closes that window back down to "exists only between the
-   * backup write and the UPDATE it protects."
+   * to cover. One file per row/column instead.
+   *
+   * Re-review (round 4, residual risk): that window used to close as soon
+   * as the row's own UPDATE committed (deleted immediately by the caller).
+   * It's now instead swept up by `cleanupPriorReencryptBackups` at the
+   * START of the NEXT `reencryptPlaintextFallbackRows` call (the next app
+   * launch) — not deleted here or immediately after this row's UPDATE —
+   * giving at least one full restart's worth of time to notice a mistaken
+   * re-encrypt before the only copy of the original bytes disappears. See
+   * that function's docstring for the exact scenario this protects
+   * against.
    */
   private backupBeforeReencrypt(table: 'secrets' | 'oauth_tokens', id: string, column: string, original: Buffer): string {
     const dir = this.secretReencryptBackupDir()
@@ -4382,9 +4387,17 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
    * be noticed and recovered from before its backup disappears.
    */
   reencryptPlaintextFallbackRows(): { secrets: number; oauthTokens: number } {
-    if (!safeStorage.isEncryptionAvailable()) return { secrets: 0, oauthTokens: 0 }
-
+    // Re-review (round 5, Minor): this used to come AFTER the availability
+    // check below, so a machine where encryption is unavailable (Linux with
+    // a locked or missing keyring, most commonly) hit the early return on
+    // EVERY app launch without ever reaching this call — a prior run's
+    // backups (written back when encryption WAS available) would then
+    // persist on disk indefinitely instead of being swept up on the very
+    // next launch as intended. Cleanup must run regardless of whether this
+    // run itself can do any re-encrypting.
     this.cleanupPriorReencryptBackups()
+
+    if (!safeStorage.isEncryptionAvailable()) return { secrets: 0, oauthTokens: 0 }
 
     let secrets = 0
     const secretRows = this.db.prepare('SELECT id, value FROM secrets').all() as Array<{ id: string; value: Buffer }>

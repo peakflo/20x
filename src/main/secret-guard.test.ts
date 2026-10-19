@@ -151,6 +151,21 @@ describe('checkSecretDumpGuard', () => {
     expect(checkSecretDumpGuard('echo "$TOKEN" | docker login ./--password-stdin', ['TOKEN']).blocked).toBe(true)
     expect(checkSecretDumpGuard('echo "$TOKEN" | gh auth login ./--with-token', ['TOKEN']).blocked).toBe(true)
   })
+
+  // Nit, re-review (round 5): `--with-token\b` matched `--with-token-x`
+  // too — `\b` only checks for a word/non-word transition (the "n" in
+  // "token" to the "-" in "-x" satisfies that on its own), not that
+  // nothing else follows. A longer, DIFFERENT flag that merely starts with
+  // the same characters must not be treated as the real one.
+  it('a longer flag that merely starts with the real flag name is still blocked (exact match, not a prefix)', () => {
+    expect(checkSecretDumpGuard('echo "$TOKEN" | gh auth login --with-token-x', ['TOKEN']).blocked).toBe(true)
+    expect(checkSecretDumpGuard('echo "$TOKEN" | docker login --password-stdin-but-not-really', ['TOKEN']).blocked).toBe(true)
+  })
+
+  it('the real flag is still recognized with a trailing argument, or as --flag=value', () => {
+    expect(checkSecretDumpGuard('echo "$TOKEN" | gh auth login --with-token --hostname example.com', ['TOKEN']).blocked).toBe(false)
+    expect(checkSecretDumpGuard('echo "$TOKEN" | npm login --authtoken=abc123', ['TOKEN']).blocked).toBe(false)
+  })
 })
 
 describe('checkLoaderReadGuard', () => {
