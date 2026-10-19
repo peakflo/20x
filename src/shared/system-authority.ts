@@ -153,9 +153,21 @@ export function isSystemGeneratedMessage(text: string): boolean {
  * so a duplicate delivery can be detected without a database round-trip.
  * FNV-1a: no crypto import needed in the renderer bundle, and collisions are irrelevant
  * here because the id is scoped to one task.
+ *
+ * The separator between `taskId` and `findings` is a NUL character (`\0`),
+ * not a space — this is intentional and must not change: it's what makes a
+ * task id and findings text that happen to look identical whichever side of
+ * the join you put the boundary on (e.g. taskId `"a b"` + findings `"c"`
+ * vs taskId `"a"` + findings `"b c"`) hash differently, since `\0` can
+ * never appear inside either `taskId` or the normalised findings text
+ * itself. Using the escape sequence here (rather than an actual embedded
+ * NUL byte in this source file) keeps the file readable as plain text and
+ * diffable/grep-able — some tools silently render or round-trip a literal
+ * embedded NUL as something else, which is how this drifted to a plain
+ * space once before, silently changing every delivery id this produces.
  */
 export function computeDeliveryId(taskId: string, findings: string): string {
-  const normalized = `${taskId} ${findings.replace(/\s+/g, ' ').trim().toLowerCase()}`
+  const normalized = `${taskId}\0${findings.replace(/\s+/g, ' ').trim().toLowerCase()}`
   let hash = 0x811c9dc5
   for (let i = 0; i < normalized.length; i++) {
     hash ^= normalized.charCodeAt(i)

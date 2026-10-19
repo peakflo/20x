@@ -158,4 +158,13 @@ describe('computeDeliveryId', () => {
     expect(computeDeliveryId('task-1', INCIDENT_FINDINGS)).not.toBe(computeDeliveryId('task-2', INCIDENT_FINDINGS))
     expect(computeDeliveryId('task-1', INCIDENT_FINDINGS)).not.toBe(computeDeliveryId('task-1', 'CI failed'))
   })
+
+  it('joins taskId and findings with a NUL character, not a space — a taskId/findings split that only differs in WHERE the boundary falls must not collide', () => {
+    // If the join were a plain space, computeDeliveryId('a b', 'c') and
+    // computeDeliveryId('a', 'b c') would both normalize to the identical
+    // string "a b c" and collide on the same id — two different (task,
+    // findings) pairs reporting the same delivery. A NUL can never appear
+    // inside either half, so the boundary itself is unambiguous.
+    expect(computeDeliveryId('a b', 'c')).not.toBe(computeDeliveryId('a', 'b c'))
+  })
 })

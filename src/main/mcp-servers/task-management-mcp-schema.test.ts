@@ -368,24 +368,48 @@ describe('children\'s questions go to the parent first — tool set', () => {
     for (const name of childQuestionToolNames) expect(names).not.toContain(name)
   })
 
-  it('answer_child_question requires parent_task_id, child_task_id and question_id, and passes everything through untouched', async () => {
+  it('answer_child_question requires parent_task_id, child_task_id and question_id', () => {
     const schema = toolByName(FULL_ACCESS_SCOPE, 'answer_child_question')!.inputSchema as { required?: string[] }
     expect(schema.required).toEqual(['parent_task_id', 'child_task_id', 'question_id'])
+  })
 
+  it('answer_child_question passes child_task_id/question_id/approved through untouched for a task-scoped caller claiming its own task', async () => {
     const calls: Array<[string, Record<string, unknown>]> = []
     const invoke = async (route: string, params: Record<string, unknown>) => {
       calls.push([route, params])
       return { success: true }
     }
+    const scope: TaskMcpScope = { parentTaskId: null, taskId: 'p1', artifactTaskId: 'p1' }
     await callToolForScope(
       'answer_child_question',
       { parent_task_id: 'p1', child_task_id: 'c1', question_id: 'q1', approved: true },
-      FULL_ACCESS_SCOPE,
+      scope,
       invoke
     )
     expect(calls).toEqual([
       ['/answer_child_question', { parent_task_id: 'p1', child_task_id: 'c1', question_id: 'q1', approved: true }]
     ])
+  })
+
+  it('answer_child_question/escalate_to_user refuse a caller with no task scope at all — there is no verifiable "own authority" to bind parent_task_id to', async () => {
+    for (const name of ['answer_child_question', 'escalate_to_user']) {
+      const calls: Array<[string, Record<string, unknown>]> = []
+      const invoke = async (route: string, params: Record<string, unknown>) => {
+        calls.push([route, params])
+        return { success: true }
+      }
+
+      const result = await callToolForScope(
+        name,
+        { parent_task_id: 'forged-parent', child_task_id: 'victim', question_id: 'q1', approved: true },
+        FULL_ACCESS_SCOPE,
+        invoke
+      ) as { isError?: boolean; content: Array<{ type: string; text?: string }> }
+
+      expect(result.isError).toBe(true)
+      expect(result.content[0]?.text).toContain('no task of its own')
+      expect(calls).toEqual([])
+    }
   })
 
   it('escalate_to_user requires parent_task_id, child_task_id and question_id', () => {
@@ -469,7 +493,7 @@ describe('children\'s questions go to the parent first — tool set', () => {
       expect(calls).toEqual([['/list_child_questions', { parent_task_id: 'parent-1', caller_task_id: 'parent-1' }]])
     })
 
-    it('a caller with no task at all (e.g. the desktop\'s own in-process scope) gets no caller_task_id injected', async () => {
+    it('a caller with no task at all (e.g. the desktop\'s own in-process scope) gets a fixed, non-forgeable "mastermind" caller_task_id — never left unset, never trusting a forged value', async () => {
       const calls: Array<[string, Record<string, unknown>]> = []
       const invoke = async (route: string, params: Record<string, unknown>) => {
         calls.push([route, params])
@@ -478,8 +502,38 @@ describe('children\'s questions go to the parent first — tool set', () => {
 
       await callToolForScope('list_child_questions', { parent_task_id: 'parent-1' }, FULL_ACCESS_SCOPE, invoke)
 
-      expect(calls).toEqual([['/list_child_questions', { parent_task_id: 'parent-1' }]])
+      expect(calls).toEqual([['/list_child_questions', { parent_task_id: 'parent-1', caller_task_id: 'mastermind' }]])
     })
+
+    it('a client-supplied caller_task_id is always discarded, whether or not the scope has a task — it is never a real argument, only a forgery attempt', async () => {
+      const calls: Array<[string, Record<string, unknown>]> = []
+      const invoke = async (route: string, params: Record<string, unknown>) => {
+        calls.push([route, params])
+        return { success: true }
+      }
+
+      await callToolForScope('list_child_questions', { parent_task_id: 'parent-1', caller_task_id: 'forged-parent' }, FULL_ACCESS_SCOPE, invoke)
+      await callToolForScope('list_child_questions', { parent_task_id: 'parent-1', caller_task_id: 'forged-parent' }, COORDINATOR, invoke)
+
+      expect(calls).toEqual([
+        ['/list_child_questions', { parent_task_id: 'parent-1', caller_task_id: 'mastermind' }],
+        ['/list_child_questions', { parent_task_id: 'parent-1', caller_task_id: 'parent-1' }]
+      ])
+    })
+
+    for (const name of ['send_message', 'respond_to_checkpoint']) {
+      it(`${name}: a forged caller_task_id ({caller_task_id: 'forged-parent', child_task_id: 'victim'}) never reaches the route — a scope-less caller gets 'mastermind' instead`, async () => {
+        const calls: Array<[string, Record<string, unknown>]> = []
+        const invoke = async (route: string, params: Record<string, unknown>) => {
+          calls.push([route, params])
+          return { success: true }
+        }
+
+        await callToolForScope(name, { caller_task_id: 'forged-parent', task_id: 'victim', text: 'hi', approved: true }, FULL_ACCESS_SCOPE, invoke)
+
+        expect(calls).toEqual([[`/${name}`, { caller_task_id: 'mastermind', task_id: 'victim', text: 'hi', approved: true }]])
+      })
+    }
   })
 })
 

@@ -1142,8 +1142,18 @@ export function listToolsForScope(scope: TaskMcpScope) {
  * caller identity. When it's known, the caller's own claim is checked
  * against it (a mismatch is refused) and then overridden to it regardless,
  * so a caller doesn't even need to supply `parent_task_id` correctly to get
- * the right, bound behavior. Every other unscoped tool call passes through
- * unchanged.
+ * the right, bound behavior.
+ *
+ * When `scope.taskId` is NOT known at all (the mastermind/coordinator
+ * session has no task row of its own, nor does a triage session before one
+ * is assigned — see the callers of `buildTaskManagementMcpConfig` in
+ * agent-manager.ts) there is no task identity here to bind to, and the
+ * claimed `parent_task_id` is NOT trustworthy caller identity — it's just
+ * an argument the call supplied, exactly as forgeable as before. These two
+ * tools are specifically about acting within "your own authority over your
+ * own descendants"; with no task of its own, a caller has no such
+ * authority to exercise, so the call is refused outright rather than
+ * trusting the argument.
  */
 async function invokeUnscopedWithCallerBinding(
   name: string,
@@ -1151,7 +1161,12 @@ async function invokeUnscopedWithCallerBinding(
   scope: TaskMcpScope,
   invoke: TaskApiInvoke
 ): Promise<unknown> {
-  if ((name === 'answer_child_question' || name === 'escalate_to_user') && scope.taskId) {
+  if (name === 'answer_child_question' || name === 'escalate_to_user') {
+    if (!scope.taskId) {
+      return {
+        error: 'This session has no task of its own, so it has no descendants to answer or escalate for — answer_child_question/escalate_to_user need a task-scoped session.'
+      }
+    }
     const claimed = typeof args.parent_task_id === 'string' ? args.parent_task_id : undefined
     if (claimed && claimed !== scope.taskId) {
       return {
@@ -1211,8 +1226,26 @@ export async function callToolForScope(
     // not the caller itself — a simple override-to-scope.taskId would break
     // that mode. The Task API route verifies the caller is that task (or an
     // ancestor of it) before returning any of its private question data.
-    if ((name === 'send_message' || name === 'respond_to_checkpoint' || name === 'list_child_questions') && scope.taskId) {
-      normalizedArgs.caller_task_id = scope.taskId
+    //
+    // `caller_task_id` is NEVER a real argument any of these three tools
+    // declare — it exists purely as this trusted-identity channel — so any
+    // value already sitting in `args` is a forgery attempt, not a
+    // legitimate parameter, regardless of whether `scope.taskId` happens to
+    // be set. It is always stripped first, then replaced with real identity
+    // when there is one. A caller with NO task scope at all (the
+    // mastermind/coordinator session has no task row of its own; same for
+    // a triage session before one is assigned) still gets a caller_task_id
+    // — a fixed, non-forgeable 'mastermind' sentinel that can never equal a
+    // real task's id, so it can never satisfy a parentTaskId/isDescendant
+    // match downstream. That is the explicit, intended behavior: without a
+    // task of its own, this caller is not credited as anyone's parent and
+    // cannot read anyone's child-question traffic through this channel —
+    // it simply falls through to each route's ordinary, non-attributed
+    // behavior (ordinary send, direct respond, or — for list_child_questions,
+    // which has no non-attributed fallback — a refusal).
+    delete normalizedArgs.caller_task_id
+    if (name === 'send_message' || name === 'respond_to_checkpoint' || name === 'list_child_questions') {
+      normalizedArgs.caller_task_id = scope.taskId || 'mastermind'
     }
 
     const result = isScopedSession(scope)

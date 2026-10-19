@@ -109,7 +109,15 @@ describe('classifyCommandAuthority — allowlisted commands that can still run o
     'git fetch --upload-pack=/tmp/evil.sh origin',
     'git clone --upload-pack=/tmp/evil.sh https://example.com/repo.git',
     'git -c core.pager=/tmp/evil.sh log',
-    'git -c core.fsmonitor=/tmp/evil.sh status'
+    'git -c core.fsmonitor=/tmp/evil.sh status',
+    // Any -c config override is in scope, not just core.* — diff.external/
+    // protocol.ext.allow and similar can run an arbitrary helper too.
+    'git -c protocol.ext.allow=always log',
+    'git -c diff.external=/tmp/evil.sh diff',
+    // --ext-diff/--textconv run whatever this repo's OWN config names for
+    // the relevant diff driver — not visible on the command line at all.
+    'git diff --ext-diff',
+    'git log -p --textconv'
   ]
 
   for (const command of dangerousFlags) {

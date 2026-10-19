@@ -71,12 +71,22 @@ const DANGEROUS_PATTERNS: Array<{ category: string; pattern: RegExp }> = [
   // `git ... --upload-pack=<cmd>` / `--receive-pack=<cmd>` is a well-known
   // arbitrary-command-execution vector (git invokes whatever binary this
   // names as the remote helper) — not specific to `fetch`, since several
-  // git subcommands accept it. `-c core.*` can override config git itself
-  // later shells out through (pager, editor, fsmonitor, sshCommand, ...),
-  // which is just as dangerous even on an otherwise read-only subcommand
-  // like `git -c core.pager=... log`.
+  // git subcommands accept it.
   { category: 'git-arbitrary-command', pattern: /\bgit\b[^\n]*--(upload-pack|receive-pack)\b/i },
-  { category: 'git-arbitrary-command', pattern: /\bgit\s+(?:[^\n]*\s)?-c\s+core\./i },
+  // `-c <key>=<val>` can override ANY git config for this one invocation —
+  // not just core.* (pager, editor, fsmonitor, sshCommand, ...): also
+  // things like diff.external / protocol.ext.allow that make an otherwise
+  // read-only command run an arbitrary helper (see --ext-diff/--textconv
+  // below), or core.hooksPath pointing somewhere that runs on the next
+  // operation. There is no safe subset of `-c` to allow through, so any use
+  // of it at all requires a human, on any git subcommand.
+  { category: 'git-arbitrary-command', pattern: /\bgit\s+(?:[^\n]*\s)?-c\s+\S/i },
+  // `--ext-diff` runs whatever `diff.<driver>.command` names in this repo's
+  // config, and `--textconv` runs whatever `diff.<driver>.textconv` names —
+  // both configured in .git/config or .gitattributes, not something the
+  // command line itself reveals, and both execute arbitrary programs on
+  // otherwise read-only commands like `git diff`/`git log -p`.
+  { category: 'git-arbitrary-command', pattern: /\bgit\b[^\n]*--(ext-diff|textconv)\b/i },
   // ripgrep's `--pre <program>` runs an arbitrary program on every searched
   // file before matching — not a read, an execution.
   { category: 'command-execution-flag', pattern: /\brg\b[^\n]*--pre\b/i },
