@@ -1294,7 +1294,14 @@ export function AgentTranscriptPanel({
       )}
       {/* TaskWorkspace supplies the shared task header; standalone panels keep their own. */}
       {(!embeddedHeader || externalHeaderHeight > 0 || isSearchOpen || latestTodos) && (
-        <div ref={topOverlayRef} className="glass-bar pointer-events-none relative z-10 shrink-0" style={floatingTop && topOverlayHeight > 0 ? { marginBottom: -topOverlayHeight } : undefined}>
+        <div
+          ref={topOverlayRef}
+          // TaskWorkspace already diffuses its own floating header (glass-task-detail-bar
+          // on TaskHeaderBar) above this overlay; adding it here too would stack a second
+          // blur. A standalone panel (Mastermind, a canvas transcript panel) has no such
+          // header of its own, so this overlay carries the diffusion instead.
+          className={cn('glass-bar pointer-events-none relative z-10 shrink-0', !embeddedHeader && 'glass-task-detail-bar')}
+          style={floatingTop && topOverlayHeight > 0 ? { marginBottom: -topOverlayHeight } : undefined}>
       {externalHeaderHeight > 0 && <div aria-hidden="true" style={{ height: externalHeaderHeight }} />}
       {!embeddedHeader && (
       <div

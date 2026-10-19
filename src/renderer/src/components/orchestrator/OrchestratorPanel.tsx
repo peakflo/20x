@@ -200,7 +200,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
 
       {!selectedAgentId && (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="glass-bar flex h-[36px] shrink-0 items-center justify-between gap-2 px-3">
+          <div className="glass-bar glass-task-detail-bar flex h-[36px] shrink-0 items-center justify-between gap-2 px-3">
             <span className="text-sm font-medium">Mastermind den</span>
             <div className="flex items-center gap-2">{agentSelector}{closeButton}</div>
           </div>
