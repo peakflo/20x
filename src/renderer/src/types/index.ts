@@ -229,6 +229,14 @@ export interface AgentConfig {
   }
   /** Opt-in: pass credential-shaped shell env vars (GH_TOKEN, AWS keys, ...) through to this agent's process env. Off by default. */
   pass_shell_credentials?: boolean
+  /**
+   * Opt-in: let this agent's OWN configured secrets sit in its harness's
+   * full process environment, for harnesses with no command-scoped exec
+   * hook (Codex, ACP, Pi, Cursor). Off by default — a configured secret is
+   * withheld from these harnesses unless explicitly turned on. Ignored by
+   * Claude Code/OpenCode, which never need it.
+   */
+  allow_secrets_in_env?: boolean
 }
 
 export interface Agent {

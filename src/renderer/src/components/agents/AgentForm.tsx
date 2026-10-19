@@ -78,6 +78,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [showSkillSelector, setShowSkillSelector] = useState(false)
   const [secretIds, setSecretIds] = useState<string[]>(agent?.config.secret_ids ?? [])
   const [passShellCredentials, setPassShellCredentials] = useState(agent?.config.pass_shell_credentials ?? false)
+  const [allowSecretsInEnv, setAllowSecretsInEnv] = useState(agent?.config.allow_secrets_in_env ?? false)
   const [mcpSelection, setMcpSelection] = useState<Map<string, string[] | undefined>>(
     () => parseMcpSelection(agent?.config.mcp_servers)
   )
@@ -297,6 +298,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         skill_ids: skillIds,
         secret_ids: secretIds.length > 0 ? secretIds : undefined,
         pass_shell_credentials: passShellCredentials || undefined,
+        allow_secrets_in_env: allowSecretsInEnv || undefined,
         api_keys: {
           // Only persist the OpenAI key when Codex is in api_key mode
           openai: (codingAgent === CodingAgentType.CODEX && authMethod === 'api_key')
@@ -881,6 +883,24 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </p>
         <SecretSelector selectedIds={secretIds} onChange={setSecretIds} />
       </div>
+
+      {secretIds.length > 0 && codingAgent !== CodingAgentType.CLAUDE_CODE && codingAgent !== CodingAgentType.OPENCODE && (
+        <div className="space-y-1.5">
+          <label className="flex items-center gap-2.5 cursor-pointer">
+            <Checkbox
+              checked={allowSecretsInEnv}
+              onCheckedChange={(checked) => setAllowSecretsInEnv(checked === true)}
+            />
+            <span className="text-sm">Allow secrets in this agent's environment</span>
+          </label>
+          <p className="text-xs text-muted-foreground pl-[26px]">
+            Off by default: {CODING_AGENTS.find((a) => a.value === codingAgent)?.label ?? 'This harness'} has no way
+            to scope a secret to a single command, so the selected secret(s) above would sit in this agent's{' '}
+            <strong>entire process environment</strong> — every tool and subprocess it spawns, not just one command.
+            They are withheld unless you turn this on.
+          </p>
+        </div>
+      )}
 
       <div className="space-y-1.5">
         <label className="flex items-center gap-2.5 cursor-pointer">

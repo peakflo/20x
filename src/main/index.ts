@@ -1,6 +1,6 @@
 import { execFile, execSync } from 'child_process'
 import { readdirSync } from 'fs'
-import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage, Notification } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
@@ -1047,6 +1047,29 @@ app.whenReady().then(async () => {
     db.reencryptPlaintextFallbackRows()
   } catch (err) {
     console.warn('[Main] Re-encrypting plaintext-fallback secret rows failed:', err)
+  }
+  // User-visible warning for the case reencryptPlaintextFallbackRows can't
+  // fix: encryption is STILL unavailable, so any existing plaintext-fallback
+  // row just sits there unprotected with nothing else ever telling the
+  // user. Shown once per app run — not spammy, but not silent either.
+  try {
+    if (!db.isSecretEncryptionAvailable()) {
+      const { secrets: plaintextSecrets, oauthTokens: plaintextTokens } = db.countPlaintextFallbackRows()
+      if (plaintextSecrets > 0 || plaintextTokens > 0) {
+        const parts: string[] = []
+        if (plaintextSecrets > 0) parts.push(`${plaintextSecrets} secret(s)`)
+        if (plaintextTokens > 0) parts.push(`${plaintextTokens} connected-account token(s)`)
+        new Notification({
+          title: 'Secrets stored without encryption',
+          body: `${parts.join(' and ')} are stored in plaintext because this system's keychain/keyring is unavailable. ` +
+            (process.platform === 'linux'
+              ? 'Install and unlock a keyring (gnome-keyring, kwallet, or kwallet6), then restart 20x — they will be encrypted automatically.'
+              : 'Unlock your OS keychain, or restart 20x — they will be encrypted automatically.')
+        }).show()
+      }
+    }
+  } catch (err) {
+    console.warn('[Main] Failed to check for plaintext-fallback secret rows:', err)
   }
   const savedBrand = db.getSetting('enterprise_brand_spaces')
   setSelectedCompanyBrand(savedBrand === 'true' ? true : savedBrand === 'false' ? false : null)

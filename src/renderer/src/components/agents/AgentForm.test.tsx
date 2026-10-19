@@ -236,3 +236,40 @@ describe('AgentForm — pass_shell_credentials opt-in', () => {
     expect(screen.getByText(/credentials like GH_TOKEN and AWS keys are stripped/)).toBeTruthy()
   })
 })
+
+describe('AgentForm — allow_secrets_in_env opt-in (harnesses with no command-scoped delivery)', () => {
+  it('is hidden when no secrets are selected', () => {
+    render(<AgentForm onSubmit={vi.fn()} onCancel={vi.fn()} />)
+    selectCodingAgent('codex')
+    expect(screen.queryByText("Allow secrets in this agent's environment")).toBeNull()
+  })
+
+  it('is hidden for Claude Code/OpenCode even with secrets selected (they never need it)', () => {
+    render(<AgentForm agent={makeAgent({ coding_agent: CodingAgentType.CLAUDE_CODE, secret_ids: ['s1'] })} onSubmit={vi.fn()} onCancel={vi.fn()} />)
+    expect(screen.queryByText("Allow secrets in this agent's environment")).toBeNull()
+  })
+
+  it('defaults to off and submits undefined for a harness with secrets selected (e.g. Codex)', async () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm agent={makeAgent({ coding_agent: CodingAgentType.CODEX, secret_ids: ['s1'] })} onSubmit={onSubmit} onCancel={vi.fn()} />)
+
+    const checkbox = screen.getByText("Allow secrets in this agent's environment").closest('label')!.querySelector('button, input')!
+    expect(checkbox).toHaveAttribute('aria-checked', 'false')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].config.allow_secrets_in_env).toBeUndefined()
+  })
+
+  it('submits true once turned on', async () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm agent={makeAgent({ coding_agent: CodingAgentType.CODEX, secret_ids: ['s1'] })} onSubmit={onSubmit} onCancel={vi.fn()} />)
+
+    const checkbox = screen.getByText("Allow secrets in this agent's environment").closest('label')!.querySelector('button, input')!
+    fireEvent.click(checkbox)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].config.allow_secrets_in_env).toBe(true)
+  })
+})

@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { safeStorage } from 'electron'
+import { existsSync, readFileSync, rmSync } from 'fs'
+import { join } from 'path'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import type { DatabaseManager } from './database'
 
@@ -8,19 +10,29 @@ let rawDb: import('better-sqlite3').Database
 
 // The global test mock (test/setup-main.ts) makes encryptString/decryptString
 // an identity pass-through, which can't model the real asymmetry this file's
-// tests depend on: a properly-encrypted blob is NOT valid input to decrypt as
-// plaintext, and vice versa (real safeStorage prefixes encrypted output with
-// a version marker; raw plaintext bytes don't have one, so decrypting them
-// throws). Override with a fake pair that models that same asymmetry.
-const MARKER = Buffer.from('FAKE_ENCRYPTED:')
+// tests depend on. Override with a pair that models the REAL shape —
+// Chromium os_crypt's own "v10" version prefix, empirically confirmed by
+// actually calling safeStorage.encryptString in a real Electron process on
+// this Mac (not a made-up marker like an earlier version of this fixture
+// used, which the re-review correctly flagged: `isPlaintextFallback` now
+// does a POSITIVE byte-prefix check, not a "did decrypt throw" check, so
+// the fixture has to produce the prefix real encrypted bytes actually have
+// — a decrypt-only throwing mock can no longer stand in for it.
+const REAL_PREFIX = Buffer.from('v10', 'latin1')
+const BACKUP_DIR = '/tmp/pf-desktop-test/secret-reencrypt-backups'
 
 beforeEach(() => {
   ;({ db, rawDb } = createTestDb())
-  vi.mocked(safeStorage.encryptString).mockImplementation((value: string) => Buffer.concat([MARKER, Buffer.from(value, 'utf8')]))
+  vi.mocked(safeStorage.encryptString).mockImplementation((value: string) => Buffer.concat([REAL_PREFIX, Buffer.from(value, 'utf8')]))
   vi.mocked(safeStorage.decryptString).mockImplementation((buf: Buffer) => {
-    if (!buf.subarray(0, MARKER.length).equals(MARKER)) throw new Error('not actually encrypted')
-    return buf.subarray(MARKER.length).toString('utf8')
+    if (!buf.subarray(0, REAL_PREFIX.length).equals(REAL_PREFIX)) throw new Error('not actually encrypted')
+    return buf.subarray(REAL_PREFIX.length).toString('utf8')
   })
+  rmSync(BACKUP_DIR, { recursive: true, force: true })
+})
+
+afterEach(() => {
+  rmSync(BACKUP_DIR, { recursive: true, force: true })
 })
 
 describe('createSecret / updateSecret refuse plaintext when safeStorage is unavailable', () => {
@@ -119,6 +131,88 @@ describe('reencryptPlaintextFallbackRows', () => {
 
     const after = (rawDb.prepare('SELECT value FROM secrets WHERE id = ?').get(secret.id) as { value: Buffer }).value
     expect(Buffer.compare(before, after)).toBe(0)
+  })
+
+  // P0, re-review: the OLD detection ("decrypt throws" => "plaintext") could
+  // not tell "never encrypted" apart from "WAS encrypted, can't decrypt
+  // right now for an unrelated reason" (keychain reset, keyring backend
+  // changed, profile moved to another machine) — and would re-encrypt the
+  // latter, permanently destroying the real ciphertext by overwriting it
+  // with a UTF-8 misreading of its own bytes. The fix detects plaintext
+  // POSITIVELY (byte prefix), so a real-but-undecryptable row must be left
+  // alone entirely, not "fixed".
+  it('does NOT touch a row that has the real encrypted-data prefix but fails to decrypt for an unrelated reason (keychain reset, etc.) — the exact scenario that used to destroy it', () => {
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true)
+    const secret = db.createSecret({ name: 'K', description: '', env_var_name: 'MY_SECRET', value: 'leaked-secret-123456' })!
+    const originalBytes = (rawDb.prepare('SELECT value FROM secrets WHERE id = ?').get(secret.id) as { value: Buffer }).value
+    expect(originalBytes.subarray(0, 3).toString('latin1')).toBe('v10') // sanity: really has the real prefix
+
+    // Simulate "the OS can no longer decrypt this specific blob" (keychain
+    // reset, etc.) WITHOUT changing its prefix — decryptString throws for
+    // every v10-prefixed value for the rest of this test, same as it would
+    // on a real system in this situation.
+    vi.mocked(safeStorage.decryptString).mockImplementation(() => {
+      throw new Error('simulated: OS keychain entry no longer decryptable')
+    })
+
+    const result = db.reencryptPlaintextFallbackRows()
+    expect(result.secrets).toBe(0) // NOT treated as plaintext — left alone
+
+    const afterBytes = (rawDb.prepare('SELECT value FROM secrets WHERE id = ?').get(secret.id) as { value: Buffer }).value
+    expect(Buffer.compare(originalBytes, afterBytes)).toBe(0) // byte-for-byte untouched
+
+    // Reading it back surfaces the failure rather than returning garbage —
+    // and does not crash or corrupt anything for OTHER secrets in the batch.
+    expect(db.getSecretsWithValues([secret.id])).toEqual([])
+  })
+
+  it('backs up the original bytes to disk before re-encrypting a genuinely legacy plaintext row', () => {
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false)
+    const now = new Date().toISOString()
+    rawDb.prepare(`
+      INSERT INTO secrets (id, name, description, env_var_name, value, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('legacy-backup-1', 'Legacy', '', 'MY_SECRET', Buffer.from('leaked-secret-123456', 'utf8'), now, now)
+
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true)
+    expect(existsSync(join(BACKUP_DIR, 'backup.jsonl'))).toBe(false)
+    expect(db.reencryptPlaintextFallbackRows().secrets).toBe(1)
+
+    const backupPath = join(BACKUP_DIR, 'backup.jsonl')
+    expect(existsSync(backupPath)).toBe(true)
+    const entry = JSON.parse(readFileSync(backupPath, 'utf-8').trim().split('\n')[0])
+    expect(entry.table).toBe('secrets')
+    expect(entry.id).toBe('legacy-backup-1')
+    expect(Buffer.from(entry.original_base64, 'base64').toString('utf8')).toBe('leaked-secret-123456')
+  })
+})
+
+describe('countPlaintextFallbackRows', () => {
+  it('counts a legacy plaintext row regardless of whether encryption is currently available', () => {
+    const now = new Date().toISOString()
+    rawDb.prepare(`
+      INSERT INTO secrets (id, name, description, env_var_name, value, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('legacy-count-1', 'Legacy', '', 'MY_SECRET', Buffer.from('leaked-secret-123456', 'utf8'), now, now)
+
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false)
+    expect(db.countPlaintextFallbackRows()).toEqual({ secrets: 1, oauthTokens: 0 })
+
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true)
+    expect(db.countPlaintextFallbackRows()).toEqual({ secrets: 1, oauthTokens: 0 })
+  })
+
+  it('does not count a properly-encrypted row, or a real-but-undecryptable one', () => {
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true)
+    db.createSecret({ name: 'K', description: '', env_var_name: 'MY_SECRET', value: 'leaked-secret-123456' })
+    expect(db.countPlaintextFallbackRows()).toEqual({ secrets: 0, oauthTokens: 0 })
+
+    vi.mocked(safeStorage.decryptString).mockImplementation(() => { throw new Error('simulated keychain failure') })
+    expect(db.countPlaintextFallbackRows()).toEqual({ secrets: 0, oauthTokens: 0 }) // still has the real prefix — not plaintext
+  })
+
+  it('returns zero counts when there is nothing stored at all', () => {
+    expect(db.countPlaintextFallbackRows()).toEqual({ secrets: 0, oauthTokens: 0 })
   })
 })
 

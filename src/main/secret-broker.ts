@@ -29,7 +29,7 @@
  */
 
 import { createServer, type Server as HttpServer, type IncomingMessage } from 'http'
-import { writeFileSync, chmodSync, existsSync, mkdirSync } from 'fs'
+import { writeFileSync, chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { createHash, timingSafeEqual } from 'crypto'
 import { app } from 'electron'
@@ -157,63 +157,139 @@ function secretLoaderDir(): string {
   return dir
 }
 
-// Takes (port, token) as plain arguments — no file, no env var, nothing
-// written to disk per session. Stdout carries ONLY the broker's `export`
-// lines (or nothing) — the channel the caller's `eval "$(...)"` captures and
-// runs — so a secret value is the only thing that can ever reach the
-// command it's injected into. Never enables `-x`. Fails closed on any
-// error: nothing is exported, the original command still runs (just without
-// secrets), and a one-line diagnostic goes to STDERR, which `eval "$(...)"`
-// does NOT capture — it reaches the harness's own stderr/log, not the
-// command's captured stdout or the transcript the model sees as output.
-const POSIX_LOADER = `#!/bin/bash
+// Takes (port, tokenFilePath) as plain arguments — NOT the token itself.
+// P1, re-review: the token used to be passed as a plain argument, which put
+// it in two places it didn't need to be: the loader subprocess's own argv
+// (readable via `ps -ef`/`ps eww`/`/proc/*/cmdline`), and — one level up —
+// the WRAPPED command's own text (`updatedInput`/OpenCode's persisted
+// `args.command`), visible in the transcript. It's not a user secret (an
+// ephemeral, loopback-only, revoked-on-session-end capability token), but
+// there's no reason to spend that exposure either, so it's now read from a
+// 0600 file instead (see `writeSecretTokenFile`) — the command text and
+// this script's own argv carry only a PATH.
+//
+// Forwarded to curl via `-H @-` (stdin), not `-H "Authorization: ..."` —
+// otherwise the token would still land in CURL's OWN argv even though it
+// never touches this script's argv. `$(cat "$tokenfile")` strips the
+// trailing newline the file is written with (POSIX command substitution
+// always does), so the header value is exact.
+//
+// Stdout carries ONLY the broker's `export` lines (or nothing) — the
+// channel the caller's `eval "$(...)"` captures and runs — so a secret
+// value is the only thing that can ever reach the command it's injected
+// into. Never enables `-x`. Fails closed on any error: nothing is
+// exported, the original command still runs (just without secrets), and a
+// one-line diagnostic goes to STDERR — `eval "$(...)"` only captures
+// STDOUT, so this reaches the WRAPPED command's own stderr (caller must
+// not redirect it away — see the `2>/dev/null` removal at the call sites,
+// another P2 re-review finding), which the Bash tool surfaces like any
+// other stderr output instead of failing completely silently.
+//
+// `#!/bin/sh`, not `#!/bin/bash` — no bash-specific syntax is used, and sh
+// is universally present (including Git Bash on Windows, which this script
+// now always targets — see writeSecretLoaderScript's docstring).
+const POSIX_LOADER = `#!/bin/sh
 port="$1"
-token="$2"
-if [ -z "$port" ] || [ -z "$token" ]; then
-  echo "20x secret-loader: missing port/token — failing closed, no secrets available" >&2
+tokenfile="$2"
+if [ -z "$port" ] || [ -z "$tokenfile" ]; then
+  echo "20x secret-loader: missing port/token-file — failing closed, no secrets available" >&2
   exit 1
 fi
-if ! curl -sf -H "Authorization: Bearer $token" "http://127.0.0.1:$port/secrets/export"; then
-  echo "20x secret-loader: could not reach the secret broker at 127.0.0.1:$port — failing closed, no secrets available" >&2
+if [ ! -f "$tokenfile" ]; then
+  echo "20x secret-loader: token file not found — failing closed, no secrets available" >&2
+  exit 1
+fi
+if ! command -v curl >/dev/null 2>&1; then
+  echo "20x secret-loader: curl not found on PATH — failing closed, no secrets available" >&2
+  exit 1
+fi
+if ! printf 'Authorization: Bearer %s' "$(cat "$tokenfile")" | curl -sf --max-time 3 -H @- "http://127.0.0.1:$port/secrets/export"; then
+  echo "20x secret-loader: could not reach the secret broker at 127.0.0.1:$port within 3s — failing closed, no secrets available" >&2
   exit 1
 fi
 `
 
-// Windows equivalent, for harnesses/paths that invoke the loader through
-// PowerShell rather than a POSIX shell (currently none do — kept for parity
-// and so a future Windows-side caller does not have to reinvent this).
-const WINDOWS_LOADER = `param([string]$Port, [string]$Token)
-if (-not $Port -or -not $Token) {
-  Write-Error "20x secret-loader: missing port/token — failing closed, no secrets available"
-  exit 1
-}
-try {
-  $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/secrets/export" -Headers @{ Authorization = "Bearer $Token" } -UseBasicParsing -TimeoutSec 5
-  Write-Output $response.Content
-} catch {
-  Write-Error "20x secret-loader: could not reach the secret broker at 127.0.0.1:$Port — failing closed, no secrets available"
-  exit 1
-}
-`
+// P1 finding, re-review: a separate WINDOWS_LOADER (.ps1) used to be
+// selected whenever `process.platform === 'win32'`, on the assumption some
+// future caller would invoke it through PowerShell. No caller ever has —
+// every current one (Claude Code's PreToolUse hook, OpenCode's generated
+// plugin) builds the exact same `eval "$(<loaderPath> <port> <tokenFile>)"`
+// POSIX construct regardless of host OS, because both harnesses' Bash tool
+// runs through Git Bash on Windows, not PowerShell or cmd.exe. Git Bash's
+// `eval "$(...)"` has no idea how to run a `.ps1` file — it would try to
+// execute it directly as a shell script and fail (or, with `2>/dev/null`
+// swallowing the error, silently produce nothing), so a Windows Claude Code
+// session lost secret delivery entirely despite the loader path being set.
+// Removed rather than kept as unreachable dead code — `writeSecretLoaderScript`
+// below now always writes the POSIX script, on every platform.
 
 /**
- * Writes the shared secret-loader script (idempotent — written once, shared
- * by every session and every harness that wraps a command with it) and
- * returns its path. Callers build the command-text invocation themselves:
- * `eval "$(<loaderPath> <port> <token>)"`.
+ * Writes the shared secret-loader script (shared by every session and
+ * every harness that wraps a command with it) and returns its path.
+ * Callers build the command-text invocation themselves:
+ * `eval "$(<loaderPath> <port> <tokenFilePath>)"` (see `writeSecretTokenFile`
+ * below for the token half of that).
+ *
+ * ALWAYS the POSIX script, even on Windows — see WINDOWS_LOADER's docstring
+ * above for why `process.platform` is not the right thing to switch on
+ * here. Content-compared and rewritten on a mismatch (not just written
+ * once when missing) — a fix to this script's own source must actually
+ * reach a user whose app already wrote an older version of the file.
  */
 export function writeSecretLoaderScript(): string {
   const dir = secretLoaderDir()
-  const isWin = process.platform === 'win32'
-  const loaderPath = join(dir, isWin ? 'secret-loader.ps1' : 'secret-loader.sh')
-  if (!existsSync(loaderPath)) {
-    writeFileSync(loaderPath, isWin ? WINDOWS_LOADER : POSIX_LOADER, 'utf-8')
-    if (!isWin) chmodSync(loaderPath, 0o755)
+  const loaderPath = join(dir, 'secret-loader.sh')
+  const current = existsSync(loaderPath) ? readFileSync(loaderPath, 'utf-8') : null
+  if (current !== POSIX_LOADER) {
+    writeFileSync(loaderPath, POSIX_LOADER, 'utf-8')
+    chmodSync(loaderPath, 0o755)
   }
   return loaderPath
 }
 
-/** Shell-quotes a command-line argument for the loader invocation (the token). Single-quote, escape embedded single quotes — same convention as the export lines above. */
+function secretTokenDir(): string {
+  const dir = join(app.getPath('userData'), 'secret-tokens')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
+  return dir
+}
+
+/**
+ * Writes `token` to a 0600 file outside the workspace and returns its path
+ * — what the loader invocation embeds in the command text instead of the
+ * token itself (see `POSIX_LOADER`'s docstring and `SessionConfig.secretTokenFilePath`
+ * for the full reasoning). Named by a hash of the token's own bytes, not
+ * anything session-identifying, so repeated calls for the SAME token
+ * overwrite the same file (no buildup) while two different tokens never
+ * collide.
+ */
+export function writeSecretTokenFile(token: string): string {
+  const dir = secretTokenDir()
+  const name = createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 32)
+  const path = join(dir, `${name}.token`)
+  writeFileSync(path, token, 'utf-8')
+  chmodSync(path, 0o600)
+  return path
+}
+
+/**
+ * Deletes the token file for `token`, written by `writeSecretTokenFile` —
+ * call when the session that owns the token ends (alongside
+ * `unregisterSecretSession`). Recomputes the same hash-derived path rather
+ * than requiring the caller to have kept it around. Safe to call when the
+ * file doesn't exist.
+ */
+export function deleteSecretTokenFile(token: string): void {
+  const dir = secretTokenDir()
+  const name = createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 32)
+  const path = join(dir, `${name}.token`)
+  try {
+    if (existsSync(path)) unlinkSync(path)
+  } catch {
+    // Best-effort.
+  }
+}
+
+/** Shell-quotes a command-line argument for the loader invocation. Single-quote, escape embedded single quotes — same convention as the export lines above. */
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`
 }

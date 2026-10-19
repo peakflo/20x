@@ -69,3 +69,22 @@ export function isSnoozed(snoozedUntil: string | null): boolean {
   if (!snoozedUntil) return false
   return new Date(snoozedUntil) > new Date()
 }
+
+// Electron's contextBridge/ipcRenderer wraps a main-process throw as
+// `Error: Error invoking remote method '<channel>': <original error>`
+// (and the original error's own message often starts with "Error: " too,
+// since `String(err)` on an Error calls its `.toString()`). Re-review (P2):
+// that whole wrapper is internal plumbing, not something a user should have
+// to read past — strip it down to just the original message.
+export function cleanErrorMessage(message: string): string {
+  let m = message
+  // Repeat: `String(err)` on a nested Error can leave more than one
+  // "Error: " layer, and the IPC prefix can itself wrap another one.
+  for (let i = 0; i < 5; i++) {
+    const before = m
+    m = m.replace(/^Error invoking remote method\s*'[^']*':\s*/, '')
+    m = m.replace(/^Error:\s*/, '')
+    if (m === before) break
+  }
+  return m.trim()
+}

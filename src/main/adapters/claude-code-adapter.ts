@@ -532,10 +532,12 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * (tests, or a harness invocation outside agent-manager's session model).
    */
   private buildSecretHooks(config: SessionConfig, fallbackScrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> {
-    const { secretBrokerPort, secretSessionToken, secretLoaderPath, secretsForScrubbing } = config
-    const hasLoader = !!(secretBrokerPort && secretSessionToken && secretLoaderPath)
+    const { secretBrokerPort, secretLoaderPath, secretTokenFilePath, secretsForScrubbing } = config
+    const hasLoader = !!(secretBrokerPort && secretTokenFilePath && secretLoaderPath)
+    // Embeds secretTokenFilePath (a path), never the token itself — see
+    // SessionConfig.secretSessionToken's docstring (P1, re-review).
     const loaderInvocation = hasLoader
-      ? `eval "$(${shellQuote(secretLoaderPath!)} ${secretBrokerPort} ${shellQuote(secretSessionToken!)} 2>/dev/null)"`
+      ? `eval "$(${shellQuote(secretLoaderPath!)} ${secretBrokerPort} ${shellQuote(secretTokenFilePath!)})"`
       : null
     const knownSecretVarNames = Object.keys(secretsForScrubbing || {})
 
@@ -548,7 +550,13 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       const originalCommand = toolInput.command as string
 
       const dumpGuard = checkSecretDumpGuard(originalCommand, knownSecretVarNames)
-      const guard = dumpGuard.blocked ? dumpGuard : checkLoaderReadGuard(originalCommand, secretLoaderPath)
+      // Re-review (P2): checkLoaderReadGuard only protects something when the
+      // loader/token file actually hold a secret capability worth protecting
+      // — skip the extra scan entirely for a secret-free session.
+      const guard =
+        dumpGuard.blocked || !hasLoader
+          ? dumpGuard
+          : checkLoaderReadGuard(originalCommand, secretLoaderPath, secretTokenFilePath)
       if (guard.blocked) {
         return {
           hookSpecificOutput: {

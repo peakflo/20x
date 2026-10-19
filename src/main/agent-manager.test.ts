@@ -87,7 +87,9 @@ vi.mock('./secret-broker', () => ({
   registerSecretSession: vi.fn(),
   unregisterSecretSession: vi.fn(),
   getSecretBrokerPort: vi.fn(),
-  writeSecretShellWrapper: vi.fn(),
+  writeSecretLoaderScript: vi.fn(() => '/fake/secret-loader.sh'),
+  writeSecretTokenFile: vi.fn((token: string) => `/fake/secret-tokens/${token}.token`),
+  deleteSecretTokenFile: vi.fn(),
 }))
 vi.mock('./mcp-auth-proxy', () => ({
   registerMcpProxyTarget: vi.fn(),
@@ -6152,5 +6154,65 @@ describe('AgentManager sendToRenderer — secret scrubbing choke point', () => {
     })
 
     expect(JSON.stringify(sent[0].data)).not.toContain(SECRET_VALUE)
+  })
+})
+
+// P1 finding, re-review: allow_secrets_in_env used to default to TRUE
+// ("!== false"). For a harness with no command-scoped exec hook (Codex,
+// ACP, Pi, Cursor), that means EVERY agent configured with secrets handed
+// them to that harness's entire process environment — every tool, every
+// subprocess — unless the user had explicitly opted OUT. Re-reviewed and
+// changed to default OFF: an agent must now explicitly opt IN.
+describe('populateSecretDelivery — allow_secrets_in_env defaults to OFF', () => {
+  function makeManagerForProvider() {
+    const mockDb = {
+      getSecretsByIds: vi.fn(() => [{ id: 'secret-1', name: 'My Secret', env_var_name: 'MY_SECRET' }]),
+      getSecretsWithValues: vi.fn(() => [{ id: 'secret-1', env_var_name: 'MY_SECRET', value: 'leaked-secret-value-123456' }]),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+    return new AgentManager(mockDb)
+  }
+
+  it('withholds secretEnvVars by default for a harness with no command-scoped delivery (e.g. Codex)', () => {
+    const mgr = makeManagerForProvider()
+    const agent = { id: 'agent-1', name: 'Agent', config: { coding_agent: 'codex', secret_ids: ['secret-1'] } }
+    const config: Record<string, unknown> = { systemPrompt: '' }
+
+    ;(mgr as any).populateSecretDelivery(config, agent, undefined)
+
+    expect(config.secretEnvVars).toBeUndefined()
+    expect(config.allowSecretsInEnv).toBe(false)
+    expect(config.systemPrompt).toContain('withheld')
+  })
+
+  it('passes secretEnvVars through once the agent explicitly opts in (allow_secrets_in_env: true)', () => {
+    const mgr = makeManagerForProvider()
+    const agent = { id: 'agent-1', name: 'Agent', config: { coding_agent: 'codex', secret_ids: ['secret-1'], allow_secrets_in_env: true } }
+    const config: Record<string, unknown> = { systemPrompt: '' }
+
+    ;(mgr as any).populateSecretDelivery(config, agent, undefined)
+
+    expect(config.secretEnvVars).toEqual({ MY_SECRET: 'leaked-secret-value-123456' })
+    expect(config.allowSecretsInEnv).toBe(true)
+  })
+
+  it('still withholds when allow_secrets_in_env is explicitly false (unchanged — not a behavior regression for users who already set it)', () => {
+    const mgr = makeManagerForProvider()
+    const agent = { id: 'agent-1', name: 'Agent', config: { coding_agent: 'codex', secret_ids: ['secret-1'], allow_secrets_in_env: false } }
+    const config: Record<string, unknown> = { systemPrompt: '' }
+
+    ;(mgr as any).populateSecretDelivery(config, agent, undefined)
+
+    expect(config.secretEnvVars).toBeUndefined()
+  })
+
+  it('ignores allow_secrets_in_env entirely for a broker+loader harness (Claude Code) — never gets secretEnvVars either way', () => {
+    const mgr = makeManagerForProvider()
+    const agent = { id: 'agent-1', name: 'Agent', config: { coding_agent: 'claude-code', secret_ids: ['secret-1'] } }
+    const config: Record<string, unknown> = { systemPrompt: '' }
+
+    ;(mgr as any).populateSecretDelivery(config, agent, undefined)
+
+    expect(config.secretEnvVars).toBeUndefined()
+    expect(config.allowSecretsInEnv).toBeUndefined()
   })
 })

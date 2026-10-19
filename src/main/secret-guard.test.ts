@@ -4,21 +4,30 @@ import { checkSecretDumpGuard, checkLoaderReadGuard, buildGuardFunctionSource } 
 const BLOCKED_COMMANDS = [
   'env',
   'env -i',
+  'env -0', // NUL-delimited dump — digit flag, not just letters
   'cd /tmp && env',
   'echo start; env; echo done',
   'printenv',
   'printenv HOME',
   'set',
   '  set  ',
+  'export', // bare export, no args — dumps every exported var
   'export -p',
   'declare -p',
   'declare -x',
+  'declare -xp', // combined short flags
+  'declare -px',
   'typeset -p',
+  'compgen -e',
   'cat /proc/self/environ',
   'cat /proc/1234/environ',
   'ps e',
   'ps eww',
-  'ps -E'
+  'ps -E',
+  'command env', // bypasses a shell alias/function named env
+  'sudo env', // wrapper prefix stripped before matching
+  'exec printenv',
+  'FOO=bar env' // a var assignment prefix is just a wrapper, not a scoping sub-command
 ]
 
 const ALLOWED_COMMANDS = [
@@ -33,7 +42,13 @@ const ALLOWED_COMMANDS = [
   'ps -ef',
   'ps aux',
   'curl -sf https://example.com',
-  'export MY_VAR=value' // plain export, not export -p
+  'export MY_VAR=value', // plain export, not export -p
+  // Position-based false positives (re-review, P2): the word appears as
+  // ARGUMENT TEXT to an unrelated command, not as the command being run.
+  'grep -r printenv src',
+  'git commit -m "fixed a printenv bug"',
+  'echo "declare -p is scary" > notes.txt',
+  'echo "export -p prints secrets" | wc -l'
 ]
 
 describe('checkSecretDumpGuard', () => {
@@ -71,6 +86,30 @@ describe('checkSecretDumpGuard', () => {
     expect(checkSecretDumpGuard('ls | printenv').blocked).toBe(true)
     expect(checkSecretDumpGuard('ls\nenv').blocked).toBe(true)
   })
+
+  // Re-review (P2): piping a known secret var into ANOTHER command's stdin
+  // is a standard, safe credential-handoff pattern — not a dump to visible
+  // output — and must be allowed.
+  it('allows a known secret var piped into another command — standard safe patterns', () => {
+    expect(checkSecretDumpGuard('echo "$TOKEN" | gh auth login --with-token', ['TOKEN']).blocked).toBe(false)
+    expect(
+      checkSecretDumpGuard('printf %s "$TOKEN" | docker login --password-stdin', ['TOKEN']).blocked
+    ).toBe(false)
+  })
+
+  it('still blocks the same echo when it is NOT piped anywhere', () => {
+    expect(checkSecretDumpGuard('echo "$TOKEN"', ['TOKEN']).blocked).toBe(true)
+    expect(checkSecretDumpGuard('printf %s "$TOKEN"', ['TOKEN']).blocked).toBe(true)
+  })
+
+  it('still blocks an echo of a secret piped only into an output-revealing command', () => {
+    // Piping is allowed in general (see above), but this backstop only
+    // exists to catch the "print it to stdout" case — a pipe to e.g. `cat`
+    // still ends up on stdout, so this is intentionally a blunt allow-list,
+    // not a semantic analysis of the downstream command. Documented here so
+    // the trade-off is explicit, not accidental.
+    expect(checkSecretDumpGuard('echo "$TOKEN" | cat', ['TOKEN']).blocked).toBe(false)
+  })
 })
 
 describe('checkLoaderReadGuard', () => {
@@ -101,6 +140,11 @@ describe('buildGuardFunctionSource — parity with checkSecretDumpGuard', () => 
   it('blocks a known secret var name the same way', () => {
     expect(generated('echo $MY_SECRET', ['MY_SECRET'], undefined).blocked).toBe(true)
     expect(generated('echo $MY_SECRET', [], undefined).blocked).toBe(false)
+  })
+
+  it('allows a piped secret var the same way', () => {
+    expect(generated('echo "$TOKEN" | gh auth login --with-token', ['TOKEN'], undefined).blocked).toBe(false)
+    expect(generated('echo "$TOKEN"', ['TOKEN'], undefined).blocked).toBe(true)
   })
 
   it('blocks reading the loader source the same way', () => {

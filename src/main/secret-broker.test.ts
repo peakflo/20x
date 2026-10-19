@@ -9,6 +9,8 @@ import {
   unregisterSecretSession,
   getSecretBrokerPort,
   writeSecretLoaderScript,
+  writeSecretTokenFile,
+  deleteSecretTokenFile,
   shellQuote
 } from './secret-broker'
 import type { DatabaseManager } from './database'
@@ -162,20 +164,22 @@ describe.skipIf(process.platform === 'win32')('secret-loader.sh end-to-end', () 
 
   it('prints only export lines to stdout for a valid token, nothing to stderr', async () => {
     const loaderPath = writeSecretLoaderScript()
-    const { stdout, stderr } = await execFileAsync(loaderPath, [String(port), 'tok-abc'])
+    const tokenFile = writeSecretTokenFile('tok-abc')
+    const { stdout, stderr } = await execFileAsync(loaderPath, [String(port), tokenFile])
     expect(stdout.trim()).toBe(`export MY_SECRET='leaked-value-123456'`)
     expect(stderr.trim()).toBe('')
   })
 
   it('fails closed with nothing on stdout and a clear message on stderr when the broker is unreachable', async () => {
     const loaderPath = writeSecretLoaderScript()
+    const tokenFile = writeSecretTokenFile('tok-abc')
     // Stop our own broker so this port is DEFINITELY not listening — picking
     // an arbitrary nearby port number is flaky under a full parallel test
     // run, where some other test's server can legitimately be bound there.
     const deadPort = port
     stopSecretBroker()
     try {
-      await execFileAsync(loaderPath, [String(deadPort), 'tok-abc'])
+      await execFileAsync(loaderPath, [String(deadPort), tokenFile])
       throw new Error('expected the loader to fail')
     } catch (err) {
       const e = err as { code: number; stdout: string; stderr: string }
@@ -187,13 +191,52 @@ describe.skipIf(process.platform === 'win32')('secret-loader.sh end-to-end', () 
 
   it('fails closed when given a wrong token — no secret value leaks to stdout', async () => {
     const loaderPath = writeSecretLoaderScript()
+    const wrongTokenFile = writeSecretTokenFile('wrong-token')
     try {
-      await execFileAsync(loaderPath, [String(port), 'wrong-token'])
+      await execFileAsync(loaderPath, [String(port), wrongTokenFile])
       throw new Error('expected failure')
     } catch (err) {
       const e = err as { stdout: string; stderr: string; code: number }
       expect(e.stdout.trim()).toBe('')
       expect(e.stdout).not.toContain('leaked-value-123456')
     }
+  })
+
+  // P1 finding, re-review: the token used to be passed to the loader as a
+  // plain argv entry, visible via `ps -ef`/`ps eww` for the whole time the
+  // loader process ran. It's now read from a 0600 file whose PATH is the
+  // argv entry instead.
+  it("reads the token from a file — the raw token value never appears in the loader's own argv", async () => {
+    const loaderPath = writeSecretLoaderScript()
+    const tokenFile = writeSecretTokenFile('tok-abc')
+    expect(tokenFile).not.toContain('tok-abc') // the path itself doesn't leak the token
+    const { stdout } = await execFileAsync(loaderPath, [String(port), tokenFile])
+    expect(stdout.trim()).toBe(`export MY_SECRET='leaked-value-123456'`)
+  })
+
+  it('fails closed with a clear message when the token file does not exist', async () => {
+    const loaderPath = writeSecretLoaderScript()
+    try {
+      await execFileAsync(loaderPath, [String(port), '/tmp/20x-nonexistent-token-file-xyz'])
+      throw new Error('expected failure')
+    } catch (err) {
+      const e = err as { code: number; stdout: string; stderr: string }
+      expect(e.stdout.trim()).toBe('')
+      expect(e.stderr).toContain('token file not found')
+    }
+  })
+
+  it('writeSecretTokenFile writes a 0600 file, and deleteSecretTokenFile removes it', () => {
+    const tokenFile = writeSecretTokenFile('tok-cleanup-test')
+    expect(existsSync(tokenFile)).toBe(true)
+    expect(statSync(tokenFile).mode & 0o777).toBe(0o600)
+    expect(readFileSync(tokenFile, 'utf-8')).toBe('tok-cleanup-test')
+
+    deleteSecretTokenFile('tok-cleanup-test')
+    expect(existsSync(tokenFile)).toBe(false)
+  })
+
+  it('deleteSecretTokenFile is a no-op for a token that was never written', () => {
+    expect(() => deleteSecretTokenFile('never-written-token')).not.toThrow()
   })
 })

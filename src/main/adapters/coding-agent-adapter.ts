@@ -77,12 +77,29 @@ export interface SessionConfig {
   /**
    * Per-session token for authenticating with the secret broker. Not a user
    * secret — an ephemeral, loopback-only, revoked-on-session-end capability
-   * token. May appear in a command's loader line; a real secret value never
-   * does.
+   * token. Kept here for cleanup (`unregisterSecretSession`) and guard
+   * checks — NOT for building the loader invocation. P1, re-review: putting
+   * even this non-secret capability token directly in a command's loader
+   * line meant it sat in the rewritten command TEXT (visible in the
+   * transcript via `updatedInput`/OpenCode's persisted `args.command`) and
+   * in the loader subprocess's own argv (`ps -ef`/`ps eww`, or reading
+   * /proc/PID/cmdline directly).
+   * `secretTokenFilePath` below is what the invocation is actually built
+   * from now — a 0600 file path, never the token value itself.
    */
   secretSessionToken?: string
   /** Absolute path to the shared secret-loader script (secret-broker.ts's `writeSecretLoaderScript()`). */
   secretLoaderPath?: string
+  /**
+   * Absolute path to a 0600 file (outside the workspace) holding this
+   * session's broker token — what the loader invocation actually embeds in
+   * the command text and passes as an argv entry, instead of the token
+   * value itself (see `secretSessionToken`'s docstring for why). The loader
+   * script reads the token FROM this file and forwards it to the broker
+   * via `curl -H @-` (stdin), so the token never appears in the loader's OR
+   * curl's own argv either.
+   */
+  secretTokenFilePath?: string
   /**
    * Decrypted secret env vars. Only read by harnesses with no command-scoped
    * exec hook to route through the broker instead (Codex, ACP, Pi — see each

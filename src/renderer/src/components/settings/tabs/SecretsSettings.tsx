@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/Button'
 import { SettingsSection } from '../SettingsSection'
 import { SecretFormDialog } from '../forms/SecretFormDialog'
 import { useSecretStore } from '@/stores/secret-store'
+import { cleanErrorMessage } from '@/lib/utils'
 import type { Secret, CreateSecretDTO, UpdateSecretDTO } from '@/types'
 
 interface SecretDialogState {
@@ -19,19 +20,23 @@ export function SecretsSettings() {
     fetchSecrets()
   }, [])
 
-  // The dialog always closes after a submit attempt; on failure (most
-  // commonly: safeStorage unavailable) the store's error banner above stays
-  // up afterward so the failure is still visible, not silently discarded.
-  const handleCreate = async (data: CreateSecretDTO | UpdateSecretDTO) => {
-    await createSecret(data as CreateSecretDTO)
-    setDialog({ open: false })
+  // Re-review (P2): the dialog used to close unconditionally after a submit
+  // attempt (SecretFormDialog's own handleSubmit used to call onClose()
+  // right after firing the submit, without waiting for or checking the
+  // result), so a failure (most commonly: safeStorage unavailable) silently
+  // discarded whatever the user had just typed — they'd see an error banner
+  // appear behind an already-closed dialog, with no obvious link between
+  // the two. SecretFormDialog now awaits this return value and only closes
+  // itself when it's true.
+  const handleCreate = async (data: CreateSecretDTO | UpdateSecretDTO): Promise<boolean> => {
+    const created = await createSecret(data as CreateSecretDTO)
+    return created !== null
   }
 
-  const handleUpdate = async (data: CreateSecretDTO | UpdateSecretDTO) => {
-    if (dialog.secret) {
-      await updateSecret(dialog.secret.id, data as UpdateSecretDTO)
-      setDialog({ open: false })
-    }
+  const handleUpdate = async (data: CreateSecretDTO | UpdateSecretDTO): Promise<boolean> => {
+    if (!dialog.secret) return false
+    const updated = await updateSecret(dialog.secret.id, data as UpdateSecretDTO)
+    return updated !== null
   }
 
   const handleDelete = async (id: string) => {
@@ -58,7 +63,7 @@ export function SecretsSettings() {
         )}
         {error && (
           <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            {error.replace(/^Error:\s*/, '')}
+            {cleanErrorMessage(error)}
           </div>
         )}
         <div className="flex items-center justify-between">
