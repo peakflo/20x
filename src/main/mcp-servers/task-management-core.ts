@@ -34,6 +34,13 @@ export type TaskMcpScope = {
   taskId: string | null
   /** Task that owns any artifact this session writes. */
   artifactTaskId: string | null
+  /**
+   * Grants the mastermind memory tools (remember/recall/forget/list_memories),
+   * independent of task scoping — set for the Mastermind session itself and
+   * for any agent the user marked memory-trusted, including a scoped subtask
+   * agent whose own agent config is trusted.
+   */
+  memoryAccess?: boolean
 }
 
 /** Calls one Task API route. In process this is handleRoute; over stdio it is fetch. */
@@ -610,6 +617,66 @@ const mastermindTools: Tool[] = [
   }
 ]
 
+// Mastermind's durable memory. Available when scope.memoryAccess is set —
+// the Mastermind session always has it; any other agent only has it when the
+// user marked that agent memory-trusted in its settings. Credentials never
+// belong here: `remember` refuses anything that looks like one.
+const memoryTools: Tool[] = [
+  {
+    name: 'remember',
+    description:
+      'Save a durable memory: a stable preference, decision, fact, goal, person or recurring procedure that should survive a restart. Only for things worth recalling across sessions — never a single task\'s details, and never a secret or credential (refused). A near-identical existing memory in the same scope is updated instead of duplicated; pass its id to update an exact one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', maxLength: 1000, description: 'Short, durable note. Not a transcript.' },
+        kind: { type: 'string', enum: ['preference', 'decision', 'fact', 'goal', 'person', 'procedure'] },
+        scope: { type: 'string', description: "'global' (default), 'project:<id>', or 'repo:<owner/name>'." },
+        importance: { type: 'number', minimum: 1, maximum: 5, description: '1 (minor) to 5 (critical). Default 3.' },
+        id: { type: 'string', description: 'Update this exact memory instead of creating or deduping a new one.' },
+        pinned: { type: 'boolean', description: 'Pinned memories are always included first in the "what you remember" block.' }
+      },
+      required: ['content', 'kind']
+    }
+  },
+  {
+    name: 'recall',
+    description: 'Search saved memories by keyword relevance. Use this before asking the user something that may already be remembered.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Keywords to search for.' },
+        scope: { type: 'string', description: "Restrict to one scope, e.g. 'global' or 'project:<id>'." },
+        limit: { type: 'number', default: 10 }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'forget',
+    description: 'Delete a memory by exact id, or by a query that matches exactly one memory. An ambiguous query returns the candidates instead of deleting anything.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Exact memory id from recall/list_memories.' },
+        query: { type: 'string', description: 'Used only when id is omitted.' }
+      }
+    }
+  },
+  {
+    name: 'list_memories',
+    description: 'List saved memories, optionally filtered by scope and/or kind.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scope: { type: 'string' },
+        kind: { type: 'string', enum: ['preference', 'decision', 'fact', 'goal', 'person', 'procedure'] },
+        limit: { type: 'number', default: 50 }
+      }
+    }
+  }
+]
+
 // Browser-panel tools. They drive canvas "Agent Browser" panels through the
 // in-app broker — no external CLI, no global debug port, and only panels
 // edge-connected to the calling task are addressable.
@@ -1060,9 +1127,10 @@ async function handleScopedCall(
 
 /** The tools a session may see. This is the whole answer to "which tools to serve". */
 export function listToolsForScope(scope: TaskMcpScope) {
-  return isScopedSession(scope)
+  const base = isScopedSession(scope)
     ? [...subtaskTools, ...browserTools, ...sharedTools]
     : [...mastermindTools, ...browserTools, ...sharedTools]
+  return scope.memoryAccess ? [...base, ...memoryTools] : base
 }
 
 /**
@@ -1096,6 +1164,12 @@ export async function callToolForScope(
     if (artifactToolNames.has(name) && scope.artifactTaskId) normalizedArgs.task_id = scope.artifactTaskId
     if (browserRecordingToolNames.has(name) && (scope.taskId || scope.artifactTaskId)) {
       normalizedArgs.task_id = scope.taskId || scope.artifactTaskId
+    }
+    // A trusted non-Mastermind agent's new memories are attributed to its task,
+    // so Settings can show where a memory came from. The Mastermind session has
+    // no real task id to attribute to, so it keeps remember's own default.
+    if (name === 'remember' && !normalizedArgs.source && scope.taskId && scope.taskId !== 'mastermind-session') {
+      normalizedArgs.source = `task:${scope.taskId}`
     }
 
     const result = isScopedSession(scope)

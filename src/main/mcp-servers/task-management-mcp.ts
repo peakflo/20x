@@ -32,7 +32,8 @@ const scope: TaskMcpScope = {
   // Every real task session receives this even when it needs unscoped task
   // orchestration tools. Artifact file operations are always pinned to the
   // current task so an agent cannot mutate another task's workpieces.
-  artifactTaskId: process.env.TASK_ARTIFACT_SCOPE_ID || process.env.TASK_SCOPE_TASK_ID || null
+  artifactTaskId: process.env.TASK_ARTIFACT_SCOPE_ID || process.env.TASK_SCOPE_TASK_ID || null,
+  memoryAccess: process.env.TASK_SCOPE_MEMORY === '1'
 }
 
 async function callApi(route: string, params: Record<string, unknown> = {}): Promise<unknown> {

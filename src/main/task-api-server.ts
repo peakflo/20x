@@ -36,6 +36,13 @@ import {
   type UiCommandEnvelope
 } from '../shared/ui-commands'
 import { buildSimilarTasksQuery } from './task-search'
+import {
+  containsLikelySecret,
+  findDuplicateMemory,
+  isValidMemoryKind,
+  normalizeMemoryScope,
+  type MemoryKind
+} from '../shared/mastermind-memory'
 import { limitsByInstance, summarizeAgentUsage } from './usage/agent-usage-summary'
 import { agentInstanceId } from '../shared/harness-instances'
 import { isSameHarness, toolOutputPage } from './context-handoff'
@@ -1566,6 +1573,93 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         typeof params.limit === 'number' ? params.limit : undefined,
         str(params.panel_id)
       )
+    }
+
+    // ── Mastermind memory ───────────────────────────────────────
+    // Only reachable by a session whose scope granted memoryAccess (see
+    // task-management-core.ts / task-mcp-endpoint.ts) — the tool list itself
+    // is the boundary, same as every other scoped tool in this file.
+
+    case '/remember': {
+      const content = typeof params.content === 'string' ? params.content.trim() : ''
+      if (!content) return { error: 'content is required' }
+      if (!isValidMemoryKind(params.kind)) return { error: `kind must be one of: preference, decision, fact, goal, person, procedure` }
+      const kind = params.kind as MemoryKind
+
+      const scrub = containsLikelySecret(content)
+      if (scrub.found) return { error: `Refused: this memory ${scrub.reason} — memory never stores credentials.` }
+
+      const importance = params.importance !== undefined ? Number(params.importance) : undefined
+      const pinned = typeof params.pinned === 'boolean' ? params.pinned : undefined
+      const source = typeof params.source === 'string' && params.source ? params.source : 'user-stated'
+
+      // An explicit id updates that exact memory — used when the agent is
+      // correcting something it (or the user) already saved. `previous` lets
+      // the save toast's Undo put the exact prior content back.
+      if (typeof params.id === 'string' && params.id) {
+        const previous = db.getMemory(params.id)
+        const updated = db.updateMemory(params.id, { content, kind, importance, pinned, source })
+        if (!updated) return { error: 'Memory not found' }
+        notifyRenderer?.('mastermind:memory-saved', { memory: updated, deduped: false, updated: true, previous })
+        return { memory: updated, deduped: false }
+      }
+
+      const scope = normalizeMemoryScope(params.scope)
+      const candidates = db.listMemoriesForDedupe(scope, kind)
+      const duplicate = findDuplicateMemory(candidates, content)
+      if (duplicate) {
+        const previous = duplicate
+        const updated = db.updateMemory(duplicate.id, { content, importance, pinned, source })!
+        notifyRenderer?.('mastermind:memory-saved', { memory: updated, deduped: true, updated: false, previous })
+        return { memory: updated, deduped: true }
+      }
+
+      const created = db.createMemory({ content, kind, scope, importance, pinned, source })
+      notifyRenderer?.('mastermind:memory-saved', { memory: created, deduped: false, updated: false })
+      return { memory: created, deduped: false }
+    }
+
+    case '/recall': {
+      const query = typeof params.query === 'string' ? params.query.trim() : ''
+      if (!query) return { error: 'query is required' }
+      const scope = params.scope !== undefined ? normalizeMemoryScope(params.scope) : undefined
+      const kind = isValidMemoryKind(params.kind) ? params.kind : undefined
+      const limit = typeof params.limit === 'number' ? params.limit : undefined
+      const memories = db.searchMemories(query, { scope, kind, limit })
+      const usedAt = new Date().toISOString()
+      db.touchMemoriesUsed(memories.map((m) => m.id))
+      // Reflect the touch in the response too, instead of returning the
+      // pre-touch last_used_at the search just read.
+      return { memories: memories.map((m) => ({ ...m, last_used_at: usedAt })) }
+    }
+
+    case '/forget': {
+      const id = typeof params.id === 'string' ? params.id : ''
+      if (id) {
+        const deleted = db.deleteMemory(id)
+        if (!deleted) return { error: 'Memory not found' }
+        notifyRenderer?.('mastermind:memory-deleted', { id })
+        return { success: true, id }
+      }
+
+      const query = typeof params.query === 'string' ? params.query.trim() : ''
+      if (!query) return { error: 'id or query is required' }
+      const candidates = db.searchMemories(query, { limit: 5 })
+      if (candidates.length === 0) return { error: 'No memory matches that query.' }
+      if (candidates.length > 1) {
+        return { ambiguous: true, candidates: candidates.map((m) => ({ id: m.id, content: m.content, kind: m.kind, scope: m.scope })) }
+      }
+      const only = candidates[0]
+      db.deleteMemory(only.id)
+      notifyRenderer?.('mastermind:memory-deleted', { id: only.id })
+      return { success: true, id: only.id }
+    }
+
+    case '/list_memories': {
+      const scope = params.scope !== undefined ? normalizeMemoryScope(params.scope) : undefined
+      const kind = isValidMemoryKind(params.kind) ? params.kind : undefined
+      const limit = typeof params.limit === 'number' ? params.limit : undefined
+      return { memories: db.listMemories({ scope, kind, limit }) }
     }
 
     default:

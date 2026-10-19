@@ -20,6 +20,7 @@ import { listBrowserImportSources, importBrowserSessions, clearImportedBrowserSe
 import type { BrowserImportRequest } from '../shared/browser-session-import'
 import type { CustomModelPrice, UsageSummaryQuery } from '../shared/usage'
 import { sanitizeUsageSummaryQuery, sanitizeUsageParallelismQuery } from './usage/usage-query'
+import { containsLikelySecret } from '../shared/mastermind-memory'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -38,7 +39,10 @@ import type {
   CreateSkillData,
   UpdateSkillData,
   CreateSecretData,
-  UpdateSecretData
+  UpdateSecretData,
+  CreateMemoryData,
+  UpdateMemoryData,
+  ListMemoriesFilter
 } from './database'
 import type { AgentManager } from './agent-manager'
 import { TaskStatus } from '../shared/constants'
@@ -661,6 +665,15 @@ export function registerIpcHandlers(
     return { success: true, sessionId: result.sessionId }
   })
 
+  // Ends Mastermind's conversation and drops its resume anchor, so the next
+  // start is genuinely fresh. Used by the Orchestrator panel's "Clear
+  // conversation" action — see clearMastermindConversation for what it does
+  // (and does not: it never touches saved memories).
+  ipcMain.handle('agentSession:clearMastermind', async () => {
+    await agentManager.clearMastermindConversation()
+    return { success: true }
+  })
+
   ipcMain.handle(
     'agentSession:sendByTaskId',
     async (_, taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
@@ -1030,6 +1043,61 @@ export function registerIpcHandlers(
 
   ipcMain.handle('secrets:delete', (_, id: string) => {
     return db.deleteSecret(id)
+  })
+
+  // Mastermind memory handlers — Settings → Memory CRUD. The MCP tools
+  // (remember/recall/forget/list_memories, see task-api-server.ts) are the
+  // agent-facing path; this is the human-facing one, same storage, same
+  // secret refusal so a pasted credential can't be saved either way.
+  ipcMain.handle('memories:list', (_, filter?: ListMemoriesFilter) => {
+    return db.listMemories(filter ?? {})
+  })
+
+  ipcMain.handle('memories:get', (_, id: string) => {
+    return db.getMemory(id)
+  })
+
+  ipcMain.handle('memories:create', (_, data: CreateMemoryData) => {
+    const scrub = containsLikelySecret(data.content ?? '')
+    if (scrub.found) throw new Error(`Refused: this memory ${scrub.reason} — memory never stores credentials.`)
+    return db.createMemory(data)
+  })
+
+  ipcMain.handle('memories:update', (_, id: string, data: UpdateMemoryData) => {
+    if (data.content !== undefined) {
+      const scrub = containsLikelySecret(data.content)
+      if (scrub.found) throw new Error(`Refused: this memory ${scrub.reason} — memory never stores credentials.`)
+    }
+    return db.updateMemory(id, data)
+  })
+
+  ipcMain.handle('memories:delete', (_, id: string) => {
+    return db.deleteMemory(id)
+  })
+
+  ipcMain.handle('memories:clearAll', (_, scope?: string) => {
+    return db.clearAllMemories(scope)
+  })
+
+  ipcMain.handle('memories:exportToFile', async () => {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      defaultPath: join(app.getPath('downloads'), 'mastermind-memories.json'),
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (canceled || !filePath) return { saved: false }
+    writeFileSync(filePath, JSON.stringify(db.exportMemories(), null, 2))
+    return { saved: true, filePath }
+  })
+
+  ipcMain.handle('memories:importFromFile', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (canceled || filePaths.length === 0) return { canceled: true as const }
+    const raw = JSON.parse(readFileSync(filePaths[0], 'utf-8'))
+    const records = Array.isArray(raw) ? raw : []
+    return db.importMemories(records)
   })
 
   // Dependency check handler — delegates to the shared detectInstalledAgents()

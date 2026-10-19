@@ -4753,6 +4753,222 @@ describe('AgentManager resume after a reassignment from the agent dropdown', () 
   })
 })
 
+describe('AgentManager Mastermind session continuity + memory', () => {
+  const MASTERMIND_ID = 'mastermind-session'
+  const SESSION_SETTING = 'mastermind:harness-session-id'
+  const AGENT_SETTING = 'mastermind:agent-id'
+  const HANDOFF_KEY = 'context-handoff:mastermind-session'
+
+  beforeEach(() => {
+    vi.mocked(getTaskApiPort).mockReturnValue(4321)
+  })
+
+  it('persists the harness session id to settings instead of a nonexistent task row, and clears it the same way', () => {
+    const settings = new Map<string, string>()
+    const db = createMockDb() as any
+    db.getTask = vi.fn(() => undefined) // Mastermind has no `tasks` row — the restart bug this fixes.
+    db.setSetting = vi.fn((k: string, v: string) => settings.set(k, v))
+    db.deleteSetting = vi.fn((k: string) => settings.delete(k))
+    const manager = new AgentManager(db)
+
+    ;(manager as any).updateTaskFromLocalAgent(MASTERMIND_ID, { session_id: 'sess-123' })
+    expect(settings.get(SESSION_SETTING)).toBe('sess-123')
+    expect(db.updateTask).not.toHaveBeenCalled()
+
+    ;(manager as any).updateTaskFromLocalAgent(MASTERMIND_ID, { session_id: null })
+    expect(settings.has(SESSION_SETTING)).toBe(false)
+  })
+
+  it('leaves a real task\'s session_id write alone', () => {
+    const db = createMockDb() as any
+    db.getTask = vi.fn(() => ({ id: 'task-1', status: 'agent_working' }))
+    const manager = new AgentManager(db)
+
+    ;(manager as any).updateTaskFromLocalAgent('task-1', { session_id: 'sess-456' })
+    expect(db.updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ session_id: 'sess-456' }))
+    expect(db.setSetting).not.toHaveBeenCalledWith(SESSION_SETTING, expect.anything())
+  })
+
+  it('resumes the same harness session across a simulated restart instead of starting fresh', async () => {
+    const settings = new Map<string, string>([
+      [SESSION_SETTING, 'persisted-session-1'],
+      [AGENT_SETTING, 'agent-1']
+    ])
+    const db = createMockDb({ coding_agent: 'claude-code' }) as any
+    Object.assign(db, {
+      getTask: vi.fn(() => undefined),
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Mastermind Agent', config: { coding_agent: 'claude-code' } })),
+      getSetting: vi.fn((k: string) => settings.get(k)),
+      setSetting: vi.fn((k: string, v: string) => settings.set(k, v)),
+      deleteSetting: vi.fn((k: string) => settings.delete(k)),
+      getTranscriptParts: vi.fn(() => []),
+    })
+    const manager = new AgentManager(db)
+    const adapter = { initialize: vi.fn(async () => undefined), resumeSession: vi.fn(async () => []) }
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(manager as any, 'writeSkillFiles').mockResolvedValue(undefined)
+    vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    const sessionId = await manager.startSession('agent-1', MASTERMIND_ID, undefined, true)
+
+    expect(adapter.resumeSession).toHaveBeenCalledWith('persisted-session-1', expect.anything())
+    expect(sessionId).toBeTruthy()
+  })
+
+  it('marks a context handoff and skips native resume when Mastermind switches to a different harness', async () => {
+    const settings = new Map<string, string>([
+      [SESSION_SETTING, 'persisted-session-1'],
+      [AGENT_SETTING, 'agent-old'] // previously ran as the Claude Code agent
+    ])
+    const agents: Record<string, unknown> = {
+      'agent-old': { id: 'agent-old', name: 'Claude Lead', config: { coding_agent: 'claude-code' } },
+      'agent-new': { id: 'agent-new', name: 'Codex Lead', config: { coding_agent: 'codex' } },
+    }
+    const db = createMockDb() as any
+    Object.assign(db, {
+      getTask: vi.fn(() => undefined),
+      getAgent: vi.fn((id: string) => agents[id]),
+      getSetting: vi.fn((k: string) => settings.get(k)),
+      setSetting: vi.fn((k: string, v: string) => settings.set(k, v)),
+      deleteSetting: vi.fn((k: string) => settings.delete(k)),
+      getTranscriptParts: vi.fn(() => [
+        { taskId: MASTERMIND_ID, partId: 'p1', seq: 1, role: 'user', content: 'Remember I use pnpm', partType: 'text', createdAt: 1, updatedAt: 1, rev: 1 },
+      ]),
+      hasTranscriptParts: vi.fn(() => true),
+      // Mirrors the real DatabaseManager.markContextHandoff behaviour closely
+      // enough for this test: records the marker in the same settings map
+      // `getSetting`/`setSetting` already share, keyed by HANDOFF_KEY.
+      markContextHandoff: vi.fn((_taskId: string, fromAgentId: string | null) => {
+        settings.set(HANDOFF_KEY, JSON.stringify({ fromAgentId, recordedAt: Date.now(), announced: false }))
+      }),
+    })
+    const manager = new AgentManager(db)
+    const adapter = {
+      initialize: vi.fn(async () => undefined),
+      resumeSession: vi.fn(async () => []),
+      createSession: vi.fn(async () => 'fresh-session-1'),
+      sendPrompt: vi.fn(async () => undefined),
+      getStatus: vi.fn(async () => ({ type: 'working' })),
+    }
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(manager as any, 'writeSkillFiles').mockResolvedValue(undefined)
+    vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    const sessionId = await manager.startSession('agent-new', MASTERMIND_ID, undefined, true)
+
+    // A different harness never resumes the old backend session directly.
+    expect(adapter.resumeSession).not.toHaveBeenCalled()
+    expect(sessionId).toBeTruthy()
+    // The handoff marker is recorded so the fresh session's first prompt carries the earlier conversation.
+    expect(settings.has(HANDOFF_KEY)).toBe(true)
+    expect(settings.get(AGENT_SETTING)).toBe('agent-new')
+  })
+
+  it('does not mark a handoff when restarting with the same agent as last time', async () => {
+    const settings = new Map<string, string>([
+      [SESSION_SETTING, 'persisted-session-1'],
+      [AGENT_SETTING, 'agent-1']
+    ])
+    const db = createMockDb({ coding_agent: 'claude-code' }) as any
+    Object.assign(db, {
+      getTask: vi.fn(() => undefined),
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Mastermind Agent', config: { coding_agent: 'claude-code' } })),
+      getSetting: vi.fn((k: string) => settings.get(k)),
+      setSetting: vi.fn((k: string, v: string) => settings.set(k, v)),
+      deleteSetting: vi.fn((k: string) => settings.delete(k)),
+      getTranscriptParts: vi.fn(() => []),
+    })
+    const manager = new AgentManager(db)
+    const adapter = { initialize: vi.fn(async () => undefined), resumeSession: vi.fn(async () => []) }
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(manager as any, 'writeSkillFiles').mockResolvedValue(undefined)
+    vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    await manager.startSession('agent-1', MASTERMIND_ID, undefined, true)
+
+    expect(settings.has(HANDOFF_KEY)).toBe(false)
+  })
+
+  it('injects "what you remember" once, only into the first prompt of the session', async () => {
+    const memory = {
+      id: 'mem-1', scope: 'global', kind: 'preference' as const, content: 'Always use pnpm.',
+      source: 'user-stated', importance: 5, created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z', last_used_at: null, expires_at: null, pinned: true
+    }
+    const db = createMockDb({ coding_agent: 'claude-code' }) as any
+    Object.assign(db, {
+      getTask: vi.fn(() => undefined),
+      listMemoriesForScopes: vi.fn(() => [memory]),
+      touchMemoriesUsed: vi.fn(),
+    })
+    const manager = new AgentManager(db)
+    const sent: Array<[string, unknown]> = []
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation((channel: unknown, data: unknown) => { sent.push([channel as string, data]) })
+
+    const session = {
+      agentId: 'agent-1', taskId: MASTERMIND_ID, status: 'idle', workspaceDir: undefined,
+      adapter: { sendPrompt: vi.fn(async () => undefined), getStatus: vi.fn(async () => ({ type: 'working' })) },
+      isTriageSession: false, seenMessageIds: new Set<string>(), seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(), assistantTextKeys: new Set<string>(),
+    }
+    ;(manager as any).sessions.set('session-1', session)
+
+    await (manager as any).doSendAdapterMessage(session, 'session-1', 'Hello Mastermind')
+    const firstPrompt = (session.adapter.sendPrompt as any).mock.calls.at(-1)[1][0].text as string
+
+    expect(firstPrompt).toContain('## What you remember')
+    expect(firstPrompt).toContain('Always use pnpm.')
+    expect(firstPrompt).toContain('[id:mem-1]')
+    expect(db.touchMemoriesUsed).toHaveBeenCalledWith(['mem-1'])
+    const contextEvent = sent.find(([channel]) => channel === 'mastermind:memory-context')
+    expect(contextEvent?.[1]).toEqual({ count: 1, ids: ['mem-1'] })
+
+    // The second prompt of the same session does not repeat the block.
+    await (manager as any).doSendAdapterMessage(session, 'session-1', 'Follow-up')
+    const secondPrompt = (session.adapter.sendPrompt as any).mock.calls.at(-1)[1][0].text as string
+    expect(secondPrompt).not.toContain('## What you remember')
+    expect(db.touchMemoriesUsed).toHaveBeenCalledTimes(1)
+  })
+
+  it('never injects "what you remember" into a regular task session', async () => {
+    const db = createMockDb({ coding_agent: 'claude-code' }) as any
+    Object.assign(db, {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Ship it', description: '', status: 'agent_working' })),
+      listMemoriesForScopes: vi.fn(() => [{
+        id: 'mem-1', scope: 'global', kind: 'fact', content: 'Should never show up here.',
+        source: 'user-stated', importance: 5, created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-02T00:00:00.000Z', last_used_at: null, expires_at: null, pinned: false
+      }]),
+      touchMemoriesUsed: vi.fn(),
+    })
+    const manager = new AgentManager(db)
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    const session = {
+      agentId: 'agent-1', taskId: 'task-1', status: 'idle', workspaceDir: undefined,
+      adapter: { sendPrompt: vi.fn(async () => undefined), getStatus: vi.fn(async () => ({ type: 'working' })) },
+      isTriageSession: false, seenMessageIds: new Set<string>(), seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(), assistantTextKeys: new Set<string>(),
+    }
+    ;(manager as any).sessions.set('session-1', session)
+
+    await (manager as any).doSendAdapterMessage(session, 'session-1', 'Hello')
+    const prompt = (session.adapter.sendPrompt as any).mock.calls.at(-1)[1][0].text as string
+
+    expect(prompt).not.toContain('## What you remember')
+    expect(db.touchMemoriesUsed).not.toHaveBeenCalled()
+  })
+})
+
 describe('AgentManager serverOverloaded automatic retry', () => {
   const OVERLOAD_MESSAGE = 'Selected model is at capacity. Please try a different model. (serverOverloaded)'
 

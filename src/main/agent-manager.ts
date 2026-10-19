@@ -71,6 +71,7 @@ import {
   type ContinuationPlan
 } from './context-handoff'
 import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
+import { buildMastermindMemoryContext, MEMORY_SCOPE_GLOBAL } from '../shared/mastermind-memory'
 import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../shared/system-authority'
 import { sendMobilePush } from './mobile-push'
 import { AgentPushEvents, type QuestionPart } from './agent-push-events'
@@ -124,6 +125,15 @@ const ARTIFACT_WORKSPACE_REMINDER =
 // Default OpenCode server URL (matches database default)
 const DEFAULT_SERVER_URL = 'http://localhost:4096'
 const WORKFLO_MCP_DEV_PATH = '/api/mcp/dev/mcp'
+
+/** Pseudo-task id Mastermind's global session runs under — it has no `tasks` row. */
+const MASTERMIND_TASK_ID = 'mastermind-session'
+/** Settings key: Mastermind's harness session id, so a restart resumes natively instead of starting fresh. */
+const MASTERMIND_SESSION_ID_SETTING = 'mastermind:harness-session-id'
+/** Settings key: the agent Mastermind last ran as, used to detect an agent/harness change for the context handoff. */
+const MASTERMIND_AGENT_ID_SETTING = 'mastermind:agent-id'
+/** Token budget for the "what you remember" block injected into Mastermind's first prompt of a session. */
+const MASTERMIND_MEMORY_CONTEXT_TOKEN_BUDGET = 1500
 
 /**
  * Agent backends do not all pass the MCP `initialize.instructions` field to
@@ -199,6 +209,12 @@ interface AgentSession {
    *  serverOverloaded retry can nudge the session with the exact same prompt. */
   lastPromptText?: string
   lastPromptAttachments?: MessageAttachmentRef[]
+  /**
+   * Set once the "what you remember" block has been injected into a
+   * Mastermind session's outgoing message. Only the first prompt of each
+   * session (fresh or resumed) carries it — see doSendAdapterMessage.
+   */
+  mastermindMemoryInjected?: boolean
 }
 
 /** The harness instance an agent runs under, as the manager sees it. */
@@ -1522,7 +1538,7 @@ export class AgentManager extends EventEmitter {
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
-  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
+  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string; memoryAccess?: boolean }): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
     const result: Record<string, McpServerConfig> = {}
@@ -1614,7 +1630,7 @@ export class AgentManager extends EventEmitter {
    * the same config, including after a resume.
    */
   private buildTaskManagementMcpConfig(
-    opts?: { taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }
+    opts?: { taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string; memoryAccess?: boolean }
   ): McpServerConfig | null {
     const apiPort = getTaskApiPort()
     if (!apiPort) {
@@ -1626,9 +1642,15 @@ export class AgentManager extends EventEmitter {
       url: buildTaskMcpUrl(apiPort, {
         taskId: opts?.taskScope?.taskId,
         parentTaskId: opts?.taskScope?.parentTaskId,
-        artifactTaskId: opts?.artifactTaskId
+        artifactTaskId: opts?.artifactTaskId,
+        memoryAccess: opts?.memoryAccess
       })
     }
+  }
+
+  /** The Mastermind session always has memory access; any other agent needs the user's explicit trust. */
+  private memoryAccessFor(agent: AgentRecord | undefined | null, isMastermind: boolean): boolean {
+    return isMastermind || agent?.config?.memory_trusted === true
   }
 
   /**
@@ -1673,6 +1695,32 @@ export class AgentManager extends EventEmitter {
     )
   }
 
+  /**
+   * Builds (once per session) the "what you remember" block prepended to
+   * Mastermind's first prompt of a session, fresh or resumed — the design's
+   * automatic-context requirement. A no-op, returning '', for every other
+   * session, and for a Mastermind session's second-and-later prompts (the
+   * `mastermindMemoryInjected` flag on the in-memory session).
+   *
+   * v1 only ever uses the global scope — Mastermind has no per-project
+   * context yet (that's #526's "workspace-aware Mastermind"; this table's
+   * `scope` already supports `project:<id>` for when it lands).
+   *
+   * Also fires the `mastermind:memory-context` renderer event (used for the
+   * "Remembering N things" indicator) and marks the injected memories used,
+   * even when the block ends up empty (count 0 clears a stale indicator).
+   */
+  private buildMastermindMemoryInjection(session: AgentSession): string {
+    if (session.taskId !== MASTERMIND_TASK_ID || session.mastermindMemoryInjected) return ''
+    session.mastermindMemoryInjected = true
+
+    const memories = this.db.listMemoriesForScopes([MEMORY_SCOPE_GLOBAL])
+    const { text, count, ids } = buildMastermindMemoryContext(memories, MASTERMIND_MEMORY_CONTEXT_TOKEN_BUDGET)
+    this.sendToRenderer('mastermind:memory-context', { count, ids })
+    if (count > 0) this.db.touchMemoriesUsed(ids)
+    return text
+  }
+
   private async buildSessionConfig(
     agentId: string,
     taskId: string,
@@ -1688,7 +1736,12 @@ export class AgentManager extends EventEmitter {
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, {
+      ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task,
+      taskScope,
+      artifactTaskId: task ? taskId : undefined,
+      memoryAccess: this.memoryAccessFor(agent, isMastermind)
+    })
 
     // systemPrompt is intentionally task-agnostic and identical every time this
     // is called for a given agent — it must stay byte-for-byte frozen for the
@@ -2361,7 +2414,12 @@ export class AgentManager extends EventEmitter {
     // per-agent MCP configuration.
     const isMastermind = taskId === 'mastermind-session'
     const ensureTaskManagement = isMastermind || isTriageSession || isSubtask || !!task
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, {
+      ensureTaskManagement,
+      taskScope,
+      artifactTaskId: task ? taskId : undefined,
+      memoryAccess: this.memoryAccessFor(agent, isMastermind)
+    })
 
     // Write SKILL.md files and the session documentation (async to avoid
     // blocking the event loop). This runs AFTER the MCP map is built so the
@@ -3734,7 +3792,12 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     await yieldEL()
 
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, {
+      ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task,
+      taskScope,
+      artifactTaskId: task ? taskId : undefined,
+      memoryAccess: this.memoryAccessFor(agent, isMastermind)
+    })
 
     // Rewrite the memory file before the harness reads it. A resumed session
     // otherwise keeps the catalog written at start, and that file is reloaded
@@ -4001,6 +4064,16 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
   /** Local help can save its session and results, but cannot set canonical status. */
   private updateTaskFromLocalAgent(taskId: string, updates: Parameters<DatabaseManager['updateTask']>[1]): TaskRecord | undefined {
     const fields = { ...updates }
+    // Mastermind has no `tasks` row, so a `session_id` write here used to be a
+    // silent no-op (db.updateTask affects zero rows) — see the restart bug
+    // this class's startSession() fixes. Its resume anchor lives in settings
+    // instead, written/cleared by every site that already calls this helper.
+    if (taskId === MASTERMIND_TASK_ID && 'session_id' in fields) {
+      const sessionId = fields.session_id
+      if (typeof sessionId === 'string' && sessionId) this.db.setSetting(MASTERMIND_SESSION_ID_SETTING, sessionId)
+      else this.db.deleteSetting(MASTERMIND_SESSION_ID_SETTING)
+      delete fields.session_id
+    }
     if (serverTaskSnapshot(this.db, taskId) || (fields.status === TaskStatus.AgentWorking && this.db.getTask(taskId)?.status === TaskStatus.AgentLearning)) delete fields.status
     if (Object.keys(fields).length === 0) return this.db.getTask(taskId)
     return this.db.updateTask(taskId, fields)
@@ -4050,6 +4123,14 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       throw new Error(`Agent not found: ${agentId}`)
     }
 
+    // Mastermind has no `tasks` row to resume from, so its session_id and
+    // last-used agentId live in settings (see updateTaskFromLocalAgent). Try
+    // that resume before falling through to a fresh start.
+    if (taskId === MASTERMIND_TASK_ID) {
+      const resumedId = await this.tryResumeMastermindSession(agentId)
+      if (resumedId) return resumedId
+    }
+
     // Auto-setup worktrees if caller didn't provide a workspaceDir
     if (!workspaceDir) {
       workspaceDir = await this.setupWorktreeIfNeeded(taskId)
@@ -4060,6 +4141,55 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       throw new Error(`No adapter available for agent ${agentId}`)
     }
     return this.startAdapterSession(adapter, agentId, taskId, workspaceDir, skipInitialPrompt)
+  }
+
+  /**
+   * Tries to resume Mastermind's persisted session before a fresh start.
+   * Records (and detects changes to) the agent Mastermind last ran as, so a
+   * harness change is caught by the existing context-handoff machinery —
+   * `resumeAdapterSession` already calls `planResume`, which reads that
+   * marker and decides native-resume vs. handoff vs. fresh on its own.
+   *
+   * Returns the resumed session id, or null when there is nothing to resume
+   * (first ever run, no adapter, or the backend session is gone) — the
+   * caller then starts fresh, and any pending handoff marker is picked up by
+   * that fresh session's first prompt.
+   */
+  private async tryResumeMastermindSession(agentId: string): Promise<string | null> {
+    const previousAgentId = this.db.getSetting(MASTERMIND_AGENT_ID_SETTING)
+    if (previousAgentId && previousAgentId !== agentId) {
+      this.db.markContextHandoff(MASTERMIND_TASK_ID, previousAgentId)
+    }
+    this.db.setSetting(MASTERMIND_AGENT_ID_SETTING, agentId)
+
+    const persistedSessionId = this.db.getSetting(MASTERMIND_SESSION_ID_SETTING)
+    if (!persistedSessionId) return null
+
+    const adapter = this.getAdapter(agentId)
+    if (!adapter) return null
+
+    try {
+      const resumedId = await this.resumeAdapterSession(adapter, agentId, MASTERMIND_TASK_ID, persistedSessionId)
+      return resumedId || null // '' means planResume chose handoff/fresh, or the backend session is gone
+    } catch (err) {
+      console.warn('[AgentManager] Mastermind session resume failed, starting fresh:', err)
+      return null
+    }
+  }
+
+  /**
+   * Ends Mastermind's conversation and drops its resume anchor, so the next
+   * start is genuinely fresh (no native resume, no handoff). Used by the
+   * "Clear conversation" action in the Orchestrator panel. Does NOT touch
+   * saved memories — those are a separate, durable store; clearing the
+   * conversation only clears the live backend session and its handoff state.
+   */
+  async clearMastermindConversation(): Promise<void> {
+    const live = this.findSessionByTaskId(MASTERMIND_TASK_ID)
+    if (live) await this.stopSession(live.sessionId, false)
+    this.db.deleteSetting(MASTERMIND_SESSION_ID_SETTING)
+    this.db.deleteSetting(MASTERMIND_AGENT_ID_SETTING)
+    this.db.deleteSetting(contextHandoffSettingKey(MASTERMIND_TASK_ID))
   }
 
   async startTask(taskId: string, opts?: { preferSubtasks?: boolean; allowTriage?: boolean }): Promise<{
@@ -5172,8 +5302,11 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       const resolvedAgentId = task?.agent_id || agentId
 
       if (resolvedAgentId) {
-        // Try resuming existing session first
-        const persistedSessionId = task?.session_id
+        // Try resuming existing session first. Mastermind has no task row —
+        // its resume anchor lives in settings (see updateTaskFromLocalAgent).
+        const persistedSessionId = taskId === MASTERMIND_TASK_ID
+          ? this.db.getSetting(MASTERMIND_SESSION_ID_SETTING)
+          : task?.session_id
         if (persistedSessionId) {
           try {
             console.log(`[AgentManager] Session ${sessionId} not found, attempting resume from ${persistedSessionId} for task ${taskId}`)
@@ -5458,6 +5591,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       promptText += this.buildTaskContextReminder(currentTask, liveTaskContextMode)
     }
     if (handoff) promptText = handoff.block + CONTEXT_HANDOFF_SEPARATOR + promptText
+    // "What you remember" — only Mastermind's own first prompt of this
+    // session (fresh or resumed) carries it; see buildMastermindMemoryInjection.
+    const memoryBlock = this.buildMastermindMemoryInjection(session)
+    if (memoryBlock) promptText = memoryBlock + CONTEXT_HANDOFF_SEPARATOR + promptText
     const parts: MessagePart[] = [{ type: MessagePartType.TEXT, text: promptText }]
     // Set before the send: the backend can report "session not found" while the send is still in flight.
     if (nativeFirstPrompt) session.nativeResumeFirstPrompt = { message, attachments }

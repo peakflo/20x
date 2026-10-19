@@ -77,6 +77,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const [skillIds, setSkillIds] = useState<string[] | undefined>(agent?.config.skill_ids)
   const [showSkillSelector, setShowSkillSelector] = useState(false)
   const [secretIds, setSecretIds] = useState<string[]>(agent?.config.secret_ids ?? [])
+  const [memoryTrusted, setMemoryTrusted] = useState(agent?.config.memory_trusted ?? false)
   const [mcpSelection, setMcpSelection] = useState<Map<string, string[] | undefined>>(
     () => parseMcpSelection(agent?.config.mcp_servers)
   )
@@ -295,6 +296,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
         skill_ids: skillIds,
         secret_ids: secretIds.length > 0 ? secretIds : undefined,
+        memory_trusted: memoryTrusted || undefined,
         api_keys: {
           // Only persist the OpenAI key when Codex is in api_key mode
           openai: (codingAgent === CodingAgentType.CODEX && authMethod === 'api_key')
@@ -878,6 +880,19 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           Select secrets to inject into the agent's shell environment
         </p>
         <SecretSelector selectedIds={secretIds} onChange={setSecretIds} />
+      </div>
+
+      <div className="space-y-2">
+        <Label>Mastermind memory</Label>
+        <label className="flex items-center gap-2.5 px-3 py-2 rounded-md border border-border cursor-pointer hover:bg-accent/50">
+          <Checkbox checked={memoryTrusted} onCheckedChange={(checked) => setMemoryTrusted(checked === true)} />
+          <div className="min-w-0">
+            <span className="text-sm">Trust this agent with memory</span>
+            <p className="text-xs text-muted-foreground">
+              Lets this agent use remember/recall/forget/list_memories, same as the Mastermind session. Off by default.
+            </p>
+          </div>
+        </label>
       </div>
 
       <div className="flex justify-end gap-2 pt-2">

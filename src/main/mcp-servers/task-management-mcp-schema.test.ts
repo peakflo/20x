@@ -354,3 +354,72 @@ describe('window-driving tools are hard to misuse', () => {
     expect(result.isError).toBe(true)
   })
 })
+
+describe('mastermind memory tools — gated by scope.memoryAccess', () => {
+  const MEMORY_TOOL_NAMES = ['remember', 'recall', 'forget', 'list_memories']
+
+  it('are absent for an ordinary full-access (non-Mastermind) session', () => {
+    const names = listToolsForScope(FULL_ACCESS_SCOPE).map((t) => t.name)
+    for (const name of MEMORY_TOOL_NAMES) expect(names).not.toContain(name)
+  })
+
+  it('are absent for an ordinary scoped subtask session', () => {
+    const names = listToolsForScope(SCOPED).map((t) => t.name)
+    for (const name of MEMORY_TOOL_NAMES) expect(names).not.toContain(name)
+  })
+
+  it('are present for a full-access session with memoryAccess (the Mastermind session)', () => {
+    const names = listToolsForScope({ ...FULL_ACCESS_SCOPE, memoryAccess: true }).map((t) => t.name)
+    for (const name of MEMORY_TOOL_NAMES) expect(names).toContain(name)
+  })
+
+  it('are present for a scoped subtask session with memoryAccess (an explicitly trusted agent)', () => {
+    const names = listToolsForScope({ ...SCOPED, memoryAccess: true }).map((t) => t.name)
+    for (const name of MEMORY_TOOL_NAMES) expect(names).toContain(name)
+  })
+
+  it('a call is rejected as unknown when the scope was not granted memoryAccess — the tool list is the real boundary', async () => {
+    const result = await callToolForScope('remember', { content: 'x', kind: 'fact' }, FULL_ACCESS_SCOPE, async () => ({ memory: {} }))
+    expect(result.isError).toBe(true)
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining('Unknown tool') })
+  })
+
+  it('passes a memory-trusted subtask session\'s remember call through with its task id as the default source', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = async (route: string, params: Record<string, unknown>) => {
+      calls.push([route, params])
+      return { memory: { id: 'mem-1' } }
+    }
+    const result = await callToolForScope(
+      'remember',
+      { content: 'The staging DB needs a manual migration step', kind: 'procedure' },
+      { ...SCOPED, memoryAccess: true },
+      invoke
+    )
+    expect(result.isError).toBeUndefined()
+    expect(calls).toEqual([
+      ['/remember', { content: 'The staging DB needs a manual migration step', kind: 'procedure', source: 'task:task-own' }]
+    ])
+  })
+
+  it('does not override an explicit source', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = async (route: string, params: Record<string, unknown>) => {
+      calls.push([route, params])
+      return { memory: { id: 'mem-1' } }
+    }
+    await callToolForScope('remember', { content: 'x', kind: 'fact', source: 'user-stated' }, { ...SCOPED, memoryAccess: true }, invoke)
+    expect(calls[0][1].source).toBe('user-stated')
+  })
+
+  it('never attributes the Mastermind session\'s own remember calls to a fake "mastermind-session" task', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = async (route: string, params: Record<string, unknown>) => {
+      calls.push([route, params])
+      return { memory: { id: 'mem-1' } }
+    }
+    const mastermindScope: TaskMcpScope = { parentTaskId: null, taskId: 'mastermind-session', artifactTaskId: null, memoryAccess: true }
+    await callToolForScope('remember', { content: 'x', kind: 'fact' }, mastermindScope, invoke)
+    expect(calls[0][1].source).toBeUndefined()
+  })
+})

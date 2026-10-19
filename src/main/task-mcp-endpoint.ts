@@ -15,6 +15,9 @@
  *   /mcp                                        full orchestration tool set
  *   /mcp?task=<id>&parent=<id>                  subtask set, parent + siblings only
  *   /mcp?...&artifact=<id>                      pins artifact writes to one task
+ *   /mcp?...&memory=1                           adds the mastermind memory tools
+ *                                                (Mastermind sessions, or any agent
+ *                                                the user marked memory-trusted)
  *
  * The parameters are an address, not a credential. The Task API server they
  * reach has no authentication either, and it listens only on 127.0.0.1.
@@ -41,7 +44,8 @@ export function parseScopeFromUrl(url: URL): TaskMcpScope {
   return {
     parentTaskId: url.searchParams.get('parent') || null,
     taskId: taskId || null,
-    artifactTaskId: url.searchParams.get('artifact') || taskId || null
+    artifactTaskId: url.searchParams.get('artifact') || taskId || null,
+    memoryAccess: url.searchParams.get('memory') === '1'
   }
 }
 
@@ -51,7 +55,7 @@ export function parseScopeFromUrl(url: URL): TaskMcpScope {
  */
 export function buildTaskMcpUrl(
   port: number,
-  scope: { taskId?: string | null; parentTaskId?: string | null; artifactTaskId?: string | null } = {}
+  scope: { taskId?: string | null; parentTaskId?: string | null; artifactTaskId?: string | null; memoryAccess?: boolean } = {}
 ): string {
   const params = new URLSearchParams()
   if (scope.taskId) params.set('task', scope.taskId)
@@ -60,6 +64,7 @@ export function buildTaskMcpUrl(
   if (scope.artifactTaskId && scope.artifactTaskId !== scope.taskId) {
     params.set('artifact', scope.artifactTaskId)
   }
+  if (scope.memoryAccess) params.set('memory', '1')
   const query = params.toString()
   return `http://127.0.0.1:${port}${TASK_MCP_PATH}${query ? `?${query}` : ''}`
 }

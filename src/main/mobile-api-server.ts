@@ -545,6 +545,12 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
     return agentRef!.listAcpAgentInstances()
   }
 
+  // GET /api/memories — Mastermind's durable memory, read-only on mobile
+  // (delete only; add/edit/pin/export/import stay desktop-only — see MemorySettings.tsx).
+  if (pathname === '/api/memories') {
+    return db.listMemories({})
+  }
+
   // GET /api/usage/limits — subscription plan limits per harness instance (Claude Code, Codex)
   if (pathname === '/api/usage/limits') {
     return agentRef!.getUsageLimits()
@@ -1017,6 +1023,15 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
   // POST /api/usage/limits/refresh — re-read plan limits ({ force?: boolean })
   if (pathname === '/api/usage/limits/refresh') {
     return agent.refreshUsageLimits({ force: (params as { force?: unknown }).force === true })
+  }
+
+  // POST /api/memories/delete — the only mutation mobile gets for memory ({ id: string })
+  if (pathname === '/api/memories/delete') {
+    const id = typeof (params as { id?: unknown }).id === 'string' ? (params as { id: string }).id : ''
+    if (!id) throw Object.assign(new Error('id is required'), { status: 400 })
+    const deleted = db.deleteMemory(id)
+    if (!deleted) throw Object.assign(new Error('Memory not found'), { status: 404 })
+    return { success: true, id }
   }
 
   // POST /api/harness-maintenance/refresh — re-check every harness ({ fresh?: boolean })

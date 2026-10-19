@@ -1,4 +1,4 @@
-import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
+import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, MastermindMemory, CreateMemoryDTO, UpdateMemoryDTO, ListMemoriesFilterDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
@@ -266,6 +266,11 @@ export const agentSessionApi = {
 
   stopByTaskId: (taskId: string): Promise<{ success: boolean; sessionId: string | null }> => {
     return window.electronAPI.agentSession.stopByTaskId(taskId)
+  },
+
+  /** Ends Mastermind's conversation and drops its resume anchor (never touches saved memories). */
+  clearMastermind: (): Promise<{ success: boolean }> => {
+    return window.electronAPI.agentSession.clearMastermind()
   },
 
   send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[]): Promise<{ success: boolean; newSessionId?: string }> => {
@@ -676,6 +681,56 @@ export const secretApi = {
   delete: (id: string): Promise<boolean> => {
     return window.electronAPI.secrets.delete(id)
   }
+}
+
+export const memoryApi = {
+  list: (filter?: ListMemoriesFilterDTO): Promise<MastermindMemory[]> => {
+    return window.electronAPI.memories.list(filter)
+  },
+
+  getById: (id: string): Promise<MastermindMemory | undefined> => {
+    return window.electronAPI.memories.get(id)
+  },
+
+  create: (data: CreateMemoryDTO): Promise<MastermindMemory> => {
+    return window.electronAPI.memories.create(data)
+  },
+
+  update: (id: string, data: UpdateMemoryDTO): Promise<MastermindMemory | undefined> => {
+    return window.electronAPI.memories.update(id, data)
+  },
+
+  delete: (id: string): Promise<boolean> => {
+    return window.electronAPI.memories.delete(id)
+  },
+
+  clearAll: (scope?: string): Promise<number> => {
+    return window.electronAPI.memories.clearAll(scope)
+  },
+
+  exportToFile: (): Promise<{ saved: boolean; filePath?: string }> => {
+    return window.electronAPI.memories.exportToFile()
+  },
+
+  importFromFile: (): Promise<{ imported: number; skipped: number } | { canceled: true }> => {
+    return window.electronAPI.memories.importFromFile()
+  }
+}
+
+export const onMastermindMemoryContext = (
+  callback: (event: { count: number; ids: string[] }) => void
+): (() => void) => {
+  return window.electronAPI.onMastermindMemoryContext(callback)
+}
+
+export const onMastermindMemorySaved = (
+  callback: (event: { memory: MastermindMemory; deduped: boolean; updated: boolean; previous?: MastermindMemory }) => void
+): (() => void) => {
+  return window.electronAPI.onMastermindMemorySaved(callback)
+}
+
+export const onMastermindMemoryDeleted = (callback: (event: { id: string }) => void): (() => void) => {
+  return window.electronAPI.onMastermindMemoryDeleted(callback)
 }
 
 export const depsApi = {
