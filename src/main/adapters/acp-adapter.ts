@@ -260,14 +260,46 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
 
   private resolveProcessConfig?: () => Promise<AcpAgentProcessConfig>
   private processConfigResolved = false
+  /**
+   * The registry id this instance was configured as (e.g. `'gemini'`),
+   * when known — used to gate credential re-adds on the AGENT, not the
+   * resolved command path. Re-review (round 4, Bug): a registry install
+   * resolves `command` to an absolute path (`<binDir>/gemini`, or
+   * `gemini.cmd`/`gemini.exe` on Windows — see install-manager.ts /
+   * resolve-instance.ts), never the bare literal `'gemini'`, so gating on
+   * `processConfig.command === 'gemini'` never matched a real Gemini
+   * session and silently withheld GEMINI_API_KEY from every one of them.
+   */
+  private registryAgentId?: string
 
   constructor(options: AcpAgentAdapterOptions) {
     this.processConfig = { command: options.command, args: options.args, env: options.env }
     this.wrapperHooks = options.wrapperHooks ?? getWrapperHooks(options.registryAgentId)
+    this.registryAgentId = options.registryAgentId
     this.enableFs = options.enableFs ?? false
     this.enableTerminal = options.enableTerminal ?? false
     this.resolveProcessConfig = options.resolveProcessConfig
     this.debugRpcLogs = AcpAgentAdapter.isDebugLogLevel(process.env.LOG_LEVEL)
+  }
+
+  /**
+   * True when this instance is (as best this process can tell) running the
+   * Gemini CLI — by registry id first (the reliable signal: set once at
+   * configuration time, not derived from a resolved path that varies by
+   * install method/platform), falling back to the resolved command's own
+   * basename (strips a directory and a Windows `.cmd`/`.exe`/`.bat`
+   * extension) for a LOCAL-COMMAND agent pointed directly at a `gemini`
+   * binary with no registry id at all.
+   */
+  private isGeminiCli(): boolean {
+    if (this.registryAgentId) return this.registryAgentId === 'gemini'
+    // Split on BOTH `/` and `\` rather than using `path.basename()` — that
+    // function's separator handling is platform-dependent (POSIX only
+    // splits on `/`), but this code (and the Windows-style paths it has to
+    // recognize) can run on either OS regardless of which platform it was
+    // built/tested on.
+    const base = this.processConfig.command.split(/[\\/]/).pop() ?? ''
+    return base.replace(/\.(cmd|exe|bat)$/i, '') === 'gemini'
   }
 
   private static isDebugLogLevel(value: string | undefined): boolean {
@@ -413,19 +445,23 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       env.CURSOR_AUTH_TOKEN = config.apiKeys.cursor
       scrubber?.addEntries([{ name: 'CURSOR_AUTH_TOKEN', value: config.apiKeys.cursor }])
     }
-    // Gemini CLI (a registry ACP agent, resolved `command: 'gemini'` — see
-    // the registry's own `id: "gemini"` entry) authenticates via ambient
-    // GEMINI_API_KEY — there's no `config.apiKeys.gemini` field for it (ACP
-    // runs many different third-party agent binaries, not one 20x
-    // explicitly manages auth for), so this is a re-add from the login
-    // shell, not from an explicit per-agent secret. Re-review (round 3,
-    // Medium): used to re-add it unconditionally for every ACP agent, not
-    // just Gemini — so cursor-agent, or any other registry/local-command
-    // ACP agent, got a GEMINI_API_KEY it had no use for whenever one
-    // happened to be sitting in the ambient shell env. Gated the same way
-    // the cursor-agent-specific checks elsewhere in this file already are:
-    // on the resolved process command, not the agent type in the abstract.
-    if (this.processConfig.command === 'gemini') {
+    // Gemini CLI (a registry ACP agent — see the registry's own
+    // `id: "gemini"` entry) authenticates via ambient GEMINI_API_KEY —
+    // there's no `config.apiKeys.gemini` field for it (ACP runs many
+    // different third-party agent binaries, not one 20x explicitly manages
+    // auth for), so this is a re-add from the login shell, not from an
+    // explicit per-agent secret. Re-review (round 3, Medium): used to
+    // re-add it unconditionally for every ACP agent, not just Gemini — so
+    // cursor-agent, or any other registry/local-command ACP agent, got a
+    // GEMINI_API_KEY it had no use for whenever one happened to be sitting
+    // in the ambient shell env. Gated on `isGeminiCli()` (round 4, Bug fix:
+    // the original gate compared the resolved command to the literal
+    // string `'gemini'`, but a registry install resolves to an absolute
+    // path like `<binDir>/gemini` — see isGeminiCli()'s own docstring —
+    // so that gate never actually matched a real Gemini session and
+    // silently withheld the key from every one of them; only the test's
+    // own made-up `command: 'gemini'` fixture happened to match it).
+    if (this.isGeminiCli()) {
       reAddAmbientCredentials(env as Record<string, string>, ['GEMINI_API_KEY'], scrubber)
     }
     applyShellCredentialsOptIn(env as Record<string, string>, config.allowShellCredentials, scrubber)
