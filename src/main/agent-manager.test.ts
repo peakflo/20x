@@ -3025,6 +3025,67 @@ describe('AgentManager session ID re-keying redirect', () => {
     expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
   })
 
+  // Minor finding, re-review (round 5): the round-4 fix REPLACED
+  // session.mcpServerIds on every buildSessionConfig refresh (sendMessage,
+  // abort, question responses, ...) with exactly what the agent's CURRENT
+  // config resolves to — so a row dropped from config mid-session was
+  // forgotten by the very next refresh, well before the session actually
+  // stopped, not just by a fresh read at stop time (the round-4 test above
+  // only exercised the stop-time read, never an intermediate refresh).
+  // Every refresh must only ADD rows now, never replace/shrink the set —
+  // this test calls buildSessionConfig itself, between the config edit and
+  // the stop, to prove the row survives that intermediate refresh too.
+  it('buildSessionConfig called between a config edit and stopSession does NOT forget a row the session still owns', async () => {
+    const remoteServer = { id: 'remote-server-1', type: 'remote', name: 'Remote MCP' }
+    const mockDb = {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test', agent_id: 'agent-1' })),
+      // The agent's config has ALREADY been edited to drop remote-server-1
+      // by the time buildSessionConfig (and later stopSession) run.
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Agent', config: { mcp_servers: [] } })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn((id: string) => (id === 'remote-server-1' ? remoteServer : null)),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null)
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      // What the session actually registered back when it started —
+      // the (already-edited) agent config above no longer shows this.
+      mcpServerIds: new Set(['remote-server-1'])
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    // A refresh in between the config edit and the stop — e.g. a
+    // sendMessage/abort/question-response flow calling buildSessionConfig
+    // for reasons unrelated to MCP servers at all.
+    await (mgr as any).buildSessionConfig('agent-1', 'task-1', '/tmp/ws')
+
+    // The refresh must not have thrown the row away, even though the
+    // agent's CURRENT config no longer resolves it.
+    expect(session.mcpServerIds.has('remote-server-1')).toBe(true)
+
+    const { unregisterMcpProxyTargetByKey } = await import('./mcp-auth-proxy')
+    vi.mocked(unregisterMcpProxyTargetByKey).mockClear()
+
+    await mgr.stopSession('session-1')
+
+    // Still cleaned up correctly at stop time.
+    expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
+  })
+
   // Minor finding, re-review (round 4), the other direction: an OTHER
   // live session's agent config edited to ADD a server it hasn't actually
   // registered yet must not make isMcpServerRowStillInUse think that row

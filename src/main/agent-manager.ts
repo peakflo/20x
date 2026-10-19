@@ -212,20 +212,31 @@ interface AgentSession {
    */
   scrubber?: SecretScrubber
   /**
-   * MCP server row ids this session actually registered with the MCP
-   * auth-proxy / env-wrapper, as of the last time `buildMcpServersForAdapter`
-   * ran for it (session start, resume, or any later buildSessionConfig call
-   * — refreshed every time, not frozen at session start). Re-review (round
-   * 4, Minor): `stopSession`'s cleanup and `isMcpServerRowStillInUse` used
-   * to re-read the agent's CURRENT db config instead — if that config was
-   * edited mid-session (a server added or removed from the agent after this
-   * session started), either could disagree with what this session's own
-   * live process actually has wired up: a removed-from-config row this
-   * session still depends on would never get cleaned up on stop (missing
-   * from the fresh config read), and a stopping session could be judged
-   * "still needed by another session" (or not) based on that OTHER
-   * session's current config rather than what it actually registered. This
-   * set is this session's own ground truth, independent of later config edits.
+   * MCP server row ids this session has EVER actually registered with the
+   * MCP auth-proxy / env-wrapper, across every call to
+   * `buildMcpServersForAdapter` for it (session start, resume, or any later
+   * buildSessionConfig call). Re-review (round 4, Minor): `stopSession`'s
+   * cleanup and `isMcpServerRowStillInUse` used to re-read the agent's
+   * CURRENT db config instead — if that config was edited mid-session (a
+   * server added or removed from the agent after this session started),
+   * either could disagree with what this session's own live process
+   * actually has wired up. This set is this session's own ground truth,
+   * independent of later config edits.
+   *
+   * Re-review (round 5, Minor): the first version of this fix REPLACED
+   * this set on every refresh with exactly what config resolves to right
+   * now — so a row dropped from config mid-session was immediately
+   * forgotten by the very next refresh, well before the session actually
+   * stopped: its proxy registration / local env file (plaintext secrets)
+   * then lingered until the whole app restarted, since nothing else
+   * referenced it either. Every refresh now only ADDS rows, never removes
+   * any — monotonically growing for the life of the session, so a row is
+   * only ever actually released by `stopSession`'s cleanup, never silently
+   * dropped by an earlier refresh. This also protects a harness that
+   * freezes its own MCP wiring at startup and never calls this again (ACP,
+   * Codex): some OTHER session sharing a row with it can no longer, via a
+   * shrinking refresh, make `isMcpServerRowStillInUse` wrongly conclude
+   * nobody needs that row and tear it down out from under the frozen one.
    */
   mcpServerIds?: Set<string>
 }
@@ -1928,8 +1939,26 @@ export class AgentManager extends EventEmitter {
     // addEntries call below (which can't see values that never end up in
     // `config.mcpServers` once they're routed through the proxy/wrapper).
     const session = this.findSessionByTask(agentId, taskId)
-    // Refreshed on EVERY call for an existing session (not just at session
-    // start) — see AgentSession.mcpServerIds's docstring (round 4, Minor).
+    // Re-review (round 5, Minor): this used to REPLACE `session.mcpServerIds`
+    // on every call (sendMessage, abort, question responses, ...) with
+    // exactly what the agent's CURRENT config resolves to right now. If a
+    // row was dropped from config mid-session, the very next refresh threw
+    // it away from the session's own set — forgetting that the session
+    // ever used it, so its proxy registration / local env file (holding
+    // plaintext secrets) linger until the whole app restarts (nothing left
+    // to clean it up: this session no longer reports it, and no OTHER
+    // session's `isMcpServerRowStillInUse` check would either). For a
+    // harness that keeps its OWN MCP wiring fixed at startup and never
+    // calls this again (ACP, Codex), that's doubly risky: refreshing some
+    // OTHER session that merely shares a row with one of those frozen
+    // sessions could, via the same replace-then-shrink bug, make
+    // `isMcpServerRowStillInUse` wrongly conclude nobody needs that row
+    // anymore and tear it down out from under the frozen session, which
+    // never gets a chance to re-register it. Every row this call resolves
+    // is now ADDED to the session's existing set instead of replacing it —
+    // monotonically growing for the life of the session — so a row is only
+    // ever released by `stopSession`'s cleanup (see `ownedMcpServerIds`
+    // below), never silently forgotten by an earlier refresh.
     const resolvedServerIds = new Set<string>()
     const mcpServers = await this.buildMcpServersForAdapter(
       agentId,
@@ -1937,7 +1966,10 @@ export class AgentManager extends EventEmitter {
       session?.scrubber,
       resolvedServerIds
     )
-    if (session) session.mcpServerIds = resolvedServerIds
+    if (session) {
+      session.mcpServerIds ??= new Set<string>()
+      for (const id of resolvedServerIds) session.mcpServerIds.add(id)
+    }
 
     // systemPrompt is intentionally task-agnostic and identical every time this
     // is called for a given agent — it must stay byte-for-byte frozen for the
