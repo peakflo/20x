@@ -24,6 +24,10 @@ function isUnsupportedTaskCreateRoute(error: unknown): boolean {
   return /^Route POST:\/api\/tasks\/? not found$/i.test(message.trim())
 }
 
+function isMissingServerTask(error: unknown): boolean {
+  return error instanceof Error && error.message.trim() === 'Task not found'
+}
+
 export class SyncManager {
   private workfloApiClient?: WorkfloApiClient
   private enterpriseSyncManager?: EnterpriseSyncManager
@@ -331,9 +335,15 @@ export class SyncManager {
         if (!key.startsWith('workflo-completion:') || key.endsWith(':error')) continue
         const command = JSON.parse(value)
         if (command.scope !== scope) continue
-        if (this.db.getTask(command.taskId)?.complete_at_source === false) {
+        const task = this.db.getTask(command.taskId)
+        if (!task || task.complete_at_source === false) {
           this.db.deleteSetting(key)
           this.db.deleteSetting(`${key}:error`)
+          continue
+        }
+        const source = task.source_id ? this.db.getTaskSource(task.source_id) : undefined
+        if (source?.config?.unified_scope && source.config.unified_scope !== scope) {
+          this.db.setSetting(`${key}:error`, `This task belongs to a different ${desktopBrandName()} account or organization. Complete it only in 20x.`)
           continue
         }
         try {
@@ -345,6 +355,14 @@ export class SyncManager {
           this.db.deleteSetting(key)
           this.db.deleteSetting(`${key}:error`)
         } catch (error) {
+          if (isMissingServerTask(error)) {
+            // The task was removed at its original source. There is nothing
+            // left to complete remotely, so finish the local copy once.
+            this.db.updateTask(task.id, { status: TaskStatus.Completed, complete_at_source: false })
+            this.db.deleteSetting(key)
+            this.db.deleteSetting(`${key}:error`)
+            continue
+          }
           this.db.setSetting(`${key}:error`, error instanceof Error ? error.message : String(error))
         }
       }
@@ -366,6 +384,9 @@ export class SyncManager {
     if (source.plugin_id === 'peakflo') {
       const scope = this.taskUploadScope()
       if (!scope) return { success: false, error: `Connect to ${desktopBrandName()} and select an organization before completing this task.` }
+      if (source.config?.unified_scope && source.config.unified_scope !== scope) {
+        return { success: false, error: `This task belongs to a different ${desktopBrandName()} account or organization. Complete it only in 20x.` }
+      }
       if (!task.external_id) return { success: false, error: `This task has no ${desktopBrandName()} task ID. Sync it before completing at source.` }
       let snapshot = serverTaskSnapshot(this.db, task.id)
       if (typeof snapshot?.version !== 'number') {
@@ -373,6 +394,10 @@ export class SyncManager {
           snapshot = await this.workfloApiClient!.getTask(task.external_id)
           if (typeof snapshot.version === 'number') saveServerTaskSnapshot(this.db, task.id, snapshot)
         } catch (error) {
+          if (isMissingServerTask(error)) {
+            this.db.updateTask(task.id, { status: TaskStatus.Completed, complete_at_source: false })
+            return { success: true }
+          }
           return { success: false, error: error instanceof Error ? error.message : String(error) }
         }
       }

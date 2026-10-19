@@ -261,6 +261,64 @@ it('fetches a missing server version and submits completion details', async () =
   expect(db.getTask(local.id)?.status).toBe('completed')
 })
 
+it('refuses to complete a task from another account before calling the server', async () => {
+  db.setSetting('enterprise_tenant_id', 'tenant-1')
+  const otherSource = db.createTaskSource({ name: 'Other account', plugin_id: 'peakflo', mcp_server_id: null,
+    config: { enterprise_mode: true, unified_scope: JSON.stringify(['localhost', 'tenant-2', 'user-2']) },
+    list_tool: '', list_tool_args: {}, update_tool: '', update_tool_args: {} })!
+  const local = db.createTask(makeTask({ external_id: 'remote-1', source_id: otherSource.id }))!
+  db.setSetting(`workflo-task:${local.id}`, JSON.stringify({ ...remote(), tenantId: 'tenant-2' }))
+  const api = { getDomain: () => 'api.test', executeAction: vi.fn(), getTask: vi.fn() }
+  const sync = new SyncManager(db, {} as never, { get: () => new PeakfloPlugin() } as never)
+  Object.assign(sync, { workfloApiClient: api, enterpriseUserId: 'user-1' })
+
+  const result = await sync.executeAction('complete', local, undefined, otherSource.id)
+  expect(result).toMatchObject({ success: false, error: expect.stringContaining('different') })
+  expect(api.executeAction).not.toHaveBeenCalled()
+  expect(api.getTask).not.toHaveBeenCalled()
+  expect(db.getSetting(`workflo-completion:${local.id}`)).toBeUndefined()
+
+  // An older app could have queued this command before checking the source.
+  const key = `workflo-completion:${local.id}`
+  db.setSetting(key, JSON.stringify({ scope: JSON.stringify(['api.test', 'tenant-1', 'user-1']),
+    taskId: local.id, externalId: 'remote-1', expectedVersion: 3, outputs: { action: 'complete' } }))
+  await sync.flushTaskCompletions()
+  expect(api.executeAction).not.toHaveBeenCalled()
+  expect(db.getSetting(`${key}:error`)).toContain('different')
+})
+
+it('completes the local copy when a task in the current account was removed remotely', async () => {
+  db.setSetting('enterprise_tenant_id', 'tenant-1')
+  const local = db.createTask(makeTask({ external_id: 'remote-1', source_id: sourceId }))!
+  db.setSetting(`workflo-task:${local.id}`, JSON.stringify(remote()))
+  const api = { getDomain: () => 'api.test', executeAction: vi.fn().mockRejectedValue(new Error('Task not found')),
+    getTask: vi.fn() }
+  const sync = new SyncManager(db, {} as never, { get: () => new PeakfloPlugin() } as never)
+  Object.assign(sync, { workfloApiClient: api, enterpriseUserId: 'user-1' })
+
+  expect(await sync.executeAction('complete', local, undefined, sourceId)).toEqual({ success: true })
+  expect(api.executeAction).toHaveBeenCalledOnce()
+  expect(db.getTask(local.id)).toMatchObject({ status: 'completed', complete_at_source: false })
+  expect(db.getSetting(`workflo-completion:${local.id}`)).toBeUndefined()
+  expect(db.getSetting(`workflo-completion:${local.id}:error`)).toBeUndefined()
+  await sync.flushTaskCompletions()
+  expect(api.executeAction).toHaveBeenCalledOnce()
+})
+
+it('completes locally when a removed task has no cached server version', async () => {
+  db.setSetting('enterprise_tenant_id', 'tenant-1')
+  const local = db.createTask(makeTask({ external_id: 'remote-1', source_id: sourceId }))!
+  const api = { getDomain: () => 'api.test', getTask: vi.fn().mockRejectedValue(new Error('Task not found')),
+    executeAction: vi.fn() }
+  const sync = new SyncManager(db, {} as never, { get: () => new PeakfloPlugin() } as never)
+  Object.assign(sync, { workfloApiClient: api, enterpriseUserId: 'user-1' })
+
+  expect(await sync.executeAction('complete', local, undefined, sourceId)).toEqual({ success: true })
+  expect(api.executeAction).not.toHaveBeenCalled()
+  expect(db.getTask(local.id)).toMatchObject({ status: 'completed', complete_at_source: false })
+  expect(db.getSetting(`workflo-completion:${local.id}`)).toBeUndefined()
+})
+
 it('does not queue completion when Workflo provides no task version', async () => {
   db.setSetting('enterprise_tenant_id', 'tenant-1')
   const local = db.createTask(makeTask({ external_id: 'remote-1', source_id: sourceId }))!
