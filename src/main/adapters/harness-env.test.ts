@@ -74,10 +74,17 @@ describe('buildHarnessBaseEnv', () => {
     expect(env.KEEP_ME).toBe('fine')
   })
 
-  it('strips GH_TOKEN/GITHUB_TOKEN and AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN, but keeps AWS_PROFILE/AWS_REGION', () => {
+  it('strips GH_TOKEN/GITHUB_TOKEN and the AWS credential triad, but keeps AWS_PROFILE/AWS_REGION', () => {
     const env = buildHarnessBaseEnv({
       GH_TOKEN: 'gh-leak',
       GITHUB_TOKEN: 'gh-leak-2',
+      // AWS_ACCESS_KEY_ID found missing from the denylist while testing the
+      // round-3 re-review's Bedrock-gating fix: it doesn't match
+      // CREDENTIAL_SUFFIX_RE (ends in "_ID", not "_ACCESS_KEY"/"_TOKEN"),
+      // so it passed through to every harness unconditionally until it was
+      // added to the explicit KNOWN_PROVIDER_CREDENTIAL_ENV_VARS list.
+      AWS_ACCESS_KEY_ID: 'aws-leak-id',
+      AWS_BEARER_TOKEN_BEDROCK: 'aws-leak-bedrock',
       AWS_SECRET_ACCESS_KEY: 'aws-leak',
       AWS_SESSION_TOKEN: 'aws-leak-2',
       AWS_PROFILE: 'default',
@@ -86,6 +93,8 @@ describe('buildHarnessBaseEnv', () => {
     })
     expect(env.GH_TOKEN).toBeUndefined()
     expect(env.GITHUB_TOKEN).toBeUndefined()
+    expect(env.AWS_ACCESS_KEY_ID).toBeUndefined()
+    expect(env.AWS_BEARER_TOKEN_BEDROCK).toBeUndefined()
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined()
     expect(env.AWS_SESSION_TOKEN).toBeUndefined()
     expect(env.AWS_PROFILE).toBe('default')

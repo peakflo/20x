@@ -341,14 +341,25 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * Also re-adds, ambiently, the credentials Claude Code's OWN alternate
    * auth modes use that the generic denylist strips like any other
    * credential-shaped var: `CLAUDE_CODE_OAUTH_TOKEN` (the long-lived token
-   * from `claude setup-token`), `ANTHROPIC_AUTH_TOKEN` (a custom gateway,
-   * used together with `ANTHROPIC_BASE_URL`), and the AWS Bedrock
-   * credentials (`AWS_BEARER_TOKEN_BEDROCK`, or full `AWS_ACCESS_KEY_ID`/
+   * from `claude setup-token` — its own presence is the signal, no separate
+   * mode flag gates it), `ANTHROPIC_AUTH_TOKEN` (a custom gateway, used
+   * together with `ANTHROPIC_BASE_URL`), and the AWS Bedrock credentials
+   * (`AWS_BEARER_TOKEN_BEDROCK`, or full `AWS_ACCESS_KEY_ID`/
    * `AWS_SECRET_ACCESS_KEY`/`AWS_SESSION_TOKEN`) Claude Code natively
-   * supports via `CLAUDE_CODE_USE_BEDROCK`. All of these, when present, are
-   * registered with `scrubber` too. Finally applies the per-agent "pass
-   * shell credentials" opt-in (`config.allowShellCredentials`) as the
-   * generic fallback for anything not named here.
+   * supports via `CLAUDE_CODE_USE_BEDROCK`. Re-review (round 3, Medium): the
+   * AWS triad and the gateway token used to be re-added unconditionally —
+   * so an agent that never uses Bedrock or a custom gateway still got
+   * whatever AWS/gateway credentials happened to sit in the ambient shell
+   * env, reopening exactly the leak the denylist exists to close for a
+   * session that has no actual use for them. Each is now gated on the
+   * ambient flag that actually turns the corresponding mode on
+   * (`CLAUDE_CODE_USE_BEDROCK` for the AWS vars, `ANTHROPIC_BASE_URL` for
+   * `ANTHROPIC_AUTH_TOKEN`) — both already present in `env` unchanged,
+   * since neither is credential-shaped and `buildHarnessBaseEnv` never
+   * strips them. All re-added values, when present, are registered with
+   * `scrubber` too. Finally applies the per-agent "pass shell credentials"
+   * opt-in (`config.allowShellCredentials`) as the generic fallback for
+   * anything not named here.
    */
   private buildClaudeEnvironment(
     config: Pick<SessionConfig, 'harnessHome' | 'authMethod' | 'apiKeys' | 'allowShellCredentials'>,
@@ -361,14 +372,16 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // credential-shaped and were never stripped by buildHarnessBaseEnv in
     // the first place — nothing to re-add for either, and not worth
     // registering with the scrubber (a URL/flag, not a secret).
-    reAddAmbientCredentials(env, [
-      'CLAUDE_CODE_OAUTH_TOKEN',
-      'ANTHROPIC_AUTH_TOKEN',
-      'AWS_BEARER_TOKEN_BEDROCK',
-      'AWS_ACCESS_KEY_ID',
-      'AWS_SECRET_ACCESS_KEY',
-      'AWS_SESSION_TOKEN'
-    ], scrubber)
+    reAddAmbientCredentials(env, ['CLAUDE_CODE_OAUTH_TOKEN'], scrubber)
+    // Gated: only re-add the gateway token / Bedrock credentials when the
+    // ambient flag that actually enables that mode is set, not for every
+    // session unconditionally (round 3, Medium — see docstring above).
+    if (env.ANTHROPIC_BASE_URL) {
+      reAddAmbientCredentials(env, ['ANTHROPIC_AUTH_TOKEN'], scrubber)
+    }
+    if (env.CLAUDE_CODE_USE_BEDROCK) {
+      reAddAmbientCredentials(env, ['AWS_BEARER_TOKEN_BEDROCK', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN'], scrubber)
+    }
     applyShellCredentialsOptIn(env, config.allowShellCredentials, scrubber)
 
     // Remove CLAUDECODE to prevent nested session error
@@ -442,6 +455,16 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * tracking still sees wherever the agent's command actually left the
    * directory, exactly as if no subshell were involved.
    *
+   * Re-review (round 3, Nit): if `mktemp` itself is unavailable, the marker
+   * is left EMPTY rather than falling back to a predictable path like
+   * `/tmp/.20x-cwd-$$` (guessable by PID, and a shared, world-writable
+   * directory — a local attacker could pre-plant a symlink at that exact
+   * path before this runs). Every use of the marker below is guarded on it
+   * being non-empty, so this fails closed: the only casualty of a missing
+   * `mktemp` is that `cd`-persistence doesn't carry over for that one
+   * invocation — exit-status reporting (this wrapper's actual, security-
+   * relevant purpose) is unaffected either way.
+   *
    * Known, documented, NOT covered by this wrapper: the harness itself
    * killing the Bash tool's process on a timeout. A SIGTERM/SIGKILL from
    * outside stops this whole script wherever it happens to be, including
@@ -452,16 +475,16 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    */
   private static wrapCommandForScrubbableFailure(command: string): string {
     return [
-      '__20x_cwdmark="$(mktemp 2>/dev/null || echo /tmp/.20x-cwd-$$)"',
+      '__20x_cwdmark="$(mktemp 2>/dev/null)"',
       '(',
       command,
       '__20x_inner_ec=$?',
-      'pwd -P > "$__20x_cwdmark" 2>/dev/null',
+      'if [ -n "$__20x_cwdmark" ]; then pwd -P > "$__20x_cwdmark" 2>/dev/null; fi',
       'exit "$__20x_inner_ec"',
       ')',
       '__20x_ec=$?',
-      'if [ -s "$__20x_cwdmark" ]; then cd "$(cat "$__20x_cwdmark")" 2>/dev/null; fi',
-      'rm -f "$__20x_cwdmark" 2>/dev/null',
+      'if [ -n "$__20x_cwdmark" ] && [ -s "$__20x_cwdmark" ]; then cd "$(cat "$__20x_cwdmark")" 2>/dev/null; fi',
+      'if [ -n "$__20x_cwdmark" ]; then rm -f "$__20x_cwdmark" 2>/dev/null; fi',
       'if [ "$__20x_ec" -ne 0 ]; then printf \'\\n[20x] command exited with status %s\\n\' "$__20x_ec" >&2; fi',
       'true'
     ].join('\n')

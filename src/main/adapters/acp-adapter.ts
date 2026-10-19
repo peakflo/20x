@@ -413,12 +413,21 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       env.CURSOR_AUTH_TOKEN = config.apiKeys.cursor
       scrubber?.addEntries([{ name: 'CURSOR_AUTH_TOKEN', value: config.apiKeys.cursor }])
     }
-    // Gemini CLI (a registry ACP agent) authenticates via ambient
+    // Gemini CLI (a registry ACP agent, resolved `command: 'gemini'` — see
+    // the registry's own `id: "gemini"` entry) authenticates via ambient
     // GEMINI_API_KEY — there's no `config.apiKeys.gemini` field for it (ACP
     // runs many different third-party agent binaries, not one 20x
     // explicitly manages auth for), so this is a re-add from the login
-    // shell, not from an explicit per-agent secret.
-    reAddAmbientCredentials(env as Record<string, string>, ['GEMINI_API_KEY'], scrubber)
+    // shell, not from an explicit per-agent secret. Re-review (round 3,
+    // Medium): used to re-add it unconditionally for every ACP agent, not
+    // just Gemini — so cursor-agent, or any other registry/local-command
+    // ACP agent, got a GEMINI_API_KEY it had no use for whenever one
+    // happened to be sitting in the ambient shell env. Gated the same way
+    // the cursor-agent-specific checks elsewhere in this file already are:
+    // on the resolved process command, not the agent type in the abstract.
+    if (this.processConfig.command === 'gemini') {
+      reAddAmbientCredentials(env as Record<string, string>, ['GEMINI_API_KEY'], scrubber)
+    }
     applyShellCredentialsOptIn(env as Record<string, string>, config.allowShellCredentials, scrubber)
     if (config.secretEnvVars) {
       for (const [key, value] of Object.entries(config.secretEnvVars)) env[key] = value

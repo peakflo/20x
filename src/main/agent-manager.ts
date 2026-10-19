@@ -429,11 +429,17 @@ export class AgentManager extends EventEmitter {
    * surviving callback would only reach whichever session's scrubber that
    * callback happened to close over, silently stopping protection for every
    * OTHER session still using the same server. Entries are added here every
-   * time `buildMcpServersForAdapter` resolves this server for a session,
-   * and never removed (worst case: a redundant scrubber hangs onto this
-   * instance a bit longer than its session lived — harmless, since adding
-   * entries to a dead session's scrubber has no effect on anything that
-   * reads it again).
+   * time `buildMcpServersForAdapter` resolves this server for a session.
+   * Re-review (round 3): entries used to never be removed, which both leaked
+   * memory (every session that ever touched a row left its scrubber behind
+   * forever) and — worse — meant `stopSession` believed it was safe to tear
+   * down a row's proxy registration / env-wrapper file even while another
+   * live session still depended on them, since nothing here recorded that
+   * dependency. `stopSession` now removes exactly the stopped session's own
+   * scrubber from every row it used (always safe — that scrubber instance
+   * belongs to no one else), and only tears down the row's proxy
+   * registration / env file once a live-session scan confirms no OTHER
+   * session still references that row (see `isMcpServerRowStillInUse`).
    */
   private mcpServerScrubbersByKey: Map<string, Set<SecretScrubber>> = new Map()
   /** Maps old (temp) session IDs to their re-keyed (real) IDs so that
@@ -1597,6 +1603,33 @@ export class AgentManager extends EventEmitter {
     const set = this.mcpServerScrubbersByKey.get(registrationKey)
     if (!set || entries.length === 0) return
     for (const scrubber of set) scrubber.addEntries(entries)
+  }
+
+  /**
+   * True when some OTHER live session (any agent, not just this session's
+   * own) still has MCP server row `serverId` in its agent's current
+   * `mcp_servers` config. Re-review (round 3, Major): `stopSession` used to
+   * tear down a row's shared proxy registration / env-wrapper file the
+   * moment ANY one session using it stopped — but a remote/local MCP server
+   * row can be shared by several concurrently running sessions (the same
+   * agent running two tasks, or two different agents pointed at the same
+   * row), and none of those other sessions rebuild `mcpServers` for their
+   * already-running `claude` process — so they kept the now-dead proxy URL /
+   * env file path and silently lost that MCP server. Checked against LIVE
+   * session state (not an incrementally-maintained counter) so it can never
+   * drift out of sync with a mid-session agent-config edit.
+   */
+  private isMcpServerRowStillInUse(serverId: string, excludingSessionId: string): boolean {
+    for (const [otherSessionId, otherSession] of this.sessions) {
+      if (otherSessionId === excludingSessionId) continue
+      const otherAgent = this.db.getAgent(otherSession.agentId)
+      const entries = otherAgent?.config?.mcp_servers || []
+      for (const entry of entries) {
+        const otherServerId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
+        if (otherServerId === serverId) return true
+      }
+    }
+    return false
   }
 
   /**
@@ -5323,9 +5356,12 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     }
 
     // Clean up MCP auth-proxy registrations and local-server env files for
-    // every MCP server this agent is configured with. Best-effort and
-    // self-healing (see the docstrings on these two functions) when another
-    // live session for the same agent still uses the same server row.
+    // every MCP server this agent is configured with — but ONLY once no
+    // other live session still depends on that row (re-review, round 3,
+    // Major: see isMcpServerRowStillInUse's docstring). This session's own
+    // scrubber is always removed from the row's scrubber registry
+    // regardless — that removal is per-session-instance, not per-row, so
+    // it's safe even while other sessions keep using the row.
     {
       const agent = this.db.getAgent(session.agentId)
       const mcpEntries = agent?.config?.mcp_servers || []
@@ -5333,8 +5369,11 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         const serverId = typeof entry === 'string' ? entry : entry.serverId
         const mcpServer = this.db.getMcpServer(serverId)
         if (!mcpServer) continue
+        if (session.scrubber) this.mcpServerScrubbersByKey.get(mcpServer.id)?.delete(session.scrubber)
+        if (this.isMcpServerRowStillInUse(mcpServer.id, sessionId)) continue
         if (mcpServer.type === 'remote') unregisterMcpProxyTargetByKey(mcpServer.id)
         else if (mcpServer.type === 'local') cleanupLocalMcpEnvFile(mcpServer.id)
+        this.mcpServerScrubbersByKey.delete(mcpServer.id)
       }
     }
 

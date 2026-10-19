@@ -9,10 +9,14 @@
  * known, or `«secret»` when it isn't.
  *
  * Beyond the literal value, each entry also matches a handful of transformed
- * forms a model or a shell pipeline commonly produces: base64, base64url,
- * URL-encoded, and JSON-escaped. `Bearer <value>` needs no special case —
- * the literal-value pattern already matches the value substring inside it,
- * so the "Bearer " prefix is left intact and only the token is redacted.
+ * forms a model or a shell pipeline commonly produces: base64 (including the
+ * two non-zero byte-alignment phases — see `base64AlignedFragments` — for
+ * when the value is embedded inside a larger string before being
+ * base64-encoded as a whole, not just when it's encoded completely alone),
+ * base64url, URL-encoded, and JSON-escaped. `Bearer <value>` needs no
+ * special case — the literal-value pattern already matches the value
+ * substring inside it, so the "Bearer " prefix is left intact and only the
+ * token is redacted.
  *
  * Scrub at *assembled* text (a fully buffered message part, a complete log
  * line, a persisted DB field) — never per streaming delta — so a value split
@@ -55,6 +59,41 @@ function base64url(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64url')
 }
 
+/**
+ * Alignment-invariant base64 fragments of `value`. Re-review (round 3,
+ * Minor — a PR body overclaim corrected into an actual fix): base64 groups
+ * bytes 3-at-a-time, so if `value` is embedded inside a larger string that
+ * then gets base64-encoded as a whole (`echo "token=$SECRET" | base64`, a
+ * JSON blob containing the secret, …), the resulting substring for
+ * `value`'s own bytes depends on how many bytes of surrounding content
+ * precede it (mod 3) — three possible phases. The single plain
+ * `Buffer.from(value).toString('base64')` variant above only matches the
+ * phase-0 case where `value` is encoded completely alone (nothing else in
+ * the same call). This covers the other two phases by simulating 1 and 2
+ * bytes of unknown prefix content, then keeping only the base64 GROUPS
+ * made up ENTIRELY of `value`'s own bytes — those groups are determined
+ * solely by which 3-byte boundary `value`'s bytes fall on, not by what the
+ * surrounding content actually is, so they appear identically in the real
+ * encoding of any larger buffer with the same alignment. The boundary
+ * groups that mix a real byte of `value` with an unknown neighboring byte
+ * are dropped (their encoding isn't recoverable without knowing that
+ * neighbor), so very short values can yield no usable fragment for a given
+ * phase — the caller's length filter already handles that.
+ */
+function base64AlignedFragments(value: string): string[] {
+  const bytes = Buffer.from(value, 'utf8')
+  const fragments: string[] = []
+  for (const leadPad of [0, 1, 2] as const) {
+    const tailPad = (3 - ((leadPad + bytes.length) % 3)) % 3
+    const padded = Buffer.concat([Buffer.alloc(leadPad), bytes, Buffer.alloc(tailPad)])
+    const encoded = padded.toString('base64') // length is a multiple of 3 -> no '=' padding
+    const start = leadPad > 0 ? 4 : 0
+    const end = encoded.length - (tailPad > 0 ? 4 : 0)
+    if (end > start) fragments.push(encoded.slice(start, end))
+  }
+  return fragments
+}
+
 function jsonEscapedInner(value: string): string {
   // JSON.stringify("abc") -> `"abc"`; strip the surrounding quotes to get just
   // the escaped body, which is what shows up when the value is embedded in a
@@ -68,6 +107,7 @@ function variantsOf(value: string): string[] {
   const variants = new Set<string>()
   variants.add(value)
   try { variants.add(Buffer.from(value, 'utf8').toString('base64')) } catch { /* ignore */ }
+  try { for (const f of base64AlignedFragments(value)) variants.add(f) } catch { /* ignore */ }
   try { variants.add(base64url(value)) } catch { /* ignore */ }
   try { variants.add(encodeURIComponent(value)) } catch { /* ignore */ }
   try { variants.add(jsonEscapedInner(value)) } catch { /* ignore */ }
