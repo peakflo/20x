@@ -1744,6 +1744,10 @@ describe('AgentManager transitionToIdle — completing without review', () => {
       getSubtasks: vi.fn(() => [] as unknown[]),
       openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: 'task-1', sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
       closeTaskRun: vi.fn(() => null),
+      // getTaskWakeupQueue() (called from transitionToIdle to deliver any
+      // wake-ups pending for THIS task, now that it's idle) needs a real
+      // sqlite handle to create TaskWakeupStore's table against.
+      db: new Database(':memory:'),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
   }
 
@@ -1816,6 +1820,10 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
       getSubtasks: vi.fn(() => [] as unknown[]),
       openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: 'task-1', sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
       closeTaskRun: vi.fn(() => null),
+      // getTaskWakeupQueue() (called from transitionToIdle to deliver any
+      // wake-ups pending for THIS task, now that it's idle) needs a real
+      // sqlite handle to create TaskWakeupStore's table against.
+      db: new Database(':memory:'),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
   }
 
@@ -1910,6 +1918,45 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(adapter.getAllMessages).toHaveBeenCalledOnce()
     expect(replayCall).toBeDefined()
     expect(sessionWithAdapter.seenPartIds.has('final-part')).toBe(true)
+  })
+
+  it('classifies from the REPLAYED final text, not a stale tool-call tracked by the live poll just before idle (race)', async () => {
+    // Regression: the final assistant text can arrive in the same tick the
+    // adapter reports idle, racing the live polling loop. Before this fix,
+    // replayMissedTranscriptPartsBeforeIdle never updated
+    // session.lastPartRole/lastPartType, so the run was classified from
+    // whatever the live loop saw just before replay ran — here, a tool call
+    // — misreporting a genuinely finished run as stopped_early/model_error.
+    const mockDb = createEnterpriseTaskDb({
+      status: TaskStatus.AgentWorking,
+      output_fields: [],
+      source_id: null
+    })
+    const { mgr, session } = setupManager(mockDb)
+    const adapter = {
+      getAllMessages: vi.fn(async () => ([
+        {
+          id: 'msg-1',
+          role: MessageRole.ASSISTANT,
+          parts: [
+            { id: 'final-part', type: MessagePartType.TEXT, text: 'Fixed and pushed the commit.', content: 'Fixed and pushed the commit.' }
+          ]
+        }
+      ]))
+    }
+    const sessionWithAdapter = {
+      ...session,
+      adapter: adapter as any,
+      // Stale tracking from the live poll's last tick, just before idle.
+      lastPartRole: 'assistant',
+      lastPartType: 'tool_call'
+    }
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+
+    await (mgr as any).transitionToIdle('session-1', sessionWithAdapter)
+
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ModelError })
   })
 
   it('does NOT re-emit a message already persisted under a different part id (codex id-scheme mismatch)', async () => {
@@ -3143,6 +3190,51 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
     expect(transitionSpy).toHaveBeenCalledOnce()
     const transitionSession = transitionSpy.mock.calls[0][1] as { assistantTextKeys: Set<string> }
     expect(transitionSession.assistantTextKeys.has(finalText)).toBe(true)
+  })
+
+  it('an OpenCode-shaped batch ending in step-finish tracks the real final text, not the trailing marker, for run-end classification', async () => {
+    // Regression: OpenCode emits a step-finish part after every assistant
+    // answer. Before this fix, the live polling loop tracked the LITERAL
+    // last part in the batch as "how this turn ended" — so every OpenCode
+    // completion looked identical to a turn that stopped with nothing to
+    // show, and was wrongly classified stopped_early (-> model_error)
+    // instead of completed (-> ready_for_review).
+    const mgr = buildManager()
+    const adapter = buildAdapter()
+    adapter.pollMessages.mockResolvedValueOnce([
+      { id: 'p1', role: 'assistant', content: '', type: 'step-start' },
+      { id: 'p2', role: 'assistant', content: 'Fixed the flaky test and pushed the commit.', type: 'text' },
+      { id: 'p3', role: 'assistant', content: '', type: 'step-finish' }
+    ])
+    adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.BUSY })
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+      lastAssistantText: '',
+      lastPartRole: undefined as string | undefined,
+      lastPartType: undefined as string | undefined
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }
+    )
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    entry.createdAt = Date.now()
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(session.lastPartRole).toBe('assistant')
+    expect(session.lastPartType).toBe('text')
   })
 
   it('pollSingleSession transitions to idle after grace period expires without work (new session stuck)', async () => {

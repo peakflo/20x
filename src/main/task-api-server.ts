@@ -75,6 +75,7 @@ type TaskApiAgentController = Pick<
   | 'findSessionByTaskId'
   | 'getSessionStatus'
   | 'getActiveSessionsForTask'
+  | 'getTaskWakeupQueue'
 >
 
 let agentController: TaskApiAgentController | null = null
@@ -527,9 +528,14 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (!params.title) return { error: 'Title is required' }
 
       pruneExpiredOrchestrationReceiptsOnce(db)
-      // No parent task to scope a retry to at the root — every root-level
-      // create_task call shares one 'global' idempotency bucket.
-      const idempotencyScope = params.parent_task_id ? `task:${String(params.parent_task_id)}` : 'global'
+      // The route name is part of the scope — without it, a client_request_id
+      // that happens to repeat across different tools (e.g. an agent reusing
+      // a short counter like "req-1") would return one tool's cached result
+      // for another. No parent task to scope a retry to at the root — every
+      // root-level create_task call shares one bucket (see idempotency.ts's
+      // documented gap: no caller identity exists at this layer for an
+      // unscoped/Mastermind call).
+      const idempotencyScope = params.parent_task_id ? `create_task:task:${String(params.parent_task_id)}` : 'create_task:global'
       return withIdempotency(db, idempotencyScope, params.client_request_id as string | undefined, () => {
       const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
       const now = new Date().toISOString()
@@ -1207,7 +1213,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
       pruneExpiredOrchestrationReceiptsOnce(db)
       const sendController = agentController
-      return withIdempotency(db, `task:${taskId}`, params.client_request_id as string | undefined, async () => {
+      return withIdempotency(db, `send_message:task:${taskId}`, params.client_request_id as string | undefined, async () => {
         // The message is attributed to the user, because that is who spoke it.
         // A transcript that credited the agent would misreport who asked.
         const result = await sendController.sendByTaskId(taskId, String(params.text))
@@ -1257,19 +1263,29 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
       pruneExpiredOrchestrationReceiptsOnce(db)
       const startController = agentController
-      return withIdempotency(db, `task:${String(params.task_id)}`, params.client_request_id as string | undefined, async () => {
-        const result = await startController.startTask(String(params.task_id), {
-          preferSubtasks: params.prefer_subtasks !== false,
-          allowTriage: params.allow_triage !== false
-        })
+      return withIdempotency(
+        db,
+        `start_task:task:${String(params.task_id)}`,
+        params.client_request_id as string | undefined,
+        async () => {
+          const result = await startController.startTask(String(params.task_id), {
+            preferSubtasks: params.prefer_subtasks !== false,
+            allowTriage: params.allow_triage !== false
+          })
 
-        const startedTask = result.startedTaskId ? db.getTask(result.startedTaskId) : null
-        return {
-          success: result.action !== 'no_action',
-          ...result,
-          task: startedTask
-        }
-      })
+          const startedTask = result.startedTaskId ? db.getTask(result.startedTaskId) : null
+          return {
+            success: result.action !== 'no_action',
+            ...result,
+            task: startedTask
+          }
+        },
+        // A "no_action" (nothing to start — no agent, already running, etc.)
+        // is not a success to remember: caching it would make a retry AFTER
+        // fixing the actual cause (assigning an agent) keep replaying the
+        // stale no-op for the rest of the TTL instead of trying again.
+        (res) => res.success
+      )
     }
 
     case '/create_subtask': {
@@ -1281,7 +1297,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (!parentTask) return { error: 'Parent task not found' }
 
       pruneExpiredOrchestrationReceiptsOnce(db)
-      return withIdempotency(db, `task:${String(params.parent_task_id)}`, params.client_request_id as string | undefined, () => {
+      return withIdempotency(db, `create_subtask:task:${String(params.parent_task_id)}`, params.client_request_id as string | undefined, () => {
       const subtaskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
       const now = new Date().toISOString()
 
@@ -1368,6 +1384,21 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         return targetIds ? subtasks.filter((task) => targetIds.has(String(task.id))) : subtasks
       }
 
+      // This route is MCP-tool-only (never called from the renderer, IPC, or
+      // mobile) — so returning a child's terminal state here unambiguously
+      // means the calling coordinator just observed it directly. Consume any
+      // pending wake-up for that exact child so it isn't ALSO delivered as a
+      // redundant message later, re-running a coordinator that already acted
+      // on the result it just read.
+      const markObserved = (subtasks: Record<string, unknown>[]): void => {
+        if (!agentController) return
+        for (const subtask of subtasks) {
+          if (terminalStatuses.includes(String(subtask.status))) {
+            agentController.getTaskWakeupQueue().markObserved(String(params.parent_task_id), String(subtask.id))
+          }
+        }
+      }
+
       const startedAt = Date.now()
       while (Date.now() - startedAt < timeoutMs) {
         const subtasks = readSubtasks()
@@ -1379,6 +1410,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
             : matches.length === subtasks.length
 
           if (done) {
+            markObserved(subtasks)
             return {
               success: true,
               timed_out: false,
@@ -1392,12 +1424,14 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         await new Promise((resolve) => setTimeout(resolve, pollMs))
       }
 
+      const finalSubtasks = readSubtasks()
+      markObserved(finalSubtasks)
       return {
         success: false,
         timed_out: true,
         return_when: returnWhen,
         terminal_statuses: terminalStatuses,
-        subtasks: readSubtasks()
+        subtasks: finalSubtasks
       }
     }
 

@@ -533,7 +533,10 @@ function deserializeTaskRun(row: TaskRunRow): TaskRunRecord {
 export interface OrchestrationReceiptRecord {
   scope: string
   clientRequestId: string
+  /** The call's result, or `undefined` while a call for this key is still in flight (see `isPending`). */
   result: unknown
+  /** True when a caller claimed this key and is still running — not yet completed, not a stored result. */
+  isPending: boolean
   createdAt: number
 }
 
@@ -1680,10 +1683,16 @@ export class DatabaseManager {
       -- instead of a duplicate side effect. Expired (see
       -- ORCHESTRATION_RECEIPT_TTL_MS) rows are pruned opportunistically, not
       -- on a timer. New table, so no SCHEMA_VERSION bump is needed.
+      -- result is NULLable: a row with result IS NULL means a call for this
+      -- key is currently IN FLIGHT (inserted before fn() runs, so a second
+      -- concurrent caller can tell "someone's already doing this" apart from
+      -- "already done" — see orchestration/idempotency.ts). A genuine JS
+      -- null result is stored as the JSON string 'null', never as SQL NULL,
+      -- so the two can never be confused.
       CREATE TABLE IF NOT EXISTS orchestration_receipts (
         scope TEXT NOT NULL,
         client_request_id TEXT NOT NULL,
-        result TEXT NOT NULL,
+        result TEXT,
         created_at INTEGER NOT NULL,
         PRIMARY KEY (scope, client_request_id)
       );
@@ -3185,35 +3194,58 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   // Idempotency for create_task / create_subtask / start_task / send_message.
   // See src/main/orchestration/idempotency.ts.
 
-  /** The stored result for a prior call with this (scope, client_request_id), or null if none (or expired — callers prune separately). */
+  /** The receipt for a prior/in-flight call with this (scope, client_request_id), or null if none exists at all (or it expired — callers prune separately). */
   getOrchestrationReceipt(scope: string, clientRequestId: string): OrchestrationReceiptRecord | null {
     if (!this.ensureDbOpen()) return null
     const row = this.db.prepare(`
       SELECT * FROM orchestration_receipts WHERE scope = ? AND client_request_id = ?
-    `).get(scope, clientRequestId) as { scope: string; client_request_id: string; result: string; created_at: number } | undefined
+    `).get(scope, clientRequestId) as { scope: string; client_request_id: string; result: string | null; created_at: number } | undefined
     if (!row) return null
+    if (row.result === null) {
+      return { scope: row.scope, clientRequestId: row.client_request_id, result: undefined, isPending: true, createdAt: row.created_at }
+    }
     let result: unknown = null
     try {
       result = JSON.parse(row.result)
     } catch {
       result = null
     }
-    return { scope: row.scope, clientRequestId: row.client_request_id, result, createdAt: row.created_at }
+    return { scope: row.scope, clientRequestId: row.client_request_id, result, isPending: false, createdAt: row.created_at }
   }
 
   /**
-   * Stores a receipt for a (scope, client_request_id) pair. `ON CONFLICT DO
-   * NOTHING` — if a concurrent caller already stored one for this exact key,
-   * the earlier result wins (read it back with getOrchestrationReceipt
-   * instead of trusting the input just written).
+   * Claims a (scope, client_request_id) key BEFORE running anything, so a
+   * second concurrent caller with the same key can see "already claimed"
+   * instead of both racing into the side effect. Returns true if THIS call
+   * won the claim (the caller must now run its work and call
+   * `completeOrchestrationReceipt`); false if a row already existed —
+   * either someone else's call is still in flight, or it already completed
+   * (use `getOrchestrationReceipt` to tell which).
    */
-  putOrchestrationReceipt(scope: string, clientRequestId: string, result: unknown, createdAtMs: number): void {
+  claimOrchestrationReceipt(scope: string, clientRequestId: string, createdAtMs: number): boolean {
+    if (!this.ensureDbOpen()) return true // fail open: no DB means no idempotency bookkeeping is possible anyway
+    const result = this.db.prepare(`
+      INSERT INTO orchestration_receipts (scope, client_request_id, result, created_at)
+      VALUES (?, ?, NULL, ?)
+      ON CONFLICT(scope, client_request_id) DO NOTHING
+    `).run(scope, clientRequestId, createdAtMs)
+    return result.changes > 0
+  }
+
+  /** Fills in the result for a key this call already claimed via `claimOrchestrationReceipt`. */
+  completeOrchestrationReceipt(scope: string, clientRequestId: string, result: unknown): void {
     if (!this.ensureDbOpen()) return
     this.db.prepare(`
-      INSERT INTO orchestration_receipts (scope, client_request_id, result, created_at)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(scope, client_request_id) DO NOTHING
-    `).run(scope, clientRequestId, JSON.stringify(result ?? null), createdAtMs)
+      UPDATE orchestration_receipts SET result = ? WHERE scope = ? AND client_request_id = ?
+    `).run(JSON.stringify(result ?? null), scope, clientRequestId)
+  }
+
+  /** Releases a claim without ever completing it (the claimed work threw) — a retry with the same key gets to try again instead of waiting on a receipt that will never complete. */
+  releaseOrchestrationReceiptClaim(scope: string, clientRequestId: string): void {
+    if (!this.ensureDbOpen()) return
+    this.db.prepare(`
+      DELETE FROM orchestration_receipts WHERE scope = ? AND client_request_id = ? AND result IS NULL
+    `).run(scope, clientRequestId)
   }
 
   /** Deletes receipts older than `maxAgeMs` (default 7 days). Called opportunistically, not on a timer. */

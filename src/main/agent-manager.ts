@@ -73,7 +73,7 @@ import {
 import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
 import { isSystemGeneratedMessage } from '../shared/system-authority'
 import { TaskWakeupQueue, TaskWakeupStore, computeWakeupDeliveryId, type WakeupReason } from './orchestration/task-wakeups'
-import { classifyIdleEnd, statusForEndReason, describeEndReason } from './orchestration/run-finalization'
+import { classifyIdleEnd, statusForEndReason, describeEndReason, lastMeaningfulPart } from './orchestration/run-finalization'
 import { sendMobilePush } from './mobile-push'
 import { AgentPushEvents, type QuestionPart } from './agent-push-events'
 import { formatRetryDelay, isOverloadError, MAX_OVERLOAD_RETRY_ATTEMPTS, OverloadRetryTracker } from './overload-retry'
@@ -3267,14 +3267,19 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
               }))
           }
         }
-        // Track the very last part seen this turn (run-finalization's
+        // Track the last MEANINGFUL part seen this turn (run-finalization's
         // classifyIdleEnd reads this at idle time to tell a genuine
-        // completion — ends on a final assistant text message — apart from
-        // one that merely went idle after a tool call or with nothing at all).
-        if (batchMessages.length > 0) {
-          const lastMsg = batchMessages[batchMessages.length - 1]
-          currentSession.lastPartRole = lastMsg.role
-          currentSession.lastPartType = lastMsg.partType
+        // completion apart from one that merely went idle after a tool call
+        // or with nothing at all). Skip ephemeral/meta parts (OpenCode's
+        // trailing step-finish after every real answer, Claude's
+        // task_progress/system-status, ...) — the literal last part in a
+        // batch is often noise, not the actual end of the turn. If this
+        // whole batch was ephemeral, leave whatever an earlier batch tracked
+        // alone instead of clobbering it with noise.
+        const meaningful = lastMeaningfulPart(batchMessages)
+        if (meaningful) {
+          currentSession.lastPartRole = meaningful.role
+          currentSession.lastPartType = meaningful.partType
         }
         if (assistantTexts.length > 0) {
           // Replace (not append) and cap at 50 KB to prevent unbounded string growth
@@ -4032,6 +4037,19 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
   }
 
   /**
+   * Public wrapper around `updateTaskFromLocalAgent` for external callers
+   * (restart-repair.ts) that need to write a local status update through the
+   * normal path — the server-managed guard AND a renderer `task:updated`
+   * notification — instead of calling `DatabaseManager.updateTask` directly,
+   * which silently bypasses both.
+   */
+  applyLocalTaskUpdate(taskId: string, updates: Parameters<DatabaseManager['updateTask']>[1]): TaskRecord | undefined {
+    const updated = this.updateTaskFromLocalAgent(taskId, updates)
+    this.sendToRenderer('task:updated', { taskId, updates: updated ?? this.db.getTask(taskId) })
+    return updated
+  }
+
+  /**
    * Surfaces a terminal model/provider error on the task — set when polling
    * observes a session error that is NOT a transient/retryable one the
    * adapter already recovers from (see `isOverloadError`/overload retry) and
@@ -4056,7 +4074,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
    * ready_for_review/completed wake-up path — so a coordinator doesn't sit
    * waiting forever on a subtask that stopped for good without "completing".
    */
-  private markTaskModelError(taskId: string): void {
+  /**
+   * Public so restart-repair.ts (and similar external callers) can flag a
+   * task "needs attention" through the normal path — the server-managed
+   * guard, the renderer notification, and the parent wake-up below — instead
+   * of poking the DB status column directly.
+   */
+  markTaskModelError(taskId: string): void {
     const task = this.db.getTask(taskId)
     if (!task || isTaskClosed(task.status) || task.status === TaskStatus.ModelError) return
     this.updateTaskFromLocalAgent(taskId, { status: TaskStatus.ModelError })
@@ -4320,6 +4344,23 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         },
         send: async (parentTaskId, message) => {
           await this.sendByTaskId(parentTaskId, message)
+        },
+        // Past the retry cap (or the parent is gone/completed), leave a
+        // visible note instead of silently dropping the result forever.
+        onGivenUp: (parentTaskId, wakeups) => {
+          const summary = wakeups.map((w) => `- "${w.payload.childTitle}" (id: ${w.childTaskId}) → ${w.payload.childStatus}`).join('\n')
+          try {
+            this.db.upsertTranscriptParts(parentTaskId, [{
+              id: `wakeup-given-up-${parentTaskId}-${Date.now()}`,
+              role: 'system',
+              partType: 'text',
+              content: `${wakeups.length} subtask wake-up(s) could not be delivered and were given up:\n${summary}\nCheck these subtasks' current state directly.`,
+              receivedAt: Date.now()
+            }])
+            this.sendToRenderer('task:updated', { taskId: parentTaskId, updates: this.db.getTask(parentTaskId) })
+          } catch (err) {
+            console.error(`[AgentManager] Failed to record given-up wake-up note for ${parentTaskId}:`, err)
+          }
         }
       })
     }
@@ -4710,6 +4751,17 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
           taskId: session.taskId,
           messages: batchMessages
         })
+        // The final assistant text can arrive in the SAME tick the adapter
+        // reports idle, racing the live polling loop's own tracking (above) —
+        // without this, classifyIdleEnd reads whatever stale tool-call part
+        // the live loop saw just before replay ran, not the real final
+        // answer this replay just caught. Classify from what was actually
+        // replayed, not from before it.
+        const meaningful = lastMeaningfulPart(batchMessages)
+        if (meaningful) {
+          session.lastPartRole = meaningful.role
+          session.lastPartType = meaningful.partType
+        }
       }
       return batchMessages.length
     } catch (err) {
@@ -4962,6 +5014,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
           console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${session.taskId} ended (${endReason}):`, err)
         })
       }
+
+      // This task may itself be a PARENT with wake-ups that arrived while it
+      // was busy — deliver them now that it's idle, instead of waiting up to
+      // SWEEP_INTERVAL_MS for the periodic sweep to notice.
+      this.getTaskWakeupQueue().tryDeliver(session.taskId).catch((err) => {
+        console.error(`[AgentManager] Failed to deliver pending wake-ups to ${session.taskId} on idle:`, err)
+      })
     }
 
     this.sendToRenderer('agent:status', {

@@ -304,7 +304,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     CREATE TABLE IF NOT EXISTS orchestration_receipts (
       scope TEXT NOT NULL,
       client_request_id TEXT NOT NULL,
-      result TEXT NOT NULL,
+      result TEXT,
       created_at INTEGER NOT NULL,
       PRIMARY KEY (scope, client_request_id)
     );

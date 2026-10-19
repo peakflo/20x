@@ -9,7 +9,7 @@ function makeDb(): DatabaseManager {
     CREATE TABLE IF NOT EXISTS orchestration_receipts (
       scope TEXT NOT NULL,
       client_request_id TEXT NOT NULL,
-      result TEXT NOT NULL,
+      result TEXT,
       created_at INTEGER NOT NULL,
       PRIMARY KEY (scope, client_request_id)
     );
@@ -65,20 +65,78 @@ describe('withIdempotency', () => {
     expect(fn).toHaveBeenCalledTimes(2)
   })
 
-  it('resolves a race between two concurrent callers with the same key to one canonical result', async () => {
+  it('a genuinely concurrent duplicate call waits for the in-flight one and returns its result, never running fn itself', async () => {
+    let release!: () => void
     let calls = 0
     const fn = vi.fn(async () => {
       calls += 1
+      // Hold the first call open until the test explicitly releases it, so
+      // the second call unambiguously arrives while the first is still "in
+      // flight" (claimed, not yet completed) — not a sequential retry.
+      await new Promise<void>((resolve) => { release = resolve })
       return { call: calls }
     })
-    const [a, b] = await Promise.all([
-      withIdempotency(db, 'task:race', 'req-race', fn),
-      withIdempotency(db, 'task:race', 'req-race', fn)
-    ])
-    // Both callers raced past the "no receipt yet" check, so fn ran twice —
-    // but ON CONFLICT DO NOTHING means only one write landed, and both callers
-    // read back and return that SAME canonical result.
+
+    const first = withIdempotency(db, 'task:race', 'req-race', fn)
+    // Let the first call actually claim the key before the second starts.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const second = withIdempotency(db, 'task:race', 'req-race', fn)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    release()
+
+    const [a, b] = await Promise.all([first, second])
+    expect(calls).toBe(1) // fn ran exactly once — the second caller never raced into it
     expect(a).toEqual(b)
+    expect(a).toEqual({ call: 1 })
+  })
+
+  it('a concurrent duplicate throws a clear error instead of hanging if the in-flight call fails (claim released, nothing to return)', async () => {
+    let release!: (err: Error) => void
+    const fn = vi.fn(() => new Promise<never>((_resolve, reject) => { release = reject }))
+
+    const first = withIdempotency(db, 'task:race-fail', 'req-1', fn)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const second = withIdempotency(db, 'task:race-fail', 'req-1', fn)
+    release(new Error('boom'))
+
+    await expect(first).rejects.toThrow('boom')
+    await expect(second).rejects.toThrow(/did not complete successfully/)
+  })
+
+  it('fn throwing releases the claim — a retry with the same key runs fresh instead of being stuck forever', async () => {
+    const failingFn = vi.fn(async () => { throw new Error('transient failure') })
+    await expect(withIdempotency(db, 'task:retry', 'req-1', failingFn)).rejects.toThrow('transient failure')
+
+    const succeedingFn = vi.fn(async () => ({ ok: true }))
+    const result = await withIdempotency(db, 'task:retry', 'req-1', succeedingFn)
+
+    expect(result).toEqual({ ok: true })
+    expect(succeedingFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('shouldCache=false releases the claim instead of caching a "nothing happened" result, so a retry after fixing the cause runs fresh', async () => {
+    let attempt = 0
+    const fn = vi.fn(async () => {
+      attempt += 1
+      return attempt === 1 ? { success: false, reason: 'no_agent' } : { success: true, reason: 'started' }
+    })
+    const shouldCache = (r: { success: boolean }) => r.success
+
+    const first = await withIdempotency(db, 'task:soft-fail', 'req-1', fn, shouldCache)
+    expect(first).toEqual({ success: false, reason: 'no_agent' })
+
+    // Retried with the SAME client_request_id after whatever caused the
+    // no-op was fixed — must try again, not replay the cached no-op.
+    const second = await withIdempotency(db, 'task:soft-fail', 'req-1', fn, shouldCache)
+    expect(second).toEqual({ success: true, reason: 'started' })
+    expect(fn).toHaveBeenCalledTimes(2)
+  })
+
+  it('shouldCache=true (the default) still caches a genuine success exactly as before', async () => {
+    const fn = vi.fn(async () => ({ success: true }))
+    await withIdempotency(db, 'task:ok', 'req-1', fn)
+    await withIdempotency(db, 'task:ok', 'req-1', fn)
+    expect(fn).toHaveBeenCalledTimes(1)
   })
 })
 
