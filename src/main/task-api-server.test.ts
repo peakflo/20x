@@ -716,6 +716,56 @@ describe('/wait_for_subtasks', () => {
     expect(result.success).toBe(false)
     expect(result.timed_out).toBe(true)
   })
+
+  it('consumes a pending wake-up for a subtask it just observed as terminal, so it is not ALSO delivered as a redundant message later', async () => {
+    // This route is MCP-tool-only (never the renderer/mobile), so returning
+    // a terminal child here unambiguously means the calling coordinator
+    // just read that result directly.
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const subtask = db.createTask(makeTask({
+      title: 'Done subtask',
+      parent_task_id: parent.id,
+      status: TaskStatus.ReadyForReview
+    }))!
+
+    rawDb.exec(`
+      CREATE TABLE IF NOT EXISTS task_wakeups (
+        id TEXT PRIMARY KEY, parent_task_id TEXT NOT NULL, child_task_id TEXT NOT NULL,
+        reason TEXT NOT NULL, delivery_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL, delivered_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT, last_attempt_at INTEGER, given_up_at INTEGER
+      );
+    `)
+    rawDb.prepare(`
+      INSERT INTO task_wakeups (id, parent_task_id, child_task_id, reason, delivery_id, payload, created_at)
+      VALUES ('w1', ?, ?, 'child_ready', 'delivery-wait-test', '{}', ?)
+    `).run(parent.id, subtask.id, Date.now())
+
+    setTaskApiAgentController({
+      getTaskWakeupQueue: () => ({
+        markObserved: (parentTaskId: string, childTaskId: string) => {
+          const row = rawDb.prepare(
+            "SELECT id FROM task_wakeups WHERE parent_task_id = ? AND child_task_id = ? AND delivered_at IS NULL"
+          ).get(parentTaskId, childTaskId) as { id: string } | undefined
+          if (row) rawDb.prepare('UPDATE task_wakeups SET delivered_at = ? WHERE id = ?').run(Date.now(), row.id)
+          return row ? 1 : 0
+        }
+      }),
+      getChildQuestionService: () => ({ listForChild: () => [] })
+    } as any)
+
+    const port = await startTaskApiServer(db)
+    const response = await fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_task_id: parent.id, subtask_ids: [subtask.id], timeout_ms: 5_000 })
+    })
+    const result = await response.json() as Record<string, unknown>
+
+    expect(result.success).toBe(true)
+    const row = rawDb.prepare('SELECT delivered_at FROM task_wakeups WHERE id = ?').get('w1') as { delivered_at: number | null }
+    expect(row.delivered_at).not.toBeNull()
+  })
 })
 
 describe('children\'s questions go to the parent first (task API routes)', () => {
@@ -1471,5 +1521,48 @@ describe('client_request_id idempotency', () => {
     await post(port, '/send_message', { task_id: task.id, text: 'hello', client_request_id: 'msg-once' })
 
     expect(sendByTaskId).toHaveBeenCalledTimes(1)
+  })
+
+  it('the SAME client_request_id on the SAME task does not collide across different tools (start_task vs send_message)', async () => {
+    // Regression: scope used to be just `task:<id>`, shared across every
+    // tool — an agent reusing a short counter like "req-1" for both an
+    // start_task and a later send_message on the same task would otherwise
+    // get one tool's cached result back for the other.
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
+    const task = db.createTask(makeTask({ title: 'Shared id task' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+    const startTask = vi.fn(async () => ({ action: 'task_started' as const, sessionId: 's-1', startedTaskId: task.id, agentId: agent.id }))
+    const sendByTaskId = vi.fn(async () => ({ sessionId: 's-1' }))
+    setTaskApiAgentController({ startTask, sendByTaskId, findSessionByTaskId: vi.fn(() => undefined) } as any)
+    const port = await startTaskApiServer(db)
+
+    await post(port, '/start_task', { task_id: task.id, client_request_id: 'req-1' })
+    await post(port, '/send_message', { task_id: task.id, text: 'hi', client_request_id: 'req-1' })
+
+    expect(startTask).toHaveBeenCalledTimes(1)
+    expect(sendByTaskId).toHaveBeenCalledTimes(1)
+  })
+
+  it('/start_task: a "no_action" result is not cached — a retry after fixing the cause (assigning an agent) actually starts it', async () => {
+    const task = db.createTask(makeTask({ title: 'No agent yet' }))!
+    // No agent_id yet: AgentManager.startTask would report no_action.
+    const startTask = vi.fn(async (): Promise<{ action: string; startedTaskId: string; sessionId?: string; agentId?: string }> =>
+      ({ action: 'no_action', startedTaskId: task.id }))
+    setTaskApiAgentController({ startTask } as any)
+    const port = await startTaskApiServer(db)
+
+    const first = await post<{ success: boolean; action: string }>(port, '/start_task', { task_id: task.id, client_request_id: 'retry-after-fix' })
+    expect(first.success).toBe(false)
+    expect(first.action).toBe('no_action')
+
+    // Fix the actual cause, then retry with the SAME client_request_id.
+    const agent = db.createAgent(makeAgent({ name: 'Now Assigned' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+    startTask.mockResolvedValueOnce({ action: 'task_started' as const, sessionId: 's-2', startedTaskId: task.id, agentId: agent.id })
+
+    const second = await post<{ success: boolean; action: string }>(port, '/start_task', { task_id: task.id, client_request_id: 'retry-after-fix' })
+    expect(second.success).toBe(true)
+    expect(second.action).toBe('task_started')
+    expect(startTask).toHaveBeenCalledTimes(2)
   })
 })

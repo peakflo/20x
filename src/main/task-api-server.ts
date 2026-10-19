@@ -77,6 +77,7 @@ type TaskApiAgentController = Pick<
   | 'getSessionStatus'
   | 'getActiveSessionsForTask'
   | 'getChildQuestionService'
+  | 'getTaskWakeupQueue'
 >
 
 let agentController: TaskApiAgentController | null = null
@@ -529,9 +530,14 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (!params.title) return { error: 'Title is required' }
 
       pruneExpiredOrchestrationReceiptsOnce(db)
-      // No parent task to scope a retry to at the root — every root-level
-      // create_task call shares one 'global' idempotency bucket.
-      const idempotencyScope = params.parent_task_id ? `task:${String(params.parent_task_id)}` : 'global'
+      // The route name is part of the scope — without it, a client_request_id
+      // that happens to repeat across different tools (e.g. an agent reusing
+      // a short counter like "req-1") would return one tool's cached result
+      // for another. No parent task to scope a retry to at the root — every
+      // root-level create_task call shares one bucket (see idempotency.ts's
+      // documented gap: no caller identity exists at this layer for an
+      // unscoped/Mastermind call).
+      const idempotencyScope = params.parent_task_id ? `create_task:task:${String(params.parent_task_id)}` : 'create_task:global'
       return withIdempotency(db, idempotencyScope, params.client_request_id as string | undefined, () => {
       const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
       const now = new Date().toISOString()
@@ -1209,15 +1215,21 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
       pruneExpiredOrchestrationReceiptsOnce(db)
       const sendController = agentController
-      return withIdempotency(db, `task:${taskId}`, params.client_request_id as string | undefined, async () => {
+      return withIdempotency(db, `send_message:task:${taskId}`, params.client_request_id as string | undefined, async () => {
         // The message is attributed to the user, because that is who spoke it.
         // A transcript that credited the agent would misreport who asked.
         const result = await sendController.sendByTaskId(taskId, String(params.text))
         // The human answered directly (the same path a question's "answer"
         // button uses) — cancel the parent's pending item, if any, so it
         // isn't nudged about something already settled. A no-op when this
-        // task has no pending child question.
-        sendController.getChildQuestionService().cancelLatestPendingForChild(taskId, String(params.text))
+        // task has no pending child question. Best-effort: the send already
+        // succeeded, so a failure here must never turn a successful send
+        // into a reported error.
+        try {
+          sendController.getChildQuestionService().cancelLatestPendingForChild(taskId, String(params.text))
+        } catch (err) {
+          console.error(`[TaskAPI] Failed to cancel a pending child question for task ${taskId} after /send_message:`, err)
+        }
         return { success: true, task_id: taskId, session_id: result.sessionId ?? result.newSessionId ?? null }
       })
     }
@@ -1245,8 +1257,14 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         params.message ? String(params.message) : undefined
       )
       // The human answered directly — cancel the parent's pending item, if
-      // any (a no-op when this task has no pending child question).
-      agentController.getChildQuestionService().cancelLatestPendingForChild(taskId, approved ? 'approved' : 'rejected')
+      // any (a no-op when this task has no pending child question). The
+      // checkpoint was already answered, so a failure here must never turn
+      // that success into a reported error.
+      try {
+        agentController.getChildQuestionService().cancelLatestPendingForChild(taskId, approved ? 'approved' : 'rejected')
+      } catch (err) {
+        console.error(`[TaskAPI] Failed to cancel a pending child question for task ${taskId} after /respond_to_checkpoint:`, err)
+      }
       notifyRenderer?.('task:checkpointAnswered', { taskId, approved })
       return { success: true, task_id: taskId, approved }
     }
@@ -1319,19 +1337,29 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
       pruneExpiredOrchestrationReceiptsOnce(db)
       const startController = agentController
-      return withIdempotency(db, `task:${String(params.task_id)}`, params.client_request_id as string | undefined, async () => {
-        const result = await startController.startTask(String(params.task_id), {
-          preferSubtasks: params.prefer_subtasks !== false,
-          allowTriage: params.allow_triage !== false
-        })
+      return withIdempotency(
+        db,
+        `start_task:task:${String(params.task_id)}`,
+        params.client_request_id as string | undefined,
+        async () => {
+          const result = await startController.startTask(String(params.task_id), {
+            preferSubtasks: params.prefer_subtasks !== false,
+            allowTriage: params.allow_triage !== false
+          })
 
-        const startedTask = result.startedTaskId ? db.getTask(result.startedTaskId) : null
-        return {
-          success: result.action !== 'no_action',
-          ...result,
-          task: startedTask
-        }
-      })
+          const startedTask = result.startedTaskId ? db.getTask(result.startedTaskId) : null
+          return {
+            success: result.action !== 'no_action',
+            ...result,
+            task: startedTask
+          }
+        },
+        // A "no_action" (nothing to start — no agent, already running, etc.)
+        // is not a success to remember: caching it would make a retry AFTER
+        // fixing the actual cause (assigning an agent) keep replaying the
+        // stale no-op for the rest of the TTL instead of trying again.
+        (res) => res.success
+      )
     }
 
     case '/create_subtask': {
@@ -1343,7 +1371,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (!parentTask) return { error: 'Parent task not found' }
 
       pruneExpiredOrchestrationReceiptsOnce(db)
-      return withIdempotency(db, `task:${String(params.parent_task_id)}`, params.client_request_id as string | undefined, () => {
+      return withIdempotency(db, `create_subtask:task:${String(params.parent_task_id)}`, params.client_request_id as string | undefined, () => {
       const subtaskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
       const now = new Date().toISOString()
 
@@ -1471,6 +1499,21 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         return subtasks.some((task) => pendingQuestionsFor(String(task.id)).length > 0)
       }
 
+      // This route is MCP-tool-only (never called from the renderer, IPC, or
+      // mobile) — so returning a child's terminal state here unambiguously
+      // means the calling coordinator just observed it directly. Consume any
+      // pending wake-up for that exact child so it isn't ALSO delivered as a
+      // redundant message later, re-running a coordinator that already acted
+      // on the result it just read.
+      const markObserved = (subtasks: Record<string, unknown>[]): void => {
+        if (!agentController) return
+        for (const subtask of subtasks) {
+          if (terminalStatuses.includes(String(subtask.status))) {
+            agentController.getTaskWakeupQueue().markObserved(parentTaskId, String(subtask.id))
+          }
+        }
+      }
+
       // Check current DB state BEFORE subscribing, remembering the event
       // sequence as of that read — so an event landing in the gap between
       // this read and the subscribe below can never be missed (see
@@ -1478,6 +1521,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       let sinceSeq = subtaskEvents.currentSeq()
       let subtasks = readSubtasks()
       if (isDone(subtasks)) {
+        markObserved(subtasks)
         return { success: true, timed_out: false, return_when: returnWhen, terminal_statuses: terminalStatuses, subtasks: snapshot(subtasks) }
       }
 
@@ -1511,17 +1555,20 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
         subtasks = readSubtasks()
         if (isDone(subtasks)) {
+          markObserved(subtasks)
           return { success: true, timed_out: false, return_when: returnWhen, terminal_statuses: terminalStatuses, subtasks: snapshot(subtasks) }
         }
       }
 
+      const finalSubtasks = readSubtasks()
+      markObserved(finalSubtasks)
       return {
         success: false,
         timed_out: true,
         ...(cappedTimeout ? { capped_timeout: true, note: `timeout_ms was capped to ${MAX_TIMEOUT_MS}ms for this call — call wait_for_subtasks again to keep waiting.` } : {}),
         return_when: returnWhen,
         terminal_statuses: terminalStatuses,
-        subtasks: snapshot(readSubtasks())
+        subtasks: snapshot(finalSubtasks)
       }
     }
 

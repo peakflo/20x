@@ -20,13 +20,23 @@
  *   parents that were busy).
  * - A send is only considered "delivered" once the caller's `send` callback
  *   resolves; rows are marked delivered only then. A throwing `send`
- *   increments `attempts`/`last_error` on every row in the batch and leaves
- *   them pending — nothing is ever dropped.
- * - Respects the existing rules: no delivery to a completed parent, and
- *   (in the default "wait for all" mode) deferred while any sibling subtask
- *   is still `agent_working`/`triaging`. `deliveryMode: 'per-child'` is a
- *   reusable escape hatch for a future PR that wants a wake-up to go out the
- *   moment its own child finishes, without waiting on siblings.
+ *   increments `attempts`/`last_error` on every row in the batch, backs off
+ *   exponentially before the next retry, and — past `MAX_DELIVERY_ATTEMPTS`
+ *   — gives up permanently (`given_up_at`) with a visible transcript note on
+ *   the parent, rather than retrying forever.
+ * - Respects the existing rules: no delivery to a completed parent (rows for
+ *   a completed or deleted parent are retired immediately, not left pending
+ *   forever — so a later reopen never surfaces stale wake-ups), and (in the
+ *   default "wait for all" mode) deferred while any sibling subtask is still
+ *   `agent_working`/`triaging`. `deliveryMode: 'per-child'` is a reusable
+ *   escape hatch for a future PR that wants a wake-up to go out the moment
+ *   its own child finishes, without waiting on siblings.
+ * - `markObserved(parentTaskId, childTaskId)` consumes a pending wake-up
+ *   without sending anything, when the parent has already learned the same
+ *   result through another channel (today: `wait_for_subtasks` — the one
+ *   route that is unambiguously agent-coordination, never the renderer or
+ *   mobile UI, so consuming it here can't silently swallow a wake-up a human
+ *   was waiting to see delivered as a message).
  */
 
 import type Database from 'better-sqlite3'
@@ -52,6 +62,8 @@ export interface Wakeup {
   deliveredAt: number | null
   attempts: number
   lastError: string | null
+  lastAttemptAt: number | null
+  givenUpAt: number | null
 }
 
 interface WakeupRow {
@@ -65,6 +77,8 @@ interface WakeupRow {
   delivered_at: number | null
   attempts: number
   last_error: string | null
+  last_attempt_at: number | null
+  given_up_at: number | null
 }
 
 function fromRow(row: WakeupRow): Wakeup {
@@ -84,7 +98,9 @@ function fromRow(row: WakeupRow): Wakeup {
     createdAt: row.created_at,
     deliveredAt: row.delivered_at,
     attempts: row.attempts,
-    lastError: row.last_error
+    lastError: row.last_error,
+    lastAttemptAt: row.last_attempt_at,
+    givenUpAt: row.given_up_at
   }
 }
 
@@ -99,7 +115,9 @@ const SCHEMA_SQL = `
     created_at INTEGER NOT NULL,
     delivered_at INTEGER,
     attempts INTEGER NOT NULL DEFAULT 0,
-    last_error TEXT
+    last_error TEXT,
+    last_attempt_at INTEGER,
+    given_up_at INTEGER
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_task_wakeups_delivery_id ON task_wakeups(delivery_id);
   CREATE INDEX IF NOT EXISTS idx_task_wakeups_parent_pending ON task_wakeups(parent_task_id, delivered_at);
@@ -113,6 +131,9 @@ export interface EnqueueWakeupInput {
   payload: WakeupPayload
 }
 
+/** A row counts as "pending" only while neither delivered NOR given up — a permanently-failed row must stop showing up for retry. */
+const PENDING_WHERE = 'delivered_at IS NULL AND given_up_at IS NULL'
+
 export class TaskWakeupStore {
   constructor(private readonly db: Database.Database) {
     this.db.exec(SCHEMA_SQL)
@@ -124,8 +145,8 @@ export class TaskWakeupStore {
     try {
       this.db
         .prepare(
-          `INSERT INTO task_wakeups (id, parent_task_id, child_task_id, reason, delivery_id, payload, created_at, delivered_at, attempts, last_error)
-           VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL)`
+          `INSERT INTO task_wakeups (id, parent_task_id, child_task_id, reason, delivery_id, payload, created_at, delivered_at, attempts, last_error, last_attempt_at, given_up_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL, NULL, NULL)`
         )
         .run(id, input.parentTaskId, input.childTaskId, input.reason, input.deliveryId, JSON.stringify(input.payload), nowMs)
     } catch (err) {
@@ -144,14 +165,14 @@ export class TaskWakeupStore {
   listPending(parentTaskId: string): Wakeup[] {
     return (
       this.db
-        .prepare('SELECT * FROM task_wakeups WHERE parent_task_id = ? AND delivered_at IS NULL ORDER BY created_at')
+        .prepare(`SELECT * FROM task_wakeups WHERE parent_task_id = ? AND ${PENDING_WHERE} ORDER BY created_at`)
         .all(parentTaskId) as WakeupRow[]
     ).map(fromRow)
   }
 
-  /** Distinct parent task ids with at least one undelivered wake-up. */
+  /** Distinct parent task ids with at least one still-pending (not delivered, not given up) wake-up. */
   listParentsWithPending(): string[] {
-    return (this.db.prepare('SELECT DISTINCT parent_task_id FROM task_wakeups WHERE delivered_at IS NULL').all() as Array<{
+    return (this.db.prepare(`SELECT DISTINCT parent_task_id FROM task_wakeups WHERE ${PENDING_WHERE}`).all() as Array<{
       parent_task_id: string
     }>).map((r) => r.parent_task_id)
   }
@@ -165,13 +186,33 @@ export class TaskWakeupStore {
     tx(ids)
   }
 
-  recordFailure(ids: string[], error: string): void {
+  recordFailure(ids: string[], error: string, attemptedAtMs: number): void {
     if (ids.length === 0) return
-    const stmt = this.db.prepare('UPDATE task_wakeups SET attempts = attempts + 1, last_error = ? WHERE id = ?')
+    const stmt = this.db.prepare('UPDATE task_wakeups SET attempts = attempts + 1, last_error = ?, last_attempt_at = ? WHERE id = ?')
     const tx = this.db.transaction((rows: string[]) => {
-      for (const id of rows) stmt.run(error, id)
+      for (const id of rows) stmt.run(error, attemptedAtMs, id)
     })
     tx(ids)
+  }
+
+  /** Permanently stops retrying these rows (past the attempt cap, or the parent is gone/completed) — never "delivered", but no longer "pending" either. */
+  giveUp(ids: string[], givenUpAtMs: number): void {
+    if (ids.length === 0) return
+    const stmt = this.db.prepare('UPDATE task_wakeups SET given_up_at = ? WHERE id = ?')
+    const tx = this.db.transaction((rows: string[]) => {
+      for (const id of rows) stmt.run(givenUpAtMs, id)
+    })
+    tx(ids)
+  }
+
+  /** Marks every pending wake-up for (parentTaskId, childTaskId) delivered WITHOUT sending anything — the parent already observed this child's result through another channel. */
+  markObserved(parentTaskId: string, childTaskId: string, observedAtMs: number): number {
+    const rows = this.db
+      .prepare(`SELECT id FROM task_wakeups WHERE parent_task_id = ? AND child_task_id = ? AND ${PENDING_WHERE}`)
+      .all(parentTaskId, childTaskId) as Array<{ id: string }>
+    if (rows.length === 0) return 0
+    this.markDelivered(rows.map((r) => r.id), observedAtMs)
+    return rows.length
   }
 
   /** Drops delivered rows older than `olderThanMs` ago, so the table doesn't grow forever. */
@@ -179,22 +220,6 @@ export class TaskWakeupStore {
     const result = this.db
       .prepare('DELETE FROM task_wakeups WHERE delivered_at IS NOT NULL AND delivered_at < ?')
       .run(nowMs - olderThanMs)
-    return result.changes
-  }
-
-  /**
-   * Drops still-undelivered rows for one child→parent transition. Used when
-   * the thing the wake-up was about is resolved by another path before the
-   * parent ever saw it (e.g. a human answered a child's question directly) —
-   * so the parent isn't nudged about something that's already settled.
-   * No-op (and harmless) once the row has been delivered.
-   */
-  cancelPending(parentTaskId: string, childTaskId: string, reason: WakeupReason): number {
-    const result = this.db
-      .prepare(
-        `DELETE FROM task_wakeups WHERE parent_task_id = ? AND child_task_id = ? AND reason = ? AND delivered_at IS NULL`
-      )
-      .run(parentTaskId, childTaskId, reason)
     return result.changes
   }
 }
@@ -220,12 +245,19 @@ export interface TaskWakeupDeps {
   getDeliveryContext: (parentTaskId: string) => ParentDeliveryContext
   /** Sends the combined message to the parent's task session. Throw to signal a failed send. */
   send: (parentTaskId: string, message: string) => Promise<void>
+  /** Called once a batch of rows has exhausted its retry budget — give the parent a visible note instead of silently dropping them. Never throws into the caller. */
+  onGivenUp?: (parentTaskId: string, wakeups: Wakeup[]) => void
   mode?: WakeupDeliveryMode
   now?: () => number
 }
 
 const SWEEP_INTERVAL_MS = 30 * 1000
 const DELIVERED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+const PRUNE_MIN_INTERVAL_MS = 60 * 60 * 1000
+/** Past this many failed attempts, a wake-up gives up instead of retrying forever. */
+const MAX_DELIVERY_ATTEMPTS = 5
+/** Exponential backoff off the sweep cadence, capped at 30 minutes between retries. */
+const MAX_BACKOFF_MS = 30 * 60 * 1000
 
 /**
  * Builds a deterministic delivery id for one child→parent transition.
@@ -236,9 +268,14 @@ export function computeWakeupDeliveryId(parentTaskId: string, childTaskId: strin
   return computeDeliveryId(`${parentTaskId}:${childTaskId}:${reason}`, statusEnteredAt)
 }
 
+function backoffMs(attempts: number): number {
+  return Math.min(SWEEP_INTERVAL_MS * 2 ** attempts, MAX_BACKOFF_MS)
+}
+
 export class TaskWakeupQueue {
   private timer: ReturnType<typeof setInterval> | null = null
   private sweeping = false
+  private lastPruneAtMs = 0
   private readonly now: () => number
   private readonly mode: WakeupDeliveryMode
   /** In-flight delivery attempts, so a sweep tick can't race a just-enqueued immediate attempt for the same parent. */
@@ -268,6 +305,7 @@ export class TaskWakeupQueue {
    * One sweep pass: attempts delivery for every parent with at least one
    * pending wake-up. Safe to call directly (tests, startup) or on a timer —
    * `tryDeliver` is itself a no-op whenever the parent can't take it yet.
+   * Also prunes long-delivered rows, throttled to once an hour of sweeps.
    */
   async sweep(): Promise<void> {
     if (this.sweeping) return
@@ -275,6 +313,11 @@ export class TaskWakeupQueue {
     try {
       for (const parentTaskId of this.deps.store.listParentsWithPending()) {
         await this.tryDeliver(parentTaskId)
+      }
+      const nowMs = this.now()
+      if (nowMs - this.lastPruneAtMs >= PRUNE_MIN_INTERVAL_MS) {
+        this.lastPruneAtMs = nowMs
+        this.pruneOldDelivered()
       }
     } finally {
       this.sweeping = false
@@ -290,9 +333,22 @@ export class TaskWakeupQueue {
   }
 
   /**
+   * Consumes a pending wake-up without sending anything, because the parent
+   * has already observed this child's result through another channel (see
+   * the module doc for why only `wait_for_subtasks` is a safe caller of
+   * this today).
+   */
+  markObserved(parentTaskId: string, childTaskId: string): number {
+    return this.deps.store.markObserved(parentTaskId, childTaskId, this.now())
+  }
+
+  /**
    * Attempts to deliver every pending wake-up for one parent as a single
    * combined message. No-ops (leaving rows pending) when the parent can't
-   * take it right now — nothing is ever dropped.
+   * take it right now — nothing is ever silently dropped while it's still
+   * retryable. Retires rows for a parent that no longer exists or already
+   * completed (it will never accept them, so leaving them pending forever,
+   * only to surface if the parent is later reopened, would be worse).
    */
   async tryDeliver(parentTaskId: string): Promise<void> {
     if (this.delivering.has(parentTaskId)) return
@@ -300,10 +356,13 @@ export class TaskWakeupQueue {
     if (pending.length === 0) return
 
     const ctx = this.deps.getDeliveryContext(parentTaskId)
-    if (!ctx.exists || ctx.completed) return
+    if (!ctx.exists || ctx.completed) {
+      this.giveUp(parentTaskId, pending, ctx.exists ? 'the parent task is already completed' : 'the parent task no longer exists')
+      return
+    }
     if (ctx.sessionBusy) return
 
-    let deliverable = pending
+    let batchEligible = pending
     if (this.mode === 'wait-for-all') {
       const stillWorking = ctx.subtasks.some((s) => s.status === 'agent_working' || s.status === 'triaging')
       if (stillWorking) {
@@ -311,9 +370,16 @@ export class TaskWakeupQueue {
         // human on its own timeout — so it must not wait behind siblings
         // that are still working. Every other reason keeps batching until
         // the whole cohort is done.
-        deliverable = pending.filter((w) => w.reason === 'child_question')
+        batchEligible = pending.filter((w) => w.reason === 'child_question')
       }
     }
+
+    // Exponential backoff: a row that failed recently waits its own window
+    // before the next retry, instead of hammering a send that just failed.
+    const nowMs = this.now()
+    const deliverable = batchEligible.filter(
+      (w) => w.attempts === 0 || w.lastAttemptAt === null || nowMs - w.lastAttemptAt >= backoffMs(w.attempts)
+    )
     if (deliverable.length === 0) return
 
     this.delivering.add(parentTaskId)
@@ -324,11 +390,27 @@ export class TaskWakeupQueue {
         this.deps.store.markDelivered(deliverable.map((w) => w.id), this.now())
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err)
-        this.deps.store.recordFailure(deliverable.map((w) => w.id), errorMessage)
+        const attemptAtMs = this.now()
+        this.deps.store.recordFailure(deliverable.map((w) => w.id), errorMessage, attemptAtMs)
         console.error(`[TaskWakeupQueue] Failed to deliver ${deliverable.length} wake-up(s) to parent ${parentTaskId}:`, err)
+
+        const exhausted = deliverable.filter((w) => w.attempts + 1 >= MAX_DELIVERY_ATTEMPTS)
+        if (exhausted.length > 0) {
+          this.giveUp(parentTaskId, exhausted, `delivery failed ${MAX_DELIVERY_ATTEMPTS} times: ${errorMessage}`)
+        }
       }
     } finally {
       this.delivering.delete(parentTaskId)
+    }
+  }
+
+  private giveUp(parentTaskId: string, wakeups: Wakeup[], reason: string): void {
+    this.deps.store.giveUp(wakeups.map((w) => w.id), this.now())
+    console.warn(`[TaskWakeupQueue] Giving up on ${wakeups.length} wake-up(s) for parent ${parentTaskId}: ${reason}`)
+    try {
+      this.deps.onGivenUp?.(parentTaskId, wakeups)
+    } catch (err) {
+      console.error(`[TaskWakeupQueue] onGivenUp callback threw for parent ${parentTaskId}:`, err)
     }
   }
 
@@ -364,13 +446,8 @@ export class TaskWakeupQueue {
     )
   }
 
-  /** Drops delivered rows older than 7 days. Safe to call on a timer or on startup. */
+  /** Drops delivered rows older than 7 days. Safe to call on a timer or on startup. Called automatically from `sweep()`, throttled to once an hour. */
   pruneOldDelivered(): number {
     return this.deps.store.pruneDelivered(this.now(), DELIVERED_RETENTION_MS)
-  }
-
-  /** Drops a still-undelivered wake-up for one child→parent transition — see `TaskWakeupStore.cancelPending`. */
-  cancelPending(parentTaskId: string, childTaskId: string, reason: WakeupReason): number {
-    return this.deps.store.cancelPending(parentTaskId, childTaskId, reason)
   }
 }

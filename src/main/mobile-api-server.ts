@@ -1142,8 +1142,16 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     agent.noteUserTaskActivity(taskId, sessionId)
     const result = await agent.sendMessage(sessionId, message, taskId, aid, attachments)
     // The human answered directly — cancel the parent's pending item, if any
-    // (a no-op when this task has no pending child question).
-    if (taskId) agent.getChildQuestionService().cancelLatestPendingForChild(taskId, message)
+    // (a no-op when this task has no pending child question). Best-effort:
+    // the send already succeeded, so a failure here must never turn it into
+    // a reported error.
+    if (taskId) {
+      try {
+        agent.getChildQuestionService().cancelLatestPendingForChild(taskId, message)
+      } catch (err) {
+        console.error(`[MobileAPI] Failed to cancel a pending child question for task ${taskId} after send:`, err)
+      }
+    }
     return { success: true, ...result }
   }
 
@@ -1160,7 +1168,13 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     if (typeof approved !== 'boolean') throw Object.assign(new Error('approved (boolean) is required'), { status: 400 })
     const taskId = agent.getSessionStatus(sessionId)?.taskId
     await agent.respondToPermission(sessionId, approved, message, undefined, responseType, requestId)
-    if (taskId) agent.getChildQuestionService().cancelLatestPendingForChild(taskId, approved ? 'approved' : 'rejected')
+    if (taskId) {
+      try {
+        agent.getChildQuestionService().cancelLatestPendingForChild(taskId, approved ? 'approved' : 'rejected')
+      } catch (err) {
+        console.error(`[MobileAPI] Failed to cancel a pending child question for task ${taskId} after approve:`, err)
+      }
+    }
     return { success: true }
   }
 

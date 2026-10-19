@@ -668,8 +668,13 @@ export function registerIpcHandlers(
       const result = await agentManager.sendByTaskId(taskId, message, attachments)
       // The human answered directly (the same path a question's "answer"
       // button uses) — cancel the parent's pending item, if any. A no-op
-      // when this task has no pending child question.
-      agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, message)
+      // when this task has no pending child question. Best-effort: the send
+      // already succeeded, so a failure here must never turn it into an error.
+      try {
+        agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, message)
+      } catch (err) {
+        console.error(`[IPC] Failed to cancel a pending child question for task ${taskId} after sendByTaskId:`, err)
+      }
       return { success: true, ...result }
     }
   )
@@ -679,7 +684,13 @@ export function registerIpcHandlers(
     async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
       agentManager.noteUserTaskActivity(taskId, sessionId)
       const result = await agentManager.sendMessage(sessionId, message, taskId, agentId, attachments)
-      if (taskId) agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, message)
+      if (taskId) {
+        try {
+          agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, message)
+        } catch (err) {
+          console.error(`[IPC] Failed to cancel a pending child question for task ${taskId} after send:`, err)
+        }
+      }
       return { success: true, ...result }
     }
   )
@@ -688,7 +699,13 @@ export function registerIpcHandlers(
     const taskId = agentManager.getSessionStatus(sessionId)?.taskId
     await agentManager.respondToPermission(sessionId, approved, message, undefined, responseType, requestId)
     // The human answered directly — cancel the parent's pending item, if any.
-    if (taskId) agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, approved ? 'approved' : 'rejected')
+    if (taskId) {
+      try {
+        agentManager.getChildQuestionService().cancelLatestPendingForChild(taskId, approved ? 'approved' : 'rejected')
+      } catch (err) {
+        console.error(`[IPC] Failed to cancel a pending child question for task ${taskId} after approve:`, err)
+      }
+    }
     return { success: true }
   })
 
