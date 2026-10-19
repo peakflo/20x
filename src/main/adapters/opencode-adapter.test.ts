@@ -70,9 +70,9 @@ describe('OpencodeAdapter', () => {
           agentId: 'agent-1',
           taskId: 'task-1',
           workspaceDir,
-          secretEnvVars: {
-            API_KEY: 'secret-value'
-          }
+          secretBrokerPort: 5555,
+          secretSessionToken: 'session-token-abc',
+          secretLoaderPath: '/fake/secret-loader.sh'
         })
 
         const pluginPaths = (adapter as any).pluginFilePaths as string[]
@@ -83,7 +83,9 @@ describe('OpencodeAdapter', () => {
         expect(pluginPaths.some(path => path.endsWith('20x-secret-injector.js'))).toBe(true)
         expect(pluginPaths.every(path => path.includes(`${join('.opencode', '.20x-plugins')}`))).toBe(true)
         expect(pluginPaths.every(path => !path.includes(`${join('.opencode', 'plugins')}`))).toBe(true)
-        expect(supportPaths.some(path => path.endsWith('.20x-secrets'))).toBe(true)
+        // No plaintext secrets file is written anywhere — the broker+loader
+        // delivers values at exec time, inside the one command's own subshell.
+        expect(supportPaths.some(path => path.endsWith('.20x-secrets'))).toBe(false)
         expect(supportPaths.some(path => path.endsWith('.20x-tilldone-state.json'))).toBe(true)
         expect(supportPaths.some(path => path.endsWith('.20x-tilldone-config.json'))).toBe(true)
 
@@ -124,8 +126,15 @@ describe('OpencodeAdapter', () => {
 
         const secretPluginPath = pluginPaths.find(path => path.endsWith('20x-secret-injector.js'))!
         const secretPluginCode = readFileSync(secretPluginPath, 'utf-8')
-        expect(secretPluginCode).toContain('input.tool === "bash"')
-        expect(secretPluginCode).toContain('readFileSync(SECRETS_PATH, "utf-8").trim()')
+        expect(secretPluginCode).toContain('input.tool !== "bash"')
+        // The loader path/port/token (not a user secret) are embedded as
+        // literals — no readFileSync of a plaintext secrets file anymore,
+        // and no literal `export KEY=` line (those only ever exist inside
+        // the loader-invoked subshell, never in this plugin's own text).
+        expect(secretPluginCode).toContain(JSON.stringify('/fake/secret-loader.sh'))
+        expect(secretPluginCode).toContain(JSON.stringify('session-token-abc'))
+        expect(secretPluginCode).not.toContain('readFileSync')
+        expect(secretPluginCode).not.toMatch(/export\s+\w+=/)
       } finally {
         rmSync(workspaceDir, { recursive: true, force: true })
       }
@@ -146,7 +155,9 @@ describe('OpencodeAdapter', () => {
         const pluginPaths = (adapter as any).pluginFilePaths as string[]
         const supportPaths = (adapter as any).runtimeSupportFilePaths as string[]
 
-        expect(pluginPaths).toEqual([])
+        // The secret-injector plugin (guard-only here — no secrets
+        // configured) is always written, independent of tillDone.
+        expect(pluginPaths).toEqual([join(workspaceDir, '.opencode', '.20x-plugins', '20x-secret-injector.js')])
         expect(supportPaths).toEqual([])
         expect(existsSync(join(workspaceDir, '.opencode', 'plugins', '20x-tilldone.js'))).toBe(false)
         expect(existsSync(join(workspaceDir, '.opencode', '.20x-plugins', '20x-tilldone.js'))).toBe(false)
@@ -180,7 +191,7 @@ describe('OpencodeAdapter', () => {
 
         expect(existsSync(stalePluginPath)).toBe(false)
         expect(existsSync(join(workspaceDir, '.opencode', '.20x-plugins', '20x-tilldone.js'))).toBe(false)
-        expect((adapter as any).pluginFilePaths).toEqual([])
+        expect((adapter as any).pluginFilePaths).toEqual([join(workspaceDir, '.opencode', '.20x-plugins', '20x-secret-injector.js')])
       } finally {
         rmSync(workspaceDir, { recursive: true, force: true })
       }
@@ -258,9 +269,9 @@ describe('OpencodeAdapter', () => {
           agentId: 'agent-1',
           taskId: 'task-1',
           workspaceDir,
-          secretEnvVars: {
-            API_KEY: 'secret-value'
-          }
+          secretBrokerPort: 5555,
+          secretSessionToken: 'session-token-abc',
+          secretLoaderPath: '/fake/secret-loader.sh'
         })
 
         const generatedPaths = [

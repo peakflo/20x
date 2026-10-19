@@ -32,6 +32,8 @@ import {
 import { buildHarnessBaseEnv, reAddAmbientCredentials, applyShellCredentialsOptIn, type ScrubberLike } from './harness-env'
 import { buildSecretEntriesFromSessionConfig } from '../secret-entries'
 import { SecretScrubber } from '../secret-scrubber'
+import { shellQuote } from '../secret-broker'
+import { checkSecretDumpGuard, checkLoaderReadGuard } from '../secret-guard'
 
 type ClaudeSDK = typeof import('@anthropic-ai/claude-agent-sdk')
 type Query = import('@anthropic-ai/claude-agent-sdk').Query
@@ -491,17 +493,34 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   }
 
   /**
-   * Build the PreToolUse hook for Bash calls. Two independent jobs, applied
-   * in this order, only to the agent's own original command text:
+   * One PreToolUse/Bash hook doing three independent jobs, in this order, on
+   * the agent's own original command text (never on anything this hook
+   * itself produces):
    *
-   * 1. Secret injection — prepends `export KEY='value'` lines (PR B replaces
-   *    this with a broker+loader call so no literal value sits in the
-   *    command text at all; kept as direct exports here since this is the
-   *    first PR and nothing downstream reads config.secretEnvVars yet).
+   * 1. Second-line-of-defence guard (secret-guard.ts) — denies the command
+   *    outright if it looks like an obvious secret/env dump (`env`,
+   *    `printenv`, bare `set`, `export -p`, `declare -p`/`-x`,
+   *    reading /proc/PID/environ, `ps e`/`eww`/`-E`, reading the loader's own
+   *    source, or `echo`/`printf` of a known secret var name). This is a
+   *    backstop, not the guarantee — fix 1 (scrubbing) and the broker+loader
+   *    below are.
    * 2. wrapCommandForScrubbableFailure (above) — applied whenever this
    *    session has ANYTHING for buildScrubHooks to scrub, independent of
-   *    whether secretEnvVars is set (a provider API key or MCP token can
-   *    leak through a failing command too).
+   *    whether this agent has broker secrets (a provider API key or MCP
+   *    token can leak through a failing command too).
+   * 3. Broker+loader injection — prepends `eval "$(<loader> <port> <token>)"`.
+   *    The loader fetches this session's secrets from the local broker and
+   *    the `eval` applies them inside the one subshell running THIS command
+   *    — they never touch the agent process's own env, never get written to
+   *    a file, and never appear as a literal value anywhere in `command`
+   *    (the transcript shows the loader invocation — a path, a port, and the
+   *    broker's own short-lived session token, none of which is a user
+   *    secret — never a secret value).
+   *
+   * Registered even when there is no broker session for this agent (no
+   * secrets configured) — the guard still applies, since even a secret-free
+   * agent's env can carry things worth not dumping (e.g. ANTHROPIC_API_KEY
+   * for an api_key-auth session).
    *
    * `fallbackScrubber` is only the snapshot taken when this hook was built
    * (process start). The hook body below resolves `config.getLiveScrubber?.()`
@@ -512,37 +531,38 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * `fallbackScrubber` still matters for sessions with no live getter at all
    * (tests, or a harness invocation outside agent-manager's session model).
    */
-  private buildSecretHooks(config: SessionConfig, fallbackScrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
-    const secretEnvVars = config.secretEnvVars
-    const hasExports = !!secretEnvVars && Object.keys(secretEnvVars).length > 0
-    // Skip registering entirely only when there's nothing now AND no way
-    // for that to change later (no live getter to re-check against).
-    if (!hasExports && fallbackScrubber.isEmpty && !config.getLiveScrubber) {
-      return undefined
-    }
-
-    const exportLines = hasExports
-      ? Object.entries(secretEnvVars!)
-        .map(([k, v]) => `export ${k}='${v.replace(/'/g, "'\\''")}'`)
-        .join('\n')
-      : ''
-
-    if (hasExports) {
-      console.log(`[ClaudeCodeAdapter] Registering PreToolUse hook for secrets: [${Object.keys(secretEnvVars!).join(', ')}]`)
-    }
+  private buildSecretHooks(config: SessionConfig, fallbackScrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> {
+    const { secretBrokerPort, secretSessionToken, secretLoaderPath, secretsForScrubbing } = config
+    const hasLoader = !!(secretBrokerPort && secretSessionToken && secretLoaderPath)
+    const loaderInvocation = hasLoader
+      ? `eval "$(${shellQuote(secretLoaderPath!)} ${secretBrokerPort} ${shellQuote(secretSessionToken!)} 2>/dev/null)"`
+      : null
+    const knownSecretVarNames = Object.keys(secretsForScrubbing || {})
 
     const hook: HookCallback = async (input) => {
       const toolInput = ('tool_input' in input ? input.tool_input : undefined) as Record<string, unknown> | undefined
       if (!toolInput?.command) {
         return {}
       }
-
       const scrubber = config.getLiveScrubber?.() ?? fallbackScrubber
       const originalCommand = toolInput.command as string
+
+      const dumpGuard = checkSecretDumpGuard(originalCommand, knownSecretVarNames)
+      const guard = dumpGuard.blocked ? dumpGuard : checkLoaderReadGuard(originalCommand, secretLoaderPath)
+      if (guard.blocked) {
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse' as const,
+            permissionDecision: 'deny' as const,
+            permissionDecisionReason: guard.reason
+          }
+        }
+      }
+
       const wrapped = scrubber.isEmpty
         ? originalCommand
         : ClaudeCodeAdapter.wrapCommandForScrubbableFailure(originalCommand)
-      const modifiedCommand = hasExports ? `${exportLines}\n${wrapped}` : wrapped
+      const modifiedCommand = loaderInvocation ? `${loaderInvocation}\n${wrapped}` : wrapped
 
       if (modifiedCommand === originalCommand) return {}
 
@@ -1076,12 +1096,12 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     // even though the scrubber it closed over would have had something by
     // the time any hook actually fired.
     const env = this.buildClaudeEnvironment(config, config.getLiveScrubber?.() ?? scrubber)
+    // buildSecretHooks always returns a hooks object — the guard it installs
+    // (secret-guard.ts) applies even to a secret-free session.
     const secretHooks = this.buildSecretHooks(config, scrubber)
     const scrubHooks = this.buildScrubHooks(config, scrubber)
     const failureHooks = this.buildPostToolUseFailureHook(config, scrubber)
-    const hooks = secretHooks || scrubHooks || failureHooks
-      ? { ...secretHooks, ...scrubHooks, ...failureHooks }
-      : undefined
+    const hooks = { ...secretHooks, ...scrubHooks, ...failureHooks }
     const effort = config.reasoningEffort === 'minimal' ? undefined : config.reasoningEffort
     const options: Options = {
       cwd: config.workspaceDir,
@@ -1097,7 +1117,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       abortController,
       permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)
       allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
-      ...(hooks ? { hooks } : {}),
+      hooks,
     }
 
     // Determine session continuation mode

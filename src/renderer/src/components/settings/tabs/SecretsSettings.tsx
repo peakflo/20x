@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Edit3, Trash2, KeyRound } from 'lucide-react'
+import { Plus, Edit3, Trash2, KeyRound, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { SettingsSection } from '../SettingsSection'
 import { SecretFormDialog } from '../forms/SecretFormDialog'
@@ -12,13 +12,16 @@ interface SecretDialogState {
 }
 
 export function SecretsSettings() {
-  const { secrets, fetchSecrets, createSecret, updateSecret, deleteSecret } = useSecretStore()
+  const { secrets, error, encryptionAvailable, fetchSecrets, createSecret, updateSecret, deleteSecret } = useSecretStore()
   const [dialog, setDialog] = useState<SecretDialogState>({ open: false })
 
   useEffect(() => {
     fetchSecrets()
   }, [])
 
+  // The dialog always closes after a submit attempt; on failure (most
+  // commonly: safeStorage unavailable) the store's error banner above stays
+  // up afterward so the failure is still visible, not silently discarded.
   const handleCreate = async (data: CreateSecretDTO | UpdateSecretDTO) => {
     await createSecret(data as CreateSecretDTO)
     setDialog({ open: false })
@@ -43,6 +46,21 @@ export function SecretsSettings() {
         title="Secrets"
         description="Manage encrypted secrets that can be injected into agent environments"
       >
+        {encryptionAvailable === false && (
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <p>
+              Your OS keychain/keyring is unavailable, so 20x cannot encrypt secrets at rest right now.
+              New secrets can&apos;t be saved until it&apos;s available again.
+              {' '}On Linux this usually means installing or unlocking a keyring (gnome-keyring, kwallet, or kwallet6).
+            </p>
+          </div>
+        )}
+        {error && (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {error.replace(/^Error:\s*/, '')}
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
             {secrets.length} secret{secrets.length !== 1 ? 's' : ''} configured

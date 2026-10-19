@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { safeStorage } from 'electron'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask, makeAgent } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
@@ -13,6 +14,10 @@ let db: DatabaseManager
 
 beforeEach(() => {
   ;({ db } = createTestDb())
+  // These tests exercise createSecret, which refuses to save when
+  // safeStorage reports encryption unavailable (the default test mock) —
+  // see secret-storage-refusal.test.ts for that behavior itself.
+  vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true)
 })
 
 afterEach(() => {

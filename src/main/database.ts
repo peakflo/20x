@@ -76,8 +76,23 @@ export interface AgentConfigRecord {
    * credentials (rather than an explicit per-agent secret) needs this to
    * keep working. Every value passed this way is still registered with the
    * session's scrubber, so it's redacted if it's ever echoed.
+   *
+   * Distinct from `allow_secrets_in_env` below: this one is about the LOGIN
+   * SHELL's own ambient credentials; that one is about THIS AGENT's own
+   * configured secrets (`secret_ids`/`secretEnvVars`).
    */
   pass_shell_credentials?: boolean
+  /**
+   * Explicit opt-in for this agent's OWN configured secrets to sit in its
+   * harness's full process environment, for harnesses with no
+   * command-scoped exec hook to route them through the broker instead
+   * (Codex, ACP, Pi, Cursor — Claude Code and OpenCode always use the
+   * broker and ignore this). Off by default: an agent with secrets
+   * configured for one of these harnesses gets NONE of them in its env
+   * unless this is explicitly turned on, since there is no way to scrub
+   * what a harness with no exec hook does with them once they're there.
+   */
+  allow_secrets_in_env?: boolean
 }
 
 /** A stored harness instance. The implicit defaults ("Claude Code", "Codex") are not rows. */
@@ -1130,30 +1145,51 @@ function deserializeSecret(row: SecretRow): SecretRecord {
   }
 }
 
+/**
+ * Decrypts a stored secret/token blob, tolerating a value written while
+ * safeStorage was unavailable (the plaintext-UTF8 fallback — see
+ * createSecret/createOAuthToken) even if encryption is available now.
+ * `safeStorage.decryptString` throws on a buffer that was never actually
+ * encrypted; that failure IS the detection signal for "this is an old
+ * plaintext-fallback row", not an error to propagate.
+ */
+function safeDecryptBuffer(value: Buffer): string {
+  if (safeStorage.isEncryptionAvailable()) {
+    try {
+      return safeStorage.decryptString(value)
+    } catch {
+      // Fall through — not actually encrypted.
+    }
+  }
+  return value.toString('utf8')
+}
+
+/** True when `value` is a plaintext-fallback blob (not a real safeStorage-encrypted one), given encryption is available right now to tell the difference. */
+function isPlaintextFallback(value: Buffer): boolean {
+  if (!safeStorage.isEncryptionAvailable()) return false
+  try {
+    safeStorage.decryptString(value)
+    return false
+  } catch {
+    return true
+  }
+}
+
 function deserializeSecretWithValue(row: SecretRow): SecretRecordWithValue {
-  const decryptedValue = safeStorage.isEncryptionAvailable()
-    ? safeStorage.decryptString(row.value)
-    : row.value.toString('utf8')
   return {
     id: row.id,
     name: row.name,
     description: row.description,
     env_var_name: row.env_var_name,
-    value: decryptedValue,
+    value: safeDecryptBuffer(row.value),
     created_at: row.created_at,
     updated_at: row.updated_at
   }
 }
 
 function deserializeOAuthToken(row: OAuthTokenRow): OAuthTokenRecord {
-  // Decrypt tokens using safeStorage
-  const accessToken = safeStorage.isEncryptionAvailable()
-    ? safeStorage.decryptString(row.access_token)
-    : row.access_token.toString('utf8')
-
-  const refreshToken = row.refresh_token && safeStorage.isEncryptionAvailable()
-    ? safeStorage.decryptString(row.refresh_token)
-    : row.refresh_token?.toString('utf8') || null
+  const accessToken = safeDecryptBuffer(row.access_token)
+  const refreshToken = row.refresh_token ? safeDecryptBuffer(row.refresh_token) : null
 
   return {
     id: row.id,
@@ -4112,12 +4148,73 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return rows.map(deserializeSecretWithValue)
   }
 
+  /**
+   * Error thrown by createSecret/updateSecret when the OS can't provide
+   * encryption-at-rest for a NEW secret value. Thrown, not silently
+   * swallowed into a plaintext fallback — a secret's whole point is that it
+   * isn't stored in the clear. The renderer shows this message as-is; it
+   * names no secret value.
+   */
+  static readonly SECRET_ENCRYPTION_UNAVAILABLE_MESSAGE =
+    'This secret cannot be saved: the OS keychain/keyring is unavailable, so 20x cannot encrypt it at rest. ' +
+    (process.platform === 'linux'
+      ? 'On Linux, safeStorage needs a keyring (gnome-keyring, kwallet, or kwallet6) running and unlocked — install/unlock one and try again.'
+      : 'Try again after unlocking your OS keychain, or restart 20x.')
+
+  isSecretEncryptionAvailable(): boolean {
+    return safeStorage.isEncryptionAvailable()
+  }
+
+  /**
+   * Re-encrypts every secret/OAuth-token row still holding the
+   * plaintext-fallback bytes from a time safeStorage was unavailable (see
+   * createSecret/createOAuthToken). No-ops instantly when encryption still
+   * isn't available — there's nothing it could do. Safe to call on every
+   * app start; idempotent (a row already properly encrypted is left alone —
+   * isPlaintextFallback() checks each row's own bytes, not a stored flag).
+   * Returns counts only, never values.
+   */
+  reencryptPlaintextFallbackRows(): { secrets: number; oauthTokens: number } {
+    if (!safeStorage.isEncryptionAvailable()) return { secrets: 0, oauthTokens: 0 }
+
+    let secrets = 0
+    const secretRows = this.db.prepare('SELECT id, value FROM secrets').all() as Array<{ id: string; value: Buffer }>
+    for (const row of secretRows) {
+      if (!isPlaintextFallback(row.value)) continue
+      const reencrypted = safeStorage.encryptString(row.value.toString('utf8'))
+      this.db.prepare('UPDATE secrets SET value = ? WHERE id = ?').run(reencrypted, row.id)
+      secrets++
+    }
+
+    let oauthTokens = 0
+    const tokenRows = this.db.prepare('SELECT id, access_token, refresh_token FROM oauth_tokens').all() as Array<{
+      id: string; access_token: Buffer; refresh_token: Buffer | null
+    }>
+    for (const row of tokenRows) {
+      const accessIsPlaintext = isPlaintextFallback(row.access_token)
+      const refreshIsPlaintext = row.refresh_token ? isPlaintextFallback(row.refresh_token) : false
+      if (!accessIsPlaintext && !refreshIsPlaintext) continue
+      const newAccess = accessIsPlaintext ? safeStorage.encryptString(row.access_token.toString('utf8')) : row.access_token
+      const newRefresh = refreshIsPlaintext && row.refresh_token
+        ? safeStorage.encryptString(row.refresh_token.toString('utf8'))
+        : row.refresh_token
+      this.db.prepare('UPDATE oauth_tokens SET access_token = ?, refresh_token = ? WHERE id = ?').run(newAccess, newRefresh, row.id)
+      oauthTokens++
+    }
+
+    if (secrets > 0 || oauthTokens > 0) {
+      console.log(`[DatabaseManager] Re-encrypted ${secrets} secret(s) and ${oauthTokens} OAuth token row(s) that were stored as plaintext`)
+    }
+    return { secrets, oauthTokens }
+  }
+
   createSecret(data: CreateSecretData): SecretRecord | undefined {
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error(DatabaseManager.SECRET_ENCRYPTION_UNAVAILABLE_MESSAGE)
+    }
     const id = createId()
     const now = new Date().toISOString()
-    const encryptedValue = safeStorage.isEncryptionAvailable()
-      ? safeStorage.encryptString(data.value)
-      : Buffer.from(data.value, 'utf8')
+    const encryptedValue = safeStorage.encryptString(data.value)
     this.db.prepare(`
       INSERT INTO secrets (id, name, description, env_var_name, value, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -4128,6 +4225,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   updateSecret(id: string, data: UpdateSecretData): SecretRecord | undefined {
     const existing = this.getSecret(id)
     if (!existing) return undefined
+    if (data.value !== undefined && !safeStorage.isEncryptionAvailable()) {
+      throw new Error(DatabaseManager.SECRET_ENCRYPTION_UNAVAILABLE_MESSAGE)
+    }
 
     const setClauses: string[] = []
     const values: (string | Buffer)[] = []
@@ -4137,10 +4237,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (data.env_var_name !== undefined) { setClauses.push('env_var_name = ?'); values.push(data.env_var_name) }
     if (data.value !== undefined) {
       setClauses.push('value = ?')
-      const encryptedValue = safeStorage.isEncryptionAvailable()
-        ? safeStorage.encryptString(data.value)
-        : Buffer.from(data.value, 'utf8')
-      values.push(encryptedValue)
+      values.push(safeStorage.encryptString(data.value))
     }
 
     if (setClauses.length === 0) return existing
@@ -4189,6 +4286,15 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const id = createId()
     const now = new Date().toISOString()
     const expiresAt = new Date(Date.now() + data.expires_in * 1000).toISOString()
+
+    // OAuth tokens are written from automated connect/refresh flows, not a
+    // user-initiated save action — unlike createSecret/updateSecret, this
+    // isn't refused outright (that would silently break those flows with no
+    // UI to surface the failure to). Logged so the gap is visible instead of
+    // silent; refusing this too is tracked as a follow-up.
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn(`[DatabaseManager] safeStorage unavailable — OAuth token for provider "${data.provider}" stored as plaintext`)
+    }
 
     // Encrypt tokens before storing
     const encryptedAccessToken = safeStorage.isEncryptionAvailable()

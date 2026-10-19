@@ -657,6 +657,10 @@ export const skillApi = {
 }
 
 export const secretApi = {
+  encryptionAvailable: (): Promise<boolean> => {
+    return window.electronAPI.secrets.encryptionAvailable()
+  },
+
   getAll: (): Promise<Secret[]> => {
     return window.electronAPI.secrets.getAll()
   },

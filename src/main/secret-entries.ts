@@ -9,11 +9,14 @@
  * needing agent-manager to thread a pre-built scrubber through the adapter
  * interface).
  *
- * Covers: the agent's configured secrets (secretEnvVars), its provider API
- * keys (apiKeys), OAuth/MCP bearer tokens and local MCP server env baked
- * into mcpServers, and every known provider credential var present in this
- * process's own environment (see harness-env.ts) — a value this session's
- * harness may have been handed even though it didn't ask for it.
+ * Covers: the agent's configured secrets — whether delivered via full-process
+ * env (secretEnvVars, the Codex/ACP/Pi fallback) or via the broker+loader
+ * (secretsForScrubbing, Claude Code/OpenCode — never injected into any
+ * process env, but still needs to be scrubbed from command output) — its
+ * provider API keys (apiKeys), OAuth/MCP bearer tokens and local MCP server
+ * env baked into mcpServers, and every known provider credential var present
+ * in this process's own environment (see harness-env.ts) — a value this
+ * session's harness may have been handed even though it didn't ask for it.
  */
 
 import type { SessionConfig, McpServerConfig } from './adapters/coding-agent-adapter'
@@ -31,10 +34,15 @@ function bearerToken(headerValue: string | undefined): string | undefined {
   return match?.[1]
 }
 
-export function buildSecretEntriesFromSessionConfig(config: Pick<SessionConfig, 'secretEnvVars' | 'apiKeys' | 'mcpServers'>): SecretEntry[] {
+export function buildSecretEntriesFromSessionConfig(
+  config: Pick<SessionConfig, 'secretEnvVars' | 'secretsForScrubbing' | 'apiKeys' | 'mcpServers'>
+): SecretEntry[] {
   const entries: SecretEntry[] = []
 
   for (const [name, value] of Object.entries(config.secretEnvVars || {})) {
+    entries.push({ name, value })
+  }
+  for (const [name, value] of Object.entries(config.secretsForScrubbing || {})) {
     entries.push({ name, value })
   }
 

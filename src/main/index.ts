@@ -1040,6 +1040,14 @@ app.whenReady().then(async () => {
 
   db = new DatabaseManager()
   db.initialize()
+  // One-time, idempotent: re-encrypts any secret/OAuth-token row still
+  // holding plaintext-fallback bytes from a time safeStorage was
+  // unavailable. No-ops instantly when it's still unavailable now.
+  try {
+    db.reencryptPlaintextFallbackRows()
+  } catch (err) {
+    console.warn('[Main] Re-encrypting plaintext-fallback secret rows failed:', err)
+  }
   const savedBrand = db.getSetting('enterprise_brand_spaces')
   setSelectedCompanyBrand(savedBrand === 'true' ? true : savedBrand === 'false' ? false : null)
   onBrandSpacesChanged((enabled) => {
@@ -1333,11 +1341,12 @@ app.whenReady().then(async () => {
   // Build the application menu (includes "Check for Updates…")
   buildAppMenu()
 
-  // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)
+  // Start secret broker and write the shared loader script (awaited so the
+  // broker is ready before any sessions).
   try {
     const brokerPort = await startSecretBroker(db)
     console.log(`[Main] Secret broker started on port ${brokerPort}`)
-    writeSecretShellWrapper()
+    writeSecretLoaderScript()
   } catch (err) {
     console.error('[Main] Failed to start secret broker:', err)
   }

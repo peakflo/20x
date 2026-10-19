@@ -26,7 +26,7 @@ import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { buildTaskMcpUrl } from './task-mcp-endpoint'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { randomUUID } from 'crypto'
-import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
+import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretLoaderScript } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort, unregisterMcpProxyTargetByKey } from './mcp-auth-proxy'
 import { writeLocalMcpEnvWrapper, cleanupLocalMcpEnvFile } from './mcp-env-wrapper'
 import { SecretScrubber, NOOP_SCRUBBER, type SecretEntry } from './secret-scrubber'
@@ -2006,36 +2006,11 @@ export class AgentManager extends EventEmitter {
       getLiveScrubber: session ? () => session.scrubber : undefined
     }
 
-    // Attach secret broker info if agent session has an active secret token
-    if (session?.secretSessionToken) {
-      const brokerPort = getSecretBrokerPort()
-      if (brokerPort) {
-        config.secretBrokerPort = brokerPort
-        config.secretSessionToken = session.secretSessionToken
-        config.secretShellPath = writeSecretShellWrapper()
-      }
-    }
-
-    // Populate secret env vars and system prompt awareness
-    const secretIds = agent.config?.secret_ids
-    // secretIds checked for agent config
-    if (secretIds && secretIds.length > 0) {
-      const secretRecords = this.db.getSecretsByIds(secretIds)
-      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
-
-      // Attach decrypted values for injection (hooks or direct env)
-      if (secretsWithValues.length > 0) {
-        config.secretEnvVars = {}
-        for (const s of secretsWithValues) {
-          config.secretEnvVars[s.env_var_name] = s.value
-        }
-      }
-
-      // Append secret awareness to system prompt so the agent knows what's available
-      if (secretRecords.length > 0) {
-        config.systemPrompt = (config.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
-      }
-    }
+    // Attach secret delivery info if agent session has an active secret
+    // token. `session` was already looked up above (before
+    // buildMcpServersForAdapter) so its scrubber could be handed in there —
+    // reused here rather than looking it up a second time.
+    this.populateSecretDelivery(config, agent, session?.secretSessionToken)
 
     // Extend the live session's scrubber with anything new this rebuild
     // picked up (a secret added mid-session, a freshly rotated MCP token).
@@ -2211,6 +2186,81 @@ export class AgentManager extends EventEmitter {
       prompt += '\n'
     }
     return prompt
+  }
+
+  /** Harnesses whose adapter routes secrets through the broker+loader at exec time, scoped to one command — never placed in the agent's own process env. */
+  private static readonly BROKER_LOADER_PROVIDERS = new Set<string>([CodingAgentType.CLAUDE_CODE, CodingAgentType.OPENCODE])
+
+  /**
+   * Attaches secret delivery info to `config` for one agent/session, and the
+   * matching "Available Secrets" (or withheld-secrets) system-prompt note.
+   *
+   * - Claude Code / OpenCode: broker+loader only. secretBrokerPort/
+   *   secretSessionToken/secretLoaderPath are set so the adapter's hook/plugin
+   *   can fetch values at exec time, scoped to that one command's own shell
+   *   process. config.secretEnvVars is never populated for these — there is
+   *   no command-scoped delivery left that would need it.
+   * - Everything else (Codex, ACP, Pi, Cursor): no command-scoped exec hook
+   *   exists, so this is the documented fallback — full-process-env
+   *   injection via secretEnvVars, gated by the agent's own
+   *   `allow_secrets_in_env`. **Off by default** — re-reviewed and changed
+   *   from the original "defaults to true" behavior: a harness with no
+   *   command-scoped delivery hands a configured secret to every tool and
+   *   every subprocess it spawns, with nothing to scrub what any of them do
+   *   with it, so an agent that has never explicitly opted in should not
+   *   silently get that exposure. Set to true on the agent to receive its
+   *   secrets anyway.
+   */
+  private populateSecretDelivery(config: SessionConfig, agent: AgentRecord, secretToken: string | undefined): void {
+    const provider = getAgentProvider(agent)
+    const usesBrokerLoader = AgentManager.BROKER_LOADER_PROVIDERS.has(provider)
+
+    if (usesBrokerLoader && secretToken) {
+      const brokerPort = getSecretBrokerPort()
+      if (brokerPort) {
+        config.secretBrokerPort = brokerPort
+        config.secretSessionToken = secretToken
+        config.secretLoaderPath = writeSecretLoaderScript()
+      }
+    }
+
+    const secretIds = agent.config?.secret_ids
+    if (!secretIds || secretIds.length === 0) return
+    const secretRecords = this.db.getSecretsByIds(secretIds)
+    if (secretRecords.length === 0) return
+
+    if (usesBrokerLoader) {
+      // Never injected into any process env — carried only so this
+      // session's SecretScrubber knows these values (see secret-entries.ts).
+      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
+      if (secretsWithValues.length > 0) {
+        config.secretsForScrubbing = {}
+        for (const s of secretsWithValues) config.secretsForScrubbing[s.env_var_name] = s.value
+      }
+      config.systemPrompt = (config.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
+      return
+    }
+
+    // Off by default (re-reviewed: was `!== false`, i.e. on by default) —
+    // see the docstring above for why.
+    const allowed = agent.config?.allow_secrets_in_env === true
+    config.allowSecretsInEnv = allowed
+    if (!allowed) {
+      console.warn(`[AgentManager] Secrets withheld for agent ${agent.id}: ${provider} has no command-scoped delivery and allow_secrets_in_env is not explicitly true`)
+      config.systemPrompt = (config.systemPrompt || '') +
+        '\n\n## Secrets configured, but withheld\n\n' +
+        `This agent has secrets configured, but ${provider} has no way to scope them to a single command — they would sit in this session's entire process environment. ` +
+        'They are withheld for this session. Set allow_secrets_in_env to true on this agent to receive them anyway.\n'
+      return
+    }
+
+    const secretsWithValues = this.db.getSecretsWithValues(secretIds)
+    if (secretsWithValues.length > 0) {
+      config.secretEnvVars = {}
+      for (const s of secretsWithValues) config.secretEnvVars[s.env_var_name] = s.value
+    }
+    config.systemPrompt = (config.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords) +
+      `\n**Note:** ${provider} has no way to scope these to a single command — they are present in this session's entire process environment (every tool and subprocess it spawns, not just bash).\n`
   }
 
   /**
@@ -2728,32 +2778,9 @@ export class AgentManager extends EventEmitter {
       allowShellCredentials: agent.config?.pass_shell_credentials
     }
 
-    // Setup secret broker session if agent has secrets
+    // Setup secret delivery if agent has secrets
     const secretToken = this.setupSecretSession(agentId)
-    if (secretToken) {
-      const brokerPort = getSecretBrokerPort()
-      if (brokerPort) {
-        sessionConfig.secretBrokerPort = brokerPort
-        sessionConfig.secretSessionToken = secretToken
-        sessionConfig.secretShellPath = writeSecretShellWrapper()
-      }
-    }
-
-    // Populate secret env vars + system prompt awareness
-    const secretIds = agent.config?.secret_ids
-    if (secretIds && secretIds.length > 0) {
-      const secretRecords = this.db.getSecretsByIds(secretIds)
-      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
-      if (secretsWithValues.length > 0) {
-        sessionConfig.secretEnvVars = {}
-        for (const s of secretsWithValues) {
-          sessionConfig.secretEnvVars[s.env_var_name] = s.value
-        }
-      }
-      if (secretRecords.length > 0) {
-        sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
-      }
-    }
+    this.populateSecretDelivery(sessionConfig, agent, secretToken)
     await yieldEL()
 
     // Refresh the AI gateway virtual key before building the provider config
@@ -4119,32 +4146,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       allowShellCredentials: agent.config?.pass_shell_credentials
     }
 
-    // Setup secret broker session if agent has secrets
+    // Setup secret delivery if agent has secrets
     const secretToken = this.setupSecretSession(agentId)
-    if (secretToken) {
-      const brokerPort = getSecretBrokerPort()
-      if (brokerPort) {
-        sessionConfig.secretBrokerPort = brokerPort
-        sessionConfig.secretSessionToken = secretToken
-        sessionConfig.secretShellPath = writeSecretShellWrapper()
-      }
-    }
-
-    // Populate secret env vars + system prompt awareness
-    const secretIds = agent.config?.secret_ids
-    if (secretIds && secretIds.length > 0) {
-      const secretRecords = this.db.getSecretsByIds(secretIds)
-      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
-      if (secretsWithValues.length > 0) {
-        sessionConfig.secretEnvVars = {}
-        for (const s of secretsWithValues) {
-          sessionConfig.secretEnvVars[s.env_var_name] = s.value
-        }
-      }
-      if (secretRecords.length > 0) {
-        sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
-      }
-    }
+    this.populateSecretDelivery(sessionConfig, agent, secretToken)
     await yieldEL()
 
     // Initialize adapter
@@ -5152,6 +5156,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       // Release it through the adapter first: otherwise the agent CLI process and
       // its task-management MCP child stay alive with no handle left to stop them.
       await this.releaseAdapterSession(sessionId, 'triage_completed')
+      if (session.secretSessionToken) unregisterSecretSession(session.secretSessionToken)
       this.sessions.delete(sessionId)
       this.schedulePowerSaveBlockerUpdate()
       console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} reason=triage_completed`)
@@ -6914,6 +6919,7 @@ Important:
     // too, so the agent CLI process and its MCP stdio children stop instead of
     // running on untracked until the app quits.
     await this.releaseAdapterSession(sessionId, 'learn_from_session')
+    if (session.secretSessionToken) unregisterSecretSession(session.secretSessionToken)
     this.sessions.delete(sessionId)
     this.schedulePowerSaveBlockerUpdate()
     console.log(`[AgentManager] Learning complete for session ${sessionId}:`, result)

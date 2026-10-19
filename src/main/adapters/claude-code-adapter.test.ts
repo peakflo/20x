@@ -1609,8 +1609,13 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
     expect(options.hooks?.PostToolUse).toBeUndefined()
   })
 
-  it('keeps the existing PreToolUse secret-export hook alongside the new PostToolUse scrub hook', async () => {
-    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+  it('keeps the broker-loader PreToolUse hook alongside the new PostToolUse scrub hook', async () => {
+    const options = await sendAndCaptureOptions({
+      secretBrokerPort: 5555,
+      secretSessionToken: 'session-token-abc',
+      secretLoaderPath: '/fake/secret-loader.sh',
+      secretsForScrubbing: { MY_SECRET: SECRET_VALUE }
+    })
     expect(options.hooks?.PreToolUse?.[0]?.matcher).toBe('Bash')
     expect(options.hooks?.PostToolUse?.[0]?.hooks?.[0]).toBeTypeOf('function')
   })
@@ -1769,9 +1774,11 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
     expect(readdirSync('/tmp').some((f) => f.startsWith('.20x-cwd-'))).toBe(false)
   })
 
-  it('does not wrap the command when the session has nothing to scrub (no behavior change)', async () => {
+  it('does not wrap the command (no PreToolUse rewrite at all) when the session has nothing to scrub and no broker session', async () => {
     const options = await sendAndCaptureOptions({})
-    expect(options.hooks?.PreToolUse).toBeUndefined()
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    const passthrough = await preToolUse({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'echo hi' } })
+    expect(passthrough).toEqual({})
   })
 
   it('registers a PostToolUseFailure hook (best-effort — cannot rewrite output, only warns the model) when there is something to scrub', async () => {
@@ -1838,5 +1845,71 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
       expect(options.hooks?.PreToolUse).toBeUndefined()
       expect(options.hooks?.PostToolUseFailure).toBeUndefined()
     })
+  })
+
+  // buildSecretHooks ALWAYS registers the PreToolUse hook now (PR B) — the
+  // dump guard applies even to a secret-free session — but it should still
+  // be a true no-op passthrough for an ordinary command with nothing to
+  // wrap/rewrite/deny.
+  it('still registers the PreToolUse hook (guard-only) when there is no broker session — a secret-free agent still gets the dump guard', async () => {
+    const options = await sendAndCaptureOptions({})
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    expect(preToolUse).toBeDefined()
+
+    // No broker info, no scrubber entries → no rewrite for an ordinary command.
+    const passthrough = await preToolUse({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'echo hi' } })
+    expect(passthrough).toEqual({})
+
+    // The guard itself still applies even with no secrets configured.
+    const denied = await preToolUse({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'env' } })
+    expect(denied.hookSpecificOutput.permissionDecision).toBe('deny')
+  })
+
+  it('PreToolUse rewrites the command to a loader invocation — no secretEnvVars literal-export path remains', async () => {
+    const options = await sendAndCaptureOptions({
+      secretBrokerPort: 5555,
+      secretSessionToken: 'session-token-abc',
+      secretLoaderPath: '/fake/secret-loader.sh'
+    })
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    expect(preToolUse).toBeDefined()
+
+    const result = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' }
+    })
+    const rewritten = result.hookSpecificOutput.updatedInput.command as string
+    // The loader invocation (path, port, the broker's own short-lived
+    // session token) may appear — no literal `export KEY=` secret-value line.
+    expect(rewritten).toContain('/fake/secret-loader.sh')
+    expect(rewritten).toContain('5555')
+    expect(rewritten).toContain('session-token-abc')
+    expect(rewritten).not.toMatch(/export\s+\w+=/)
+    expect(rewritten).toContain('echo hi')
+  })
+
+  it('combines the loader invocation AND the exit-0 scrubbable-failure wrapping when both a broker session and scrubbable secrets exist', async () => {
+    const options = await sendAndCaptureOptions({
+      secretEnvVars: { MY_SECRET: SECRET_VALUE },
+      secretBrokerPort: 5555,
+      secretSessionToken: 'session-token-abc',
+      secretLoaderPath: '/fake/secret-loader.sh'
+    })
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    const result = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi; false' }
+    })
+    const rewritten = result.hookSpecificOutput.updatedInput.command as string
+    expect(rewritten).toContain('/fake/secret-loader.sh')
+    expect(rewritten).toContain('echo hi; false')
+    expect(rewritten).toContain('exit 0')
+    expect(rewritten).toMatch(/__20x_ec=\$\?/)
+    expect(rewritten).not.toMatch(/export\s+\w+=/)
+    // The loader invocation must come BEFORE the wrapped block so the
+    // broker-provided env is available to the command it wraps.
+    expect(rewritten.indexOf('/fake/secret-loader.sh')).toBeLessThan(rewritten.indexOf('echo hi; false'))
   })
 })

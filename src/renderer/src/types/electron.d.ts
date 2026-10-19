@@ -402,6 +402,7 @@ interface ElectronAPI {
     delete: (id: string) => Promise<boolean>
   }
   secrets: {
+    encryptionAvailable: () => Promise<boolean>
     getAll: () => Promise<Secret[]>
     get: (id: string) => Promise<Secret | undefined>
     create: (data: CreateSecretDTO) => Promise<Secret>

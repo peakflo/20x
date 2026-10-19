@@ -393,6 +393,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('skills:delete', id)
   },
   secrets: {
+    encryptionAvailable: (): Promise<boolean> => ipcRenderer.invoke('secrets:encryptionAvailable'),
     getAll: (): Promise<unknown[]> => ipcRenderer.invoke('secrets:getAll'),
     get: (id: string): Promise<unknown> => ipcRenderer.invoke('secrets:get', id),
     create: (data: Record<string, unknown>): Promise<unknown> =>
