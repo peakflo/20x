@@ -27,7 +27,7 @@ import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { buildTaskMcpUrl } from './task-mcp-endpoint'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { randomUUID } from 'crypto'
-import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretLoaderScript } from './secret-broker'
+import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretLoaderScript, writeSecretTokenFile, deleteSecretTokenFile } from './secret-broker'
 import { registerMcpProxyTarget, getMcpAuthProxyPort, unregisterMcpProxyTargetByKey } from './mcp-auth-proxy'
 import { writeLocalMcpEnvWrapper, cleanupLocalMcpEnvFile } from './mcp-env-wrapper'
 import { SecretScrubber, NOOP_SCRUBBER, type SecretEntry } from './secret-scrubber'
@@ -2216,6 +2216,9 @@ export class AgentManager extends EventEmitter {
         config.secretBrokerPort = brokerPort
         config.secretSessionToken = secretToken
         config.secretLoaderPath = writeSecretLoaderScript()
+        // The loader invocation embeds THIS path, never secretToken itself
+        // — see coding-agent-adapter.ts's SessionConfig docstrings.
+        config.secretTokenFilePath = writeSecretTokenFile(secretToken)
       }
     }
 
@@ -5215,7 +5218,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       // Release it through the adapter first: otherwise the agent CLI process and
       // its task-management MCP child stay alive with no handle left to stop them.
       await this.releaseAdapterSession(sessionId, 'triage_completed')
-      if (session.secretSessionToken) unregisterSecretSession(session.secretSessionToken)
+      if (session.secretSessionToken) {
+        unregisterSecretSession(session.secretSessionToken)
+        deleteSecretTokenFile(session.secretSessionToken)
+      }
       this.sessions.delete(sessionId)
       this.schedulePowerSaveBlockerUpdate()
       console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} reason=triage_completed`)
@@ -5518,6 +5524,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // Clean up secret broker session
     if (session.secretSessionToken) {
       unregisterSecretSession(session.secretSessionToken)
+      deleteSecretTokenFile(session.secretSessionToken)
       console.log(`[AgentManager] Unregistered secret session for ${sessionId}`)
     }
 
@@ -7034,7 +7041,10 @@ Important:
     // too, so the agent CLI process and its MCP stdio children stop instead of
     // running on untracked until the app quits.
     await this.releaseAdapterSession(sessionId, 'learn_from_session')
-    if (session.secretSessionToken) unregisterSecretSession(session.secretSessionToken)
+    if (session.secretSessionToken) {
+      unregisterSecretSession(session.secretSessionToken)
+      deleteSecretTokenFile(session.secretSessionToken)
+    }
     this.sessions.delete(sessionId)
     this.schedulePowerSaveBlockerUpdate()
     console.log(`[AgentManager] Learning complete for session ${sessionId}:`, result)

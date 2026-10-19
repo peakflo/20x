@@ -71,7 +71,7 @@ describe('OpencodeAdapter', () => {
           taskId: 'task-1',
           workspaceDir,
           secretBrokerPort: 5555,
-          secretSessionToken: 'session-token-abc',
+          secretTokenFilePath: '/fake/secret-tokens/session-token-abc.token',
           secretLoaderPath: '/fake/secret-loader.sh'
         })
 
@@ -127,12 +127,13 @@ describe('OpencodeAdapter', () => {
         const secretPluginPath = pluginPaths.find(path => path.endsWith('20x-secret-injector.js'))!
         const secretPluginCode = readFileSync(secretPluginPath, 'utf-8')
         expect(secretPluginCode).toContain('input.tool !== "bash"')
-        // The loader path/port/token (not a user secret) are embedded as
-        // literals — no readFileSync of a plaintext secrets file anymore,
-        // and no literal `export KEY=` line (those only ever exist inside
-        // the loader-invoked subshell, never in this plugin's own text).
+        // The loader path, port, and broker TOKEN FILE PATH (never the
+        // token value itself — P1, re-review) are embedded as literals —
+        // no readFileSync of a plaintext secrets file anymore, and no
+        // literal `export KEY=` line (those only ever exist inside the
+        // loader-invoked subshell, never in this plugin's own text).
         expect(secretPluginCode).toContain(JSON.stringify('/fake/secret-loader.sh'))
-        expect(secretPluginCode).toContain(JSON.stringify('session-token-abc'))
+        expect(secretPluginCode).toContain(JSON.stringify('/fake/secret-tokens/session-token-abc.token'))
         expect(secretPluginCode).not.toContain('readFileSync')
         expect(secretPluginCode).not.toMatch(/export\s+\w+=/)
       } finally {
@@ -270,7 +271,7 @@ describe('OpencodeAdapter', () => {
           taskId: 'task-1',
           workspaceDir,
           secretBrokerPort: 5555,
-          secretSessionToken: 'session-token-abc',
+          secretTokenFilePath: '/fake/secret-tokens/session-token-abc.token',
           secretLoaderPath: '/fake/secret-loader.sh'
         })
 

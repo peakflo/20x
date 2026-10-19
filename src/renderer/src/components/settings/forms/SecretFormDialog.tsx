@@ -10,7 +10,10 @@ interface SecretFormDialogProps {
   secret?: Secret
   open: boolean
   onClose: () => void
-  onSubmit: (data: CreateSecretDTO | UpdateSecretDTO) => void
+  // Re-review (P2): returns whether the submit actually succeeded, so the
+  // dialog can stay open (with the caller's error banner still visible)
+  // instead of closing — and silently discarding the form — on failure.
+  onSubmit: (data: CreateSecretDTO | UpdateSecretDTO) => Promise<boolean>
 }
 
 const ENV_VAR_PATTERN = /^[A-Z_][A-Z0-9_]*$/
@@ -21,6 +24,7 @@ export function SecretFormDialog({ secret, open, onClose, onSubmit }: SecretForm
   const [envVarName, setEnvVarName] = useState(secret?.env_var_name ?? '')
   const [value, setValue] = useState('')
   const [envVarError, setEnvVarError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   useEffect(() => {
     if (open) {
@@ -53,32 +57,42 @@ export function SecretFormDialog({ secret, open, onClose, onSubmit }: SecretForm
 
   const isValid = name.trim() && envVarName.trim() && ENV_VAR_PATTERN.test(envVarName.trim()) && (secret ? true : value.trim())
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!isValid) return
+    if (!isValid || isSubmitting) return
 
+    let data: CreateSecretDTO | UpdateSecretDTO
     if (secret) {
       // Update — only include value if changed
-      const data: UpdateSecretDTO = {
+      const updateData: UpdateSecretDTO = {
         name: name.trim(),
         description: description.trim(),
         env_var_name: envVarName.trim()
       }
       if (value.trim()) {
-        data.value = value.trim()
+        updateData.value = value.trim()
       }
-      onSubmit(data)
+      data = updateData
     } else {
       // Create
-      const data: CreateSecretDTO = {
+      data = {
         name: name.trim(),
         description: description.trim(),
         env_var_name: envVarName.trim(),
         value: value.trim()
       }
-      onSubmit(data)
     }
-    onClose()
+
+    setIsSubmitting(true)
+    try {
+      // Re-review (P2): only close on an actual success — a save that fails
+      // (most commonly: safeStorage unavailable) must leave the dialog open,
+      // with the user's input intact, next to the error.
+      const ok = await onSubmit(data)
+      if (ok) onClose()
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (
@@ -151,8 +165,8 @@ export function SecretFormDialog({ secret, open, onClose, onSubmit }: SecretForm
               <Button type="button" variant="outline" size="sm" onClick={onClose}>
                 Cancel
               </Button>
-              <Button type="submit" size="sm" disabled={!isValid}>
-                {secret ? 'Save' : 'Add'}
+              <Button type="submit" size="sm" disabled={!isValid || isSubmitting}>
+                {isSubmitting ? 'Saving…' : secret ? 'Save' : 'Add'}
               </Button>
             </div>
           </form>

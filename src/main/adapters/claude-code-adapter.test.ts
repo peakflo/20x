@@ -1612,7 +1612,7 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
   it('keeps the broker-loader PreToolUse hook alongside the new PostToolUse scrub hook', async () => {
     const options = await sendAndCaptureOptions({
       secretBrokerPort: 5555,
-      secretSessionToken: 'session-token-abc',
+      secretTokenFilePath: '/fake/secret-tokens/session-token-abc.token',
       secretLoaderPath: '/fake/secret-loader.sh',
       secretsForScrubbing: { MY_SECRET: SECRET_VALUE }
     })
@@ -1839,11 +1839,15 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
       expect(after.hookSpecificOutput.updatedInput.command).toMatch(/__20x_ec=\$\?/)
     })
 
-    it('without a live getter, falls back to the one-time snapshot scrubber (unchanged pre-fix behavior for callers that never provide one)', async () => {
+    it('without a live getter, falls back to the one-time snapshot scrubber for PostToolUse/PostToolUseFailure (unchanged pre-fix behavior for callers that never provide one)', async () => {
       const options = await sendAndCaptureOptions({}) // no getLiveScrubber, nothing configured
       expect(options.hooks?.PostToolUse).toBeUndefined()
-      expect(options.hooks?.PreToolUse).toBeUndefined()
       expect(options.hooks?.PostToolUseFailure).toBeUndefined()
+      // PreToolUse is the one exception: buildSecretHooks ALWAYS registers it
+      // now (PR B) so the second-line dump guard applies even to a
+      // secret-free session — see the "still registers the PreToolUse hook
+      // (guard-only)" test below for that behavior specifically.
+      expect(options.hooks?.PreToolUse).toBeDefined()
     })
   })
 
@@ -1868,7 +1872,7 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
   it('PreToolUse rewrites the command to a loader invocation — no secretEnvVars literal-export path remains', async () => {
     const options = await sendAndCaptureOptions({
       secretBrokerPort: 5555,
-      secretSessionToken: 'session-token-abc',
+      secretTokenFilePath: '/fake/secret-tokens/session-token-abc.token',
       secretLoaderPath: '/fake/secret-loader.sh'
     })
     const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
@@ -1880,11 +1884,12 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
       tool_input: { command: 'echo hi' }
     })
     const rewritten = result.hookSpecificOutput.updatedInput.command as string
-    // The loader invocation (path, port, the broker's own short-lived
-    // session token) may appear — no literal `export KEY=` secret-value line.
+    // The loader invocation (loader path, port, the broker TOKEN FILE PATH
+    // — never the token value itself) may appear — no literal `export
+    // KEY=` secret-value line.
     expect(rewritten).toContain('/fake/secret-loader.sh')
     expect(rewritten).toContain('5555')
-    expect(rewritten).toContain('session-token-abc')
+    expect(rewritten).toContain('/fake/secret-tokens/session-token-abc.token')
     expect(rewritten).not.toMatch(/export\s+\w+=/)
     expect(rewritten).toContain('echo hi')
   })
@@ -1893,7 +1898,7 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
     const options = await sendAndCaptureOptions({
       secretEnvVars: { MY_SECRET: SECRET_VALUE },
       secretBrokerPort: 5555,
-      secretSessionToken: 'session-token-abc',
+      secretTokenFilePath: '/fake/secret-tokens/session-token-abc.token',
       secretLoaderPath: '/fake/secret-loader.sh'
     })
     const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
@@ -1905,7 +1910,11 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
     const rewritten = result.hookSpecificOutput.updatedInput.command as string
     expect(rewritten).toContain('/fake/secret-loader.sh')
     expect(rewritten).toContain('echo hi; false')
-    expect(rewritten).toContain('exit 0')
+    // Ends with "true", not a literal "exit 0" — see
+    // wrapCommandForScrubbableFailure's own docstring: an "exit" here would
+    // terminate the SDK's `eval <cmd> && pwd -P >| <cwdfile>` shell before
+    // the cwd-tracking half ever ran.
+    expect(rewritten).toMatch(/\ntrue\s*$/)
     expect(rewritten).toMatch(/__20x_ec=\$\?/)
     expect(rewritten).not.toMatch(/export\s+\w+=/)
     // The loader invocation must come BEFORE the wrapped block so the
