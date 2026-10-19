@@ -512,7 +512,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
       onMouseDown={handleMouseDown}
       onMouseEnter={handlePanelMouseEnter}
       onMouseLeave={handlePanelMouseLeave}
-      className={`absolute rounded-xl border bg-[var(--canvas-chrome)] shadow-2xl flex flex-col transition-shadow duration-150 group/panel ${cfg.border} ${
+      className={`absolute rounded-xl border border-transparent bg-[var(--canvas-chrome)] shadow-2xl flex flex-col transition-shadow duration-150 group/panel ${
         // Selection thickens the outer border with an outline — it is drawn
         // outside the border box, so the content inside is never resized or
         // restyled (unlike border-2, which would shrink the content box).
@@ -657,6 +657,9 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
           </svg>
         </div>
       )}
+
+      {/* Paint the status border above the clipped content and resize handle so the rounded corner stays visible. */}
+      <div data-canvas-panel-border="true" className={`pointer-events-none absolute -inset-px z-[2] rounded-xl border ${cfg.border}`} aria-hidden="true" />
 
       {/* Side handle — React Flow style, for task panels: click to create browser, drag to connect */}
       {panel.type === 'task' && !isCollapsed && !isDragging && (

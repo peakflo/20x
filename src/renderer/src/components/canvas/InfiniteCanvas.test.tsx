@@ -291,8 +291,9 @@ describe('InfiniteCanvas', () => {
 
     const statusBadge = screen.getByText('Working')
     expect(statusBadge.className).toContain('text-amber-300')
-    const taskPanel = container.querySelector('[data-canvas-panel="true"]')
-    expect(taskPanel?.className).toContain('border-amber-500/55')
+    const taskBorder = container.querySelector('[data-canvas-panel-border="true"]')
+    expect(taskBorder?.className).toContain('border-amber-500/55')
+    expect(taskBorder?.className).toContain('pointer-events-none')
     expect(container.querySelector('svg rect[fill="rgba(245,158,11,0.86)"]')).toBeTruthy()
   })
 
