@@ -28,6 +28,28 @@ import {
 } from './pi-adapter'
 import { MessagePartType } from './coding-agent-adapter'
 
+/**
+ * The REAL spawned env, computed by calling the adapter's own private
+ * `processEnv` — not a hand-reconstructed copy of its filtering logic.
+ * Asserting against raw `nodeWorkerRuntime().env` (i.e. unfiltered
+ * `process.env`) broke the moment ANY credential-shaped var showed up in the
+ * ambient environment — not just 20x's own provider keys, but a CI
+ * platform's own injected token (confirmed in CI: Ubicloud's runner sets
+ * `UBICLOUD_RUNTIME_TOKEN`) or a dev session's own tooling vars
+ * (`AI_AGENT`, `CLAUDE_CODE_MESSAGING_TOKEN`) — `processEnv` explicitly
+ * strips several of these (`AI_AGENT`, `PI_CODING_AGENT`,
+ * `MCP_DIRECT_TOOLS`) on top of `buildHarnessBaseEnv`'s pattern-based
+ * denylist. Calling the production method directly means this test can
+ * never drift out of sync with what it's actually asserting against.
+ */
+function expectedPiEnv(adapter: PiAdapter, config: Parameters<PiAdapter['createSession']>[0]): NodeJS.ProcessEnv {
+  // Mirrors piInvocation: the env it hands to `spawn` is processEnv's
+  // result routed through nodeWorkerRuntime (which, on darwin, also strips
+  // ELECTRON_RUN_AS_NODE) — not processEnv's raw output.
+  const processed = (adapter as any).processEnv(config, null)
+  return nodeWorkerRuntime(process.platform, process.execPath, processed).env
+}
+
 function fakeProcess() {
   const process = new EventEmitter() as EventEmitter & Record<string, any>
   process.pid = 12345
@@ -99,13 +121,14 @@ describe('PiAdapter', () => {
       })
       .mockResolvedValueOnce({ type: 'response', command: 'set_model', success: true })
 
-    const id = await adapter.createSession({
+    const sessionConfig = {
       agentId: 'agent-1',
       taskId: 'task-1',
       workspaceDir: '/workspace',
       model: 'peakflo/model-one',
-      permissionMode: 'ask',
-    })
+      permissionMode: 'ask' as const,
+    }
+    const id = await adapter.createSession(sessionConfig)
 
     expect(id).toBe('/sessions/native-session.jsonl')
     expect(spawnMock.mock.calls[0][0]).toBe(nodeWorkerRuntime().execPath)
@@ -117,7 +140,7 @@ describe('PiAdapter', () => {
     expect(args).not.toContain('--provider')
     expect(args).not.toContain('--model')
     expect(spawnMock.mock.calls[0][2]).toMatchObject({
-      env: nodeWorkerRuntime().env,
+      env: expectedPiEnv(adapter, sessionConfig as any),
       shell: false,
     })
     expect(command).toHaveBeenLastCalledWith(
@@ -169,7 +192,14 @@ describe('PiAdapter', () => {
       '--approve',
     ])
     expect(spawnMock.mock.calls[0][2]).toMatchObject({
-      env: nodeWorkerRuntime().env,
+      // Matches the internal `config` getProviders itself builds (agentId/
+      // taskId: 'pi-discovery', permissionMode: 'allow') — see pi-adapter.ts.
+      env: expectedPiEnv(adapter, {
+        agentId: 'pi-discovery',
+        taskId: 'pi-discovery',
+        workspaceDir: '/workspace',
+        permissionMode: 'allow',
+      } as any),
       shell: false,
     })
   })
