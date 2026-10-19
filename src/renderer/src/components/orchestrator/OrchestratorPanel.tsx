@@ -1,10 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { X } from 'lucide-react'
+import { Bot, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
+import { AgentHoverCard } from '@/components/usage/AgentHoverCard'
+import { ProviderLogo } from '@/components/usage/ProviderLogo'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { agentApi, settingsApi } from '@/lib/ipc-client'
+import { isUsageProvider } from '@shared/usage'
 import type { Agent } from '@/types'
 
 const MASTERMIND_SESSION_ID = 'mastermind-session'
@@ -56,17 +59,6 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       }
     })
   }, [])
-
-  // Switch agent. The new choice is recorded before the old session is
-  // stopped, or the warm-up would race in and start the old agent again.
-  const handleAgentChange = async (newAgentId: string) => {
-    selectedAgentIdRef.current = newAgentId
-    setSelectedAgentId(newAgentId)
-    if (currentSession?.sessionId) {
-      await stop()
-      removeSession(MASTERMIND_SESSION_ID)
-    }
-  }
 
   /**
    * Brings up the session, or joins the one already starting.
@@ -154,20 +146,20 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     return () => window.removeEventListener('mastermind-prefill', handlePrefill)
   }, [handleSendMessage])
 
-  const agentSelector = (
-    <select
-      value={selectedAgentId || ''}
-      onChange={(e) => handleAgentChange(e.target.value)}
-      className="glass-control h-[24px] max-w-[140px] cursor-pointer px-2 text-xs transition-colors hover:border-primary/50"
-      disabled={(currentSession?.messages?.length ?? 0) > 0}
-      aria-label="Mastermind agent"
-    >
-      {agents.map((agent) => (
-        <option key={agent.id} value={agent.id}>
-          {agent.name}
-        </option>
-      ))}
-    </select>
+  // A read-only badge, not a picker — a dropdown here just invited switching
+  // mid-conversation, which the warm-up already treats as a reset. Hover
+  // still gets the same plan/usage detail as a task's agent badge.
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? null
+  const agentIcon = selectedAgent?.config?.coding_agent && isUsageProvider(selectedAgent.config.coding_agent)
+    ? <ProviderLogo provider={selectedAgent.config.coding_agent} className="h-3 w-3" />
+    : <Bot className="h-3 w-3" />
+  const agentBadge = (
+    <AgentHoverCard agent={selectedAgent}>
+      <span className="inline-flex h-[24px] max-w-[140px] items-center gap-1.5 rounded-full border border-border/50 bg-card px-2 text-[11px] text-muted-foreground">
+        {agentIcon}
+        <span className="truncate">{selectedAgent?.name || 'No agent'}</span>
+      </span>
+    </AgentHoverCard>
   )
   const closeButton = (
     <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close Mastermind den">
@@ -184,7 +176,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       {selectedAgentId && (
         <AgentTranscriptPanel
           title="Mastermind den"
-          headerLeading={agentSelector}
+          headerLeading={agentBadge}
           headerTrailing={closeButton}
           messages={currentSession?.messages || []}
           status={currentSession?.status || SessionStatus.IDLE}
@@ -202,7 +194,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="glass-bar glass-task-detail-bar flex h-[36px] shrink-0 items-center justify-between gap-2 px-3">
             <span className="text-sm font-medium">Mastermind den</span>
-            <div className="flex items-center gap-2">{agentSelector}{closeButton}</div>
+            <div className="flex items-center gap-2">{agentBadge}{closeButton}</div>
           </div>
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
             No agent selected

@@ -97,36 +97,16 @@ describe('OrchestratorPanel — warming the session', () => {
     expect(agentSessionApi.start).not.toHaveBeenCalled()
   })
 
-  it('leaves the agent choice open while the session is only warm', async () => {
+  it('shows the agent as a plain name, not a picker', async () => {
     await act(async () => {
       render(<OrchestratorPanel onClose={vi.fn()} />)
     })
     await waitFor(() => expect(agentSessionApi.start).toHaveBeenCalled())
 
-    // Warm is not a conversation: locking here would make the agent
-    // unchangeable from the moment the app opens.
-    expect(screen.getByRole('combobox')).not.toBeDisabled()
-  })
-
-  it('locks the agent choice once something has been said', async () => {
-    await act(async () => {
-      render(<OrchestratorPanel onClose={vi.fn()} />)
-    })
-    await waitFor(() => expect(agentSessionApi.start).toHaveBeenCalled())
-
-    await act(async () => {
-      useAgentStore.setState((state) => {
-        const sessions = new Map(state.sessions)
-        const current = sessions.get(MASTERMIND) as Record<string, unknown> | undefined
-        sessions.set(MASTERMIND, {
-          ...current,
-          messages: [{ id: 'm1', role: 'user', content: 'hello' }],
-        } as never)
-        return { sessions }
-      })
-    })
-
-    expect(screen.getByRole('combobox')).toBeDisabled()
+    // The header used to carry a <select>, which invited switching agents
+    // mid-conversation; now it is a read-only name + icon badge.
+    expect(screen.getByText('Claude')).toBeInTheDocument()
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
   })
 
   it('starts the session only once, however many times it re-renders', async () => {
