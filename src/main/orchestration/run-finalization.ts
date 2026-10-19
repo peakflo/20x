@@ -19,7 +19,7 @@
 import { TaskStatus } from '../../shared/constants'
 
 /** How one agent run actually ended. */
-export type RunEndReason = 'completed' | 'stopped_early' | 'error' | 'interrupted' | 'limit' | 'user_stop'
+export type RunEndReason = 'completed' | 'stopped_early' | 'error' | 'interrupted' | 'limit' | 'user_stop' | 'awaiting_input'
 
 export interface IdleEndSignal {
   /** Role of the last MEANINGFUL transcript part seen since the run started (reset on every send). */
@@ -41,6 +41,11 @@ export interface IdleEndSignal {
  *   `compaction` — OpenCode SDK part types passed through largely unmapped.
  * - `task_progress` / `system-status` — Claude subagent-task and
  *   system-status notices, pushed with no stable role.
+ * - `todowrite` — a plan/checklist update (ACP `session/update` of kind
+ *   `plan`, mapped into the existing todo convention). A turn routinely
+ *   updates its plan right alongside or after the real final answer, so
+ *   treating it as the "last part" misclassifies the completion underneath
+ *   as stopped_early.
  */
 const EPHEMERAL_PART_TYPES: ReadonlySet<string> = new Set([
   'step-start',
@@ -51,7 +56,8 @@ const EPHEMERAL_PART_TYPES: ReadonlySet<string> = new Set([
   'retry',
   'compaction',
   'task_progress',
-  'system-status'
+  'system-status',
+  'todowrite'
 ])
 
 export interface MeaningfulPartCandidate {
@@ -78,42 +84,57 @@ export function lastMeaningfulPart<T extends MeaningfulPartCandidate>(parts: rea
 
 /**
  * Classifies a "working → idle" transition as `completed` (the adapter's
- * last MEANINGFUL part was a final assistant text message, or the turn ended
- * on a question/permission request — that's waiting for input, not a turn
- * cut short) or `stopped_early` (idle with no meaningful part at all, or the
- * last one is a tool call — e.g. the agent went idle right after "Let's
- * stage and commit").
+ * last MEANINGFUL part was a final assistant text message), `awaiting_input`
+ * (the turn ended on a question/permission request — the agent produced
+ * real output and is waiting on an answer, neither a finished review nor a
+ * run that needs attention), `error` (the last meaningful part is itself an
+ * error — e.g. an adapter that reports a provider error as an ordinary part
+ * rather than a distinct session-level ERROR status), or `stopped_early`
+ * (idle with no meaningful part at all, or the last one is a tool call —
+ * e.g. the agent went idle right after "Let's stage and commit").
  *
- * Other end reasons (`error`, `limit`, `user_stop`, `interrupted`) are never
- * produced here — they come from their own call sites, which already know
+ * `error` is normally produced by its own dedicated call site (a session
+ * status of ERROR, handled before a run ever reaches this idle classifier)
+ * — this is a second, narrower path for an adapter that surfaces an error
+ * as a plain part instead of a session-level status.
+ *
+ * Other end reasons (`limit`, `user_stop`, `interrupted`) are never produced
+ * here — they come from their own call sites, which already know
  * unambiguously why the run ended.
  */
 export function classifyIdleEnd(signal: IdleEndSignal): RunEndReason {
   if (signal.lastPartRole === 'assistant' && signal.lastPartType === 'text') {
     return 'completed'
   }
-  // A turn that ends with a pending question/permission request isn't cut
-  // short — the agent produced real output and is waiting on an answer.
   if (signal.lastPartRole === 'assistant' && signal.lastPartType === 'question') {
-    return 'completed'
+    return 'awaiting_input'
+  }
+  if (signal.lastPartRole === 'assistant' && signal.lastPartType === 'error') {
+    return 'error'
   }
   return 'stopped_early'
 }
 
 /**
- * The task status a run's end reason should produce. Only a genuinely
- * `completed` run reaches `ready_for_review` — every other reason is a
- * "needs attention" state, surfaced by reusing `model_error` (see
- * `NEEDS_ATTENTION_REASONS`/`isNeedsAttentionReason` for the UI/parent
+ * The task status a run's end reason should produce, or `null` when the
+ * task's current status should be left exactly as it is. Only a genuinely
+ * `completed` run reaches `ready_for_review`. `awaiting_input` is neither a
+ * finished review nor a "needs attention" failure — the task stays wherever
+ * it already is (normally `agent_working`); the renderer's own pending-
+ * question indicator (scanning the transcript, not `task.status`) already
+ * surfaces it. Every other reason is a "needs attention" state, surfaced by
+ * reusing `model_error` (see `isNeedsAttentionReason` for the UI/parent
  * wake-up copy that explains which one it was).
  */
-export function statusForEndReason(reason: RunEndReason): TaskStatus {
-  return reason === 'completed' ? TaskStatus.ReadyForReview : TaskStatus.ModelError
+export function statusForEndReason(reason: RunEndReason): TaskStatus | null {
+  if (reason === 'completed') return TaskStatus.ReadyForReview
+  if (reason === 'awaiting_input') return null
+  return TaskStatus.ModelError
 }
 
-/** True for every end reason that is NOT a genuine, honest completion. */
+/** True for every end reason that is a genuine failure needing attention — NOT a completion, and NOT merely awaiting an answer. */
 export function isNeedsAttentionReason(reason: RunEndReason): boolean {
-  return reason !== 'completed'
+  return reason !== 'completed' && reason !== 'awaiting_input'
 }
 
 /** Short, user-facing label for a non-completed end reason — shown on the task and in its parent's wake-up. */
@@ -129,6 +150,8 @@ export function describeEndReason(reason: RunEndReason): string {
       return 'Interrupted by restart — the app closed while this was running.'
     case 'user_stop':
       return 'Stopped by the user.'
+    case 'awaiting_input':
+      return 'Waiting for your answer — the agent asked a question.'
     case 'completed':
       return 'Completed.'
   }

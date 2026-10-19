@@ -20,8 +20,12 @@ describe('classifyIdleEnd', () => {
     expect(classifyIdleEnd({ lastPartRole: 'user', lastPartType: 'text' })).toBe('stopped_early')
   })
 
-  it('is completed when the turn ends on a question — that is waiting for input, not cut short', () => {
-    expect(classifyIdleEnd({ lastPartRole: 'assistant', lastPartType: 'question' })).toBe('completed')
+  it('is awaiting_input when the turn ends on a question — that is waiting for an answer, not cut short and not a finished review', () => {
+    expect(classifyIdleEnd({ lastPartRole: 'assistant', lastPartType: 'question' })).toBe('awaiting_input')
+  })
+
+  it('is error when the last meaningful part is itself an error part', () => {
+    expect(classifyIdleEnd({ lastPartRole: 'assistant', lastPartType: 'error' })).toBe('error')
   })
 })
 
@@ -46,6 +50,19 @@ describe('lastMeaningfulPart', () => {
       { role: undefined, partType: 'task_progress' }
     ]
     expect(lastMeaningfulPart(batch)?.partType).toBe('text')
+  })
+
+  it('skips a trailing ACP plan/todowrite update and finds the real final text underneath', () => {
+    // A plan update routinely follows (or accompanies) the real answer —
+    // naively taking it as "the last part" would misclassify the completion
+    // underneath as stopped_early.
+    const batch = [
+      { role: 'assistant', partType: 'text', content: 'Done — all three files updated.' },
+      { role: undefined, partType: 'todowrite' }
+    ]
+    const found = lastMeaningfulPart(batch)
+    expect(found?.partType).toBe('text')
+    expect(classifyIdleEnd({ lastPartRole: found?.role ?? 'assistant', lastPartType: found?.partType })).toBe('completed')
   })
 
   it('returns undefined when every part in the batch is ephemeral — callers must not overwrite prior tracking with this', () => {
@@ -94,11 +111,16 @@ describe('statusForEndReason', () => {
       expect(statusForEndReason(reason)).toBe(TaskStatus.ModelError)
     }
   )
+
+  it('leaves the task status unchanged (null) for awaiting_input — not ready_for_review, not model_error', () => {
+    expect(statusForEndReason('awaiting_input')).toBeNull()
+  })
 })
 
 describe('isNeedsAttentionReason', () => {
-  it('is false only for completed', () => {
+  it('is false for completed and for awaiting_input', () => {
     expect(isNeedsAttentionReason('completed')).toBe(false)
+    expect(isNeedsAttentionReason('awaiting_input')).toBe(false)
   })
 
   it.each(['stopped_early', 'error', 'interrupted', 'limit', 'user_stop'] as const)(
@@ -111,7 +133,7 @@ describe('isNeedsAttentionReason', () => {
 
 describe('describeEndReason', () => {
   it('returns a distinct, non-empty label for every reason', () => {
-    const reasons = ['completed', 'stopped_early', 'error', 'interrupted', 'limit', 'user_stop'] as const
+    const reasons = ['completed', 'stopped_early', 'error', 'interrupted', 'limit', 'user_stop', 'awaiting_input'] as const
     const labels = reasons.map(describeEndReason)
     expect(new Set(labels).size).toBe(reasons.length)
     for (const label of labels) expect(label.length).toBeGreaterThan(0)

@@ -20,8 +20,21 @@ import { TaskStatus } from '../../shared/constants'
 export interface RestartRepairAgentManager {
   findSessionByTaskId(taskId: string): { sessionId: string } | undefined
   startTask(taskId: string, opts?: { preferSubtasks?: boolean; allowTriage?: boolean }): Promise<unknown>
-  /** Native resume of a persisted session. Returns the resumed session id, or '' if native resume isn't possible (different/non-shareable harness instance, etc.) — callers must fall back to `startTask` in that case, never treat '' as success. */
-  resumeSession(agentId: string, taskId: string, sessionId: string): Promise<string>
+  /**
+   * Native resume of a persisted session. Returns the resumed session id, or
+   * '' if native resume isn't possible (different/non-shareable harness
+   * instance, etc.) — callers must fall back to `startTask` in that case,
+   * never treat '' as success. `{ silent: true }` suppresses the
+   * `agent:incompatible-session` renderer dialog — restart repair runs
+   * before any window exists to answer it, and already has its own
+   * fallback (`startTask` with the context handed off) for exactly that
+   * failure, so the alarming dialog would be both unanswerable and
+   * unnecessary. A session genuinely gone/incompatible throws
+   * `Error('SESSION_INCOMPATIBLE')`, having already cleared the task's
+   * `session_id` as a side effect — treat that one specifically as "not
+   * resumable", not as a generic failure.
+   */
+  resumeSession(agentId: string, taskId: string, sessionId: string, opts?: { silent?: boolean }): Promise<string>
   sendByTaskId(taskId: string, message: string): Promise<unknown>
   /** Writes a status update through the server-managed guard and notifies the renderer — never poke `DatabaseManager.updateTask` directly from here. */
   applyLocalTaskUpdate(taskId: string, updates: Record<string, unknown>): unknown
@@ -177,7 +190,7 @@ export async function runRestartRepair(
     if (resumable && partOfAutoChain) {
       try {
         const resumedSessionId = task.agent_id
-          ? await agentManager.resumeSession(task.agent_id, candidate.id, task.session_id!)
+          ? await agentManager.resumeSession(task.agent_id, candidate.id, task.session_id!, { silent: true })
           : ''
         if (resumedSessionId) {
           // Native resume succeeded — nudge the SAME session to continue
@@ -194,13 +207,35 @@ export async function runRestartRepair(
         summary.autoResumed.push(candidate.id)
         continue
       } catch (err) {
-        console.error(`[RestartRepair] Auto-resume failed for ${candidate.id}, leaving for manual resume:`, err)
-        // fall through to the manual-resume branch below
+        const message = err instanceof Error ? err.message : String(err)
+        if (message === 'SESSION_INCOMPATIBLE') {
+          // resumeSession already cleared session_id as a side effect — this
+          // is "not resumable", not a generic failure. Fall back exactly like
+          // the "native resume unavailable" branch above: a fresh session
+          // with the context handed off, never the manual-resume note below
+          // (which would wrongly promise a session that's already gone).
+          try {
+            await agentManager.startTask(candidate.id, { preferSubtasks: false, allowTriage: false })
+            appendRepairNote(db, candidate.id, 'Interrupted by restart — the saved session was no longer valid, so a new session continued with the context handed off, because this task is part of an auto-run chain.', nowMs)
+            summary.autoResumed.push(candidate.id)
+            continue
+          } catch (startErr) {
+            console.error(`[RestartRepair] Fallback startTask after SESSION_INCOMPATIBLE failed for ${candidate.id}:`, startErr)
+            // fall through to the manual/needs-attention branch below
+          }
+        } else {
+          console.error(`[RestartRepair] Auto-resume failed for ${candidate.id}, leaving for manual resume:`, err)
+          // fall through to the manual-resume branch below
+        }
       }
     }
 
     agentManager.markTaskModelError(candidate.id)
-    if (resumable) {
+    // Re-read session_id rather than trusting the pre-attempt `resumable`
+    // value: a SESSION_INCOMPATIBLE resume attempt above (or its startTask
+    // fallback) may have already cleared it as a side effect — writing
+    // "Resume to continue" after that would promise a session that's gone.
+    if (db.getTask(candidate.id)?.session_id) {
       appendRepairNote(db, candidate.id, 'Interrupted by restart — the app closed while this was running. Resume to continue.', nowMs)
       summary.needsResume.push(candidate.id)
     } else {

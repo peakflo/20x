@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import Database from 'better-sqlite3'
 import { DatabaseManager } from '../database'
-import { withIdempotency, pruneExpiredOrchestrationReceiptsOnce, ORCHESTRATION_RECEIPT_TTL_MS, __resetPruneThrottleForTests } from './idempotency'
+import {
+  withIdempotency,
+  pruneExpiredOrchestrationReceiptsOnce,
+  clearAllPendingOrchestrationReceiptsOnStartup,
+  ORCHESTRATION_RECEIPT_TTL_MS,
+  STALE_CLAIM_MS,
+  __resetPruneThrottleForTests
+} from './idempotency'
 
 function makeDb(): DatabaseManager {
   const raw = new Database(':memory:')
@@ -138,6 +145,56 @@ describe('withIdempotency', () => {
     await withIdempotency(db, 'task:ok', 'req-1', fn)
     expect(fn).toHaveBeenCalledTimes(1)
   })
+
+  it('a claim older than STALE_CLAIM_MS is treated as abandoned — a retry runs fresh instead of waiting it out', async () => {
+    // Simulates a claim left by a call that crashed mid-flight: nothing ever
+    // throws to release it, so without the staleness check this would sit
+    // forever (well past CONCURRENT_WAIT_TIMEOUT_MS on every retry).
+    db.claimOrchestrationReceipt('task:crashed', 'req-1', Date.now() - STALE_CLAIM_MS - 1_000)
+
+    const fn = vi.fn(async () => ({ ok: true }))
+    const result = await withIdempotency(db, 'task:crashed', 'req-1', fn)
+
+    expect(result).toEqual({ ok: true })
+    expect(fn).toHaveBeenCalledTimes(1)
+  })
+
+  it('a claim younger than STALE_CLAIM_MS is NOT cleared — a retry still waits for (and returns) its eventual result', async () => {
+    db.claimOrchestrationReceipt('task:recent', 'req-1', Date.now() - 1_000)
+
+    const fn = vi.fn(async () => ({ should: 'never run' }))
+    const waiting = withIdempotency(db, 'task:recent', 'req-1', fn)
+
+    // Let one poll tick pass, then complete the ORIGINAL (not cleared) claim.
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    db.completeOrchestrationReceipt('task:recent', 'req-1', { from: 'original-caller' })
+
+    const result = await waiting
+    expect(result).toEqual({ from: 'original-caller' })
+    expect(fn).not.toHaveBeenCalled()
+  })
+})
+
+describe('clearAllPendingOrchestrationReceiptsOnStartup', () => {
+  it('deletes every pending claim regardless of age, but leaves completed receipts alone', () => {
+    const db = makeDb()
+    db.claimOrchestrationReceipt('task:a', 'req-1', Date.now()) // pending, fresh
+    db.claimOrchestrationReceipt('task:b', 'req-1', Date.now() - 10_000_000) // pending, old
+    db.claimOrchestrationReceipt('task:c', 'req-1', Date.now())
+    db.completeOrchestrationReceipt('task:c', 'req-1', { done: true }) // completed
+
+    clearAllPendingOrchestrationReceiptsOnStartup(db)
+
+    expect(db.getOrchestrationReceipt('task:a', 'req-1')).toBeNull()
+    expect(db.getOrchestrationReceipt('task:b', 'req-1')).toBeNull()
+    expect(db.getOrchestrationReceipt('task:c', 'req-1')?.result).toEqual({ done: true })
+  })
+
+  it('swallows a database error instead of throwing', () => {
+    const db = makeDb()
+    vi.spyOn(db, 'clearAllPendingOrchestrationReceipts').mockImplementation(() => { throw new Error('disk full') })
+    expect(() => clearAllPendingOrchestrationReceiptsOnStartup(db)).not.toThrow()
+  })
 })
 
 describe('pruneExpiredOrchestrationReceiptsOnce', () => {
@@ -181,5 +238,24 @@ describe('pruneExpiredOrchestrationReceiptsOnce', () => {
       throw new Error('disk full')
     })
     expect(() => pruneExpiredOrchestrationReceiptsOnce(db, now)).not.toThrow()
+  })
+
+  it('also clears a stale pending claim nobody ever retried', () => {
+    const now = Date.UTC(2026, 9, 19, 12, 0, 0)
+    db.claimOrchestrationReceipt('task:abandoned', 'req-1', now - STALE_CLAIM_MS - 1_000)
+
+    pruneExpiredOrchestrationReceiptsOnce(db, now)
+
+    expect(db.getOrchestrationReceipt('task:abandoned', 'req-1')).toBeNull()
+  })
+
+  it('does not clear a pending claim that is still within the stale window', () => {
+    const now = Date.UTC(2026, 9, 19, 12, 0, 0)
+    db.claimOrchestrationReceipt('task:in-flight', 'req-1', now - 1_000)
+
+    pruneExpiredOrchestrationReceiptsOnce(db, now)
+
+    const receipt = db.getOrchestrationReceipt('task:in-flight', 'req-1')
+    expect(receipt?.isPending).toBe(true)
   })
 })

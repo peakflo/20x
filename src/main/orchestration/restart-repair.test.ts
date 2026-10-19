@@ -153,7 +153,7 @@ describe('runRestartRepair', () => {
     const summary = await runRestartRepair(db, agentManager)
 
     expect(summary.autoResumed).toEqual([task.id])
-    expect(agentManager.resumeSession).toHaveBeenCalledWith(agent.id, task.id, 'saved-session-2')
+    expect(agentManager.resumeSession).toHaveBeenCalledWith(agent.id, task.id, 'saved-session-2', { silent: true })
     expect(agentManager.sendByTaskId).toHaveBeenCalledWith(task.id, expect.stringContaining('restart'))
     // Native resume succeeded — must NOT also start a brand-new session,
     // which would re-send the original prompt and overwrite session_id.
@@ -171,7 +171,7 @@ describe('runRestartRepair', () => {
     const summary = await runRestartRepair(db, agentManager)
 
     expect(summary.autoResumed).toEqual([task.id])
-    expect(agentManager.resumeSession).toHaveBeenCalledWith(agent.id, task.id, 'saved-session-2b')
+    expect(agentManager.resumeSession).toHaveBeenCalledWith(agent.id, task.id, 'saved-session-2b', { silent: true })
     expect(agentManager.startTask).toHaveBeenCalledWith(task.id, { preferSubtasks: false, allowTriage: false })
     expect(agentManager.sendByTaskId).not.toHaveBeenCalled()
   })
@@ -226,6 +226,62 @@ describe('runRestartRepair', () => {
 
     expect(summary.autoResumed).toEqual([])
     expect(summary.needsResume).toEqual([task.id])
+  })
+
+  it('passes { silent: true } to resumeSession during repair — no dialog with nobody to answer it yet', async () => {
+    const agent = db.createAgent(makeAgent())!
+    const task = db.createTask(makeTask({ status: TaskStatus.AgentWorking, auto_start_agent: true }))!
+    setSessionId(task.id, 'saved-session-silent')
+    setAgentId(task.id, agent.id)
+    const agentManager = fakeAgentManager({ resumeSession: vi.fn(async () => 'saved-session-silent') })
+
+    await runRestartRepair(db, agentManager)
+
+    expect(agentManager.resumeSession).toHaveBeenCalledWith(agent.id, task.id, 'saved-session-silent', { silent: true })
+  })
+
+  it('falls back to startTask (handoff) when resumeSession throws SESSION_INCOMPATIBLE, instead of a misleading "Resume to continue" note', async () => {
+    const agent = db.createAgent(makeAgent())!
+    const task = db.createTask(makeTask({ status: TaskStatus.AgentWorking, auto_start_agent: true }))!
+    setSessionId(task.id, 'gone-session')
+    setAgentId(task.id, agent.id)
+    // Mirrors the real AgentManager.resumeAdapterSession: SESSION_INCOMPATIBLE
+    // clears session_id as a side effect before throwing.
+    const agentManager = fakeAgentManager({
+      resumeSession: vi.fn(async () => {
+        db.updateTask(task.id, { session_id: null })
+        throw new Error('SESSION_INCOMPATIBLE')
+      })
+    })
+
+    const summary = await runRestartRepair(db, agentManager)
+
+    expect(summary.autoResumed).toEqual([task.id])
+    expect(summary.needsResume).toEqual([])
+    expect(agentManager.startTask).toHaveBeenCalledWith(task.id, { preferSubtasks: false, allowTriage: false })
+    const parts = db.getTranscriptParts(task.id)
+    expect(parts.some((p) => p.content?.includes('no longer valid'))).toBe(true)
+    expect(parts.some((p) => p.content?.includes('Resume to continue'))).toBe(false)
+  })
+
+  it('lands in needsAttention (not the misleading needsResume) when the SESSION_INCOMPATIBLE fallback startTask also fails', async () => {
+    const agent = db.createAgent(makeAgent())!
+    const task = db.createTask(makeTask({ status: TaskStatus.AgentWorking, auto_start_agent: true }))!
+    setSessionId(task.id, 'gone-session-2')
+    setAgentId(task.id, agent.id)
+    const agentManager = fakeAgentManager({
+      resumeSession: vi.fn(async () => {
+        db.updateTask(task.id, { session_id: null })
+        throw new Error('SESSION_INCOMPATIBLE')
+      }),
+      startTask: vi.fn(async () => { throw new Error('no adapter available either') })
+    })
+
+    const summary = await runRestartRepair(db, agentManager)
+
+    // session_id is already gone — "Resume to continue" would be a lie.
+    expect(summary.needsResume).toEqual([])
+    expect(summary.needsAttention).toEqual([task.id])
   })
 
   it('falls back to manual resume when resumeSession itself throws (not just returns empty)', async () => {
