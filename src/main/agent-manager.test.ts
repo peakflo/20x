@@ -2875,6 +2875,10 @@ describe('AgentManager session ID re-keying redirect', () => {
       seenMessageIds: new Set<string>(),
       seenPartIds: new Set<string>(),
       partContentLengths: new Map<string, string>(),
+      // Round 4, Minor: the cleanup loop now iterates the session's OWN
+      // captured registration, not a fresh agent-config re-read — see
+      // AgentSession.mcpServerIds's docstring.
+      mcpServerIds: new Set(['remote-server-1', 'local-server-1'])
     })
 
     const { unregisterMcpProxyTargetByKey } = await import('./mcp-auth-proxy')
@@ -2929,7 +2933,10 @@ describe('AgentManager session ID re-keying redirect', () => {
       seenMessageIds: new Set<string>(),
       seenPartIds: new Set<string>(),
       partContentLengths: new Map<string, string>(),
-      scrubber: scrubberA
+      scrubber: scrubberA,
+      // Round 4, Minor: isMcpServerRowStillInUse now checks each session's
+      // own captured registration, not a fresh agent-config re-read.
+      mcpServerIds: new Set(['remote-server-1', 'local-server-1'])
     })
     ;(mgr as any).sessions.set('session-2', {
       agentId: 'agent-1',
@@ -2939,7 +2946,8 @@ describe('AgentManager session ID re-keying redirect', () => {
       seenMessageIds: new Set<string>(),
       seenPartIds: new Set<string>(),
       partContentLengths: new Map<string, string>(),
-      scrubber: scrubberB
+      scrubber: scrubberB,
+      mcpServerIds: new Set(['remote-server-1', 'local-server-1'])
     })
     ;(mgr as any).mcpServerScrubbersByKey.set('remote-server-1', new Set([scrubberA, scrubberB]))
 
@@ -2968,6 +2976,113 @@ describe('AgentManager session ID re-keying redirect', () => {
     // Now the last live user of this row is gone — safe to tear down.
     expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
     expect(cleanupLocalMcpEnvFile).toHaveBeenCalledWith('local-server-1')
+  })
+
+  // Minor finding, re-review (round 4): stopSession's cleanup and
+  // isMcpServerRowStillInUse used to re-read the agent's CURRENT db config
+  // instead of using the session's own actual registration — if that
+  // config was edited mid-session, a session's real MCP dependency could
+  // disagree with what a fresh config read says.
+  it("stopSession cleans up the stopping session's OWN captured MCP rows, even if the agent's config was edited to drop that server mid-session", async () => {
+    const remoteServer = { id: 'remote-server-1', type: 'remote', name: 'Remote MCP' }
+    const mockDb = {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test', agent_id: 'agent-1' })),
+      // The agent's CURRENT config no longer references remote-server-1 —
+      // simulates an edit made after session-1 started and registered it.
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Agent', config: { mcp_servers: [] } })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn((id: string) => (id === 'remote-server-1' ? remoteServer : null)),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null)
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+    ;(mgr as any).sessions.set('session-1', {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      // What session-1 actually registered back when it started/last ran —
+      // a fresh `getAgent` read (above) would no longer show this at all.
+      mcpServerIds: new Set(['remote-server-1'])
+    })
+
+    const { unregisterMcpProxyTargetByKey } = await import('./mcp-auth-proxy')
+    vi.mocked(unregisterMcpProxyTargetByKey).mockClear()
+
+    await mgr.stopSession('session-1')
+
+    // Cleaned up based on what this session actually had registered, not
+    // the (now server-less) current agent config.
+    expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
+  })
+
+  // Minor finding, re-review (round 4), the other direction: an OTHER
+  // live session's agent config edited to ADD a server it hasn't actually
+  // registered yet must not make isMcpServerRowStillInUse think that row
+  // is still needed — a fresh config read would have said so wrongly.
+  it("does NOT treat a row as still in use by another session whose agent config was edited to add it, but which hasn't actually registered it", async () => {
+    const remoteServer = { id: 'remote-server-1', type: 'remote', name: 'Remote MCP' }
+    const mockDb = {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test', agent_id: 'agent-1' })),
+      // agent-2's CURRENT config now lists remote-server-1 too (edited
+      // after session-2 started), but session-2 itself never actually
+      // resolved/registered it.
+      getAgent: vi.fn((id: string) =>
+        id === 'agent-1'
+          ? { id: 'agent-1', name: 'Agent 1', config: { mcp_servers: ['remote-server-1'] } }
+          : { id: 'agent-2', name: 'Agent 2', config: { mcp_servers: ['remote-server-1'] } }
+      ),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn((id: string) => (id === 'remote-server-1' ? remoteServer : null)),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null)
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+    ;(mgr as any).sessions.set('session-1', {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      mcpServerIds: new Set(['remote-server-1'])
+    })
+    ;(mgr as any).sessions.set('session-2', {
+      agentId: 'agent-2',
+      taskId: 'task-2',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      // Config now says agent-2 uses remote-server-1, but this session's
+      // own actual registration (captured, not re-derived) says otherwise.
+      mcpServerIds: new Set<string>()
+    })
+
+    const { unregisterMcpProxyTargetByKey } = await import('./mcp-auth-proxy')
+    vi.mocked(unregisterMcpProxyTargetByKey).mockClear()
+
+    await mgr.stopSession('session-1')
+
+    // session-2's stale config entry must not keep this row alive.
+    expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
   })
 
   it('cleanupHeartbeatSession fully tears down heartbeat sessions without resetting task status', async () => {

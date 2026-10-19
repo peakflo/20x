@@ -211,6 +211,23 @@ interface AgentSession {
    * choke point before output is persisted, rendered, or broadcast anywhere.
    */
   scrubber?: SecretScrubber
+  /**
+   * MCP server row ids this session actually registered with the MCP
+   * auth-proxy / env-wrapper, as of the last time `buildMcpServersForAdapter`
+   * ran for it (session start, resume, or any later buildSessionConfig call
+   * — refreshed every time, not frozen at session start). Re-review (round
+   * 4, Minor): `stopSession`'s cleanup and `isMcpServerRowStillInUse` used
+   * to re-read the agent's CURRENT db config instead — if that config was
+   * edited mid-session (a server added or removed from the agent after this
+   * session started), either could disagree with what this session's own
+   * live process actually has wired up: a removed-from-config row this
+   * session still depends on would never get cleaned up on stop (missing
+   * from the fresh config read), and a stopping session could be judged
+   * "still needed by another session" (or not) based on that OTHER
+   * session's current config rather than what it actually registered. This
+   * set is this session's own ground truth, independent of later config edits.
+   */
+  mcpServerIds?: Set<string>
 }
 
 /** The harness instance an agent runs under, as the manager sees it. */
@@ -1607,27 +1624,36 @@ export class AgentManager extends EventEmitter {
 
   /**
    * True when some OTHER live session (any agent, not just this session's
-   * own) still has MCP server row `serverId` in its agent's current
-   * `mcp_servers` config. Re-review (round 3, Major): `stopSession` used to
-   * tear down a row's shared proxy registration / env-wrapper file the
-   * moment ANY one session using it stopped — but a remote/local MCP server
-   * row can be shared by several concurrently running sessions (the same
-   * agent running two tasks, or two different agents pointed at the same
-   * row), and none of those other sessions rebuild `mcpServers` for their
-   * already-running `claude` process — so they kept the now-dead proxy URL /
-   * env file path and silently lost that MCP server. Checked against LIVE
-   * session state (not an incrementally-maintained counter) so it can never
-   * drift out of sync with a mid-session agent-config edit.
+   * own) still actually has MCP server row `serverId` registered — i.e.
+   * `serverId` is in that session's own `mcpServerIds` (see that field's
+   * docstring), as of the last time `buildMcpServersForAdapter` ran for it.
+   * Re-review (round 3, Major): `stopSession` used to tear down a row's
+   * shared proxy registration / env-wrapper file the moment ANY one session
+   * using it stopped — but a remote/local MCP server row can be shared by
+   * several concurrently running sessions (the same agent running two
+   * tasks, or two different agents pointed at the same row), and none of
+   * those other sessions rebuild `mcpServers` for their already-running
+   * `claude` process — so they kept the now-dead proxy URL / env file path
+   * and silently lost that MCP server.
+   *
+   * Re-review (round 4, Minor): the original version of this fix re-read
+   * each OTHER session's agent's CURRENT db config instead of its actual
+   * captured registration — which could disagree with reality if that
+   * agent's config was edited mid-session (a server added or removed after
+   * that session started): a server just removed from config would vanish
+   * from this check even though that session's live process still has it
+   * wired up (this method would then wrongly say "not in use," and the
+   * stopping session's cleanup would tear it down anyway), and the reverse
+   * for a server just added. Checking each session's own `mcpServerIds`
+   * instead is checked against that session's actual last-known
+   * registration, not a config snapshot that can be edited out from under
+   * it — it can't drift the same way, because it isn't re-derived from
+   * current config at all.
    */
   private isMcpServerRowStillInUse(serverId: string, excludingSessionId: string): boolean {
     for (const [otherSessionId, otherSession] of this.sessions) {
       if (otherSessionId === excludingSessionId) continue
-      const otherAgent = this.db.getAgent(otherSession.agentId)
-      const entries = otherAgent?.config?.mcp_servers || []
-      for (const entry of entries) {
-        const otherServerId = typeof entry === 'string' ? entry : (entry as AgentMcpServerEntry).serverId
-        if (otherServerId === serverId) return true
-      }
+      if (otherSession.mcpServerIds?.has(serverId)) return true
     }
     return false
   }
@@ -1650,11 +1676,20 @@ export class AgentManager extends EventEmitter {
    * file path, that read finds nothing — the scrubber would never learn
    * these values exist unless this function hands them over directly at the
    * point it resolves them.
+   *
+   * `resolvedServerIds`, when provided, has every 'local'/'remote' DB
+   * server row id this call actually resolves added to it — the caller
+   * stores this on its `AgentSession.mcpServerIds` as that session's own
+   * ground truth for "which rows do I actually depend on right now" (see
+   * that field's docstring, and `isMcpServerRowStillInUse`). Deliberately
+   * NOT populated for the synthetic task-management server — it isn't a DB
+   * row and has no proxy/env-file cleanup concern.
    */
   private async buildMcpServersForAdapter(
     agentId: string,
     opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string },
-    scrubber?: SecretScrubber
+    scrubber?: SecretScrubber,
+    resolvedServerIds?: Set<string>
   ): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
@@ -1678,6 +1713,7 @@ export class AgentManager extends EventEmitter {
         const taskManagement = this.buildTaskManagementMcpConfig(opts)
         if (taskManagement) result[mcpServer.name] = taskManagement
       } else if (mcpServer.type === 'local') {
+        resolvedServerIds?.add(mcpServer.id)
         // Local (stdio) MCP server. `mcpServer.environment` can carry secret
         // values (API keys the MCP server itself needs) — never put those in
         // the config object directly: at least one harness (Claude Code)
@@ -1701,6 +1737,7 @@ export class AgentManager extends EventEmitter {
           }
         }
       } else if (mcpServer.type === 'remote') {
+        resolvedServerIds?.add(mcpServer.id)
         // Every header-bearing remote MCP server — whether its auth is a
         // refreshable OAuth/enterprise token or a plain header the user
         // typed into the server form (Authorization, X-API-Key, …) — is
@@ -1891,11 +1928,16 @@ export class AgentManager extends EventEmitter {
     // addEntries call below (which can't see values that never end up in
     // `config.mcpServers` once they're routed through the proxy/wrapper).
     const session = this.findSessionByTask(agentId, taskId)
+    // Refreshed on EVERY call for an existing session (not just at session
+    // start) — see AgentSession.mcpServerIds's docstring (round 4, Minor).
+    const resolvedServerIds = new Set<string>()
     const mcpServers = await this.buildMcpServersForAdapter(
       agentId,
       { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined },
-      session?.scrubber
+      session?.scrubber,
+      resolvedServerIds
     )
+    if (session) session.mcpServerIds = resolvedServerIds
 
     // systemPrompt is intentionally task-agnostic and identical every time this
     // is called for a given agent — it must stay byte-for-byte frozen for the
@@ -2625,7 +2667,8 @@ export class AgentManager extends EventEmitter {
     // object itself once routed through the proxy/wrapper) still reaches
     // this session's scrubber.
     const scrubber = new SecretScrubber()
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined }, scrubber)
+    const resolvedServerIds = new Set<string>()
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined }, scrubber, resolvedServerIds)
 
     // Write SKILL.md files and the session documentation (async to avoid
     // blocking the event loop). This runs AFTER the MCP map is built so the
@@ -2757,7 +2800,8 @@ export class AgentManager extends EventEmitter {
       // Reuses the SAME scrubber instance buildMcpServersForAdapter was
       // handed above (already carrying any MCP secret values it resolved),
       // extended with everything else the full session config carries.
-      scrubber
+      scrubber,
+      mcpServerIds: resolvedServerIds
     }
     scrubber.addEntries(buildSecretEntriesFromSessionConfig(sessionConfig))
     this.sessions.set(adapterSessionId, newSession)
@@ -4006,10 +4050,12 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // Created now and reused as-is for the new session's scrubber below —
     // see the matching comment in startAdapterSession.
     const scrubber = new SecretScrubber()
+    const resolvedServerIds = new Set<string>()
     const mcpServers = await this.buildMcpServersForAdapter(
       agentId,
       { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined },
-      scrubber
+      scrubber,
+      resolvedServerIds
     )
 
     // Rewrite the memory file before the harness reads it. A resumed session
@@ -4238,7 +4284,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       secretSessionToken: secretToken,
       taskContextMode: resumeTaskContextMode,
       nativeResumeAwaitingAck: !!pendingMarker,
-      scrubber
+      scrubber,
+      mcpServerIds: resolvedServerIds
     })
 
     // Persist the resumed session binding and tell the renderer BEFORE any
@@ -5338,6 +5385,14 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // Cancel any pending serverOverloaded retry — the session is going away.
     this.overloadRetryTracker.reset(sessionId)
 
+    // Captured BEFORE the buildSessionConfig call below (which refreshes
+    // `session.mcpServerIds` as a side effect, for the destroySession
+    // config it builds) — this is the MCP cleanup block's actual source of
+    // truth: the rows this session last registered while genuinely running,
+    // not whatever a config re-read happens to say by the time it's
+    // stopping (round 4, Minor — see AgentSession.mcpServerIds's docstring).
+    const ownedMcpServerIds = session.mcpServerIds ?? new Set<string>()
+
     // Destroy via adapter
     const adapter = this.getAdapter(session.agentId)
     if (adapter) {
@@ -5356,25 +5411,23 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     }
 
     // Clean up MCP auth-proxy registrations and local-server env files for
-    // every MCP server this agent is configured with — but ONLY once no
-    // other live session still depends on that row (re-review, round 3,
+    // every MCP server row THIS SESSION actually registered (ownedMcpServerIds,
+    // captured above — not a fresh agent-config re-read, which could have
+    // drifted from what this session's own live process has wired up if the
+    // agent's config was edited mid-session; round 4, Minor) — but ONLY once
+    // no other live session still depends on that row (re-review, round 3,
     // Major: see isMcpServerRowStillInUse's docstring). This session's own
     // scrubber is always removed from the row's scrubber registry
     // regardless — that removal is per-session-instance, not per-row, so
     // it's safe even while other sessions keep using the row.
-    {
-      const agent = this.db.getAgent(session.agentId)
-      const mcpEntries = agent?.config?.mcp_servers || []
-      for (const entry of mcpEntries) {
-        const serverId = typeof entry === 'string' ? entry : entry.serverId
-        const mcpServer = this.db.getMcpServer(serverId)
-        if (!mcpServer) continue
-        if (session.scrubber) this.mcpServerScrubbersByKey.get(mcpServer.id)?.delete(session.scrubber)
-        if (this.isMcpServerRowStillInUse(mcpServer.id, sessionId)) continue
-        if (mcpServer.type === 'remote') unregisterMcpProxyTargetByKey(mcpServer.id)
-        else if (mcpServer.type === 'local') cleanupLocalMcpEnvFile(mcpServer.id)
-        this.mcpServerScrubbersByKey.delete(mcpServer.id)
-      }
+    for (const serverId of ownedMcpServerIds) {
+      const mcpServer = this.db.getMcpServer(serverId)
+      if (!mcpServer) continue
+      if (session.scrubber) this.mcpServerScrubbersByKey.get(mcpServer.id)?.delete(session.scrubber)
+      if (this.isMcpServerRowStillInUse(mcpServer.id, sessionId)) continue
+      if (mcpServer.type === 'remote') unregisterMcpProxyTargetByKey(mcpServer.id)
+      else if (mcpServer.type === 'local') cleanupLocalMcpEnvFile(mcpServer.id)
+      this.mcpServerScrubbersByKey.delete(mcpServer.id)
     }
 
     // Eagerly clear dedup structures to free memory immediately (don't wait for GC)
