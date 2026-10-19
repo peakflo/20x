@@ -158,6 +158,8 @@ export interface CreateChildQuestionInput {
   authorityCategories: string[]
   state: ChildQuestionState
   escalateAt: number | null
+  /** Set when `state` is already `escalated` at creation time (immediate, out-of-authority escalation) — so a later revert (claim failure, or `recoverStuckAnswering`) can tell "this was always escalated" from "this was pending_parent", the same way it already can for one escalated after the fact via `claimAndEscalate`. */
+  escalatedAt?: number | null
 }
 
 export interface UpdateChildQuestionStatePatch {
@@ -187,7 +189,7 @@ export class ChildQuestionStore {
             id, child_task_id, parent_task_id, question_id, kind, question_text, options,
             tool_name, command, context_excerpt, requires_human, authority_categories, state,
             answer, option_id, note, answered_by, created_at, updated_at, escalate_at, escalated_at, answered_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, NULL, NULL)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?, ?, ?, NULL)`
         )
         .run(
           id,
@@ -205,7 +207,8 @@ export class ChildQuestionStore {
           input.state,
           nowMs,
           nowMs,
-          input.escalateAt
+          input.escalateAt,
+          input.escalatedAt ?? null
         )
     } catch (err) {
       if (err instanceof Error && /UNIQUE constraint failed/.test(err.message)) return null
@@ -279,6 +282,25 @@ export class ChildQuestionStore {
         `UPDATE child_questions SET state = CASE WHEN escalated_at IS NOT NULL THEN 'escalated' ELSE 'pending_parent' END, updated_at = ? WHERE id = ? AND state = 'answering'`
       )
       .run(nowMs, id)
+  }
+
+  /**
+   * Same revert as `revertClaim`, but for every row that's been stuck in
+   * `answering` past `olderThanMs` (a claim whose holder crashed, or
+   * otherwise never reached the try/catch that would have reverted it
+   * itself) — not one specific id. While a row sits stuck like this, it is
+   * unclaimable (not `pending_parent`/`escalated`) so neither the parent nor
+   * a human can answer it at all. Called both at startup (recovering
+   * anything left over from before a restart) and on the periodic sweep (a
+   * ~2 minute backstop against an in-process holder that silently hung).
+   */
+  recoverStuckAnswering(nowMs: number, olderThanMs: number): number {
+    const result = this.db
+      .prepare(
+        `UPDATE child_questions SET state = CASE WHEN escalated_at IS NOT NULL THEN 'escalated' ELSE 'pending_parent' END, updated_at = ? WHERE state = 'answering' AND updated_at < ?`
+      )
+      .run(nowMs, nowMs - olderThanMs)
+    return result.changes
   }
 
   /** Escalates a row atomically, only from `pending_parent` — races safely against a concurrent claim/answer. */
@@ -421,6 +443,8 @@ export type AnswerChildQuestionResult =
   | { error: string }
 
 const ESCALATION_SWEEP_INTERVAL_MS = 30 * 1000
+/** How long a row may sit claimed (`answering`) before it's treated as stuck — its holder crashed, or otherwise never reached the revert. */
+const STUCK_ANSWERING_RECOVERY_MS = 2 * 60 * 1000
 
 export class ChildQuestionService {
   private readonly now: () => number
@@ -430,12 +454,28 @@ export class ChildQuestionService {
     this.now = deps.now ?? Date.now
   }
 
-  /** Starts the periodic automatic-escalation sweep (every 30s), plus an immediate pass for anything overdue from before a restart. */
+  /**
+   * Starts the periodic automatic-escalation sweep (every 30s), plus an
+   * immediate pass for anything overdue from before a restart. Also
+   * recovers any row stuck in `answering` from before a restart (its claim
+   * holder never got the chance to revert it) and re-checks on the same
+   * 30s cadence as a backstop against an in-process holder that silently
+   * hung past `STUCK_ANSWERING_RECOVERY_MS`.
+   */
   startSweep(): void {
     if (this.sweepTimer) return
-    this.sweepTimer = setInterval(() => this.sweepEscalations(), ESCALATION_SWEEP_INTERVAL_MS)
+    this.sweepTimer = setInterval(() => {
+      this.sweepEscalations()
+      this.recoverStuckAnswering()
+    }, ESCALATION_SWEEP_INTERVAL_MS)
     this.sweepTimer.unref?.()
     this.sweepEscalations()
+    this.recoverStuckAnswering()
+  }
+
+  /** See `startSweep`'s doc comment. Exposed on its own so it can also be called from a one-off startup-repair pass, without waiting on the periodic timer. */
+  recoverStuckAnswering(): number {
+    return this.deps.store.recoverStuckAnswering(this.now(), STUCK_ANSWERING_RECOVERY_MS)
   }
 
   stopSweep(): void {
@@ -452,7 +492,7 @@ export class ChildQuestionService {
    */
   private computeRouting(
     childTask: { id: string; parent_task_id: string | null },
-    authorityInput: { toolName?: string | null; command?: string | null; questionText: string; workspaceDir?: string | null }
+    authorityInput: { kind: ChildQuestionKind; toolName?: string | null; command?: string | null; questionText: string; workspaceDir?: string | null }
   ): { mustEscalate: boolean; requiresHuman: boolean; authorityCategories: string[]; parentTaskId: string | null; parentReachable: boolean; timeoutMs: number } {
     const parentTaskId = childTask.parent_task_id
     const parentTask = parentTaskId ? this.deps.getTask(parentTaskId) : undefined
@@ -464,17 +504,25 @@ export class ChildQuestionService {
     // entirely (`git push --force origin main` reads nothing like "merge the
     // PR") — the command gate is default-deny for anything that looks like a
     // shell/network/file-write action, independent of wording.
-    // Only fed a real `toolName`/`command` — NOT `questionText`. questionText
-    // is an English sentence ("Run tests?"), not command syntax, and feeding
-    // it to the command classifier's default-deny allowlist would just
-    // misclassify ordinary approvals as unrecognized. When there's no
-    // structured command at all, this returns requiresHuman: false and the
-    // prose gate above is what's actually doing the classifying.
-    const commandAuthority = classifyCommandAuthority({
-      toolName: authorityInput.toolName,
-      command: authorityInput.command,
-      workspaceDir: authorityInput.workspaceDir
-    })
+    //
+    // Only run for `kind === 'approval'`, and only fed a real
+    // `toolName`/`command` — NOT `questionText`. A `question`-kind item
+    // (AskUserQuestion, free text) legitimately has neither field, and the
+    // command classifier is now itself default-deny for empty input
+    // (unrecognised/no structured data → requires a human) — running it on
+    // every plain-text question would force EVERY question to escalate
+    // regardless of what it actually asks. questionText is also an English
+    // sentence ("Run tests?"), not command syntax, and feeding it to the
+    // command classifier's allowlist would just misclassify ordinary
+    // approvals as unrecognized. Free text is the prose gate's job, above.
+    const commandAuthority =
+      authorityInput.kind === 'approval'
+        ? classifyCommandAuthority({
+            toolName: authorityInput.toolName,
+            command: authorityInput.command,
+            workspaceDir: authorityInput.workspaceDir
+          })
+        : { requiresHuman: false, categories: [] as string[] }
     const requiresHuman = proseAuthority.requiresHumanAuthorization || commandAuthority.requiresHuman
     const authorityCategories = [...new Set([...proseAuthority.categories, ...commandAuthority.categories])]
 
@@ -500,19 +548,6 @@ export class ChildQuestionService {
       parentReachable,
       timeoutMs: policy.escalationTimeoutMs ?? DEFAULT_CHILD_QUESTION_ESCALATION_TIMEOUT_MS
     }
-  }
-
-  /**
-   * Preview-only: would raising this question right now escalate straight
-   * to the human, or go to the parent? Used to suppress the immediate
-   * human push/OS notification for a subtask question that is about to be
-   * routed to its parent instead (item 11) — writes nothing, raises
-   * nothing.
-   */
-  wouldEscalate(childTaskId: string, authorityInput: { toolName?: string | null; command?: string | null; questionText: string; workspaceDir?: string | null }): boolean {
-    const childTask = this.deps.getTask(childTaskId)
-    if (!childTask) return true
-    return this.computeRouting(childTask, authorityInput).mustEscalate
   }
 
   /**
@@ -547,7 +582,8 @@ export class ChildQuestionService {
         requiresHuman,
         authorityCategories,
         state: mustEscalate ? 'escalated' : 'pending_parent',
-        escalateAt: mustEscalate ? null : now + timeoutMs
+        escalateAt: mustEscalate ? null : now + timeoutMs,
+        escalatedAt: mustEscalate ? now : null
       },
       now
     )
@@ -673,6 +709,26 @@ export class ChildQuestionService {
     })
 
     return { success: true, record: this.deps.store.get(record.id)! }
+  }
+
+  /**
+   * A plain chat message (sendByTaskId / agentSession:send / the MCP
+   * send_message tool / the mobile /send route) — NOT the dedicated
+   * Approve/Reject buttons — arriving while a live child question exists.
+   *
+   * Only a `question`-kind item can be resolved this way. A live `approval`
+   * is left strictly alone: typing "no, don't" (or anything else) in chat
+   * must never be read as `{ approved: true }`, and guessing a rejection
+   * out of free text is just as unsafe the other way (a human might type
+   * "no rush, go ahead" while discussing something unrelated). Approve and
+   * Reject are the only way to answer an approval — this returns `null` for
+   * one, same as "nothing live to claim", so the caller falls through to
+   * delivering the message as an ordinary chat message instead.
+   */
+  async answerAsHumanViaMessage(childTaskId: string, message: string): Promise<AnswerChildQuestionResult | null> {
+    const record = this.deps.store.latestLiveForChild(childTaskId)
+    if (!record || record.kind !== 'question') return null
+    return this.answerAsHuman(childTaskId, undefined, { answer: message })
   }
 
   /**

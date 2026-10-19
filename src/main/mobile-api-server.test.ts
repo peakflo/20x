@@ -308,13 +308,13 @@ describe('mobile-api-server: a human answering directly claims the live child qu
     return token
   }
 
-  it('POST /api/sessions/:id/send claims the live question for the given task instead of sending directly', async () => {
-    const answerAsHuman = vi.fn(async () => ({ success: true, record: { id: 'cq-1' } }))
+  it('POST /api/sessions/:id/send claims a live QUESTION for the given task instead of sending directly', async () => {
+    const answerAsHumanViaMessage = vi.fn(async () => ({ success: true, record: { id: 'cq-1' } }))
     const sendMessage = vi.fn(async () => ({ success: true }))
     const agentManager = {
       noteUserTaskActivity: vi.fn(),
       sendMessage,
-      getChildQuestionService: vi.fn(() => ({ answerAsHuman }))
+      getChildQuestionService: vi.fn(() => ({ answerAsHumanViaMessage }))
     }
     const { db, portPromise } = startServer(agentManager)
     const port = await portPromise
@@ -326,17 +326,17 @@ describe('mobile-api-server: a human answering directly claims the live child qu
       body: JSON.stringify({ message: 'hello', taskId: 'task-1' })
     })
 
-    expect(answerAsHuman).toHaveBeenCalledWith('task-1', undefined, { approved: true, answer: 'hello' })
+    expect(answerAsHumanViaMessage).toHaveBeenCalledWith('task-1', 'hello')
     expect(sendMessage).not.toHaveBeenCalled()
   })
 
   it('POST /api/sessions/:id/send falls through to a direct send when there is nothing live to claim', async () => {
-    const answerAsHuman = vi.fn(async () => null)
+    const answerAsHumanViaMessage = vi.fn(async () => null)
     const sendMessage = vi.fn(async () => ({ success: true }))
     const agentManager = {
       noteUserTaskActivity: vi.fn(),
       sendMessage,
-      getChildQuestionService: vi.fn(() => ({ answerAsHuman }))
+      getChildQuestionService: vi.fn(() => ({ answerAsHumanViaMessage }))
     }
     const { db, portPromise } = startServer(agentManager)
     const port = await portPromise
@@ -349,6 +349,28 @@ describe('mobile-api-server: a human answering directly claims the live child qu
     })
 
     expect(sendMessage).toHaveBeenCalledWith('session-1', 'hello', 'task-1', undefined, undefined)
+  })
+
+  it('POST /api/sessions/:id/send with "no, don\'t" while a live APPROVAL is pending delivers it as a normal message — it must NOT approve the command', async () => {
+    const answerAsHumanViaMessage = vi.fn(async () => null)
+    const sendMessage = vi.fn(async () => ({ success: true }))
+    const agentManager = {
+      noteUserTaskActivity: vi.fn(),
+      sendMessage,
+      getChildQuestionService: vi.fn(() => ({ answerAsHumanViaMessage }))
+    }
+    const { db, portPromise } = startServer(agentManager)
+    const port = await portPromise
+    const token = pairToken(db)
+
+    await fetch(`http://127.0.0.1:${port}/api/sessions/session-1/send`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: "no, don't", taskId: 'task-1' })
+    })
+
+    expect(answerAsHumanViaMessage).toHaveBeenCalledWith('task-1', "no, don't")
+    expect(sendMessage).toHaveBeenCalledWith('session-1', "no, don't", 'task-1', undefined, undefined)
   })
 
   it('POST /api/sessions/:id/approve resolves the task from the session and claims it by the exact requestId', async () => {

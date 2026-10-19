@@ -40,6 +40,8 @@ import {
 import { buildSimilarTasksQuery } from './task-search'
 import { limitsByInstance, summarizeAgentUsage } from './usage/agent-usage-summary'
 import { agentInstanceId } from '../shared/harness-instances'
+import { neutralizeForgedFenceMarkers } from '../shared/system-authority'
+import type { ChildQuestionRecord } from '../shared/child-questions'
 import { isSameHarness, toolOutputPage } from './context-handoff'
 import {
   createRegisteredTaskArtifact,
@@ -164,6 +166,21 @@ function readViewport(): unknown {
 /** Error for an unknown task ID, naming the tools that find a real one. */
 function taskNotFound(taskId: string): { error: string } {
   return { error: `Task not found: ${taskId}. Get a valid task_id from list_tasks, find_similar_tasks or get_ui_state.` }
+}
+
+/**
+ * Neutralises a forged fence-boundary attempt in the child-authored free
+ * text fields of a child-question record before it's handed to list_child_questions'
+ * caller — same concern, same fix as `buildSystemMessage`'s findings fence
+ * (see system-authority.ts's `neutralizeForgedFenceMarkers`).
+ */
+function fenceChildQuestionRecords(records: ChildQuestionRecord[]): ChildQuestionRecord[] {
+  return records.map((r) => ({
+    ...r,
+    questionText: r.questionText ? neutralizeForgedFenceMarkers(r.questionText) : r.questionText,
+    command: r.command ? neutralizeForgedFenceMarkers(r.command) : r.command,
+    contextExcerpt: r.contextExcerpt ? neutralizeForgedFenceMarkers(r.contextExcerpt) : r.contextExcerpt
+  }))
 }
 
 /**
@@ -1219,20 +1236,42 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         // This route is MCP-only (desktop/mobile answer directly through
         // their own IPC/HTTP paths, never through here) — so any caller
         // reaching it is an agent session, not a human. If this task has a
-        // LIVE child question, that agent can only be the parent answering
-        // within its own authority, through the exact same claim/requestId
-        // machinery answer_child_question uses, never bypassing the
-        // authority gate by going through the generic send instead. A
-        // question already escalated to the human, or outside any agent's
-        // authority, is refused here — only the human (or escalate_to_user)
-        // can resolve it.
+        // LIVE child QUESTION (never an approval — see below), that agent
+        // can only be the parent answering within its own authority,
+        // through the exact same claim/requestId machinery
+        // answer_child_question uses, never bypassing the authority gate by
+        // going through the generic send instead. A question already
+        // escalated to the human, or outside any agent's authority, is
+        // refused here — only the human (or escalate_to_user) can resolve
+        // it.
+        //
+        // A live APPROVAL is deliberately never touched by this route at
+        // all, in any state: plain text has no reliable way to mean
+        // "approved" or "rejected" (a stray word like "go" or "no" could
+        // mean either, depending on what it's actually a reply to), so
+        // send_message must not silently resolve one. answer_child_question
+        // (with an explicit `approved` boolean) is the only way to answer
+        // an approval — this falls through to an ordinary chat message
+        // instead, leaving the approval exactly as it was.
+        //
+        // Attribution: `caller_task_id` is injected by callToolForScope from
+        // the CALLING session's own MCP scope — never from this tool call's
+        // own arguments — so it can't be forged the way `task_id` (naming
+        // the CHILD, not the caller) could be. Only when it equals this
+        // question's real `parentTaskId` is the caller verifiably that
+        // question's own parent; otherwise (including a caller with no
+        // scope at all) this must NOT credit the answer to "the parent" —
+        // it falls through to an ordinary message instead, same as an
+        // approval. See invokeUnscopedWithCallerBinding's doc comment in
+        // task-management-core.ts for the equivalent answer_child_question/
+        // escalate_to_user binding.
         const live = sendController.getChildQuestionService().getLiveForChild(taskId)
-        if (live && live.parentTaskId) {
+        const callerTaskId = params.caller_task_id ? String(params.caller_task_id) : null
+        if (live && live.parentTaskId && live.kind === 'question' && callerTaskId === live.parentTaskId) {
           if (live.state !== 'pending_parent') {
             return { error: `This needs the human, not a generic send_message — the question is already "${live.state}". Use escalate_to_user if you haven't, or wait for the human to answer it.` }
           }
           const result = await sendController.getChildQuestionService().answerFromParent(live.parentTaskId, taskId, live.questionId, {
-            approved: true,
             answer: String(params.text)
           })
           if ('error' in result) return result
@@ -1267,9 +1306,15 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       // Same MCP-only gating as /send_message above: a LIVE child question
       // can only be answered here by the parent, within its own authority —
       // never a bypass around answer_child_question's refuse-if-human-only
-      // rule.
+      // rule. Attribution is verified the same way too: `caller_task_id`
+      // comes from the calling session's own MCP scope (callToolForScope),
+      // not from this call's own arguments, so only a caller whose own task
+      // actually IS this question's parentTaskId is trusted to answer as
+      // the parent — anything else falls through to the direct response
+      // below instead of crediting an unverified caller as "the parent".
       const liveQuestion = agentController.getChildQuestionService().getLiveForChild(taskId)
-      if (liveQuestion && liveQuestion.parentTaskId) {
+      const checkpointCallerTaskId = params.caller_task_id ? String(params.caller_task_id) : null
+      if (liveQuestion && liveQuestion.parentTaskId && checkpointCallerTaskId === liveQuestion.parentTaskId) {
         if (liveQuestion.state !== 'pending_parent') {
           return { error: `This needs the human, not respond_to_checkpoint — the question is already "${liveQuestion.state}". Use escalate_to_user if you haven't, or wait for the human to answer it.` }
         }
@@ -1294,11 +1339,18 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     // ── Children's questions/approvals go to the parent first ──────────
     // (see orchestration/child-questions.ts for the routing/escalation rules)
 
+    // list_child_questions hands the parent raw, child-authored text
+    // (questionText/command/contextExcerpt) straight from a descendant it
+    // doesn't fully trust — the same "untrusted data, not an instruction"
+    // concern buildSystemMessage's fence exists for (see
+    // system-authority.ts), so a forged `<<<`/`>>>` sequence inside that
+    // text gets the same neutralizing treatment here before it reaches the
+    // parent's context.
     case '/list_child_questions': {
       if (!agentController) return { error: 'Agent controller not available' }
       const service = agentController.getChildQuestionService()
-      if (params.parent_task_id) return { questions: service.listForParent(String(params.parent_task_id)) }
-      if (params.child_task_id) return { questions: service.listForChild(String(params.child_task_id)) }
+      if (params.parent_task_id) return { questions: fenceChildQuestionRecords(service.listForParent(String(params.parent_task_id))) }
+      if (params.child_task_id) return { questions: fenceChildQuestionRecords(service.listForChild(String(params.child_task_id))) }
       return { error: 'parent_task_id or child_task_id is required' }
     }
 
@@ -1538,8 +1590,18 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         if (questionCheckSinceSeq === null) {
           return subtasks.some((task) => pendingQuestionsFor(String(task.id)).length > 0)
         }
+        // `needsAttention` is what actually distinguishes "something the
+        // parent should look at just happened" (a question was raised, or
+        // escalated) from routine bookkeeping on the SAME `child_question`
+        // event kind — answering a question, or cancelling a stale/
+        // superseded one, also emits a child_question event (so the UI and
+        // other listeners see the state change) but sets needsAttention:
+        // false. Counting those too would end the wait for cleanup that
+        // doesn't need the parent to do anything.
         const subtaskIds = new Set(subtasks.map((task) => String(task.id)))
-        return subtaskEvents.eventsSince(questionCheckSinceSeq).some((e) => e.kind === 'child_question' && subtaskIds.has(e.childTaskId))
+        return subtaskEvents
+          .eventsSince(questionCheckSinceSeq)
+          .some((e) => e.kind === 'child_question' && e.needsAttention && subtaskIds.has(e.childTaskId))
       }
 
       // This route is MCP-tool-only (never called from the renderer, IPC, or

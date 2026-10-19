@@ -665,14 +665,12 @@ export function registerIpcHandlers(
     'agentSession:sendByTaskId',
     async (_, taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
       agentManager.noteUserTaskActivity(taskId)
-      // Claim-first: if there's a live child question for this task, answer
-      // it THROUGH the claim (so a concurrent parent answer can't also reach
-      // the harness) instead of sending directly and reconciling after.
-      // `questionId` is omitted — a plain chat answer has no exact harness
-      // request id to match against — falling back to the single current
-      // live question for this child.
+      // Claim-first: if there's a live child QUESTION (not an approval —
+      // see answerAsHumanViaMessage) for this task, answer it THROUGH the
+      // claim (so a concurrent parent answer can't also reach the harness)
+      // instead of sending directly and reconciling after.
       try {
-        const claimed = await agentManager.getChildQuestionService().answerAsHuman(taskId, undefined, { approved: true, answer: message })
+        const claimed = await agentManager.getChildQuestionService().answerAsHumanViaMessage(taskId, message)
         if (claimed) {
           if ('error' in claimed) return claimed
           return { success: true, sessionId: null }
@@ -691,7 +689,7 @@ export function registerIpcHandlers(
       agentManager.noteUserTaskActivity(taskId, sessionId)
       if (taskId) {
         try {
-          const claimed = await agentManager.getChildQuestionService().answerAsHuman(taskId, undefined, { approved: true, answer: message })
+          const claimed = await agentManager.getChildQuestionService().answerAsHumanViaMessage(taskId, message)
           if (claimed) {
             if ('error' in claimed) return claimed
             return { success: true }

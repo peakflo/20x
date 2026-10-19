@@ -277,6 +277,39 @@ type PiMessage = {
   errorMessage?: string
 }
 
+/**
+ * Pulls the real tool name and (when present) a command/path straight out of
+ * our own permission extension's confirm request (see
+ * PI_PERMISSION_EXTENSION_SOURCE above: `ctx.ui.confirm("Allow {toolName}?",
+ * inputSummary(event.input))`), instead of leaving the authority classifier
+ * to re-derive them from free prose.
+ *
+ * `title` is always exactly `Allow {toolName}?` — that format is ours, not
+ * Pi's, so the regex is safe to rely on. `message` is
+ * `JSON.stringify(event.input, null, 2)` when it serialized cleanly (falls
+ * back to `String(input)` on failure, in which case it won't parse here and
+ * command/path are simply left undefined — not a regression, since there
+ * was never anything structured to read in that case).
+ */
+function extractPiToolInput(title: string, message: string): { toolName?: string; command?: string; path?: string } {
+  const toolName = title.match(/^Allow\s+(.+?)\?\s*$/)?.[1]
+  let input: unknown
+  try {
+    input = JSON.parse(message)
+  } catch {
+    return { toolName }
+  }
+  if (!input || typeof input !== 'object') return { toolName }
+  const obj = input as Record<string, unknown>
+  const commandKey = ['command', 'cmd', 'script'].find((k) => typeof obj[k] === 'string')
+  const pathKey = ['path', 'file_path', 'filePath', 'directory', 'dir', 'url'].find((k) => typeof obj[k] === 'string')
+  return {
+    toolName,
+    command: commandKey ? (obj[commandKey] as string) : undefined,
+    path: pathKey ? (obj[pathKey] as string) : undefined
+  }
+}
+
 function textFromContent(content: unknown): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
@@ -1025,12 +1058,19 @@ export class PiAdapter implements CodingAgentAdapter {
     toolCallId: string
     question: string
     options: Array<{ optionId: string; name: string; kind: string }>
+    /** Pi's own tool name, straight out of our permission extension's `Allow {toolName}?` title (see PI_PERMISSION_EXTENSION_SOURCE above) — independent of the human-readable `question` text. */
+    toolName?: string
+    /** The raw shell command, when the tool's JSON input (the `message`, which our extension builds as `JSON.stringify(event.input)`) carries one under a recognized key. */
+    command?: string
+    /** The raw file/directory path, same source, under a recognized key. */
+    path?: string
   } | null {
     const session = this.sessions.get(sessionId)
     const request = session
       ? Array.from(session.pendingUiRequests.values()).find((item) => item.method === 'confirm')
       : undefined
     if (!request) return null
+    const { toolName, command, path } = extractPiToolInput(request.title, request.message)
     return {
       requestId: request.id,
       toolCallId: request.id,
@@ -1039,6 +1079,9 @@ export class PiAdapter implements CodingAgentAdapter {
         { optionId: 'approved', name: 'Yes', kind: 'allow_once' },
         { optionId: 'abort', name: 'No', kind: 'reject_once' },
       ],
+      toolName,
+      command,
+      path
     }
   }
 

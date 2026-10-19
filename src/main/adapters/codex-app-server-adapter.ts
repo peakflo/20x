@@ -82,6 +82,10 @@ interface PendingApproval {
     kind: string
   }>
   responseKind: 'execCommand' | 'commandExecution' | 'fileChange' | 'permissions' | 'elicitation' | 'userInput' | 'generic'
+  /** The raw shell command, when this is an execCommand/commandExecution approval — straight from `params.command`, not reparsed out of the human-readable `question` text. */
+  command?: string
+  /** Changed-file paths, when this is a fileChange approval — from `params.changes[].path`, falling back to a single `params.path`. Empty/absent means the approval didn't name a path at all (treated as out-of-workspace by the authority classifier, not as "no path to check"). */
+  fileChangePaths?: string[]
 }
 
 interface AppServerSession {
@@ -343,6 +347,16 @@ function uniquePaths(paths: string[]): string[] {
 function isSubpath(parent: string, child: string): boolean {
   const rel = relative(resolve(parent), resolve(child))
   return rel === '' || (!!rel && !rel.startsWith('..') && !isAbsolute(rel))
+}
+
+/** Changed-file paths out of a fileChange approval's params — same shape `extractToolTitle` above reads off a completed `fileChange` thread item (`changes[].path`), falling back to a single top-level `path`. */
+function extractFileChangePaths(params: Record<string, unknown>): string[] {
+  const changes = Array.isArray(params.changes)
+    ? params.changes.filter(isObject).map((change) => asString(change.path)).filter((path): path is string => !!path)
+    : []
+  if (changes.length > 0) return changes
+  const directPath = asString(params.path)
+  return directPath ? [directPath] : []
 }
 
 function summarizeApproval(params: Record<string, unknown>, fallback: string): string {
@@ -1352,6 +1366,8 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       requestId: request.id,
       toolCallId,
       question: summarizeApproval(params, request.method),
+      command: asString(params.command) || undefined,
+      fileChangePaths: responseKind === 'fileChange' ? extractFileChangePaths(params) : undefined,
       options: approvalOptions,
       responseKind
     }

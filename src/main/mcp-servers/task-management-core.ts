@@ -437,7 +437,12 @@ const mastermindTools: Tool[] = [
           enum: ['all_terminal', 'any_terminal', 'any_event'],
           description: 'all_terminal: every selected subtask has reached a terminal status. any_terminal: as soon as one has. any_event: also returns the moment a child question is raised (waiting for the parent or escalated) or a subtask ends needing attention, even if none are fully terminal yet. Defaults to all_terminal.'
         },
-        terminal_statuses: { type: 'array', items: { type: 'string' }, description: 'Optional terminal statuses to treat as done. Defaults to ready_for_review + completed + model_error.' }
+        terminal_statuses: { type: 'array', items: { type: 'string' }, description: 'Optional terminal statuses to treat as done. Defaults to ready_for_review + completed + model_error.' },
+        since_seq: {
+          type: 'number',
+          description:
+            'For return_when: "any_event" — the `since_seq` from a PREVIOUS call\'s result. Pass it back on every retry so a child-question event this call already saw (including one that is still live and unanswered) is not reported as "new" again, which would otherwise return instantly done on every retry. Omit on the first call. Every result (including a timed-out one) includes the current `since_seq` to pass next time.'
+        }
       },
       required: ['parent_task_id']
     }
@@ -1121,6 +1126,44 @@ export function listToolsForScope(scope: TaskMcpScope) {
 }
 
 /**
+ * Binds `parent_task_id` to the actual calling session's own task for the
+ * two tools that let an agent act within its own authority over a
+ * descendant (`answer_child_question`, `escalate_to_user`) — never trusting
+ * whatever `parent_task_id` the tool CALL's arguments merely claim. Without
+ * this, any unscoped session could pass any other task's id as
+ * `parent_task_id` and answer or escalate a question belonging to a task it
+ * has no relationship to, as if it were that task's own session — the
+ * server-side `isDescendant` check further downstream only verifies a path
+ * from the CLAIMED parent to the child, never who is actually calling.
+ *
+ * `scope.taskId` is the one thing here that is NOT caller-supplied — it
+ * comes from the URL this exact session was configured with (see
+ * `buildTaskManagementMcpConfig` in agent-manager.ts), so it is trustworthy
+ * caller identity. When it's known, the caller's own claim is checked
+ * against it (a mismatch is refused) and then overridden to it regardless,
+ * so a caller doesn't even need to supply `parent_task_id` correctly to get
+ * the right, bound behavior. Every other unscoped tool call passes through
+ * unchanged.
+ */
+async function invokeUnscopedWithCallerBinding(
+  name: string,
+  args: Record<string, unknown>,
+  scope: TaskMcpScope,
+  invoke: TaskApiInvoke
+): Promise<unknown> {
+  if ((name === 'answer_child_question' || name === 'escalate_to_user') && scope.taskId) {
+    const claimed = typeof args.parent_task_id === 'string' ? args.parent_task_id : undefined
+    if (claimed && claimed !== scope.taskId) {
+      return {
+        error: `parent_task_id must be your own task (${scope.taskId}), not another task's id — this tool only lets you act within your own authority over your own descendants.`
+      }
+    }
+    return invoke(`/${name}`, { ...args, parent_task_id: scope.taskId })
+  }
+  return invoke(`/${name}`, args)
+}
+
+/**
  * Runs one tool call for a scope.
  * Returns an MCP tools/call result, and never throws.
  */
@@ -1152,10 +1195,21 @@ export async function callToolForScope(
     if (browserRecordingToolNames.has(name) && (scope.taskId || scope.artifactTaskId)) {
       normalizedArgs.task_id = scope.taskId || scope.artifactTaskId
     }
+    // send_message/respond_to_checkpoint have no parent_task_id argument to
+    // bind the way answer_child_question/escalate_to_user do (their main
+    // argument names the CHILD, not a claimed parent) — so the caller's own
+    // task is injected here instead, as a trusted field no caller argument
+    // can forge, for the Task API route to check its live question's real
+    // parentTaskId against before attributing an answer to "the parent".
+    // Without it, any session that merely knows a child's task_id could
+    // answer its pending question and be credited as that child's parent.
+    if ((name === 'send_message' || name === 'respond_to_checkpoint') && scope.taskId) {
+      normalizedArgs.caller_task_id = scope.taskId
+    }
 
     const result = isScopedSession(scope)
       ? await handleScopedCall(name, normalizedArgs, scope, invoke) as Record<string, unknown> | null
-      : await invoke(`/${name}`, normalizedArgs) as Record<string, unknown> | null
+      : await invokeUnscopedWithCallerBinding(name, normalizedArgs, scope, invoke) as Record<string, unknown> | null
 
     if (result?.error) {
       return { content: [{ type: 'text', text: JSON.stringify(result) }], isError: true }

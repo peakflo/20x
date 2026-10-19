@@ -135,6 +135,73 @@ function extractCommandFromText(text: string): string | null {
   return backticked ? backticked[1] : null
 }
 
+/**
+ * Duck-typed shape of whatever `getPendingApproval()` returns, across every
+ * adapter — a superset of each adapter's OWN real structured fields (see
+ * acp-adapter.ts/opencode-adapter.ts/pi-adapter.ts/codex-app-server-adapter.ts),
+ * never populated together since each adapter only ever sets its own.
+ */
+interface PendingApprovalShape {
+  question: string
+  /** Codex only. */
+  responseKind?: string
+  command?: string
+  fileChangePaths?: string[]
+  /** ACP only. */
+  toolCallKind?: string
+  path?: string
+  /** OpenCode only. */
+  permission?: string
+  patterns?: string[]
+  /** Pi only (also doubles as ACP's/generic `toolName`, but never set alongside ACP's `toolCallKind`). */
+  toolName?: string
+}
+
+/**
+ * Pulls a REAL structured {toolName, command} out of whichever
+ * adapter-specific fields `getPendingApproval()` actually populated, instead
+ * of only ever recognising Codex's `responseKind` (the rest fell through to
+ * free-text question scanning, which rarely has backticks — ACP, OpenCode,
+ * and Pi approvals used to look like "nothing structured here" to the
+ * authority classifier, and with its default-deny-on-empty-input rule that
+ * would wrongly force EVERY one of their approvals to escalate, never
+ * routing even a genuinely safe one to the parent).
+ *
+ * Falls back to a backtick-quoted span in the free text when nothing
+ * structured exists at all — then, if even that's empty, the authority
+ * classifier's own default-deny takes over (see command-authority.ts).
+ */
+function extractApprovalAuthorityInput(pending: PendingApprovalShape): { toolName: string | null; command: string | null } {
+  // Codex: responseKind classifies the kind; the real command/paths are
+  // separate fields (see summarizeApproval/extractFileChangePaths there).
+  if (pending.responseKind) {
+    const toolName = responseKindToToolName(pending.responseKind)
+    if (pending.responseKind === 'fileChange') {
+      return { toolName, command: pending.fileChangePaths?.length ? pending.fileChangePaths.join(' ') : null }
+    }
+    return { toolName, command: pending.command ?? null }
+  }
+
+  // ACP: toolCall.kind + rawInput.command/path.
+  if (pending.toolCallKind) {
+    return { toolName: pending.toolCallKind, command: pending.command ?? pending.path ?? null }
+  }
+
+  // OpenCode: permission type + pattern(s) — for `bash` the pattern(s) ARE
+  // the command; for path-ish permissions (edit, external_directory, ...)
+  // they're the path/glob being requested.
+  if (pending.permission) {
+    return { toolName: pending.permission, command: pending.patterns?.length ? pending.patterns.join(' ') : null }
+  }
+
+  // Pi: our own permission extension's tool name + JSON-parsed input.
+  if (pending.toolName) {
+    return { toolName: pending.toolName, command: pending.command ?? pending.path ?? null }
+  }
+
+  return { toolName: null, command: extractCommandFromText(pending.question) }
+}
+
 /** Minimal shape of an AskUserQuestion / `question` tool transcript part — see `AgentTranscriptPanel`'s `QuestionMessage` for the full renderer-side shape this mirrors. */
 interface ChildQuestionToolPart {
   id?: string
@@ -1583,7 +1650,7 @@ export class AgentManager extends EventEmitter {
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
-  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
+  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId?: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
     const result: Record<string, McpServerConfig> = {}
@@ -1675,7 +1742,7 @@ export class AgentManager extends EventEmitter {
    * the same config, including after a resume.
    */
   private buildTaskManagementMcpConfig(
-    opts?: { taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }
+    opts?: { taskScope?: { taskId: string; parentTaskId?: string }; artifactTaskId?: string }
   ): McpServerConfig | null {
     const apiPort = getTaskApiPort()
     if (!apiPort) {
@@ -1748,7 +1815,15 @@ export class AgentManager extends EventEmitter {
     const task = this.db.getTask(taskId)
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
-    const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
+    // Carries this session's OWN task id even when it isn't a subtask — the
+    // MCP endpoint's `scope.taskId` is the one piece of caller identity that
+    // isn't just whatever the tool call's arguments claim (see
+    // `invokeUnscopedWithCallerBinding` in task-management-core.ts), so
+    // answer_child_question/escalate_to_user can bind `parent_task_id` to
+    // who is ACTUALLY calling instead of trusting the argument. parentTaskId
+    // is still only set for a real subtask — that part continues to gate
+    // `isScopedSession` exactly as before.
+    const taskScope = task ? { taskId, parentTaskId: isSubtask ? (task.parent_task_id ?? undefined) : undefined } : undefined
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
 
     // systemPrompt is intentionally task-agnostic and identical every time this
@@ -2413,7 +2488,15 @@ export class AgentManager extends EventEmitter {
     const task = this.db.getTask(taskId)
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
-    const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
+    // Carries this session's OWN task id even when it isn't a subtask — the
+    // MCP endpoint's `scope.taskId` is the one piece of caller identity that
+    // isn't just whatever the tool call's arguments claim (see
+    // `invokeUnscopedWithCallerBinding` in task-management-core.ts), so
+    // answer_child_question/escalate_to_user can bind `parent_task_id` to
+    // who is ACTUALLY calling instead of trusting the argument. parentTaskId
+    // is still only set for a real subtask — that part continues to gate
+    // `isScopedSession` exactly as before.
+    const taskScope = task ? { taskId, parentTaskId: isSubtask ? (task.parent_task_id ?? undefined) : undefined } : undefined
     await yieldEL()
 
     // Build MCP servers config for adapter
@@ -3822,7 +3905,15 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const task = this.db.getTask(taskId)
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
-    const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
+    // Carries this session's OWN task id even when it isn't a subtask — the
+    // MCP endpoint's `scope.taskId` is the one piece of caller identity that
+    // isn't just whatever the tool call's arguments claim (see
+    // `invokeUnscopedWithCallerBinding` in task-management-core.ts), so
+    // answer_child_question/escalate_to_user can bind `parent_task_id` to
+    // who is ACTUALLY calling instead of trusting the argument. parentTaskId
+    // is still only set for a real subtask — that part continues to gate
+    // `isScopedSession` exactly as before.
+    const taskScope = task ? { taskId, parentTaskId: isSubtask ? (task.parent_task_id ?? undefined) : undefined } : undefined
     await yieldEL()
 
     const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
@@ -4551,27 +4642,38 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
             // Verify this is still the exact request we raised — a stale/
             // superseded approval must never be silently answered, and the
             // adapter's own pending-approval id is the only reliable source
-            // of truth for "what is pending right now".
+            // of truth for "what is pending right now". An EMPTY id (the
+            // adapter reports something pending, but it couldn't be
+            // identified) is just as unverifiable as a mismatched one — it
+            // must refuse, not silently proceed as if it matched.
             const adapter = this.getAdapter(found.session.agentId)
             if (adapter && 'getPendingApproval' in adapter && typeof (adapter as unknown as { getPendingApproval?: unknown }).getPendingApproval === 'function') {
               const pending = (adapter as unknown as { getPendingApproval: (sid: string) => { requestId?: string | number; toolCallId?: string } | null }).getPendingApproval(found.sessionId)
-              const pendingId = pending ? String(pending.requestId ?? pending.toolCallId ?? '') : null
-              if (pending && pendingId && pendingId !== requestId) {
-                throw new Error(`This approval no longer matches what is pending for the session (expected ${requestId}, got ${pendingId}) — it may have been superseded or already answered.`)
-              }
               if (!pending) {
                 throw new Error('There is no pending approval for this session anymore — it may have already been answered.')
+              }
+              const pendingId = String(pending.requestId ?? pending.toolCallId ?? '')
+              if (!pendingId || pendingId !== requestId) {
+                throw new Error(`This approval no longer matches what is pending for the session (expected ${requestId}, got ${pendingId || 'none'}) — it may have been superseded or already answered.`)
               }
             }
             await this.respondToPermission(found.sessionId, input.approved, input.answer, input.optionId, 'permission', requestId)
           } else {
             // The "question" tool / AskUserQuestion: the same path the human
             // UI's plain send uses — the answer becomes the agent's next
-            // message. There is no adapter-level "is this still the pending
-            // question" check available for this path (unlike approvals,
-            // these harnesses expose no addressable pending-question id), so
-            // this one request-id guard is not enforced here — a known,
-            // narrower gap than the approval path's.
+            // message. There is no adapter-level "is THIS SPECIFIC question
+            // still pending" id (unlike approvals, these harnesses expose no
+            // addressable pending-question id) — but whether the session
+            // still has ANY question outstanding at all is a real,
+            // enforceable proxy (the same signal push notifications already
+            // key off of): if the session has already moved on (resumed
+            // working, or never had a question pending to begin with),
+            // answering now would just inject a stray chat message into
+            // whatever the agent does next, not actually reach the question
+            // this was raised for.
+            if (!this.pushEvents.hasPendingQuestion(found.sessionId)) {
+              throw new Error('This question is no longer pending for the session — it may have already been answered, or the session has moved on.')
+            }
             await this.sendByTaskId(childTaskId, input.answer ?? input.optionId ?? (input.approved ? 'Yes' : 'No'))
           }
         },
@@ -4693,14 +4795,11 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     const pending = (
       adapter as unknown as {
-        getPendingApproval: (sid: string) => {
+        getPendingApproval: (sid: string) => (PendingApprovalShape & {
           requestId?: string | number
           toolCallId?: string
-          question: string
           options?: Array<{ optionId: string; name: string }>
-          /** Codex's app-server protocol classifies the kind of approval — mapped to a toolName below so the authority classifier sees real structure, not just prose. */
-          responseKind?: string
-        } | null
+        }) | null
       }
     ).getPendingApproval(sessionId)
     if (!pending) return
@@ -4709,8 +4808,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const options: ChildQuestionOption[] | null = pending.options?.length
       ? pending.options.map((o) => ({ optionId: o.optionId, label: o.name }))
       : null
-    const toolName = responseKindToToolName(pending.responseKind)
-    const command = extractCommandFromText(pending.question)
+    const { toolName, command } = extractApprovalAuthorityInput(pending)
 
     // The adapter is now showing a DIFFERENT pending request than whatever we
     // last raised for this child — the old one was superseded (answered some

@@ -4163,7 +4163,7 @@ describe('AgentManager child questions go to the parent first', () => {
 
   it('lets the parent answer an approval, which drives respondToPermission and leaves a transcript note', async () => {
     const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
-    const fakeAdapter = { getPendingApproval: vi.fn(() => ({ requestId: 'req-1', question: 'Run the migration?', options: [{ optionId: 'allow', name: 'Yes' }] })) }
+    const fakeAdapter = { getPendingApproval: vi.fn(() => ({ requestId: 'req-1', question: 'Run `npm test`?', options: [{ optionId: 'allow', name: 'Yes' }] })) }
     await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
 
     const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'req-1', { approved: true })
@@ -4171,6 +4171,90 @@ describe('AgentManager child questions go to the parent first', () => {
     expect(result).toMatchObject({ success: true })
     expect(mgr.respondToPermission).toHaveBeenCalledWith('child-session', true, undefined, undefined, 'permission', 'req-1')
     expect((mgr as any).sendToRenderer).toHaveBeenCalledWith('agent:output', expect.objectContaining({ taskId: 'child-1' }))
+  })
+
+  it('refuses to answer an approval when the adapter reports one pending but with NO identifiable id — unverifiable is treated as a mismatch, not skipped', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    // getPendingApproval returns a real pending approval, but one with
+    // neither requestId nor toolCallId set — there is nothing here to
+    // verify "is this still request req-1" against, so this must refuse
+    // rather than silently assume it's fine. getAdapter is stubbed directly
+    // (it normally resolves a real harness adapter by the agent's configured
+    // backend, which this minimal test fixture has none of) so the
+    // verification block inside answerChildSession actually runs against a
+    // controlled getPendingApproval, instead of silently no-opping because
+    // there's no adapter to check at all.
+    const fakeAdapter = {
+      getPendingApproval: vi.fn(() => ({ requestId: undefined, toolCallId: undefined, question: 'Run `npm test`?', options: [] }))
+    }
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(fakeAdapter)
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+    // No requestId/toolCallId on the pending approval — raiseChildApprovalIfNeeded
+    // falls back to a synthesized id (session:question) for the RECORD itself,
+    // which is a fine, stable key for storage; the point under test is that
+    // answering with THAT exact id still refuses, because getPendingApproval's
+    // own id (used to verify what's live right now) is unverifiable.
+    const [raised] = mgr.getChildQuestionService().listForChild('child-1')
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', raised.questionId, { approved: true })
+
+    expect(result).toMatchObject({ error: expect.stringContaining('no longer matches') })
+    expect(mgr.respondToPermission).not.toHaveBeenCalled()
+  })
+
+  it('refuses to answer an approval when the adapter now reports NO pending approval at all (already answered some other way)', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    let pending: { requestId: string; question: string; options: unknown[] } | null = { requestId: 'req-1', question: 'Run `npm test`?', options: [] }
+    const fakeAdapter = { getPendingApproval: vi.fn(() => pending) }
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(fakeAdapter)
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+    pending = null // the harness has moved on — nothing pending anymore
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'req-1', { approved: true })
+
+    expect(result).toMatchObject({ error: expect.stringContaining('no pending approval') })
+    expect(mgr.respondToPermission).not.toHaveBeenCalled()
+  })
+
+  it('answers an approval once the adapter\'s own pending-request id matches the one being answered', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const fakeAdapter = { getPendingApproval: vi.fn(() => ({ requestId: 'req-1', question: 'Run `npm test`?', options: [] })) }
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(fakeAdapter)
+    await (mgr as any).raiseChildApprovalIfNeeded('child-1', 'child-session', fakeAdapter)
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'req-1', { approved: true })
+
+    expect(result).toMatchObject({ success: true })
+    expect(mgr.respondToPermission).toHaveBeenCalledWith('child-session', true, undefined, undefined, 'permission', 'req-1')
+  })
+
+  it('lets the parent answer a live QUESTION, gated on the session still having one pending at all', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const part = { id: 'q-part-1', tool: { name: 'AskUserQuestion', questions: [{ header: 'Env', question: 'Which environment?', options: [{ label: 'staging' }, { label: 'production' }] }] } }
+    // The session-level "is a question pending" signal (shared with push
+    // notifications) must actually be set for the answer to go through —
+    // mirrors a real question having been raised in the live transcript.
+    ;(mgr as any).pushEvents.questionStarted('child-session', part)
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', part)
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'q-part-1', { answer: 'staging' })
+
+    expect(result).toMatchObject({ success: true })
+    expect(mgr.sendByTaskId).toHaveBeenCalledWith('child-1', 'staging')
+  })
+
+  it('refuses to answer a QUESTION once the session has already moved on (no question pending anymore)', async () => {
+    const { mgr } = buildManager({ 'parent-1': parent, 'child-1': child })
+    const part = { id: 'q-part-1', tool: { name: 'AskUserQuestion', questions: [{ header: 'Env', question: 'Which environment?', options: [{ label: 'staging' }, { label: 'production' }] }] } }
+    // Deliberately do NOT mark the question as pending via pushEvents —
+    // models the session having already resumed working (or never having a
+    // question outstanding for this id in the first place).
+    await (mgr as any).raiseChildQuestionIfNeeded('child-1', part)
+
+    const result = await mgr.getChildQuestionService().answerFromParent('parent-1', 'child-1', 'q-part-1', { answer: 'staging' })
+
+    expect(result).toMatchObject({ error: expect.stringContaining('no longer pending') })
+    expect(mgr.sendByTaskId).not.toHaveBeenCalledWith('child-1', 'staging')
   })
 
   it('rejects the parent answering a question for a task that is not its descendant', async () => {

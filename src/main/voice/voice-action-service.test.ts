@@ -71,6 +71,9 @@ function makeService(settings: Record<string, string> = {}) {
     getTranscriptParts: vi.fn(() => []),
     getSetting: vi.fn((key: string) => settings[key]),
   }
+  type ChildQuestionAnswerResult = { success: true; record: { id: string } } | { error: string } | null
+  const answerAsHuman = vi.fn<(...args: unknown[]) => Promise<ChildQuestionAnswerResult>>(async () => null)
+  const answerAsHumanViaMessage = vi.fn<(...args: unknown[]) => Promise<ChildQuestionAnswerResult>>(async () => null)
   const agents = {
     startTask: vi.fn(async () => ({ action: 'task_started' as const, sessionId: 's1' })),
     sendByTaskId: vi.fn(async () => ({ sessionId: 's1' })),
@@ -78,13 +81,14 @@ function makeService(settings: Record<string, string> = {}) {
     findSessionByTaskId: vi.fn(() => ({ sessionId: 's1', session: {} })),
     getSessionStatus: vi.fn(() => ({ status: 'waiting_approval', agentId: 'a1', taskId: 't1' })),
     getLastAssistantMessage: vi.fn(() => 'The build is green.'),
+    getChildQuestionService: vi.fn(() => ({ answerAsHuman, answerAsHumanViaMessage })),
   }
   const service = new VoiceActionService({
     db: db as never,
     agents: agents as never,
     notify,
   })
-  return { service, db, agents, notify }
+  return { service, db, agents, notify, answerAsHuman, answerAsHumanViaMessage }
 }
 
 const ON_TASK: VoiceUiContext = { selectedTaskId: 't1', view: 'tasks' }
@@ -158,6 +162,32 @@ describe('VoiceActionService — confirmation policy', () => {
     expect(outcome.status).toBe('executed')
     expect(ctx.agents.sendByTaskId).toHaveBeenCalledWith('t1', 'why did the test fail')
   })
+
+  it('answers a live child QUESTION through the claim first, instead of sending a plain message', async () => {
+    ctx.answerAsHumanViaMessage.mockResolvedValue({ success: true, record: { id: 'cq-1' } })
+    const outcome = await ctx.service.apply(
+      'turn1',
+      proposalFor({ type: 'reply_to_agent', taskRef: { kind: 'current' }, message: 'staging' }),
+      ON_TASK
+    )
+    expect(outcome.status).toBe('executed')
+    expect(ctx.answerAsHumanViaMessage).toHaveBeenCalledWith('t1', 'staging')
+    expect(ctx.agents.sendByTaskId).not.toHaveBeenCalled()
+  })
+
+  it('"no, don\'t" spoken while a live APPROVAL is pending is sent as a normal message — it must NOT approve the command', async () => {
+    // Regression: the same P0 bug as chat (ipc-handlers.ts) applies to voice
+    // relay too — answerAsHumanViaMessage refuses to touch a live approval,
+    // so this always falls through to a plain sendByTaskId.
+    const outcome = await ctx.service.apply(
+      'turn1',
+      proposalFor({ type: 'reply_to_agent', taskRef: { kind: 'current' }, message: "no, don't" }),
+      ON_TASK
+    )
+    expect(outcome.status).toBe('executed')
+    expect(ctx.answerAsHumanViaMessage).toHaveBeenCalledWith('t1', "no, don't")
+    expect(ctx.agents.sendByTaskId).toHaveBeenCalledWith('t1', "no, don't")
+  })
 })
 
 describe('VoiceActionService — checkpoint safety', () => {
@@ -221,6 +251,33 @@ describe('VoiceActionService — checkpoint safety', () => {
       true
     )
     expect(ctx.agents.respondToPermission).toHaveBeenCalledWith('s1', false, undefined)
+  })
+
+  it('answers a live child question/approval through the claim first, attributed to the human, instead of calling respondToPermission directly', async () => {
+    const ctx = makeService()
+    ctx.answerAsHuman.mockResolvedValue({ success: true, record: { id: 'cq-1' } })
+    const outcome = await ctx.service.apply(
+      'turn1',
+      proposalFor({ type: 'approve_checkpoint', taskRef: { kind: 'current' } }),
+      { ...ON_TASK, pendingApproval: { taskId: 't1', sessionId: 's1' } },
+      true
+    )
+    expect(outcome.status).toBe('executed')
+    expect(ctx.answerAsHuman).toHaveBeenCalledWith('t1', undefined, { approved: true, answer: undefined })
+    expect(ctx.agents.respondToPermission).not.toHaveBeenCalled()
+  })
+
+  it('falls through to respondToPermission when there is no live child question to claim', async () => {
+    const ctx = makeService()
+    const outcome = await ctx.service.apply(
+      'turn1',
+      proposalFor({ type: 'approve_checkpoint', taskRef: { kind: 'current' } }),
+      { ...ON_TASK, pendingApproval: { taskId: 't1', sessionId: 's1' } },
+      true
+    )
+    expect(outcome.status).toBe('executed')
+    expect(ctx.answerAsHuman).toHaveBeenCalledWith('t1', undefined, { approved: true, answer: undefined })
+    expect(ctx.agents.respondToPermission).toHaveBeenCalledWith('s1', true, undefined)
   })
 })
 

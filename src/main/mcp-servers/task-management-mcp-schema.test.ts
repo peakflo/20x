@@ -397,6 +397,64 @@ describe('children\'s questions go to the parent first — tool set', () => {
     const schema = toolByName(FULL_ACCESS_SCOPE, 'list_child_questions')!.inputSchema as { required?: string[] }
     expect(schema.required ?? []).toEqual([])
   })
+
+  // A real coordinator agent session — unscoped (no parent of its own, so
+  // it gets the full mastermind tool set), but WITH its own taskId, unlike
+  // FULL_ACCESS_SCOPE above (the desktop app's own in-process caller, which
+  // has no task at all and is not agent-controlled input).
+  const COORDINATOR: TaskMcpScope = { parentTaskId: null, taskId: 'parent-1', artifactTaskId: 'parent-1' }
+
+  describe('answer_child_question / escalate_to_user bind parent_task_id to the caller\'s own task', () => {
+    for (const name of ['answer_child_question', 'escalate_to_user']) {
+      it(`${name}: a claimed parent_task_id that is not the caller's own task is refused, not forwarded`, async () => {
+        const calls: Array<[string, Record<string, unknown>]> = []
+        const invoke = async (route: string, params: Record<string, unknown>) => {
+          calls.push([route, params])
+          return { success: true }
+        }
+
+        const result = await callToolForScope(
+          name,
+          { parent_task_id: 'someone-elses-task', child_task_id: 'c1', question_id: 'q1', approved: true },
+          COORDINATOR,
+          invoke
+        ) as { isError?: boolean; content: Array<{ type: string; text?: string }> }
+
+        expect(result.isError).toBe(true)
+        expect(result.content[0]?.text).toContain('must be your own task')
+        expect(calls).toEqual([])
+      })
+
+      it(`${name}: the caller's own task as parent_task_id passes through`, async () => {
+        const calls: Array<[string, Record<string, unknown>]> = []
+        const invoke = async (route: string, params: Record<string, unknown>) => {
+          calls.push([route, params])
+          return { success: true }
+        }
+
+        await callToolForScope(
+          name,
+          { parent_task_id: 'parent-1', child_task_id: 'c1', question_id: 'q1', approved: true },
+          COORDINATOR,
+          invoke
+        )
+
+        expect(calls).toEqual([[`/${name}`, { parent_task_id: 'parent-1', child_task_id: 'c1', question_id: 'q1', approved: true }]])
+      })
+
+      it(`${name}: omitting parent_task_id entirely is filled in as the caller's own task, not left unset`, async () => {
+        const calls: Array<[string, Record<string, unknown>]> = []
+        const invoke = async (route: string, params: Record<string, unknown>) => {
+          calls.push([route, params])
+          return { success: true }
+        }
+
+        await callToolForScope(name, { child_task_id: 'c1', question_id: 'q1', approved: true }, COORDINATOR, invoke)
+
+        expect(calls).toEqual([[`/${name}`, { parent_task_id: 'parent-1', child_task_id: 'c1', question_id: 'q1', approved: true }]])
+      })
+    }
+  })
 })
 
 describe('wait_for_subtasks schema', () => {

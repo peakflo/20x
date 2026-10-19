@@ -45,7 +45,7 @@ export type VoiceActionDb = Pick<
 
 export type VoiceActionAgents = Pick<
   AgentManager,
-  'startTask' | 'sendByTaskId' | 'respondToPermission' | 'findSessionByTaskId' | 'getSessionStatus' | 'getLastAssistantMessage'
+  'startTask' | 'sendByTaskId' | 'respondToPermission' | 'findSessionByTaskId' | 'getSessionStatus' | 'getLastAssistantMessage' | 'getChildQuestionService'
 > & Partial<Pick<AgentManager, 'noteUserTaskActivity'>>
 
 export interface VoiceActionDeps {
@@ -256,6 +256,25 @@ export class VoiceActionService {
         if (!task) return this.noTarget(turnId)
         // A spoken reply is the user acting on the task (cancels any scheduled limit continuation).
         this.deps.agents.noteUserTaskActivity?.(task.id)
+        // Same claim-first rule as the desktop/mobile "reply" paths (see
+        // agentSession:sendByTaskId in ipc-handlers.ts): a live child QUESTION
+        // (never an approval — answerAsHumanViaMessage refuses those) gets
+        // answered through the claim instead of sent as a plain message, so a
+        // concurrent parent answer can't also reach the harness.
+        try {
+          const claimed = await this.deps.agents.getChildQuestionService().answerAsHumanViaMessage(task.id, intent.message)
+          if (claimed && !('error' in claimed)) {
+            return {
+              status: 'executed',
+              turnId,
+              intent: intent.type,
+              message: `Answered the question on “${task.title}”.`,
+              taskId: task.id,
+            }
+          }
+        } catch (err) {
+          console.error(`[VoiceActionService] Child-question claim check failed for task ${task.id} before reply_to_agent, falling through to a direct send:`, err)
+        }
         await this.deps.agents.sendByTaskId(task.id, intent.message)
         return {
           status: 'executed',
@@ -277,6 +296,31 @@ export class VoiceActionService {
             reason: 'no_pending_approval',
             message: 'There is no checkpoint waiting for an answer.',
           }
+        }
+        // Claim-first: a live child question routed to the parent, OR
+        // already escalated to the human, is answered THROUGH the claim
+        // (attributed to the human, and working on an escalated item too —
+        // respondToPermission alone has no notion of the child-question
+        // state machine at all) instead of calling respondToPermission
+        // directly and leaving that state stale. No exact harness request
+        // id is available for a spoken approval — falls back to the single
+        // current live question for this task, same as the chat path.
+        try {
+          const claimed = await this.deps.agents.getChildQuestionService().answerAsHuman(pending.taskId, undefined, { approved, answer: intent.message })
+          if (claimed) {
+            if ('error' in claimed) {
+              return { status: 'rejected', turnId, reason: 'no_pending_approval', message: claimed.error }
+            }
+            return {
+              status: 'executed',
+              turnId,
+              intent: intent.type,
+              message: approved ? 'Checkpoint approved.' : 'Checkpoint rejected.',
+              taskId: pending.taskId,
+            }
+          }
+        } catch (err) {
+          console.error(`[VoiceActionService] Child-question claim check failed for task ${pending.taskId} before ${intent.type}, falling through to a direct response:`, err)
         }
         await this.deps.agents.respondToPermission(pending.sessionId, approved, intent.message)
         return {

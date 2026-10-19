@@ -1163,14 +1163,13 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
     }
     if (!message) throw Object.assign(new Error('message is required'), { status: 400 })
     agent.noteUserTaskActivity(taskId, sessionId)
-    // Claim-first: if there's a live child question for this task, answer it
-    // THROUGH the claim (so a concurrent parent answer can't also reach the
-    // harness) instead of sending directly and reconciling after. No exact
-    // harness request id is available for a plain chat answer — falls back
-    // to the single current live question for this child.
+    // Claim-first: if there's a live child QUESTION (not an approval — see
+    // answerAsHumanViaMessage) for this task, answer it THROUGH the claim
+    // (so a concurrent parent answer can't also reach the harness) instead
+    // of sending directly and reconciling after.
     if (taskId) {
       try {
-        const claimed = await agent.getChildQuestionService().answerAsHuman(taskId, undefined, { approved: true, answer: message })
+        const claimed = await agent.getChildQuestionService().answerAsHumanViaMessage(taskId, message)
         if (claimed) {
           return 'error' in claimed ? claimed : { success: true }
         }
