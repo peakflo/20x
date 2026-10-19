@@ -534,6 +534,75 @@ describe('/start_task', () => {
     expect(result.sessionId).toBe('session-123')
     expect((result.task as Record<string, unknown>).id).toBe(task.id)
   })
+
+  it('resets the auto-start retry count — an explicit start is a fresh attempt, not another scheduler retry', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
+    const task = db.createTask(makeTask({ title: 'Exhausted task' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now())
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now())
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now()) // exhausted (cap is 3)
+    expect(db.getAutomationRetryCount(task.id, 'start')).toBe(3)
+
+    setTaskApiAgentController({ startTask: vi.fn(async () => ({ action: 'task_started' as const, sessionId: 's-1', startedTaskId: task.id, agentId: agent.id })) } as any)
+    const port = await startTaskApiServer(db)
+    await fetch(`http://127.0.0.1:${port}/start_task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: task.id })
+    })
+
+    expect(db.getAutomationRetryCount(task.id, 'start')).toBe(0)
+  })
+})
+
+describe('/update_task resets automation retry counts on an explicit edit', () => {
+  it('clears both start and complete retry counts when agent_id is reassigned', async () => {
+    const task = db.createTask(makeTask({ title: 'Reassigned task' }))!
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now())
+    db.bumpAutomationRetryCount(task.id, 'complete', Date.now())
+    const agent = db.createAgent(makeAgent({ name: 'New Agent' }))!
+    const port = await startTaskApiServer(db)
+
+    await fetch(`http://127.0.0.1:${port}/update_task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: task.id, agent_id: agent.id })
+    })
+
+    expect(db.getAutomationRetryCount(task.id, 'start')).toBe(0)
+    expect(db.getAutomationRetryCount(task.id, 'complete')).toBe(0)
+  })
+
+  it('clears both retry counts when status is explicitly changed', async () => {
+    const task = db.createTask(makeTask({ title: 'Status-edited task' }))!
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now())
+    db.bumpAutomationRetryCount(task.id, 'complete', Date.now())
+    const port = await startTaskApiServer(db)
+
+    await fetch(`http://127.0.0.1:${port}/update_task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: task.id, status: 'not_started' })
+    })
+
+    expect(db.getAutomationRetryCount(task.id, 'start')).toBe(0)
+    expect(db.getAutomationRetryCount(task.id, 'complete')).toBe(0)
+  })
+
+  it('does not touch retry counts for an unrelated field edit (e.g. description)', async () => {
+    const task = db.createTask(makeTask({ title: 'Unrelated edit' }))!
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now())
+    const port = await startTaskApiServer(db)
+
+    await fetch(`http://127.0.0.1:${port}/update_task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: task.id, description: 'just a note' })
+    })
+
+    expect(db.getAutomationRetryCount(task.id, 'start')).toBe(1)
+  })
 })
 
 describe('/wait_for_subtasks', () => {

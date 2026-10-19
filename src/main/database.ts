@@ -3255,6 +3255,27 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return result.changes
   }
 
+  /**
+   * Deletes still-PENDING claims (result IS NULL) older than `maxAgeMs` —
+   * a claim left behind by a call that crashed or was killed mid-flight
+   * (no throw ever ran to release it) would otherwise block every retry
+   * with the same key for the full 7-day receipt TTL, each one waiting out
+   * `waitForReceipt`'s timeout before giving up. Never touches a completed
+   * receipt (result IS NOT NULL).
+   */
+  clearStalePendingOrchestrationReceipts(nowMs: number, maxAgeMs: number): number {
+    if (!this.ensureDbOpen()) return 0
+    const result = this.db.prepare(`DELETE FROM orchestration_receipts WHERE result IS NULL AND created_at < ?`).run(nowMs - maxAgeMs)
+    return result.changes
+  }
+
+  /** Deletes EVERY pending claim, regardless of age. Call once at startup — no in-flight call could possibly have survived a restart, so every pending row left over is abandoned by definition. */
+  clearAllPendingOrchestrationReceipts(): number {
+    if (!this.ensureDbOpen()) return 0
+    const result = this.db.prepare(`DELETE FROM orchestration_receipts WHERE result IS NULL`).run()
+    return result.changes
+  }
+
   // ── task_runs ─────────────────────────────────────────────────
   // Honest run-end classification. See src/main/orchestration/run-finalization.ts.
 
