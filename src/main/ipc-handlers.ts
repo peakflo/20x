@@ -20,7 +20,7 @@ import { listBrowserImportSources, importBrowserSessions, clearImportedBrowserSe
 import type { BrowserImportRequest } from '../shared/browser-session-import'
 import type { CustomModelPrice, UsageSummaryQuery } from '../shared/usage'
 import { sanitizeUsageSummaryQuery, sanitizeUsageParallelismQuery } from './usage/usage-query'
-import { containsLikelySecret } from '../shared/mastermind-memory'
+import { buildMemoryExportFile, containsLikelySecret, parseMemoryImportPayload } from '../shared/mastermind-memory'
 import type {
   DatabaseManager,
   CreateTaskData,
@@ -1085,9 +1085,13 @@ export function registerIpcHandlers(
       filters: [{ name: 'JSON', extensions: ['json'] }]
     })
     if (canceled || !filePath) return { saved: false }
-    writeFileSync(filePath, JSON.stringify(db.exportMemories(), null, 2))
+    writeFileSync(filePath, JSON.stringify(buildMemoryExportFile(db.exportMemories()), null, 2))
     return { saved: true, filePath }
   })
+
+  // A huge "export" would mean a corrupted or hand-crafted file, not a real
+  // one of ours — read it, but refuse to try parsing something unreasonable.
+  const MAX_MEMORY_IMPORT_FILE_BYTES = 20 * 1024 * 1024
 
   ipcMain.handle('memories:importFromFile', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
@@ -1095,9 +1099,29 @@ export function registerIpcHandlers(
       filters: [{ name: 'JSON', extensions: ['json'] }]
     })
     if (canceled || filePaths.length === 0) return { canceled: true as const }
-    const raw = JSON.parse(readFileSync(filePaths[0], 'utf-8'))
-    const records = Array.isArray(raw) ? raw : []
-    return db.importMemories(records)
+
+    let fileText: string
+    try {
+      const stat = statSync(filePaths[0])
+      if (stat.size > MAX_MEMORY_IMPORT_FILE_BYTES) {
+        return { error: `This file is too large (${Math.round(stat.size / 1024 / 1024)} MB) to be a memory export.` }
+      }
+      fileText = readFileSync(filePaths[0], 'utf-8')
+    } catch (err) {
+      return { error: `Could not read that file: ${err instanceof Error ? err.message : String(err)}` }
+    }
+
+    let raw: unknown
+    try {
+      raw = JSON.parse(fileText)
+    } catch {
+      return { error: 'This file is not valid JSON.' }
+    }
+
+    const parsed = parseMemoryImportPayload(raw)
+    if ('error' in parsed) return parsed
+    const result = db.importMemories(parsed.records)
+    return parsed.warning ? { ...result, warning: parsed.warning } : result
   })
 
   // Dependency check handler — delegates to the shared detectInstalledAgents()

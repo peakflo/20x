@@ -712,7 +712,7 @@ export const memoryApi = {
     return window.electronAPI.memories.exportToFile()
   },
 
-  importFromFile: (): Promise<{ imported: number; skipped: number } | { canceled: true }> => {
+  importFromFile: (): Promise<{ imported: number; skipped: number; duplicates: number; warning?: string } | { canceled: true } | { error: string }> => {
     return window.electronAPI.memories.importFromFile()
   }
 }

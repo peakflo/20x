@@ -39,8 +39,18 @@ export type TaskMcpScope = {
    * independent of task scoping — set for the Mastermind session itself and
    * for any agent the user marked memory-trusted, including a scoped subtask
    * agent whose own agent config is trusted.
+   *
+   * This is a real credential, not just a visibility flag: the Task API
+   * server has no other authentication, so every memory route re-checks
+   * this exact token server-side (task-api-server.ts, requireMemoryToken)
+   * before touching anything — the tool list below only controls whether a
+   * session SEES the memory tools, not whether a call succeeds. AgentManager
+   * mints one random token per session that was actually granted memory
+   * access and registers it there; a session with no token here has no way
+   * to form a request the server accepts, whether through this tool list or
+   * a raw HTTP POST to /remember.
    */
-  memoryAccess?: boolean
+  memoryToken?: string | null
 }
 
 /** Calls one Task API route. In process this is handleRoute; over stdio it is fetch. */
@@ -617,10 +627,11 @@ const mastermindTools: Tool[] = [
   }
 ]
 
-// Mastermind's durable memory. Available when scope.memoryAccess is set —
-// the Mastermind session always has it; any other agent only has it when the
-// user marked that agent memory-trusted in its settings. Credentials never
-// belong here: `remember` refuses anything that looks like one.
+// Mastermind's durable memory. Available when scope.memoryToken is set —
+// the Mastermind session always has one; any other agent only has one when
+// the user marked that agent memory-trusted in its settings. Credentials
+// never belong here: `remember` refuses anything that looks like one.
+const memoryToolNames = new Set(['remember', 'recall', 'forget', 'list_memories'])
 const memoryTools: Tool[] = [
   {
     name: 'remember',
@@ -1130,7 +1141,7 @@ export function listToolsForScope(scope: TaskMcpScope) {
   const base = isScopedSession(scope)
     ? [...subtaskTools, ...browserTools, ...sharedTools]
     : [...mastermindTools, ...browserTools, ...sharedTools]
-  return scope.memoryAccess ? [...base, ...memoryTools] : base
+  return scope.memoryToken ? [...base, ...memoryTools] : base
 }
 
 /**
@@ -1165,11 +1176,13 @@ export async function callToolForScope(
     if (browserRecordingToolNames.has(name) && (scope.taskId || scope.artifactTaskId)) {
       normalizedArgs.task_id = scope.taskId || scope.artifactTaskId
     }
-    // A trusted non-Mastermind agent's new memories are attributed to its task,
-    // so Settings can show where a memory came from. The Mastermind session has
-    // no real task id to attribute to, so it keeps remember's own default.
-    if (name === 'remember' && !normalizedArgs.source && scope.taskId && scope.taskId !== 'mastermind-session') {
-      normalizedArgs.source = `task:${scope.taskId}`
+    // The memory token is this session's real credential for the memory
+    // routes (see TaskMcpScope.memoryToken) — injected here, transparently,
+    // never something the model sees or can set itself via a tool argument.
+    // It also doubles as how /remember derives `source` server-side, so a
+    // session can never claim a false identity for a memory it wrote.
+    if (memoryToolNames.has(name) && scope.memoryToken) {
+      normalizedArgs.__memoryToken = scope.memoryToken
     }
 
     const result = isScopedSession(scope)

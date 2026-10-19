@@ -100,7 +100,12 @@ export function MemorySettings() {
   const handleImport = useCallback(async () => {
     const result = await memoryApi.importFromFile()
     if ('canceled' in result) return
-    setImportResult(`Imported ${result.imported}, skipped ${result.skipped}.`)
+    if ('error' in result) {
+      setImportResult(result.error)
+      return
+    }
+    const summary = `Imported ${result.imported}, skipped ${result.skipped}, ${result.duplicates} already present.`
+    setImportResult(result.warning ? `${summary} ${result.warning}` : summary)
     await fetchMemories()
   }, [fetchMemories])
 

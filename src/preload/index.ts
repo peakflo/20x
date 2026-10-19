@@ -428,7 +428,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('memories:delete', id),
     clearAll: (scope?: string): Promise<number> => ipcRenderer.invoke('memories:clearAll', scope),
     exportToFile: (): Promise<{ saved: boolean; filePath?: string }> => ipcRenderer.invoke('memories:exportToFile'),
-    importFromFile: (): Promise<{ imported: number; skipped: number } | { canceled: true }> =>
+    importFromFile: (): Promise<{ imported: number; skipped: number; duplicates: number; warning?: string } | { canceled: true } | { error: string }> =>
       ipcRenderer.invoke('memories:importFromFile')
   },
   deps: {

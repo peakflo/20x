@@ -81,7 +81,12 @@ vi.mock('./adapters/claude-code-adapter', () => ({ ClaudeCodeAdapter: vi.fn() })
 vi.mock('./adapters/acp-adapter', () => ({ AcpAgentAdapter: vi.fn() }))
 vi.mock('./adapters/codex-app-server-adapter', () => ({ CodexAppServerAdapter: vi.fn() }))
 vi.mock('./adapters/pi-adapter', () => ({ PiAdapter: vi.fn() }))
-vi.mock('./task-api-server', () => ({ getTaskApiPort: vi.fn(), waitForTaskApiServer: vi.fn() }))
+vi.mock('./task-api-server', () => ({
+  getTaskApiPort: vi.fn(),
+  waitForTaskApiServer: vi.fn(),
+  registerMemorySession: vi.fn(),
+  unregisterMemorySession: vi.fn(),
+}))
 vi.mock('./secret-broker', () => ({
   registerSecretSession: vi.fn(),
   unregisterSecretSession: vi.fn(),
@@ -168,6 +173,11 @@ function createMockDb(agentConfig: Record<string, unknown> = {}) {
     getEarliestAgentRunIntervalStart: vi.fn(() => null),
     getTasksShippedCount: vi.fn(() => 0),
     getLatestTranscriptActivityAfter: vi.fn(() => null),
+    // Mastermind memory injection (buildMastermindMemoryInjection) calls these
+    // unconditionally for every Mastermind session's first prompt — stubbed so
+    // tests that don't care about memory still don't throw.
+    listMemoriesForScopes: vi.fn(() => []),
+    touchMemoriesUsed: vi.fn(),
   } as unknown as ConstructorParameters<typeof AgentManager>[0]
 }
 
@@ -4818,6 +4828,61 @@ describe('AgentManager Mastermind session continuity + memory', () => {
     expect(sessionId).toBeTruthy()
   })
 
+  it('does not re-inject "what you remember" into a natively resumed session, but still fires the indicator', async () => {
+    const settings = new Map<string, string>([
+      [SESSION_SETTING, 'persisted-session-1'],
+      [AGENT_SETTING, 'agent-1']
+    ])
+    const db = createMockDb({ coding_agent: 'claude-code' }) as any
+    Object.assign(db, {
+      getTask: vi.fn(() => undefined),
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Mastermind Agent', config: { coding_agent: 'claude-code' } })),
+      getSetting: vi.fn((k: string) => settings.get(k)),
+      setSetting: vi.fn((k: string, v: string) => settings.set(k, v)),
+      deleteSetting: vi.fn((k: string) => settings.delete(k)),
+      getTranscriptParts: vi.fn(() => []),
+      listMemoriesForScopes: vi.fn(() => [{
+        id: 'mem-1', scope: 'global', kind: 'preference', content: 'Already told you this once.',
+        source: 'user-stated', importance: 5, created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-02T00:00:00.000Z', last_used_at: null, expires_at: null, pinned: true
+      }]),
+      touchMemoriesUsed: vi.fn(),
+    })
+    const manager = new AgentManager(db)
+    const adapter = {
+      initialize: vi.fn(async () => undefined),
+      resumeSession: vi.fn(async () => []),
+      sendPrompt: vi.fn(async () => undefined),
+      getStatus: vi.fn(async () => ({ type: 'working' })),
+    }
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(manager as any, 'writeSkillFiles').mockResolvedValue(undefined)
+    vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+    const sent: Array<[string, unknown]> = []
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation((channel: unknown, data: unknown) => { sent.push([channel as string, data]) })
+
+    const sessionId = await manager.startSession('agent-1', MASTERMIND_ID, undefined, true)
+    expect(adapter.resumeSession).toHaveBeenCalledWith('persisted-session-1', expect.anything())
+    const session = (manager as any).sessions.get(sessionId)
+    expect(session.isNativeResume).toBe(true)
+
+    await (manager as any).doSendAdapterMessage(session, sessionId, 'Hello again')
+    const prompt = (adapter.sendPrompt as any).mock.calls.at(-1)[1][0].text as string
+
+    // The backend session's own history already carries this block from
+    // before the restart — resending it would duplicate ~1,500 tokens.
+    expect(prompt).not.toContain('## What you remember')
+    expect(prompt).not.toContain('Already told you this once.')
+    expect(db.touchMemoriesUsed).not.toHaveBeenCalled()
+
+    // The indicator still reflects what's available, even though the prompt
+    // itself didn't re-teach it.
+    const contextEvent = sent.find(([channel]) => channel === 'mastermind:memory-context')
+    expect(contextEvent?.[1]).toEqual({ count: 1, ids: ['mem-1'] })
+  })
+
   it('marks a context handoff and skips native resume when Mastermind switches to a different harness', async () => {
     const settings = new Map<string, string>([
       [SESSION_SETTING, 'persisted-session-1'],
@@ -4866,6 +4931,67 @@ describe('AgentManager Mastermind session continuity + memory', () => {
     expect(adapter.resumeSession).not.toHaveBeenCalled()
     expect(sessionId).toBeTruthy()
     // The handoff marker is recorded so the fresh session's first prompt carries the earlier conversation.
+    expect(settings.has(HANDOFF_KEY)).toBe(true)
+    expect(settings.get(AGENT_SETTING)).toBe('agent-new')
+  })
+
+  it('never natively resumes a stale session id onto a different agent via the sendMessage recovery path either', async () => {
+    // Regression: sendMessage's "live session not found, try to resume"
+    // fallback used to call resumeAdapterSession directly for Mastermind,
+    // bypassing tryResumeMastermindSession's agent-change detection — so no
+    // handoff marker was ever set before the resume attempt, and planResume
+    // (seeing no marker) took its "native-resume" default regardless of
+    // whether the persisted session id actually belonged to the agent this
+    // call is being made with.
+    const settings = new Map<string, string>([
+      [SESSION_SETTING, 'persisted-session-1'],
+      [AGENT_SETTING, 'agent-old'] // persisted-session-1 belongs to this agent, not the one below
+    ])
+    const agents: Record<string, unknown> = {
+      'agent-old': { id: 'agent-old', name: 'Claude Lead', config: { coding_agent: 'claude-code' } },
+      'agent-new': { id: 'agent-new', name: 'Codex Lead', config: { coding_agent: 'codex' } },
+    }
+    const db = createMockDb() as any
+    Object.assign(db, {
+      getTask: vi.fn(() => undefined),
+      getAgent: vi.fn((id: string) => agents[id]),
+      getSetting: vi.fn((k: string) => settings.get(k)),
+      setSetting: vi.fn((k: string, v: string) => settings.set(k, v)),
+      deleteSetting: vi.fn((k: string) => settings.delete(k)),
+      getTranscriptParts: vi.fn(() => [
+        { taskId: MASTERMIND_ID, partId: 'p1', seq: 1, role: 'user', content: 'Earlier message', partType: 'text', createdAt: 1, updatedAt: 1, rev: 1 },
+      ]),
+      hasTranscriptParts: vi.fn(() => true),
+      markContextHandoff: vi.fn((_taskId: string, fromAgentId: string | null) => {
+        settings.set(HANDOFF_KEY, JSON.stringify({ fromAgentId, recordedAt: Date.now(), announced: false }))
+      }),
+      listMemoriesForScopes: vi.fn(() => []),
+      touchMemoriesUsed: vi.fn(),
+    })
+    const manager = new AgentManager(db)
+    const adapter = {
+      initialize: vi.fn(async () => undefined),
+      resumeSession: vi.fn(async () => []),
+      createSession: vi.fn(async () => 'fresh-session-1'),
+      sendPrompt: vi.fn(async () => undefined),
+      getStatus: vi.fn(async () => ({ type: 'working' })),
+    }
+    vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+    vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+    vi.spyOn(manager as any, 'writeSkillFiles').mockResolvedValue(undefined)
+    vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+    vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+    vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+    // No live in-memory session — exercises sendMessage's recovery branch,
+    // called with a DIFFERENT agent than the one the persisted session belongs to.
+    await manager.sendMessage('stale-session-id', 'hello', MASTERMIND_ID, 'agent-new')
+    await vi.waitFor(() => expect(adapter.sendPrompt).toHaveBeenCalled())
+
+    // The stale Claude Code session is never natively resumed onto the Codex agent.
+    expect(adapter.resumeSession).not.toHaveBeenCalled()
+    // The handoff marker was set before the fresh session started, so the
+    // agent change is caught instead of silently defaulting to native-resume.
     expect(settings.has(HANDOFF_KEY)).toBe(true)
     expect(settings.get(AGENT_SETTING)).toBe('agent-new')
   })

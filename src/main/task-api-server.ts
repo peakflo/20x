@@ -40,6 +40,7 @@ import {
   containsLikelySecret,
   findDuplicateMemory,
   isValidMemoryKind,
+  MASTERMIND_PSEUDO_TASK_ID,
   normalizeMemoryScope,
   type MemoryKind
 } from '../shared/mastermind-memory'
@@ -84,6 +85,78 @@ type TaskApiAgentController = Pick<
 >
 
 let agentController: TaskApiAgentController | null = null
+
+/**
+ * Per-session memory access tokens. The Task API server has no other
+ * authentication — it listens on 127.0.0.1, but every route it serves
+ * (including the ones below `/mcp`) is also reachable by a plain HTTP POST
+ * from anything on this machine, not only through the scoped MCP tool list.
+ * Memory is different from most other routes here: it is auto-injected into
+ * Mastermind's context on every session, so an unauthenticated `/remember`
+ * is a standing prompt-injection channel, not just an extra capability.
+ *
+ * AgentManager registers one random token per session that was actually
+ * granted memory access (the Mastermind session, or an agent explicitly
+ * marked memory-trusted) via registerMemorySession, and only threads that
+ * token into that session's own MCP config / tool-call args. A session
+ * without the token literally cannot form a request the check below
+ * accepts — see requireMemoryToken, called by every /remember, /recall,
+ * /forget and /list_memories case in handleRoute.
+ *
+ * The registered agentId/taskId also become `/remember`'s server-side
+ * `source` — see that case — so a caller can never claim a false identity
+ * ("user-stated") for a memory it wrote itself.
+ */
+export interface MemorySessionIdentity {
+  agentId: string
+  taskId: string
+}
+
+const activeMemorySessions = new Map<string, MemorySessionIdentity>()
+
+export function registerMemorySession(token: string, agentId: string, taskId: string): void {
+  activeMemorySessions.set(token, { agentId, taskId })
+}
+
+export function unregisterMemorySession(token: string): void {
+  activeMemorySessions.delete(token)
+}
+
+/** Test-only: clears every registered memory token. */
+export function clearMemorySessionsForTest(): void {
+  activeMemorySessions.clear()
+}
+
+/** The registered identity for a valid token, or an error for a missing/invalid one. */
+function requireMemoryToken(params: Record<string, unknown>): { identity: MemorySessionIdentity } | { error: string } {
+  const token = params.__memoryToken
+  const identity = typeof token === 'string' ? activeMemorySessions.get(token) : undefined
+  if (!identity) return { error: 'Unauthorized: this session was not granted memory access.' }
+  return { identity }
+}
+
+/** `agent:<id>` for Mastermind's own pseudo-session, `agent:<id>/task:<id>` for a trusted task agent. */
+function memorySourceFor(identity: MemorySessionIdentity): string {
+  return identity.taskId && identity.taskId !== MASTERMIND_PSEUDO_TASK_ID
+    ? `agent:${identity.agentId}/task:${identity.taskId}`
+    : `agent:${identity.agentId}`
+}
+
+/** Routes whose request/response can carry raw memory content or the memory token itself. */
+const MEMORY_ROUTES = new Set(['/remember', '/recall', '/forget', '/list_memories'])
+
+/**
+ * Truncated JSON for the request/response trace log — except for a memory
+ * route, whose params/result are never logged at all. Memory content is
+ * meant to stay local and (per the user's own notes) never be a secret, but
+ * it is still private: the plain `/${route}` request log otherwise put the
+ * full saved text, and the `__memoryToken` request param, straight into the
+ * app's log file.
+ */
+export function logSafeRouteBody(route: string, body: unknown): string {
+  if (MEMORY_ROUTES.has(route)) return '[redacted: memory route]'
+  return JSON.stringify(body).slice(0, 200)
+}
 
 /**
  * What the renderer is showing. It is pushed on change and cached here, so a
@@ -318,10 +391,10 @@ export function startTaskApiServer(db: DatabaseManager): Promise<number> {
             try { params = JSON.parse(body) as Record<string, unknown> } catch { /* ignore */ }
           }
 
-          console.log(`[TaskApiServer] → ${route}`, JSON.stringify(params).slice(0, 200))
+          console.log(`[TaskApiServer] → ${route}`, logSafeRouteBody(route, params))
           const result = await handleRoute(db, route, params)
           const resultStr = JSON.stringify(result)
-          console.log(`[TaskApiServer] ← ${route} (${resultStr.length} bytes)`, resultStr.slice(0, 200))
+          console.log(`[TaskApiServer] ← ${route} (${resultStr.length} bytes)`, logSafeRouteBody(route, result))
           res.writeHead(200)
           res.end(resultStr)
         } catch (err: unknown) {
@@ -1576,11 +1649,17 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     // ── Mastermind memory ───────────────────────────────────────
-    // Only reachable by a session whose scope granted memoryAccess (see
-    // task-management-core.ts / task-mcp-endpoint.ts) — the tool list itself
-    // is the boundary, same as every other scoped tool in this file.
+    // The MCP tool list (task-management-core.ts) hides these from a scope
+    // that was never granted memory access, but the tool list is UI, not
+    // enforcement: this server has no other auth, and every route here is
+    // also reachable by a plain HTTP POST that skips the tool list
+    // entirely. requireMemoryToken is the real boundary, checked first in
+    // every case below, on both paths alike.
 
     case '/remember': {
+      const auth = requireMemoryToken(params)
+      if ('error' in auth) return auth
+
       const content = typeof params.content === 'string' ? params.content.trim() : ''
       if (!content) return { error: 'content is required' }
       if (!isValidMemoryKind(params.kind)) return { error: `kind must be one of: preference, decision, fact, goal, person, procedure` }
@@ -1591,7 +1670,15 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
       const importance = params.importance !== undefined ? Number(params.importance) : undefined
       const pinned = typeof params.pinned === 'boolean' ? params.pinned : undefined
-      const source = typeof params.source === 'string' && params.source ? params.source : 'user-stated'
+      // Never trust a caller-supplied source: it's how a memory claims to be
+      // "user-stated" (and so outranks every agent-written memory, and reads
+      // in the injected block as confirmed by a human) when it is not. The
+      // source is always derived from the token's registered identity —
+      // only the IPC-driven Settings UI path (memories:create/update in
+      // ipc-handlers.ts, a different trust boundary entirely — a renderer
+      // IPC call, not anything reachable from localhost HTTP) can produce
+      // 'user-stated'.
+      const source = memorySourceFor(auth.identity)
 
       // An explicit id updates that exact memory — used when the agent is
       // correcting something it (or the user) already saved. `previous` lets
@@ -1620,6 +1707,9 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     case '/recall': {
+      const auth = requireMemoryToken(params)
+      if ('error' in auth) return auth
+
       const query = typeof params.query === 'string' ? params.query.trim() : ''
       if (!query) return { error: 'query is required' }
       const scope = params.scope !== undefined ? normalizeMemoryScope(params.scope) : undefined
@@ -1634,6 +1724,9 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     case '/forget': {
+      const auth = requireMemoryToken(params)
+      if ('error' in auth) return auth
+
       const id = typeof params.id === 'string' ? params.id : ''
       if (id) {
         const deleted = db.deleteMemory(id)
@@ -1644,7 +1737,10 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
 
       const query = typeof params.query === 'string' ? params.query.trim() : ''
       if (!query) return { error: 'id or query is required' }
-      const candidates = db.searchMemories(query, { limit: 5 })
+      // allowFallbackToList: false — a query that matched nothing (including
+      // one that stripped to no usable search terms) must never fall back to
+      // "whatever is most recent"; that would delete an unrelated memory.
+      const candidates = db.searchMemories(query, { limit: 5 }, { allowFallbackToList: false })
       if (candidates.length === 0) return { error: 'No memory matches that query.' }
       if (candidates.length > 1) {
         return { ambiguous: true, candidates: candidates.map((m) => ({ id: m.id, content: m.content, kind: m.kind, scope: m.scope })) }
@@ -1656,6 +1752,9 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     case '/list_memories': {
+      const auth = requireMemoryToken(params)
+      if ('error' in auth) return auth
+
       const scope = params.scope !== undefined ? normalizeMemoryScope(params.scope) : undefined
       const kind = isValidMemoryKind(params.kind) ? params.kind : undefined
       const limit = typeof params.limit === 'number' ? params.limit : undefined

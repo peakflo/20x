@@ -16,6 +16,7 @@ import { normalizeHomePath } from './harness-instances'
 import type { TaskRunDuration } from '../shared/task-run-duration'
 import {
   clampImportance,
+  containsLikelySecret,
   isValidMemoryKind,
   MEMORY_CONTENT_MAX_CHARS,
   normalizeMemoryScope,
@@ -4329,15 +4330,30 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
   /**
    * Full-text search over memory content, ranked by bm25. `scope`/`kind`
-   * narrow the search; an empty or punctuation-only query falls back to
-   * `listMemories` (most relevant recent/pinned items) instead of matching nothing.
+   * narrow the search. Tokenising uses `\p{L}\p{N}` (Unicode letters/digits,
+   * not just ASCII) so Cyrillic, CJK and other non-Latin queries produce
+   * real search terms instead of stripping to nothing.
+   *
+   * `allowFallbackToList` (default true): when the query has no usable
+   * terms (empty, or punctuation-only even after Unicode-aware stripping)
+   * or the FTS query itself fails, fall back to `listMemories` — the
+   * caller gets the most relevant recent/pinned items instead of nothing.
+   * `recall` wants this (a loose, best-effort search). `forget` must pass
+   * `false`: the caller requires an exact content match before deleting
+   * anything, and falling back to "whatever is most recent" for a query
+   * that matched nothing would delete the wrong memory — see callers.
    */
-  searchMemories(query: string, filter: ListMemoriesFilter = {}): MastermindMemoryRecord[] {
+  searchMemories(
+    query: string,
+    filter: ListMemoriesFilter = {},
+    opts: { allowFallbackToList?: boolean } = {}
+  ): MastermindMemoryRecord[] {
+    const allowFallback = opts.allowFallbackToList !== false
     const words = query
       .split(/\s+/)
-      .map((word) => word.replace(/[^a-zA-Z0-9_]/g, ''))
+      .map((word) => word.replace(/[^\p{L}\p{N}_]/gu, ''))
       .filter(Boolean)
-    if (words.length === 0) return this.listMemories(filter)
+    if (words.length === 0) return allowFallback ? this.listMemories(filter) : []
 
     const matchExpr = words.map((word) => `"${word}"`).join(' OR ')
     const clauses: string[] = ['(m.expires_at IS NULL OR m.expires_at > ?)']
@@ -4356,9 +4372,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       return rows.map(deserializeMemory)
     } catch (err) {
       // Malformed FTS5 syntax from the raw query text (already stripped of
-      // punctuation above, so this should be rare) — fall back to the plain list.
-      console.warn('[Database] Memory FTS search failed, falling back to listMemories:', err)
-      return this.listMemories(filter)
+      // punctuation above, so this should be rare) — fall back per allowFallback.
+      console.warn('[Database] Memory FTS search failed:', err)
+      return allowFallback ? this.listMemories(filter) : []
     }
   }
 
@@ -4436,44 +4452,65 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return rows.map(deserializeMemory)
   }
 
+  /** Hard cap on how many records a single import processes — a pathological or corrupted file can't wedge the app. */
+  static readonly MAX_IMPORT_RECORDS = 5000
+
   /**
-   * Imports memories from a JSON export. Upserts by id (an import of the
-   * same export twice does not duplicate), validating each record and
-   * skipping (not throwing on) ones that don't look right.
+   * Imports memories from a JSON export. Never overwrites an existing row:
+   * an id already present is counted as a duplicate and left untouched (so
+   * importing the same export twice is a safe no-op the second time,
+   * without silently clobbering anything a user edited locally in between).
+   * Every record is independently validated — malformed shape, invalid
+   * kind, and anything that looks like a credential are all skipped, never
+   * thrown on. By default an imported memory never arrives pre-pinned or
+   * carrying its original `source` — those came from someone else's
+   * Settings/agent and should not look locally authoritative until a human
+   * here confirms them; pass `keepPinned`/`keepSource` to preserve them
+   * instead (e.g. a user re-importing their own prior export).
    */
-  importMemories(records: unknown[]): { imported: number; skipped: number } {
+  importMemories(
+    records: unknown[],
+    options: { keepPinned?: boolean; keepSource?: boolean } = {}
+  ): { imported: number; skipped: number; duplicates: number } {
     let imported = 0
     let skipped = 0
+    let duplicates = 0
     const now = new Date().toISOString()
+    const limited = records.slice(0, DatabaseManager.MAX_IMPORT_RECORDS)
+    skipped += Math.max(0, records.length - limited.length)
+
     const stmt = this.db.prepare(`
       INSERT INTO mastermind_memories (id, scope, kind, content, source, importance, created_at, updated_at, last_used_at, expires_at, pinned)
       VALUES (@id, @scope, @kind, @content, @source, @importance, @created_at, @updated_at, @last_used_at, @expires_at, @pinned)
-      ON CONFLICT(id) DO UPDATE SET
-        scope = excluded.scope, kind = excluded.kind, content = excluded.content, source = excluded.source,
-        importance = excluded.importance, updated_at = excluded.updated_at, last_used_at = excluded.last_used_at,
-        expires_at = excluded.expires_at, pinned = excluded.pinned
     `)
-    for (const raw of records) {
+    const exists = this.db.prepare('SELECT 1 FROM mastermind_memories WHERE id = ?')
+
+    for (const raw of limited) {
       if (!raw || typeof raw !== 'object') { skipped++; continue }
       const r = raw as Record<string, unknown>
       const content = typeof r.content === 'string' ? r.content.trim().slice(0, MEMORY_CONTENT_MAX_CHARS) : ''
       if (!content || !isValidMemoryKind(r.kind)) { skipped++; continue }
+      if (containsLikelySecret(content).found) { skipped++; continue }
+
+      const id = typeof r.id === 'string' && r.id ? r.id : createId()
+      if (exists.get(id)) { duplicates++; continue }
+
       stmt.run({
-        id: typeof r.id === 'string' && r.id ? r.id : createId(),
+        id,
         scope: normalizeMemoryScope(r.scope),
         kind: r.kind,
         content,
-        source: typeof r.source === 'string' ? r.source : 'imported',
+        source: options.keepSource && typeof r.source === 'string' && r.source ? r.source : 'imported',
         importance: clampImportance(r.importance),
         created_at: typeof r.created_at === 'string' ? r.created_at : now,
         updated_at: typeof r.updated_at === 'string' ? r.updated_at : now,
         last_used_at: typeof r.last_used_at === 'string' ? r.last_used_at : null,
         expires_at: typeof r.expires_at === 'string' ? r.expires_at : null,
-        pinned: r.pinned ? 1 : 0
+        pinned: options.keepPinned && r.pinned ? 1 : 0
       })
       imported++
     }
-    return { imported, skipped }
+    return { imported, skipped, duplicates }
   }
 
   // ── Settings CRUD ──────────────────────────────────────────

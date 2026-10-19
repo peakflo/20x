@@ -27,7 +27,7 @@ const memoryApi = vi.hoisted(() => ({
 /** Captured so a test can fire the "memory loaded"/"memory saved" events like the main process would. */
 const memoryListeners = vi.hoisted(() => ({
   context: null as ((event: { count: number; ids: string[] }) => void) | null,
-  saved: null as ((event: { memory: { id: string; content: string }; deduped: boolean; updated: boolean; previous?: unknown }) => void) | null,
+  saved: null as ((event: { memory: { id: string; content: string; source?: string }; deduped: boolean; updated: boolean; previous?: unknown }) => void) | null,
 }))
 const onMastermindMemoryContext = vi.hoisted(() => vi.fn((cb: typeof memoryListeners.context) => {
   memoryListeners.context = cb
@@ -95,6 +95,10 @@ beforeEach(() => {
   composer.send = null
   memoryListeners.context = null
   memoryListeners.saved = null
+  // "Clear conversation" confirms before it destroys anything (see
+  // handleClearConversation) — default to "OK" so existing flows keep
+  // testing what happens after confirmation; cancellation gets its own test.
+  window.confirm = vi.fn(() => true)
 })
 
 describe('OrchestratorPanel — warming the session', () => {
@@ -320,6 +324,139 @@ describe('OrchestratorPanel — "saved a memory" toast with Undo', () => {
     expect(memoryApi.delete).not.toHaveBeenCalled()
     expect(memoryApi.update).not.toHaveBeenCalled()
   })
+
+  // P3: the toast used to always say "Mastermind saved…", even when a
+  // trusted task agent (not Mastermind itself) actually wrote it. `source`
+  // is now derived server-side as `agent:<id>` / `agent:<id>/task:<id>` and
+  // the toast must show who really saved it.
+  it('names the actual agent that wrote the memory, not just "Mastermind"', async () => {
+    await act(async () => {
+      render(<OrchestratorPanel onClose={vi.fn()} />)
+    })
+    await waitFor(() => expect(agentApi.getAll).toHaveBeenCalled())
+    await waitFor(() => expect(memoryListeners.saved).toBeTypeOf('function'))
+
+    act(() => {
+      memoryListeners.saved!({
+        memory: { id: 'mem-1', content: 'Deploys happen on Fridays.', source: 'agent:other-agent/task:task-1' },
+        deduped: false,
+        updated: false
+      })
+    })
+
+    expect(screen.getByText(/Codex saved a memory:/)).toBeInTheDocument()
+    expect(screen.queryByText(/Mastermind saved a memory:/)).not.toBeInTheDocument()
+  })
+
+  it('credits the user when the source is "user-stated"', async () => {
+    await act(async () => {
+      render(<OrchestratorPanel onClose={vi.fn()} />)
+    })
+    await waitFor(() => expect(memoryListeners.saved).toBeTypeOf('function'))
+
+    act(() => {
+      memoryListeners.saved!({
+        memory: { id: 'mem-1', content: 'Prefers dark mode.', source: 'user-stated' },
+        deduped: false,
+        updated: false
+      })
+    })
+
+    expect(screen.getByText(/You saved a memory:/)).toBeInTheDocument()
+  })
+
+  // P3: a burst of saves (e.g. "Save what I learned" proposing several at
+  // once) used to replace the toast each time, so only the last save in the
+  // burst was ever undoable. Now the whole burst accumulates and offers
+  // "Undo all".
+  it('groups a burst of saves into one toast with "Undo all"', async () => {
+    await act(async () => {
+      render(<OrchestratorPanel onClose={vi.fn()} />)
+    })
+    await waitFor(() => expect(memoryListeners.saved).toBeTypeOf('function'))
+
+    act(() => {
+      memoryListeners.saved!({ memory: { id: 'mem-1', content: 'First.' }, deduped: false, updated: false })
+    })
+    act(() => {
+      memoryListeners.saved!({ memory: { id: 'mem-2', content: 'Second.' }, deduped: false, updated: false })
+    })
+    act(() => {
+      memoryListeners.saved!({ memory: { id: 'mem-3', content: 'Third.' }, deduped: false, updated: false })
+    })
+
+    expect(screen.getByText('Saved 3 memories')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument()
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Undo all' }).click()
+    })
+
+    expect(memoryApi.delete).toHaveBeenCalledWith('mem-1')
+    expect(memoryApi.delete).toHaveBeenCalledWith('mem-2')
+    expect(memoryApi.delete).toHaveBeenCalledWith('mem-3')
+    expect(screen.queryByText('Saved 3 memories')).not.toBeInTheDocument()
+  })
+
+  it('dismisses the whole burst at once', async () => {
+    await act(async () => {
+      render(<OrchestratorPanel onClose={vi.fn()} />)
+    })
+    await waitFor(() => expect(memoryListeners.saved).toBeTypeOf('function'))
+
+    act(() => {
+      memoryListeners.saved!({ memory: { id: 'mem-1', content: 'First.' }, deduped: false, updated: false })
+    })
+    act(() => {
+      memoryListeners.saved!({ memory: { id: 'mem-2', content: 'Second.' }, deduped: false, updated: false })
+    })
+    expect(screen.getByText('Saved 2 memories')).toBeInTheDocument()
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Dismiss' }).click()
+    })
+
+    expect(screen.queryByText('Saved 2 memories')).not.toBeInTheDocument()
+    expect(memoryApi.delete).not.toHaveBeenCalled()
+  })
+
+  // P3: Undo of an update used to drop `source` when restoring the previous
+  // content, silently reassigning provenance to whoever undid it.
+  it('restores the previous source, not just the previous content, when undoing an update', async () => {
+    await act(async () => {
+      render(<OrchestratorPanel onClose={vi.fn()} />)
+    })
+    await waitFor(() => expect(memoryListeners.saved).toBeTypeOf('function'))
+
+    act(() => {
+      memoryListeners.saved!({
+        memory: { id: 'mem-1', content: 'Use pnpm always, never npm or yarn.' },
+        deduped: true,
+        updated: false,
+        previous: {
+          content: 'Always use pnpm.',
+          kind: 'preference',
+          scope: 'global',
+          importance: 3,
+          pinned: false,
+          source: 'user-stated'
+        }
+      })
+    })
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Undo' }).click()
+    })
+
+    expect(memoryApi.update).toHaveBeenCalledWith('mem-1', {
+      content: 'Always use pnpm.',
+      kind: 'preference',
+      scope: 'global',
+      importance: 3,
+      pinned: false,
+      source: 'user-stated'
+    })
+  })
 })
 
 describe('OrchestratorPanel — "Clear conversation" with the optional "Save what I learned" offer', () => {
@@ -369,5 +506,46 @@ describe('OrchestratorPanel — "Clear conversation" with the optional "Save wha
     // Second click: actually clears, without asking again.
     expect(agentSessionApi.send).toHaveBeenCalledTimes(1)
     expect(agentSessionApi.clearMastermind).toHaveBeenCalled()
+  })
+
+  // P3: "Clear conversation" is destructive and irreversible (it drops the
+  // persisted resume anchor) and used to fire with no confirmation at all.
+  it('does nothing when the user cancels the confirmation (direct-clear path)', async () => {
+    window.confirm = vi.fn(() => false)
+    settingsApi.get.mockResolvedValue(null) // off by default -> direct-clear path
+    await act(async () => {
+      render(<OrchestratorPanel onClose={vi.fn()} />)
+    })
+    await waitFor(() => expect(agentSessionApi.start).toHaveBeenCalled())
+
+    await act(async () => {
+      screen.getByLabelText('Clear conversation').click()
+    })
+
+    expect(window.confirm).toHaveBeenCalled()
+    expect(agentSessionApi.clearMastermind).not.toHaveBeenCalled()
+  })
+
+  it('does nothing when the user cancels the second-click confirmation (after "Save what I learned")', async () => {
+    settingsApi.get.mockImplementation(async (key?: string) =>
+      key === 'mastermind-save-what-i-learned' ? 'true' : null
+    )
+    await act(async () => {
+      render(<OrchestratorPanel onClose={vi.fn()} />)
+    })
+    await waitFor(() => expect(agentSessionApi.start).toHaveBeenCalled())
+
+    await act(async () => {
+      screen.getByLabelText('Clear conversation').click()
+    })
+    expect(await screen.findByLabelText('Clear conversation now')).toBeInTheDocument()
+
+    window.confirm = vi.fn(() => false)
+    await act(async () => {
+      screen.getByLabelText('Clear conversation now').click()
+    })
+
+    expect(window.confirm).toHaveBeenCalled()
+    expect(agentSessionApi.clearMastermind).not.toHaveBeenCalled()
   })
 })

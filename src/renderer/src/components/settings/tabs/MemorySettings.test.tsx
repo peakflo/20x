@@ -153,14 +153,27 @@ describe('MemorySettings', () => {
 
   it('imports memories from a file and shows the result', async () => {
     list.mockResolvedValue([])
-    importFromFile.mockResolvedValue({ imported: 2, skipped: 1 })
+    importFromFile.mockResolvedValue({ imported: 2, skipped: 1, duplicates: 3 })
     render(<MemorySettings />)
     await waitFor(() => expect(list).toHaveBeenCalledTimes(1))
 
     fireEvent.click(screen.getByText('Import'))
 
-    expect(await screen.findByText('Imported 2, skipped 1.')).toBeInTheDocument()
+    expect(await screen.findByText('Imported 2, skipped 1, 3 already present.')).toBeInTheDocument()
     expect(list).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows a friendly error instead of crashing on a bad import file', async () => {
+    list.mockResolvedValue([])
+    importFromFile.mockResolvedValue({ error: 'This file is not valid JSON.' })
+    render(<MemorySettings />)
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByText('Import'))
+
+    expect(await screen.findByText('This file is not valid JSON.')).toBeInTheDocument()
+    // A failed import never refetches — nothing changed.
+    expect(list).toHaveBeenCalledTimes(1)
   })
 
   it('filters by kind using the kind dropdown', async () => {

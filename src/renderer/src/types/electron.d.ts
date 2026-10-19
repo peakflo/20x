@@ -421,7 +421,7 @@ interface ElectronAPI {
     delete: (id: string) => Promise<boolean>
     clearAll: (scope?: string) => Promise<number>
     exportToFile: () => Promise<{ saved: boolean; filePath?: string }>
-    importFromFile: () => Promise<{ imported: number; skipped: number } | { canceled: true }>
+    importFromFile: () => Promise<{ imported: number; skipped: number; duplicates: number; warning?: string } | { canceled: true } | { error: string }>
   }
   deps: {
     check: () => Promise<DepsStatus>

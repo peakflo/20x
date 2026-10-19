@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createTestDb } from '../../test/helpers/db-test-helper'
-import type { DatabaseManager } from './database'
+import { DatabaseManager } from './database'
 
 let db: DatabaseManager
 
@@ -165,6 +165,51 @@ describe('Mastermind memory full-text search (searchMemories)', () => {
     db.deleteMemory(created.id)
     expect(db.searchMemories('forgotten')).toHaveLength(0)
   })
+
+  describe('non-ASCII tokenising (\\p{L}\\p{N}, not just a-z0-9)', () => {
+    it('finds a memory written in Cyrillic by a real word in it', () => {
+      db.createMemory({ content: 'Всегда используй pnpm, а не npm.', kind: 'preference' })
+      db.createMemory({ content: 'Деплои происходят по пятницам.', kind: 'procedure' })
+
+      const results = db.searchMemories('используй')
+      expect(results.map((m) => m.content)).toContain('Всегда используй pnpm, а не npm.')
+      expect(results.map((m) => m.content)).not.toContain('Деплои происходят по пятницам.')
+    })
+
+    it('does not strip a Cyrillic query to nothing and silently fall back to the full list', () => {
+      db.createMemory({ content: 'Always use pnpm.', kind: 'preference' })
+      db.createMemory({ content: 'Deploys happen on Fridays.', kind: 'procedure' })
+
+      // A real, specific Cyrillic query that matches neither memory must not
+      // match both of them via the old ASCII-only tokeniser stripping it to "".
+      const results = db.searchMemories('совершенно другой запрос', {}, { allowFallbackToList: false })
+      expect(results).toHaveLength(0)
+    })
+
+    it('finds a memory written in CJK by its exact tokenised run (unicode61 has no CJK segmentation)', () => {
+      db.createMemory({ content: '发布分支总是 main，不是 master。', kind: 'fact' })
+      const results = db.searchMemories('发布分支总是')
+      expect(results).toHaveLength(1)
+    })
+  })
+
+  describe('allowFallbackToList option', () => {
+    it('defaults to true: an empty query falls back to the plain list', () => {
+      db.createMemory({ content: 'Always use pnpm', kind: 'preference' })
+      expect(db.searchMemories('')).toHaveLength(1)
+    })
+
+    it('false: an empty/punctuation-only query returns nothing instead of the plain list', () => {
+      db.createMemory({ content: 'Always use pnpm', kind: 'preference' })
+      expect(db.searchMemories('', {}, { allowFallbackToList: false })).toHaveLength(0)
+      expect(db.searchMemories('???', {}, { allowFallbackToList: false })).toHaveLength(0)
+    })
+
+    it('false: a real query that matches something still returns it normally', () => {
+      db.createMemory({ content: 'Always use pnpm', kind: 'preference' })
+      expect(db.searchMemories('pnpm', {}, { allowFallbackToList: false })).toHaveLength(1)
+    })
+  })
 })
 
 describe('Mastermind memory usage tracking', () => {
@@ -223,19 +268,31 @@ describe('Mastermind memory export / import', () => {
       { content: 'bad kind', kind: 'not-a-kind' }, // invalid kind — skipped
       'not even an object'
     ])
-    expect(result).toEqual({ imported: 1, skipped: 3 })
+    expect(result).toEqual({ imported: 1, skipped: 3, duplicates: 0 })
     const imported = db.getMemory('imported-1')
     expect(imported?.content).toBe('Imported fact')
-    expect(imported?.pinned).toBe(true)
   })
 
-  it('upserts by id — importing the same export twice does not duplicate', () => {
+  it('does not overwrite an existing row with the same id — a duplicate is skipped, not upserted', () => {
+    db.createMemory({ content: 'Original', kind: 'fact' })
+    const exported = db.exportMemories()
+    const [existing] = exported
+
+    const result = db.importMemories([{ ...existing, content: 'Attempted overwrite' }])
+
+    expect(result).toEqual({ imported: 0, skipped: 0, duplicates: 1 })
+    expect(db.getMemory(existing.id)?.content).toBe('Original')
+  })
+
+  it('importing the same export twice does not duplicate (the second pass is all duplicates)', () => {
     db.createMemory({ content: 'Original', kind: 'fact' })
     const exported = db.exportMemories()
 
-    db.importMemories(exported)
-    db.importMemories(exported)
+    const first = db.importMemories(exported)
+    const second = db.importMemories(exported)
 
+    expect(first).toEqual({ imported: 0, skipped: 0, duplicates: 1 }) // the record already exists from createMemory above
+    expect(second).toEqual({ imported: 0, skipped: 0, duplicates: 1 })
     expect(db.listMemories({})).toHaveLength(1)
   })
 
@@ -243,5 +300,42 @@ describe('Mastermind memory export / import', () => {
     const result = db.importMemories([{ content: 'No id given', kind: 'fact' }])
     expect(result.imported).toBe(1)
     expect(db.listMemories({})[0].id).toBeTruthy()
+  })
+
+  it('refuses to import something that looks like a credential', () => {
+    const result = db.importMemories([{ content: 'api_key: sk-ant-abcdefghijklmnopqrstuvwxyz0123456789', kind: 'fact' }])
+    expect(result).toEqual({ imported: 0, skipped: 1, duplicates: 0 })
+    expect(db.listMemories({})).toHaveLength(0)
+  })
+
+  it('caps the number of records a single import processes', () => {
+    const many = Array.from({ length: DatabaseManager.MAX_IMPORT_RECORDS + 10 }, (_, i) => ({ content: `Memory ${i}`, kind: 'fact' }))
+    const result = db.importMemories(many)
+    expect(result.imported).toBe(DatabaseManager.MAX_IMPORT_RECORDS)
+    expect(result.skipped).toBe(10)
+  })
+
+  describe('pinned/source metadata is stripped by default (an imported memory should not arrive pre-trusted)', () => {
+    it('does not import as pinned unless keepPinned is passed', () => {
+      const result = db.importMemories([{ content: 'Should not be pinned', kind: 'fact', pinned: true }])
+      const [imported] = db.listMemories({})
+      expect(result.imported).toBe(1)
+      expect(imported.pinned).toBe(false)
+    })
+
+    it('imports as pinned when keepPinned is passed', () => {
+      db.importMemories([{ content: 'Should be pinned', kind: 'fact', pinned: true }], { keepPinned: true })
+      expect(db.listMemories({})[0].pinned).toBe(true)
+    })
+
+    it('does not keep the original source unless keepSource is passed', () => {
+      db.importMemories([{ content: 'x', kind: 'fact', source: 'user-stated' }])
+      expect(db.listMemories({})[0].source).toBe('imported')
+    })
+
+    it('keeps the original source when keepSource is passed', () => {
+      db.importMemories([{ content: 'x', kind: 'fact', source: 'user-stated' }], { keepSource: true })
+      expect(db.listMemories({})[0].source).toBe('user-stated')
+    })
   })
 })
