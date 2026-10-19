@@ -92,6 +92,9 @@ function makeDb() {
     getTranscriptPartsAsync: vi.fn(function (this: { getTranscriptParts: (taskId: string) => unknown }, taskId: string) {
       return Promise.resolve(this.getTranscriptParts(taskId))
     }),
+    // get_messages scrubs output through buildSecretEntriesForAgent, which
+    // looks the task's agent up — no agent configured in these fixtures.
+    getAgent: vi.fn(() => undefined),
   } as never
 }
 
