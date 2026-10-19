@@ -36,7 +36,7 @@ import { limitsByInstance, summarizeAgentUsage } from './usage/agent-usage-summa
 import { agentInstanceId } from '../shared/harness-instances'
 import { isSameHarness, toolOutputPage } from './context-handoff'
 import { SecretScrubber, NOOP_SCRUBBER } from './secret-scrubber'
-import { buildSecretEntriesForAgent } from './secret-entries'
+import { buildSecretEntriesForAgent, buildAllKnownSecretEntries } from './secret-entries'
 import {
   createRegisteredTaskArtifact,
   editRegisteredTaskArtifactFile,
@@ -266,11 +266,54 @@ export function stopTaskApiServer(): void {
 
 // ── Route handler ──────────────────────────────────────────────
 
+/** Builds a scrubber (or the shared no-op) for a specific agent id — reused by every MCP-facing write below. */
+function scrubberForAgent(db: DatabaseManager, agentId: string | null | undefined): SecretScrubber {
+  const entries = buildSecretEntriesForAgent(db, agentId)
+  return entries.length > 0 ? new SecretScrubber(entries) : NOOP_SCRUBBER
+}
+
 /** Scrubs a string of known secret values for the agent currently assigned to `taskId`. */
 function scrubForTask(db: DatabaseManager, taskId: string, text: string): string {
-  const entries = buildSecretEntriesForAgent(db, db.getTask(taskId)?.agent_id)
-  if (entries.length === 0) return text
-  return new SecretScrubber(entries).scrub(text) ?? text
+  return scrubberForAgent(db, db.getTask(taskId)?.agent_id).scrub(text) ?? text
+}
+
+/**
+ * Scrubs a string an MCP caller is about to write into a NEW task/subtask row
+ * (`create_task`/`create_subtask` title+description) against the agent the
+ * new row is being assigned to. The row doesn't exist yet, so there's no
+ * `taskId` to look the agent up from — the caller already supplied the
+ * target `agentId` directly (`params.agent_id`).
+ */
+function scrubForAgent(db: DatabaseManager, agentId: unknown, text: string): string {
+  if (typeof agentId !== 'string' || !agentId) return text
+  return scrubberForAgent(db, agentId).scrub(text) ?? text
+}
+
+/** Deep-scrubs every `output_fields` entry's `value` with an already-built scrubber. Mirrors secret-scrub-migration.ts's scrubTaskOutputFields. */
+function scrubOutputFieldsDeep(scrubber: SecretScrubber, fields: unknown): unknown {
+  if (!Array.isArray(fields)) return fields
+  if (scrubber.isEmpty) return fields
+  return fields.map((field) => {
+    if (!field || typeof field !== 'object' || !('value' in (field as Record<string, unknown>))) return field
+    const f = field as Record<string, unknown>
+    if (f.value === undefined || f.value === null) return field
+    return { ...f, value: scrubber.scrubDeep(f.value) }
+  })
+}
+
+/** Deep-scrubs every `output_fields` entry's `value` for the agent assigned to `taskId`. */
+function scrubOutputFieldsForTask(db: DatabaseManager, taskId: string, fields: unknown): unknown {
+  return scrubOutputFieldsDeep(scrubberForAgent(db, db.getTask(taskId)?.agent_id), fields)
+}
+
+/**
+ * Deep-scrubs every `output_fields` entry's `value` against the agent a NEW
+ * task/subtask row is being assigned to (`create_task`/`create_subtask`) —
+ * same "row doesn't exist yet" reasoning as `scrubForAgent` above.
+ */
+function scrubOutputFieldsForAgent(db: DatabaseManager, agentId: unknown, fields: unknown): unknown {
+  if (typeof agentId !== 'string' || !agentId) return fields
+  return scrubOutputFieldsDeep(scrubberForAgent(db, agentId), fields)
 }
 
 /** Exported so the routes can be tested without starting an HTTP server. */
@@ -477,8 +520,11 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', '[]', 'local', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         id,
-        params.title,
-        params.description || '',
+        // Scrubbed against the task's own target agent: an MCP caller (often
+        // an agent itself, creating a sibling/follow-up task) can echo one of
+        // its own secret values into a title/description it writes here.
+        scrubForAgent(db, params.agent_id, String(params.title)),
+        scrubForAgent(db, params.agent_id, String(params.description || '')),
         params.type || 'general',
         params.priority || 'medium',
         'not_started',
@@ -543,9 +589,15 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (params.title !== undefined) {
         const title = typeof params.title === 'string' ? params.title.trim() : ''
         if (!title) return { error: 'Title cannot be empty' }
-        updates.push('title = ?'); qParams.push(title)
+        // Scrubbed against the task's CURRENT agent (same source `scrubForTask`
+        // reads elsewhere) — an agent updating its own task's title can echo
+        // one of its own secret values just as easily as into output_fields.
+        updates.push('title = ?'); qParams.push(scrubForTask(db, params.task_id as string, title))
       }
-      if (params.description !== undefined) { updates.push('description = ?'); qParams.push(params.description) }
+      if (params.description !== undefined) {
+        updates.push('description = ?')
+        qParams.push(typeof params.description === 'string' ? scrubForTask(db, params.task_id as string, params.description) : params.description)
+      }
       if (params.resolution !== undefined) { updates.push('resolution = ?'); qParams.push(params.resolution) }
       if (params.attachments !== undefined) { updates.push('attachments = ?'); qParams.push(JSON.stringify(params.attachments)) }
       if (params.labels !== undefined) { updates.push('labels = ?'); qParams.push(JSON.stringify(params.labels)) }
@@ -580,7 +632,15 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         updates.push('repos = ?'); qParams.push(JSON.stringify(normalizedRepos))
       }
       if (params.priority) { updates.push('priority = ?'); qParams.push(params.priority) }
-      if (params.output_fields !== undefined) { updates.push('output_fields = ?'); qParams.push(JSON.stringify(params.output_fields)) }
+      if (params.output_fields !== undefined) {
+        // Scrub before persisting — an agent's structured output_fields are
+        // just as likely a vector for an accidentally-echoed secret as free
+        // text content. This is a raw SQL write (not DatabaseManager.updateTask,
+        // which does no scrubbing of its own either), so nothing upstream of
+        // this line scrubs output_fields for us.
+        updates.push('output_fields = ?')
+        qParams.push(JSON.stringify(scrubOutputFieldsForTask(db, params.task_id as string, params.output_fields)))
+      }
 
       if (updates.length === 0) return { error: 'No updates provided' }
 
@@ -905,8 +965,13 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       // content back to a tool caller (any MCP client), including full,
       // unredacted tool output when include_tools is set. Built once per
       // request, not per message — getSecretsWithValues decrypts.
-      const entries = buildSecretEntriesForAgent(db, db.getTask(taskId)?.agent_id)
-      const scrubber = entries.length > 0 ? new SecretScrubber(entries) : NOOP_SCRUBBER
+      //
+      // Scoped to EVERY known secret (buildAllKnownSecretEntries), not just
+      // this task's current agent_id — same reasoning as
+      // secret-scrub-migration.ts: a task can be reassigned to a different
+      // agent, or lose an agent_id entirely, after the run that produced
+      // this transcript actually leaked the value.
+      const scrubber = new SecretScrubber(buildAllKnownSecretEntries(db))
 
       return {
         task_id: taskId,
@@ -1180,15 +1245,17 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       ).get(params.parent_task_id) as { max_order: number }
       const nextSortOrder = maxOrderRow.max_order + 1
 
-      const outputFields = params.output_fields ? JSON.stringify(params.output_fields) : '[]'
+      const outputFields = params.output_fields
+        ? JSON.stringify(scrubOutputFieldsForAgent(db, params.agent_id, params.output_fields))
+        : '[]'
 
       rawDb.prepare(`
         INSERT INTO tasks (id, title, description, type, priority, status, assignee, due_date, labels, attachments, repos, output_fields, source, agent_id, skill_ids, parent_task_id, sort_order, auto_complete_without_review, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, 'not_started', '', NULL, ?, '[]', ?, ?, 'local', ?, ?, ?, ?, ?, ?, ?)
       `).run(
         subtaskId,
-        params.title,
-        params.description || '',
+        scrubForAgent(db, params.agent_id, String(params.title)),
+        scrubForAgent(db, params.agent_id, String(params.description || '')),
         params.type || 'general',
         params.priority || parentTask.priority || 'medium',
         JSON.stringify(params.labels || []),

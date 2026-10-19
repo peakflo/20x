@@ -1757,7 +1757,38 @@ describe('AgentManager MCP server routing', () => {
     // never contain the real token — only the proxy's loopback URL.
     expect(mcpServers['My OAuth MCP']).toMatchObject({ type: 'http', url: 'http://127.0.0.1:5555/abc123' })
     expect(JSON.stringify(mcpServers)).not.toContain('real-oauth-secret-token')
-    expect(registerMcpProxyTarget).toHaveBeenCalledWith('https://example.com/mcp', 'My OAuth MCP', expect.any(Function))
+    expect(registerMcpProxyTarget).toHaveBeenCalledWith('oauth-server', 'https://example.com/mcp', 'My OAuth MCP', expect.any(Function), {})
+  })
+
+  // Regression test: two DIFFERENT MCP server config rows (two accounts
+  // registered against the same shared endpoint) must register under their
+  // own row id, never under the shared URL — the proxy itself would
+  // otherwise collapse them into one shared token (see mcp-auth-proxy.test.ts
+  // for the proxy-side half of this fix).
+  it('registers two MCP server rows sharing a target URL under their own row ids, not the shared URL', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    vi.mocked(registerMcpProxyTarget).mockImplementation((key: string) => `http://127.0.0.1:5555/${key}`)
+
+    const sharedUrl = 'https://example.com/shared-mcp'
+    const serversById: Record<string, any> = {
+      'server-row-A': { id: 'server-row-A', name: 'Account A MCP', type: 'remote', url: sharedUrl, headers: {}, oauth_metadata: { resource_url: sharedUrl }, source: 'user' },
+      'server-row-B': { id: 'server-row-B', name: 'Account B MCP', type: 'remote', url: sharedUrl, headers: {}, oauth_metadata: { resource_url: sharedUrl }, source: 'user' }
+    }
+    const mockDb = {
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'OPS', config: { mcp_servers: ['server-row-A', 'server-row-B'] } })),
+      getMcpServer: vi.fn((id: string) => serversById[id]),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    manager.setOAuthManager({ getValidMcpServerToken: vi.fn(async (id: string) => `token-for-${id}`) } as any)
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['Account A MCP'].url).toBe('http://127.0.0.1:5555/server-row-A')
+    expect(mcpServers['Account B MCP'].url).toBe('http://127.0.0.1:5555/server-row-B')
+    expect(mcpServers['Account A MCP'].url).not.toBe(mcpServers['Account B MCP'].url)
+    expect(registerMcpProxyTarget).toHaveBeenCalledWith('server-row-A', sharedUrl, 'Account A MCP', expect.any(Function), {})
+    expect(registerMcpProxyTarget).toHaveBeenCalledWith('server-row-B', sharedUrl, 'Account B MCP', expect.any(Function), {})
   })
 
   it('falls back to a static Authorization header for OAuth MCP servers when the proxy is not running', async () => {
@@ -1793,6 +1824,182 @@ describe('AgentManager MCP server routing', () => {
     })
   })
 
+  // Regression test for the leak this closes: a plain remote MCP server with
+  // no oauth_metadata and no enterprise auto-management still carries a real
+  // static header (a user-typed Authorization/X-API-Key) — that must be kept
+  // off the config object (and therefore off argv for harnesses that
+  // serialize it there), not just the dynamically-refreshed OAuth/enterprise
+  // tokens.
+  it('routes a plain remote MCP server with a user-typed static header through the auth proxy — no secret in the config', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    vi.mocked(registerMcpProxyTarget).mockReturnValue('http://127.0.0.1:5555/static-header-id')
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['plain-header-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'plain-header-server',
+        name: 'Plain Header MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer plain-static-secret', 'X-Tenant': 'acme' },
+        oauth_metadata: {},
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['Plain Header MCP']).toEqual({ type: 'http', url: 'http://127.0.0.1:5555/static-header-id' })
+    expect(JSON.stringify(mcpServers)).not.toContain('plain-static-secret')
+    expect(registerMcpProxyTarget).toHaveBeenCalledWith(
+      'plain-header-server',
+      'https://example.com/mcp',
+      'Plain Header MCP',
+      undefined,
+      { Authorization: 'Bearer plain-static-secret', 'X-Tenant': 'acme' }
+    )
+  })
+
+  it('hands a static remote header value to the scrubber it is given, even though the value never appears in the built config', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    vi.mocked(registerMcpProxyTarget).mockReturnValue('http://127.0.0.1:5555/static-header-id')
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['plain-header-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'plain-header-server',
+        name: 'Plain Header MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: { 'X-Api-Key': 'remote-static-header-value' },
+        oauth_metadata: {},
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const scrubber = new SecretScrubber()
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubber)
+
+    expect(JSON.stringify(mcpServers)).not.toContain('remote-static-header-value')
+    expect(scrubber.scrub('leaked: remote-static-header-value')).toBe('leaked: «secret»')
+  })
+
+  it("hands a dynamic OAuth token to the scrubber the moment the proxy's getToken wrapper actually fetches it — including a later refresh", async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    let capturedGetToken: (() => Promise<string | null | undefined>) | undefined
+    vi.mocked(registerMcpProxyTarget).mockImplementation((_key, _url, _label, getToken) => {
+      capturedGetToken = getToken as (() => Promise<string | null | undefined>) | undefined
+      return 'http://127.0.0.1:5555/oauth-id'
+    })
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['oauth-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'oauth-server',
+        name: 'My OAuth MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {},
+        oauth_metadata: { resource_url: 'https://example.com' },
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    ;(manager as any).oauthManager = { getValidMcpServerToken: vi.fn(async () => 'oauth-token-v1') }
+    const scrubber = new SecretScrubber()
+    await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubber)
+
+    // Not registered yet — buildMcpServersForAdapter only wraps the token
+    // provider, it doesn't call it when the proxy is actually handling the
+    // request (that happens on the proxy's own request path).
+    expect(scrubber.scrub('leaked: oauth-token-v1')).toBe('leaked: oauth-token-v1')
+
+    // Simulates the proxy calling the wrapped getToken() on an actual
+    // forwarded request.
+    await capturedGetToken!()
+    expect(scrubber.scrub('leaked: oauth-token-v1')).toBe('leaked: «secret»')
+
+    // A later refresh (token rotated mid-session) is picked up too, not just
+    // whatever value happened to exist when the session started.
+    ;(manager as any).oauthManager.getValidMcpServerToken = vi.fn(async () => 'oauth-token-v2-refreshed')
+    await capturedGetToken!()
+    expect(scrubber.scrub('leaked: oauth-token-v2-refreshed')).toBe('leaked: «secret»')
+  })
+
+  it('falls back to inlining a plain static header when the proxy is not running', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(null)
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['plain-header-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'plain-header-server',
+        name: 'Plain Header MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer plain-static-secret' },
+        oauth_metadata: {},
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['Plain Header MCP']).toMatchObject({
+      type: 'http',
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer plain-static-secret' },
+    })
+    expect(registerMcpProxyTarget).not.toHaveBeenCalled()
+  })
+
+  it('does not route a plain remote MCP server with no headers at all through the proxy', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['no-header-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'no-header-server',
+        name: 'No Header MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {},
+        oauth_metadata: {},
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['No Header MCP']).toMatchObject({ type: 'http', url: 'https://example.com/mcp' })
+    expect(getMcpAuthProxyPort).not.toHaveBeenCalled()
+    expect(registerMcpProxyTarget).not.toHaveBeenCalled()
+  })
+
   it('wraps a local (stdio) MCP server with secret env instead of putting values in the config/argv', async () => {
     const mockDb = {
       getAgent: vi.fn(() => ({
@@ -1821,6 +2028,37 @@ describe('AgentManager MCP server routing', () => {
       command: '/fake/mcp-env-loader.sh',
       args: ['/fake/mcp-env/local-server.env.sh', 'node', 'server.js']
     })
+  })
+
+  // Major finding 7: once a value is routed through the wrapper/proxy, it no
+  // longer appears anywhere in `config.mcpServers` — so a session's
+  // SecretScrubber (built by reading that config) would never learn it
+  // exists unless buildMcpServersForAdapter hands it over directly. This
+  // exercises the REAL path (buildMcpServersForAdapter's own scrubber
+  // parameter), not a scrubber fed a hand-built config/entry list.
+  it('hands a local MCP server env value to the scrubber it is given, even though the value never appears in the built config', async () => {
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['local-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'local-server',
+        name: 'My Local MCP',
+        type: 'local',
+        command: 'node',
+        args: ['server.js'],
+        environment: { LOCAL_MCP_SECRET: 'local-mcp-secret-value' },
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const scrubber = new SecretScrubber()
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubber)
+
+    expect(JSON.stringify(mcpServers)).not.toContain('local-mcp-secret-value')
+    expect(scrubber.scrub('leaked: local-mcp-secret-value')).toBe('leaked: «$LOCAL_MCP_SECRET»')
   })
 
   it('does not wrap a local MCP server with no configured env', async () => {

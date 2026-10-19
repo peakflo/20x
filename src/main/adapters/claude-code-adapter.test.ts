@@ -1442,9 +1442,38 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
     }
   })
 
-  it('passes ANTHROPIC_API_KEY only for an explicit api_key session', async () => {
+  it('passes ANTHROPIC_API_KEY for an explicit api_key session', async () => {
     const options = await sendAndCaptureOptions({ authMethod: 'api_key', apiKeys: { anthropic: 'sk-ant-explicit-key' } })
     expect(options.env.ANTHROPIC_API_KEY).toBe('sk-ant-explicit-key')
+  })
+
+  it('still passes ambient ANTHROPIC_API_KEY through for legacy agents with no saved auth_method', async () => {
+    // Pre-allowlist behavior spread `process.env` wholesale, so an agent
+    // created before auth_method existed (or with it left unset) got the
+    // shell's ambient key for free. `authMethod: undefined` must keep doing
+    // that — only an explicit 'subscription' should suppress it (mirrors
+    // Codex's own undefined/legacy handling in buildEnvironment()).
+    const prevKey = process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-ambient-legacy-key'
+    try {
+      const options = await sendAndCaptureOptions({ authMethod: undefined })
+      expect(options.env.ANTHROPIC_API_KEY).toBe('sk-ant-ambient-legacy-key')
+    } finally {
+      if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = prevKey
+    }
+  })
+
+  it('prefers the agent’s own saved key over the ambient one when auth_method is unset', async () => {
+    const prevKey = process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-ambient-should-lose'
+    try {
+      const options = await sendAndCaptureOptions({ authMethod: undefined, apiKeys: { anthropic: 'sk-ant-saved-should-win' } })
+      expect(options.env.ANTHROPIC_API_KEY).toBe('sk-ant-saved-should-win')
+    } finally {
+      if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = prevKey
+    }
   })
 
   it('registers a PostToolUse hook that scrubs tool_response and leaves non-matching output untouched', async () => {
@@ -1484,5 +1513,44 @@ describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
     const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
     expect(options.hooks?.PreToolUse?.[0]?.matcher).toBe('Bash')
     expect(options.hooks?.PostToolUse?.[0]?.hooks?.[0]).toBeTypeOf('function')
+  })
+
+  // A non-zero exit routes to PostToolUseFailure instead of PostToolUse —
+  // confirmed by actually running `echo $SECRET ; false` through the real
+  // pinned SDK: the literal value came back in PostToolUseFailure's `error`
+  // field, which has no output-rewrite capability. wrapCommandForScrubbableFailure
+  // forces the wrapped command's own exit status to 0 so it always routes
+  // through the one hook event that CAN be rewritten.
+  it('PreToolUse wraps the command so a failing exit status still routes through the scrubbable PostToolUse event', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    const result = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi; false' }
+    })
+    const wrapped = result.hookSpecificOutput.updatedInput.command as string
+    expect(wrapped).toContain('echo hi; false')
+    expect(wrapped).toContain('exit 0')
+    expect(wrapped).toMatch(/__20x_ec=\$\?/)
+  })
+
+  it('does not wrap the command when the session has nothing to scrub (no behavior change)', async () => {
+    const options = await sendAndCaptureOptions({})
+    expect(options.hooks?.PreToolUse).toBeUndefined()
+  })
+
+  it('registers a PostToolUseFailure hook (best-effort — cannot rewrite output, only warns the model) when there is something to scrub', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    const failureHook = options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0]
+    expect(failureHook).toBeDefined()
+    const result = await failureHook({ hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: {}, tool_use_id: 'x', error: 'boom' })
+    expect(result.hookSpecificOutput.hookEventName).toBe('PostToolUseFailure')
+    expect(result.hookSpecificOutput.additionalContext).toContain('secret')
+  })
+
+  it('does not register a PostToolUseFailure hook when there is nothing to scrub', async () => {
+    const options = await sendAndCaptureOptions({})
+    expect(options.hooks?.PostToolUseFailure).toBeUndefined()
   })
 })
