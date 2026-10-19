@@ -88,6 +88,9 @@ function makeDb() {
     getTasks: vi.fn(() => TASKS),
     getTask: vi.fn((id: string) => TASKS.find((t) => t.id === id)),
     getTranscriptParts: vi.fn(() => PARTS),
+    // get_messages scrubs output through buildSecretEntriesForAgent, which
+    // looks the task's agent up — no agent configured in these fixtures.
+    getAgent: vi.fn(() => undefined),
   } as never
 }
 

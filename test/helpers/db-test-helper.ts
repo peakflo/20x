@@ -206,6 +206,18 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     CREATE INDEX IF NOT EXISTS idx_oauth_tokens_mcp_server ON oauth_tokens(mcp_server_id);
     CREATE INDEX IF NOT EXISTS idx_oauth_tokens_provider ON oauth_tokens(provider);
 
+    CREATE TABLE IF NOT EXISTS secrets (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      env_var_name TEXT NOT NULL UNIQUE,
+      value BLOB NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_secrets_env_var ON secrets(env_var_name);
+
     CREATE TABLE IF NOT EXISTS marketplace_sources (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,

@@ -1413,3 +1413,76 @@ describe('ClaudeCodeAdapter abort classification (regression)', () => {
     expect(session.lastError).toBe('socket hang up')
   })
 })
+
+describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
+  const SECRET_VALUE = 'sk-super-secret-leak-value-123456'
+
+  async function sendAndCaptureOptions(config: Record<string, unknown>) {
+    const { adapter, session } = createAdapterWithSession('s1', [])
+    await adapter.initialize()
+    ;(adapter as any).findClaudeExecutable = vi.fn().mockResolvedValue('/usr/local/bin/claude')
+    vi.mocked(query).mockImplementation(() => (async function* () {})() as any)
+
+    await adapter.sendPrompt('s1', [{ type: MessagePartType.TEXT, text: 'hello' }], {
+      agentId: 'a1', taskId: 't1', workspaceDir: '/tmp/workspace', ...config
+    } as any)
+    await session.streamTask
+    return vi.mocked(query).mock.lastCall?.[0].options as any
+  }
+
+  it('never puts a provider API key in env for a subscription session, even if the login shell has one', async () => {
+    const prevKey = process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-ambient-should-not-leak'
+    try {
+      const options = await sendAndCaptureOptions({ authMethod: 'subscription' })
+      expect(options.env.ANTHROPIC_API_KEY).toBeUndefined()
+    } finally {
+      if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = prevKey
+    }
+  })
+
+  it('passes ANTHROPIC_API_KEY only for an explicit api_key session', async () => {
+    const options = await sendAndCaptureOptions({ authMethod: 'api_key', apiKeys: { anthropic: 'sk-ant-explicit-key' } })
+    expect(options.env.ANTHROPIC_API_KEY).toBe('sk-ant-explicit-key')
+  })
+
+  it('registers a PostToolUse hook that scrubs tool_response and leaves non-matching output untouched', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    const postToolUse = options.hooks?.PostToolUse?.[0]?.hooks?.[0]
+    expect(postToolUse).toBeDefined()
+
+    const scrubbed = await postToolUse({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+      tool_response: `the value is ${SECRET_VALUE}`,
+      tool_use_id: 'x'
+    })
+    expect(scrubbed.hookSpecificOutput.hookEventName).toBe('PostToolUse')
+    expect(scrubbed.hookSpecificOutput.updatedToolOutput).not.toContain(SECRET_VALUE)
+    expect(scrubbed.hookSpecificOutput.updatedToolOutput).toContain('«$MY_SECRET»')
+
+    const unchanged = await postToolUse({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+      tool_response: 'nothing secret here',
+      tool_use_id: 'y'
+    })
+    // No rewrite when nothing changed — avoids a needless identity-rewrite
+    // competing last-write-wins with another hook's rewrite.
+    expect(unchanged).toEqual({})
+  })
+
+  it('does not register a PostToolUse scrub hook when the session has nothing to scrub', async () => {
+    const options = await sendAndCaptureOptions({})
+    expect(options.hooks?.PostToolUse).toBeUndefined()
+  })
+
+  it('keeps the existing PreToolUse secret-export hook alongside the new PostToolUse scrub hook', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    expect(options.hooks?.PreToolUse?.[0]?.matcher).toBe('Bash')
+    expect(options.hooks?.PostToolUse?.[0]?.hooks?.[0]).toBeTypeOf('function')
+  })
+})

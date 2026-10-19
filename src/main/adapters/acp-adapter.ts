@@ -47,6 +47,7 @@ import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-
 import type { ProviderUsageLimits } from '../../shared/usage'
 import { acpUsageUpdateCostUsd, normalizeAcpPromptUsage } from '../usage/usage-normalize'
 import { getWrapperHooks, type AcpWrapperHooks, type AcpErrorClass } from '../acp-registry/wrapper-hooks'
+import { buildHarnessBaseEnv } from './harness-env'
 
 // Type-only imports: real ACP wire shapes for v1 ("stable") and the
 // experimental v2 generation. Never imported as values — the package ships
@@ -388,8 +389,12 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
   }
 
   private buildEnv(config: SessionConfig): Record<string, string | undefined> {
+    // Base env with every known provider-credential var stripped — an ACP
+    // agent (cursor-agent, or a registry agent) gets back only the one key
+    // it was explicitly configured with below, never whatever else the login
+    // shell happened to export for other harnesses.
     const env: Record<string, string | undefined> = {
-      ...process.env,
+      ...buildHarnessBaseEnv(),
       ...this.processConfig.env
     }
     if (config.apiKeys?.anthropic) env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
@@ -758,7 +763,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       return { available: true }
     }
     const probeProcess = spawn(this.processConfig.command, this.processConfig.args, {
-      env: { ...process.env, ...this.processConfig.env },
+      env: { ...buildHarnessBaseEnv(), ...this.processConfig.env },
       stdio: ['pipe', 'pipe', 'pipe']
     })
     probeProcess.on('error', () => { /* handled by the health result listener below */ })
@@ -1343,7 +1348,11 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         const args = Array.isArray(params?.args) ? (params?.args as string[]) : []
         const cwd = typeof params?.cwd === 'string' ? params.cwd : session.config.workspaceDir
         const terminalId = randomUUID()
-        const child = spawn(command, args, { cwd, env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] })
+        // Same scoped env as the agent process itself (buildEnv), not a raw
+        // `{...process.env}` spread — this terminal runs arbitrary commands
+        // on the agent's behalf and must not hand them provider credentials
+        // the ACP agent itself was never configured with.
+        const child = spawn(command, args, { cwd, env: this.buildEnv(session.config), stdio: ['pipe', 'pipe', 'pipe'] })
         const entry: AcpTerminalProcess = { process: child, stdout: '', stderr: '', exitCode: null, exitSignal: null, exited: false }
         child.on('error', (error) => {
           entry.exited = true

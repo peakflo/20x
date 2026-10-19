@@ -29,6 +29,9 @@ import {
   latestResetAt,
   normalizeClaudeModelUsage
 } from '../usage/usage-normalize'
+import { buildHarnessBaseEnv } from './harness-env'
+import { buildSecretEntriesFromSessionConfig } from '../secret-entries'
+import { SecretScrubber } from '../secret-scrubber'
 
 type ClaudeSDK = typeof import('@anthropic-ai/claude-agent-sdk')
 type Query = import('@anthropic-ai/claude-agent-sdk').Query
@@ -313,19 +316,32 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   }
 
   /**
-   * Build environment variables for Claude process
-   * Removes CLAUDECODE to prevent nested session errors.
-   * When secrets are configured, sets SHELL to the secret-shell.sh wrapper
-   * so every bash command fetches secrets from the broker transparently.
+   * Build environment variables for the Claude process.
+   *
+   * Starts from `buildHarnessBaseEnv()` — the app's own environment with
+   * every known provider-credential var (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+   * CODEX_API_KEY, ...) stripped out — instead of spreading `process.env`
+   * wholesale, so Claude Code never sees credentials that belong to other
+   * harnesses. ANTHROPIC_API_KEY is re-added, explicitly, only when this
+   * session actually authenticates with an API key; subscription (OAuth)
+   * sessions get none of it, matching how Claude Code itself authenticates.
+   *
+   * Also removes CLAUDECODE to prevent nested session errors.
    */
-  private buildClaudeEnvironment(harnessHome: string | undefined = this.harnessHome): Record<string, string> {
-    const env = { ...process.env } as Record<string, string>
+  private buildClaudeEnvironment(config: Pick<SessionConfig, 'harnessHome' | 'authMethod' | 'apiKeys'>): Record<string, string> {
+    const env = buildHarnessBaseEnv()
 
     // Remove CLAUDECODE to prevent nested session error
     delete env.CLAUDECODE
 
     // The instance's config directory selects its login and its session store.
+    const harnessHome = config.harnessHome ?? this.harnessHome
     if (harnessHome) env.CLAUDE_CONFIG_DIR = harnessHome
+
+    if (config.authMethod === 'api_key') {
+      const key = config.apiKeys?.anthropic || process.env.ANTHROPIC_API_KEY
+      if (key) env.ANTHROPIC_API_KEY = key
+    }
 
     return env
   }
@@ -376,6 +392,43 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         hooks: [hook]
       }]
     }
+  }
+
+  /**
+   * Build a PostToolUse hook that rewrites the Bash tool result with
+   * scrubbed text before it is fed back to the model — the SDK's
+   * `updatedToolOutput` lets a host replace tool output before Claude ever
+   * sees it (confirmed in `@anthropic-ai/claude-agent-sdk`'s PostToolUse
+   * hook-specific output type). This keeps secret values out of the model's
+   * own context, not just out of what 20x stores/renders: once a model has
+   * seen a value verbatim it will often copy it into a later tool call.
+   *
+   * Scrubs with the FULL session scrubber (configured secrets, provider API
+   * keys, OAuth/MCP tokens) — not just `secretEnvVars` — since all of those
+   * can show up in a command's stdout/stderr (`env`, a verbose curl, a
+   * misconfigured script).
+   */
+  private buildScrubHooks(scrubber: SecretScrubber): Partial<Record<string, HookCallbackMatcher[]>> | undefined {
+    if (scrubber.isEmpty) return undefined
+
+    const hook: HookCallback = async (input) => {
+      const toolResponse = 'tool_response' in input ? input.tool_response : undefined
+      if (toolResponse === undefined || toolResponse === null) return {}
+      const scrubbed = scrubber.scrubDeep(toolResponse)
+      // Only return a rewrite when something actually changed — an identity
+      // rewrite would needlessly compete last-write-wins with any other
+      // hook's rewrite of the same call (none exist here today, but the SDK
+      // docs call this out explicitly).
+      if (JSON.stringify(scrubbed) === JSON.stringify(toolResponse)) return {}
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse' as const,
+          updatedToolOutput: scrubbed
+        }
+      }
+    }
+
+    return { PostToolUse: [{ hooks: [hook] }] }
   }
 
   private async loadSDK(): Promise<void> {
@@ -812,11 +865,13 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
     // Build options
     const secretHooks = this.buildSecretHooks(config)
+    const scrubHooks = this.buildScrubHooks(new SecretScrubber(buildSecretEntriesFromSessionConfig(config)))
+    const hooks = secretHooks || scrubHooks ? { ...secretHooks, ...scrubHooks } : undefined
     const effort = config.reasoningEffort === 'minimal' ? undefined : config.reasoningEffort
     const options: Options = {
       cwd: config.workspaceDir,
       pathToClaudeCodeExecutable: claudePath,
-      env: this.buildClaudeEnvironment(config.harnessHome),
+      env: this.buildClaudeEnvironment(config),
       mcpServers: config.mcpServers as Record<string, McpServerConfig> | undefined,
       model: config.model,
       effort,
@@ -827,7 +882,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       abortController,
       permissionMode: 'bypassPermissions', // Auto-approve all actions (user has already chosen to run agent)
       allowDangerouslySkipPermissions: true, // Required for bypassPermissions mode
-      ...(secretHooks ? { hooks: secretHooks } : {}),
+      ...(hooks ? { hooks } : {}),
     }
 
     // Determine session continuation mode
@@ -1390,8 +1445,12 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
             errorText = 'Unknown error (no details in result message)'
           }
 
-          console.warn('[ClaudeCodeAdapter] Received error result:', errorText)
-          console.warn('[ClaudeCodeAdapter] Full error result message:', JSON.stringify(raw, null, 2))
+          // `raw` is the SDK's full untyped result message — on an error it can
+          // echo back tool input/output verbatim (e.g. the Bash command the
+          // error happened on), so it's scrubbed before it ever reaches a log.
+          const errorScrubber = new SecretScrubber(buildSecretEntriesFromSessionConfig(session.config))
+          console.warn('[ClaudeCodeAdapter] Received error result:', errorScrubber.scrub(errorText))
+          console.warn('[ClaudeCodeAdapter] Full error result message:', errorScrubber.scrub(JSON.stringify(raw, null, 2)))
           session.status = 'error'
           session.lastError = errorText
         }
@@ -1708,7 +1767,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       options: {
         cwd: homedir(),
         pathToClaudeCodeExecutable: claudePath,
-        env: this.buildClaudeEnvironment(),
+        env: this.buildClaudeEnvironment({ harnessHome: this.harnessHome }),
         abortController,
         persistSession: false,
         settingSources: ['user']

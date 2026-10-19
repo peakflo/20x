@@ -11,6 +11,8 @@ import type { EnterpriseSyncManager } from './enterprise-sync'
 import type { SourceUser, ReassignResult } from '../shared/types'
 import { TaskStatus } from '../shared/constants'
 import { desktopBrandName } from './brand'
+import { SecretScrubber } from './secret-scrubber'
+import { buildSecretEntriesForAgent } from './secret-entries'
 
 export interface SyncResult {
   source_id: string
@@ -409,7 +411,12 @@ export class SyncManager {
           .map(field => [field.id, field.value]))
         outputs.action = actionId
         if (input) outputs.reason = input
-        this.db.setSetting(key, JSON.stringify({scope,taskId:task.id,externalId:task.external_id,expectedVersion:snapshot.version,outputs}))
+        // Output fields are agent-written and can echo a secret value verbatim
+        // (e.g. copied from a tool's stdout). Scrub before this ever leaves
+        // the app for the external Peakflo/Workflo server.
+        const entries = buildSecretEntriesForAgent(this.db, task.agent_id)
+        const scrubbed = entries.length > 0 ? new SecretScrubber(entries).scrubDeep(outputs) : outputs
+        this.db.setSetting(key, JSON.stringify({scope,taskId:task.id,externalId:task.external_id,expectedVersion:snapshot.version,outputs:scrubbed}))
       }
       await this.flushTaskCompletions()
       return this.db.getSetting(key)
