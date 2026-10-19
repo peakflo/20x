@@ -111,7 +111,7 @@ describe('useUiRemoteControl', () => {
     await act(async () => {
       commandListener?.({ requestId: 'r2', command: { kind: 'move_task_panel', taskId: 't1', x: 0, y: 0 } })
     })
-    expect(acks).toEqual([expect.objectContaining({ requestId: 'r2', applied: false, detail: 'That task has no panel on the canvas' })])
+    expect(acks).toEqual([expect.objectContaining({ requestId: 'r2', applied: false, detail: expect.stringMatching(/no panel on the canvas/) })])
   })
 
   it('stops listening when it is unmounted', () => {

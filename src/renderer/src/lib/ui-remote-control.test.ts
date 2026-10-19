@@ -116,12 +116,14 @@ describe('navigate', () => {
     expect(useUIStore.getState().sidebarView).toBe('tasks')
   })
 
-  it('opens settings on the tab that was asked for, and ignores one that does not exist', async () => {
+  it('opens settings on the tab that was asked for, and refuses one that does not exist', async () => {
     await applyUiCommand({ kind: 'navigate', view: 'settings', settingsTab: 'voice' })
     expect(useUIStore.getState().activeModal).toBe('settings')
     expect(useUIStore.getState().settingsTab).toBe(SettingsTab.VOICE)
 
-    await applyUiCommand({ kind: 'navigate', view: 'settings', settingsTab: 'not-a-tab' })
+    const result = await applyUiCommand({ kind: 'navigate', view: 'settings', settingsTab: 'not-a-tab' })
+    expect(result.applied).toBe(false)
+    expect(result.detail).toMatch(/Unknown settings_tab "not-a-tab".*voice/)
     expect(useUIStore.getState().settingsTab).toBe(SettingsTab.VOICE)
   })
 })
@@ -207,7 +209,7 @@ describe('open_task', () => {
   it('refuses a task that does not exist anywhere', async () => {
     expect(await applyUiCommand({ kind: 'open_task', taskId: 'ghost', where: 'workspace' })).toEqual({
       applied: false,
-      detail: 'That task could not be loaded',
+      detail: expect.stringMatching(/could not load that task/),
     })
     expect(useUIStore.getState().sidebarView).toBe('dashboard')
   })
@@ -253,7 +255,7 @@ describe('canvas panels', () => {
     addTaskPanel('t1')
     const pending = applyUiCommand({ kind: 'set_canvas_view', mode: 'fit_all' })
     await vi.advanceTimersByTimeAsync(UI_VIEW_COMMAND_TIMEOUT_MS + 1)
-    expect(await pending).toEqual({ applied: false, detail: 'The canvas did not apply the view change' })
+    expect(await pending).toEqual({ applied: false, detail: expect.stringMatching(/did not apply the view change/) })
   })
 
   it('does not send the user to an empty canvas to fit nothing', async () => {

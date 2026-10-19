@@ -315,3 +315,42 @@ describe('get_messages in a subtask scope', () => {
     expect(calls).toEqual([{ route: '/get_messages', params: { task_id: 'task-own', include_tools: true, seq: 3 } }])
   })
 })
+
+describe('window-driving tools are hard to misuse', () => {
+  const schemaOf = (name: string) => toolByName(FULL_ACCESS_SCOPE, name)!.inputSchema as {
+    properties: Record<string, { enum?: string[]; default?: unknown }>
+    required?: string[]
+  }
+
+  it('open_task needs only task_id, and where defaults to auto', () => {
+    const schema = schemaOf('open_task')
+    expect(schema.required).toEqual(['task_id'])
+    expect(schema.properties.where.enum).toEqual(['auto', 'canvas', 'workspace', 'modal'])
+    expect(schema.properties.where.default).toBe('auto')
+  })
+
+  it('set_canvas_view needs nothing, and mode defaults to fit_all', () => {
+    const schema = schemaOf('set_canvas_view')
+    expect(schema.required ?? []).toEqual([])
+    expect(schema.properties.mode.default).toBe('fit_all')
+  })
+
+  it('passes where through to the route untouched, explicit or omitted', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = async (route: string, params: Record<string, unknown>) => {
+      calls.push([route, params])
+      return { success: true }
+    }
+    await callToolForScope('open_task', { task_id: 't1', where: 'canvas' }, FULL_ACCESS_SCOPE, invoke)
+    await callToolForScope('open_task', { task_id: 't1' }, FULL_ACCESS_SCOPE, invoke)
+    expect(calls).toEqual([
+      ['/open_task', { task_id: 't1', where: 'canvas' }],
+      ['/open_task', { task_id: 't1' }],
+    ])
+  })
+
+  it('reports a route error as an MCP error, never as a success', async () => {
+    const result = await callToolForScope('open_task', { task_id: 't1' }, FULL_ACCESS_SCOPE, async () => ({ error: 'nope' }))
+    expect(result.isError).toBe(true)
+  })
+})

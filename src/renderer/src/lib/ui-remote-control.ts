@@ -120,6 +120,12 @@ export async function applyUiCommand(command: UiCommand): Promise<UiCommandResul
     case 'navigate': {
       if (command.view === 'settings') {
         const tab = toSettingsTab(command.settingsTab)
+        if (command.settingsTab && !tab) {
+          return {
+            applied: false,
+            detail: `Unknown settings_tab "${command.settingsTab}". Use one of: ${SETTINGS_TABS.map((t) => t.value).join(', ')}`,
+          }
+        }
         if (tab) ui.setSettingsTab(tab)
         ui.openSettings()
         return { applied: true }
@@ -132,7 +138,7 @@ export async function applyUiCommand(command: UiCommand): Promise<UiCommandResul
     }
 
     case 'open_task': {
-      if (!(await loadTask(command.taskId))) return { applied: false, detail: 'That task could not be loaded' }
+      if (!(await loadTask(command.taskId))) return { applied: false, detail: 'The 20x window could not load that task. Check the task_id with get_task.' }
       useTaskStore.getState().selectTask(command.taskId)
 
       if (command.where === 'canvas') {
@@ -146,7 +152,7 @@ export async function applyUiCommand(command: UiCommand): Promise<UiCommandResul
         // Centre it. The panel is already in the store, so it is on the canvas
         // either way; failing to centre is reported, not hidden.
         if (!(await runViewCommand({ kind: 'focus_task', taskId: command.taskId }))) {
-          return { applied: false, detail: 'The task panel was added, but the canvas could not centre it' }
+          return { applied: false, detail: 'The panel is on the canvas, but the canvas could not centre it (the 20x window may be minimised). Call get_ui_state for its position.' }
         }
         return { applied: true }
       }
@@ -166,14 +172,14 @@ export async function applyUiCommand(command: UiCommand): Promise<UiCommandResul
 
     case 'move_task_panel': {
       const panel = findTaskPanel(command.taskId)
-      if (!panel) return { applied: false, detail: 'That task has no panel on the canvas' }
+      if (!panel) return { applied: false, detail: 'That task has no panel on the canvas. Call open_task with where="canvas" first.' }
       useCanvasStore.getState().updatePanel(panel.id, { x: command.x, y: command.y })
       return { applied: true }
     }
 
     case 'close_task_panel': {
       const panel = findTaskPanel(command.taskId)
-      if (!panel) return { applied: false, detail: 'That task has no panel on the canvas' }
+      if (!panel) return { applied: false, detail: 'That task has no panel on the canvas, so there is nothing to close.' }
       useCanvasStore.getState().removePanel(panel.id)
       return { applied: true }
     }
@@ -191,11 +197,11 @@ export async function applyUiCommand(command: UiCommand): Promise<UiCommandResul
           ? { kind: 'zoom', zoom: command.zoom ?? 1 }
           : { kind: command.mode }
       )
-      return applied ? { applied: true } : { applied: false, detail: 'The canvas did not apply the view change' }
+      return applied ? { applied: true } : { applied: false, detail: 'The canvas did not apply the view change (the 20x window may be minimised). Call get_ui_state to see the current viewport.' }
     }
 
     case 'open_artifact': {
-      if (!(await loadTask(command.taskId))) return { applied: false, detail: 'That task could not be loaded' }
+      if (!(await loadTask(command.taskId))) return { applied: false, detail: 'The 20x window could not load that task. Check the task_id with get_task.' }
 
       // The caller names the artifact by its registry ID. The tab is keyed
       // differently — the registry ID is the workpiece key — so the tab is

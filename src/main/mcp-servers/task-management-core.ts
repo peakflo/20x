@@ -479,7 +479,7 @@ const mastermindTools: Tool[] = [
   {
     name: 'get_ui_state',
     description:
-      'What the user is looking at right now: the open view, the selected task, any open dialog, and the canvas panels. Read this before you act on "this task" or "here".',
+      'What the user sees in 20x right now: view, selected task, open dialog, and every canvas panel (panelId, taskId, x, y, width, height). Call it before acting on "this task" or "here". available=false means no 20x window is open.',
     inputSchema: { type: 'object', properties: {} }
   },
   {
@@ -525,12 +525,19 @@ const mastermindTools: Tool[] = [
   {
     name: 'navigate',
     description:
-      'Show the user a different part of 20x. Views: dashboard (the board), tasks (the full task view), canvas, skills, settings.',
+      'Switch the 20x window to a view. To show one task, use open_task instead.',
     inputSchema: {
       type: 'object',
       properties: {
-        view: { type: 'string', enum: ['dashboard', 'tasks', 'canvas', 'skills', 'settings'], description: 'Where to send the user' },
-        settings_tab: { type: 'string', description: 'Settings tab to open, for example general, agents, voice, secrets. Used only with view=settings.' }
+        view: {
+          type: 'string',
+          enum: ['dashboard', 'tasks', 'canvas', 'skills', 'settings'],
+          description: 'dashboard = the board, tasks = full task view, canvas, skills, settings.'
+        },
+        settings_tab: {
+          type: 'string',
+          description: 'Only with view=settings, e.g. general, agents, voice, secrets. An unknown tab is an error that lists the valid ones.'
+        }
       },
       required: ['view']
     }
@@ -538,12 +545,17 @@ const mastermindTools: Tool[] = [
   {
     name: 'open_task',
     description:
-      'Open a task for the user. By default it follows the screen they are on: the canvas centres the panel (adding it when it is not there), the dashboard opens the preview dialog, and anywhere else opens the full task view. Pass where to override that.',
+      'Show a task to the user. Works for any task, including completed ones and subtasks. Omit where to follow the screen: on the canvas the panel is added if missing and centred; on the dashboard the preview dialog opens; elsewhere the full task view opens. On the canvas the reply includes panel {panelId, x, y, width, height}, ready for move_task_panel. Returns an error, never a false success, when the window could not do it.',
     inputSchema: {
       type: 'object',
       properties: {
         task_id: { type: 'string', description: 'Task ID' },
-        where: { type: 'string', enum: ['auto', 'workspace', 'canvas', 'modal'], description: 'auto (default) follows the open view. workspace is the full task view, canvas is a panel, modal is the dashboard preview dialog.' }
+        where: {
+          type: 'string',
+          enum: ['auto', 'canvas', 'workspace', 'modal'],
+          default: 'auto',
+          description: 'auto (default) follows the screen. canvas = a canvas panel, workspace = full task view, modal = dashboard preview dialog.'
+        }
       },
       required: ['task_id']
     }
@@ -551,20 +563,20 @@ const mastermindTools: Tool[] = [
   {
     name: 'move_task_panel',
     description:
-      'Move the canvas panel of a task to a canvas coordinate. Read the panel positions and the viewport from get_ui_state first; the coordinates are canvas space, not screen pixels. It fails when that task has no panel.',
+      'Move the canvas panel of a task so its top-left corner is at (x, y) in canvas coordinates (the same space as panel x/y in get_ui_state and the open_task reply, not screen pixels). The task needs a panel: call open_task with where=canvas first. Returns the new position.',
     inputSchema: {
       type: 'object',
       properties: {
         task_id: { type: 'string', description: 'Task ID' },
-        x: { type: 'number', description: 'Canvas x coordinate for the top-left corner' },
-        y: { type: 'number', description: 'Canvas y coordinate for the top-left corner' }
+        x: { type: 'number', description: 'Canvas x of the top-left corner' },
+        y: { type: 'number', description: 'Canvas y of the top-left corner' }
       },
       required: ['task_id', 'x', 'y']
     }
   },
   {
     name: 'close_task_panel',
-    description: 'Remove the canvas panel of a task. The task itself is untouched.',
+    description: 'Remove the canvas panel of a task. The task itself is not changed. Fails if the task has no panel.',
     inputSchema: {
       type: 'object',
       properties: { task_id: { type: 'string', description: 'Task ID' } },
@@ -573,14 +585,14 @@ const mastermindTools: Tool[] = [
   },
   {
     name: 'set_canvas_view',
-    description: 'Change the canvas viewport: fit_all shows every panel, reset returns to the origin at 100%, zoom sets a level between 0.1 and 3.',
+    description:
+      'Move the canvas viewport and show the canvas. fit_all (default) shows every panel; reset goes to the origin at 100%; zoom sets a level. Passing only zoom means mode=zoom. Returns the new viewport. To centre one task, use open_task with where=canvas.',
     inputSchema: {
       type: 'object',
       properties: {
-        mode: { type: 'string', enum: ['fit_all', 'reset', 'zoom'], description: 'What to do with the viewport' },
-        zoom: { type: 'number', description: 'Zoom level between 0.1 and 3. Required with mode=zoom.' }
-      },
-      required: ['mode']
+        mode: { type: 'string', enum: ['fit_all', 'reset', 'zoom'], default: 'fit_all', description: 'fit_all (default), reset, or zoom' },
+        zoom: { type: 'number', minimum: 0.1, maximum: 3, description: 'Zoom level from 0.1 to 3. Only used with mode=zoom.' }
+      }
     }
   },
   {
