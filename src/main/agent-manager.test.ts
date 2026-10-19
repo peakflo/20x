@@ -99,7 +99,7 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
 import { AcpAgentAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
-import { getTaskApiPort } from './task-api-server'
+import { getTaskApiPort, registerMemorySession, unregisterMemorySession } from './task-api-server'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
 const mockedWriteFileAsync = vi.mocked(writeFileAsync)
@@ -688,6 +688,39 @@ describe('AgentManager skill file paths', () => {
       expect(md).toContain('http://127.0.0.1:5555/mcp?task=t1&parent=p1')
       expect(md).not.toContain('/bin/Electron')
       expect(md).not.toContain('**Command:**')
+    })
+
+    // The memory token travels as a request header (McpServerConfig.headers),
+    // never a URL query parameter — see MEMORY_TOKEN_HEADER's doc in
+    // task-mcp-endpoint.ts. generateAgentsMd/generateClaudeMd only ever write
+    // the URL into the doc, never the headers, so the token can't reach disk
+    // through this path. Also checks the defense-in-depth URL sanitizer, in
+    // case a future regression put a credential back into the URL.
+    it('never writes the memory token (or any header) into AGENTS.md or CLAUDE.md', () => {
+      manager = new AgentManager(makeMcpDb())
+      const injected = {
+        'task-management': {
+          type: 'http' as const,
+          url: 'http://127.0.0.1:5555/mcp?task=t1&memoryToken=tok-should-never-leak',
+          headers: { 'x-mastermind-memory-token': 'tok-should-never-leak' }
+        }
+      }
+
+      const agentsMd: string = (manager as any).generateAgentsMd([], [], '/tmp/ws', 'agent-1', injected)
+      const claudeMd: string = (manager as any).generateClaudeMd([], [], '/tmp/ws', 'agent-1', injected)
+
+      for (const md of [agentsMd, claudeMd]) {
+        expect(md).not.toContain('tok-should-never-leak')
+        expect(md).not.toContain('x-mastermind-memory-token')
+      }
+      // AGENTS.md documents the transport, including the URL — so this is
+      // where a regression would show up. The URL's memoryToken param gets
+      // percent-encoded by URLSearchParams ([ -> %5B), but the redaction
+      // marker survives either way.
+      expect(agentsMd).toContain('redacted')
+      // CLAUDE.md never prints transport/endpoint details at all (only tool
+      // names) — nothing to redact there, but worth asserting explicitly.
+      expect(claudeMd).not.toContain('Endpoint')
     })
 
     it('falls back to the agent config when the caller gives no server list', () => {
@@ -4881,6 +4914,116 @@ describe('AgentManager Mastermind session continuity + memory', () => {
     // itself didn't re-teach it.
     const contextEvent = sent.find(([channel]) => channel === 'mastermind:memory-context')
     expect(contextEvent?.[1]).toEqual({ count: 1, ids: ['mem-1'] })
+  })
+
+  // Round-2 review finding: memoryTokenFor used to register a memory token
+  // (making it immediately valid for /remember etc.) before the session it
+  // belongs to was even confirmed to exist. If adapter.createSession/
+  // resumeSession — or anything before it — then failed, nothing ever called
+  // unregisterMemorySession for a session that was never stored, leaving a
+  // valid-but-orphaned token forever. Fixed by minting a candidate value
+  // early (it has to be, since it's embedded in the MCP config) but only
+  // calling registerMemorySession once the session is actually stored.
+  describe('memory token registration timing (never leftover-valid on failure)', () => {
+    beforeEach(() => {
+      vi.mocked(registerMemorySession).mockClear()
+      vi.mocked(unregisterMemorySession).mockClear()
+    })
+
+    it('never registers a memory token for a fresh session that fails to start', async () => {
+      const db = createMockDb({ coding_agent: 'claude-code' }) as any
+      Object.assign(db, {
+        getTask: vi.fn(() => undefined),
+        getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Mastermind Agent', config: { coding_agent: 'claude-code' } })),
+      })
+      const manager = new AgentManager(db)
+      const adapter = {
+        initialize: vi.fn(async () => undefined),
+        createSession: vi.fn(async () => { throw new Error('boom: createSession failed') })
+      }
+      vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+      vi.spyOn(manager as any, 'writeSkillFiles').mockResolvedValue(undefined)
+      vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+      vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+      vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      await expect(
+        (manager as any).startAdapterSession(adapter, 'agent-1', MASTERMIND_ID, '/tmp/ws', true)
+      ).rejects.toThrow('boom: createSession failed')
+
+      expect(registerMemorySession).not.toHaveBeenCalled()
+      expect([...(manager as any).sessions.keys()]).toHaveLength(0)
+    })
+
+    it('registers the memory token only once a fresh session is actually stored, and it matches what the session holds', async () => {
+      const db = createMockDb({ coding_agent: 'claude-code' }) as any
+      Object.assign(db, {
+        getTask: vi.fn(() => undefined),
+        getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Mastermind Agent', config: { coding_agent: 'claude-code' } })),
+      })
+      const manager = new AgentManager(db)
+      const adapter = {
+        initialize: vi.fn(async () => undefined),
+        createSession: vi.fn(async () => 'session-fresh-1')
+      }
+      vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+      vi.spyOn(manager as any, 'writeSkillFiles').mockResolvedValue(undefined)
+      vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+      vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+      vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+      vi.spyOn(manager as any, 'startAdapterPolling').mockImplementation(() => undefined)
+      vi.spyOn(manager as any, 'buildTaskContextReminder').mockReturnValue('')
+
+      const sessionId = await (manager as any).startAdapterSession(adapter, 'agent-1', MASTERMIND_ID, '/tmp/ws', true)
+
+      expect(registerMemorySession).toHaveBeenCalledTimes(1)
+      const [registeredToken] = vi.mocked(registerMemorySession).mock.calls[0]
+      expect(registeredToken).toEqual(expect.any(String))
+      expect((manager as any).sessions.get(sessionId).memorySessionToken).toBe(registeredToken)
+    })
+
+    it('never registers a memory token for a resumed session that fails to come back up', async () => {
+      const settings = new Map<string, string>([
+        [SESSION_SETTING, 'persisted-session-1'],
+        [AGENT_SETTING, 'agent-1']
+      ])
+      const db = createMockDb({ coding_agent: 'claude-code' }) as any
+      Object.assign(db, {
+        getTask: vi.fn(() => undefined),
+        getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Mastermind Agent', config: { coding_agent: 'claude-code' } })),
+        getSetting: vi.fn((k: string) => settings.get(k)),
+        setSetting: vi.fn((k: string, v: string) => settings.set(k, v)),
+        deleteSetting: vi.fn((k: string) => settings.delete(k)),
+        getTranscriptParts: vi.fn(() => []),
+      })
+      const manager = new AgentManager(db)
+      const adapter = {
+        initialize: vi.fn(async () => undefined),
+        // Deliberately not one of the special-cased "session is gone" messages
+        // (INCOMPATIBLE_SESSION_ID etc.) — this re-throws, same as a generic
+        // adapter/provider failure would.
+        resumeSession: vi.fn(async () => { throw new Error('boom: resumeSession failed') })
+      }
+      vi.spyOn(manager as any, 'getAdapter').mockReturnValue(adapter)
+      vi.spyOn(manager as any, 'buildMcpServersForAdapter').mockResolvedValue({})
+      vi.spyOn(manager as any, 'writeSkillFiles').mockResolvedValue(undefined)
+      vi.spyOn(manager as any, 'setupSecretSession').mockReturnValue(null)
+      vi.spyOn(manager as any, 'buildSecretsSystemPrompt').mockReturnValue('')
+      vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      // Calling resumeAdapterSession directly, not the public startSession:
+      // tryResumeMastermindSession (startSession's resume path) deliberately
+      // swallows ANY resume failure and falls back to a fresh start, which
+      // would just re-exercise the "fresh session" test above instead of
+      // this one — the property under test here is specific to
+      // resumeAdapterSession's own try/catch around adapter.resumeSession.
+      await expect(
+        (manager as any).resumeAdapterSession(adapter, 'agent-1', MASTERMIND_ID, 'persisted-session-1')
+      ).rejects.toThrow('boom: resumeSession failed')
+
+      expect(registerMemorySession).not.toHaveBeenCalled()
+      expect([...(manager as any).sessions.keys()]).toHaveLength(0)
+    })
   })
 
   it('marks a context handoff and skips native resume when Mastermind switches to a different harness', async () => {

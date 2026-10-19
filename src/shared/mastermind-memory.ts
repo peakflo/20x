@@ -300,9 +300,33 @@ const SECRET_PATTERNS: SecretPattern[] = [
   { name: 'private key block', pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/ },
   { name: 'JSON Web Token', pattern: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/ },
   { name: 'bearer token', pattern: /\bBearer\s+[A-Za-z0-9._-]{16,}\b/i },
-  { name: 'credential assignment', pattern: /\b(api[_-]?key|secret|password|passwd|pwd|access[_-]?key|auth[_-]?token|client[_-]?secret)\b\s*(?:is|[:=])\s*['"]?[^\s'"]{6,}['"]?/i },
   { name: 'URL with embedded credentials', pattern: /\w+:\/\/[^/\s:]+:[^/\s@]{4,}@/ }
 ]
+
+/**
+ * "password is ...", "secret: ...", "api_key = ..." — a credential keyword
+ * immediately followed by its value. Handled separately from SECRET_PATTERNS
+ * above because a plain regex test can't also validate the captured value
+ * (see looksLikeSecretValue, below): "The password is stored in 1Password"
+ * used to match on "stored" — any word at all after "is" — which flagged
+ * ordinary sentences that merely mention where a credential lives, not the
+ * credential itself.
+ */
+const CREDENTIAL_LABEL_PATTERN = /\b(?:api[_-]?key|secret|password|passwd|pwd|access[_-]?key|auth[_-]?token|client[_-]?secret)\b\s*(?:is|[:=])\s*['"]?([^\s'"]{4,})['"]?/gi
+
+/**
+ * Whether a labelled value (the text right after "password is", "secret:",
+ * etc.) actually looks like a secret, rather than ordinary prose continuing
+ * the sentence. A short, low-entropy English word ("stored", "hidden",
+ * "required") has none of a secret's tells — a digit, a non-alphanumeric
+ * symbol, or (for a longer unbroken run) high enough entropy to not read as
+ * a dictionary word — so none of those alone trip this.
+ */
+function looksLikeSecretValue(value: string): boolean {
+  if (value.length < 6) return false
+  if (/\d/.test(value) || /[^A-Za-z0-9]/.test(value)) return true
+  return value.length >= 12 && shannonEntropyPerChar(value) >= 3.8
+}
 
 /**
  * Shannon entropy in bits per character. A short, meaningful English phrase
@@ -368,6 +392,17 @@ export function containsLikelySecret(text: string): SecretScrubResult {
   for (const { name, pattern } of SECRET_PATTERNS) {
     if (pattern.test(text)) return { found: true, reason: `looks like a ${name}` }
   }
+
+  // Fresh RegExp per call: it's stateful (`g` flag, exec advances lastIndex),
+  // and this function may run concurrently-in-effect across many memories.
+  const credentialLabel = new RegExp(CREDENTIAL_LABEL_PATTERN.source, CREDENTIAL_LABEL_PATTERN.flags)
+  let match: RegExpExecArray | null
+  while ((match = credentialLabel.exec(text))) {
+    if (looksLikeSecretValue(match[1])) {
+      return { found: true, reason: 'looks like a credential assignment' }
+    }
+  }
+
   if (containsHighEntropyToken(text)) {
     return { found: true, reason: 'contains a long, random-looking token (possible credential)' }
   }

@@ -1004,6 +1004,20 @@ function deserializeMemory(row: MastermindMemoryRow): MastermindMemoryRecord {
   }
 }
 
+/**
+ * Whether a string contains any CJK (Chinese/Japanese/Korean) text — CJK
+ * Unified Ideographs (+ Extension A, + Compatibility), Hiragana, Katakana,
+ * and Hangul syllables. Used by `searchMemories`'s LIKE fallback, below.
+ */
+function containsCjkCharacters(text: string): boolean {
+  return /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7A3]/u.test(text)
+}
+
+/** Escapes `%`, `_` and the escape character itself for a `LIKE ... ESCAPE '\'` pattern. */
+function escapeLikePattern(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+}
+
 // ── Marketplace Source types ─────────────────────────────────
 
 export interface MarketplaceSourceRow {
@@ -4357,9 +4371,12 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
 
     const matchExpr = words.map((word) => `"${word}"`).join(' OR ')
     const clauses: string[] = ['(m.expires_at IS NULL OR m.expires_at > ?)']
-    const values: unknown[] = [matchExpr, new Date().toISOString()]
-    if (filter.scope) { clauses.push('m.scope = ?'); values.push(filter.scope) }
-    if (filter.kind) { clauses.push('m.kind = ?'); values.push(filter.kind) }
+    // Kept separate from matchExpr (below) so the same base conditions
+    // (expiry/scope/kind) can be reused by the CJK LIKE fallback, which has
+    // no MATCH parameter of its own.
+    const baseValues: unknown[] = [new Date().toISOString()]
+    if (filter.scope) { clauses.push('m.scope = ?'); baseValues.push(filter.scope) }
+    if (filter.kind) { clauses.push('m.kind = ?'); baseValues.push(filter.kind) }
     const limit = Math.min(Math.max(1, filter.limit ?? 20), 200)
 
     try {
@@ -4368,8 +4385,29 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
          JOIN mastermind_memories m ON mastermind_memories_fts.rowid = m.rowid
          WHERE mastermind_memories_fts MATCH ? AND ${clauses.join(' AND ')}
          ORDER BY bm25(mastermind_memories_fts) LIMIT ?`
-      ).all(...values, limit) as MastermindMemoryRow[]
-      return rows.map(deserializeMemory)
+      ).all(matchExpr, ...baseValues, limit) as MastermindMemoryRow[]
+      if (rows.length > 0) return rows.map(deserializeMemory)
+
+      // unicode61 has no CJK word segmentation: a whole contiguous run of CJK
+      // characters is ONE token, so a genuine substring of a longer run (e.g.
+      // "发布分支" inside "发布分支总是 main...") never matches via MATCH even
+      // though a user would expect it to. LIKE is the only way to support a
+      // real CJK substring search against this tokenizer. Restricted to words
+      // that actually contain CJK text, so it never loosens matching for
+      // ordinary Latin/Cyrillic queries — those get real word-token matching
+      // above, and a bare substring scan there would be far too permissive
+      // (and, for `forget`, unsafe — see allowFallbackToList's doc).
+      const cjkWords = words.filter(containsCjkCharacters)
+      if (cjkWords.length === 0) return []
+
+      const likeClauses = cjkWords.map(() => `m.content LIKE ? ESCAPE '\\'`)
+      const likeValues = cjkWords.map((word) => `%${escapeLikePattern(word)}%`)
+      const likeRows = this.db.prepare(
+        `SELECT m.* FROM mastermind_memories m
+         WHERE (${likeClauses.join(' OR ')}) AND ${clauses.join(' AND ')}
+         ORDER BY m.updated_at DESC LIMIT ?`
+      ).all(...likeValues, ...baseValues, limit) as MastermindMemoryRow[]
+      return likeRows.map(deserializeMemory)
     } catch (err) {
       // Malformed FTS5 syntax from the raw query text (already stripped of
       // punctuation above, so this should be rare) — fall back per allowFallback.

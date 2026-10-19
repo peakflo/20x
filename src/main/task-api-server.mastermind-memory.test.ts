@@ -174,15 +174,20 @@ describe('/recall', () => {
   it('finds a memory written in CJK (Chinese) by its exact tokenised run', async () => {
     // FTS5's unicode61 tokenizer (no CJK word segmentation) treats a whole
     // contiguous run of CJK characters as one token, not characters or
-    // words within it — so a query has to match that run exactly, not an
-    // arbitrary substring of it. The safety property that actually matters
-    // here (a CJK query with no match never deletes an unrelated memory) is
-    // covered in the /forget regression tests below; this just confirms
-    // CJK text survives tokenising as real, searchable terms at all,
-    // instead of stripping to nothing the way the old ASCII-only tokeniser did.
+    // words within it — so a query matching that run exactly always worked.
+    // The partial-phrase case (a true substring of the run) is covered next
+    // — it used to return nothing and now falls back to a LIKE scan.
     await call('/remember', { content: '发布分支总是 main，不是 master。', kind: 'fact' })
     const result = await call('/recall', { query: '发布分支总是' }) as { memories: MastermindMemoryRecord[] }
     expect(result.memories.length).toBeGreaterThan(0)
+  })
+
+  it('finds a memory by a genuine PARTIAL CJK phrase, through the real /recall route', async () => {
+    await call('/remember', { content: '发布分支总是 main，不是 master。', kind: 'fact' })
+    // "发布分支" is a real substring of the tokenised run, not the whole run.
+    const result = await call('/recall', { query: '发布分支' }) as { memories: MastermindMemoryRecord[] }
+    expect(result.memories.length).toBeGreaterThan(0)
+    expect(result.memories[0].content).toContain('发布分支总是')
   })
 })
 
@@ -279,6 +284,16 @@ describe('/forget', () => {
     it('a real Cyrillic query still deletes the memory it actually matches', async () => {
       await call('/remember', { content: 'Всегда используй pnpm.', kind: 'preference' })
       const result = await call('/forget', { query: 'используй' }) as { success: boolean }
+      expect(result.success).toBe(true)
+      expect(db.listMemories({})).toHaveLength(0)
+    })
+
+    // Parity with Latin/Cyrillic: forget can act on a genuine, unambiguous
+    // CJK partial match (not just a query equal to the whole tokenised run) —
+    // the same LIKE fallback that makes /recall find partial CJK phrases.
+    it('a real partial CJK query still deletes the single memory it actually matches', async () => {
+      await call('/remember', { content: '发布分支总是 main，不是 master。', kind: 'fact' })
+      const result = await call('/forget', { query: '发布分支' }) as { success: boolean }
       expect(result.success).toBe(true)
       expect(db.listMemories({})).toHaveLength(0)
     })

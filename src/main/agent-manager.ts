@@ -23,7 +23,7 @@ import { PiAdapter } from './adapters/pi-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
 import { getTaskApiPort, waitForTaskApiServer, registerMemorySession, unregisterMemorySession } from './task-api-server'
-import { buildTaskMcpUrl } from './task-mcp-endpoint'
+import { buildTaskMcpUrl, buildTaskMcpHeaders, sanitizeMcpUrlForDisplay } from './task-mcp-endpoint'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { randomUUID } from 'crypto'
 import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
@@ -1647,6 +1647,11 @@ export class AgentManager extends EventEmitter {
    * TASK_API_URL to inject into a child environment, and no process to leak. The
    * scope is part of the URL, which means every call for the same session builds
    * the same config, including after a resume.
+   *
+   * The memory token is deliberately NOT part of that URL — see the doc
+   * comment on MEMORY_TOKEN_HEADER in task-mcp-endpoint.ts. It travels as a
+   * header instead, which `describeMcpTransport` never includes when writing
+   * this config into a session's CLAUDE.md/AGENTS.md.
    */
   private buildTaskManagementMcpConfig(
     opts?: { taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string; memoryToken?: string | null }
@@ -1661,9 +1666,9 @@ export class AgentManager extends EventEmitter {
       url: buildTaskMcpUrl(apiPort, {
         taskId: opts?.taskScope?.taskId,
         parentTaskId: opts?.taskScope?.parentTaskId,
-        artifactTaskId: opts?.artifactTaskId,
-        memoryToken: opts?.memoryToken
-      })
+        artifactTaskId: opts?.artifactTaskId
+      }),
+      headers: buildTaskMcpHeaders(opts?.memoryToken)
     }
   }
 
@@ -1697,6 +1702,28 @@ export class AgentManager extends EventEmitter {
     registerMemorySession(token, agentId, taskId)
     if (liveSession) liveSession.memorySessionToken = token
     return token
+  }
+
+  /**
+   * Mints a candidate memory token for a session that does not exist yet —
+   * used by startAdapterSession/resumeAdapterSession, where it must be known
+   * early (it's embedded in the MCP config handed to the adapter) but
+   * everything between minting and the session actually being stored in
+   * `this.sessions` — writeSkillFiles, adapter.initialize(),
+   * adapter.createSession()/resumeSession() — can still fail.
+   *
+   * Deliberately does NOT call registerMemorySession: a token only works once
+   * it's in the server's registry, so an unregistered candidate is inert —
+   * the adapter may receive it, but every /remember etc. call with it is
+   * rejected. Registering early (as `memoryTokenFor` does for an *existing*
+   * live session) would instead leave a VALID token with nothing to ever
+   * unregister it, if any of those steps threw. The caller must call
+   * registerMemorySession itself, exactly once the session is confirmed
+   * stored — see the two call sites.
+   */
+  private mintMemoryTokenCandidate(agent: AgentRecord | undefined | null, isMastermind: boolean): string | null {
+    const trusted = isMastermind || agent?.config?.memory_trusted === true
+    return trusted ? randomUUID() : null
   }
 
   /**
@@ -2227,15 +2254,18 @@ export class AgentManager extends EventEmitter {
    */
   private static describeMcpTransport(entry: DocumentedMcpServer): { type: string; detail: string } {
     const injected = entry.injected
+    // Defense in depth: the memory token travels as a header, never a URL
+    // query parameter (see MEMORY_TOKEN_HEADER's doc), but this written-to-disk
+    // doc is exactly where a regression would leak it, so sanitize regardless.
     if (injected?.type === 'http' || injected?.type === 'sse') {
-      return { type: 'Local (HTTP, in-process)', detail: `**Endpoint:** \`${injected.url}\`` }
+      return { type: 'Local (HTTP, in-process)', detail: `**Endpoint:** \`${sanitizeMcpUrlForDisplay(injected.url ?? '')}\`` }
     }
     if (injected?.type === 'stdio') {
       return { type: 'Local (stdio)', detail: `**Command:** \`${injected.command} ${(injected.args || []).join(' ')}\`` }
     }
     return entry.server.type === 'local'
       ? { type: 'Local (stdio)', detail: `**Command:** \`${entry.server.command} ${entry.server.args.join(' ')}\`` }
-      : { type: 'Remote (HTTP)', detail: `**URL:** \`${entry.server.url}\`` }
+      : { type: 'Remote (HTTP)', detail: `**URL:** \`${sanitizeMcpUrlForDisplay(entry.server.url)}\`` }
   }
 
   /**
@@ -2474,10 +2504,11 @@ export class AgentManager extends EventEmitter {
     // per-agent MCP configuration.
     const isMastermind = taskId === 'mastermind-session'
     const ensureTaskManagement = isMastermind || isTriageSession || isSubtask || !!task
-    // No live session exists yet (it's constructed below) — mints a fresh
-    // token when trusted; stored on the session object once built, so later
-    // turns (buildSessionConfig) reuse it instead of minting again.
-    const memoryToken = this.memoryTokenFor(agent, isMastermind, agentId, taskId)
+    // No live session exists yet (it's constructed below) — mints a candidate
+    // token when trusted, but does NOT register it yet: adapter.createSession
+    // below can still fail, and an unregistered token is inert. It's
+    // registered only once the session is actually stored, further down.
+    const memoryToken = this.mintMemoryTokenCandidate(agent, isMastermind)
     const mcpServers = await this.buildMcpServersForAdapter(agentId, {
       ensureTaskManagement,
       taskScope,
@@ -2613,6 +2644,9 @@ export class AgentManager extends EventEmitter {
       memorySessionToken: memoryToken ?? undefined,
       taskContextMode
     }
+    // Register the candidate minted above only now that the session is
+    // confirmed to exist — see mintMemoryTokenCandidate.
+    if (memoryToken) registerMemorySession(memoryToken, agentId, taskId)
     this.sessions.set(adapterSessionId, newSession)
 
     // Store session ID in database
@@ -3857,10 +3891,12 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     await yieldEL()
 
-    // No live session exists yet (it's constructed below) — mints a fresh
-    // token when trusted; stored on the session object once built, so later
-    // turns (buildSessionConfig) reuse it instead of minting again.
-    const memoryToken = this.memoryTokenFor(agent, isMastermind, agentId, taskId)
+    // No live session exists yet (it's constructed below) — mints a candidate
+    // token when trusted, but does NOT register it yet: adapter.resumeSession
+    // below can still fail (e.g. SESSION_INCOMPATIBLE), and an unregistered
+    // token is inert. It's registered only once the session is actually
+    // stored, further down.
+    const memoryToken = this.mintMemoryTokenCandidate(agent, isMastermind)
     const mcpServers = await this.buildMcpServersForAdapter(agentId, {
       ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task,
       taskScope,
@@ -4069,8 +4105,11 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       }
     }
 
-    // Store session in sessions map — idle until user sends a message
+    // Store session in sessions map — idle until user sends a message.
+    // Register the candidate token minted above only now that the session is
+    // confirmed to exist — see mintMemoryTokenCandidate.
     this.schedulePowerSaveBlockerUpdate()
+    if (memoryToken) registerMemorySession(memoryToken, agentId, taskId)
     this.sessions.set(adapterSessionId, {
       id: adapterSessionId,
       agentId,
