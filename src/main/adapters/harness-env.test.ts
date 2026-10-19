@@ -48,6 +48,62 @@ describe('buildHarnessBaseEnv', () => {
     expect(isKnownProviderCredentialVar('RANDOM_VAR')).toBe(false)
   })
 
+  it('strips credential-shaped vars by pattern even when not explicitly named', () => {
+    // These are NOT in KNOWN_PROVIDER_CREDENTIAL_ENV_VARS's historical set but
+    // match the generic *_API_KEY / *_TOKEN / *_SECRET / *_PASSWORD suffix
+    // pattern — a new provider 20x hasn't added a named constant for yet.
+    const env = buildHarnessBaseEnv({
+      SOME_NEW_VENDOR_API_KEY: 'leak-1',
+      CI_REGISTRY_TOKEN: 'leak-2',
+      DB_PASSWORD: 'leak-3',
+      STRIPE_SECRET_KEY: 'leak-4',
+      OAUTH_CLIENT_SECRET: 'leak-5',
+      KEEP_ME: 'fine'
+    })
+    expect(env.SOME_NEW_VENDOR_API_KEY).toBeUndefined()
+    expect(env.CI_REGISTRY_TOKEN).toBeUndefined()
+    expect(env.DB_PASSWORD).toBeUndefined()
+    expect(env.STRIPE_SECRET_KEY).toBeUndefined()
+    expect(env.OAUTH_CLIENT_SECRET).toBeUndefined()
+    expect(env.KEEP_ME).toBe('fine')
+  })
+
+  it('strips GH_TOKEN/GITHUB_TOKEN and AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN, but keeps AWS_PROFILE/AWS_REGION', () => {
+    const env = buildHarnessBaseEnv({
+      GH_TOKEN: 'gh-leak',
+      GITHUB_TOKEN: 'gh-leak-2',
+      AWS_SECRET_ACCESS_KEY: 'aws-leak',
+      AWS_SESSION_TOKEN: 'aws-leak-2',
+      AWS_PROFILE: 'default',
+      AWS_REGION: 'us-east-1',
+      AWS_DEFAULT_REGION: 'us-east-1'
+    })
+    expect(env.GH_TOKEN).toBeUndefined()
+    expect(env.GITHUB_TOKEN).toBeUndefined()
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined()
+    expect(env.AWS_SESSION_TOKEN).toBeUndefined()
+    expect(env.AWS_PROFILE).toBe('default')
+    expect(env.AWS_REGION).toBe('us-east-1')
+    expect(env.AWS_DEFAULT_REGION).toBe('us-east-1')
+  })
+
+  it('keeps SSH_AUTH_SOCK, NODE_EXTRA_CA_CERTS, and NO_PROXY/ALL_PROXY variants', () => {
+    const env = buildHarnessBaseEnv({
+      SSH_AUTH_SOCK: '/tmp/ssh-agent.sock',
+      NODE_EXTRA_CA_CERTS: '/etc/ssl/custom-ca.pem',
+      NO_PROXY: 'localhost',
+      no_proxy: 'localhost',
+      ALL_PROXY: 'socks5://127.0.0.1:1080',
+      HTTPS_PROXY: 'https://proxy:8443'
+    })
+    expect(env.SSH_AUTH_SOCK).toBe('/tmp/ssh-agent.sock')
+    expect(env.NODE_EXTRA_CA_CERTS).toBe('/etc/ssl/custom-ca.pem')
+    expect(env.NO_PROXY).toBe('localhost')
+    expect(env.no_proxy).toBe('localhost')
+    expect(env.ALL_PROXY).toBe('socks5://127.0.0.1:1080')
+    expect(env.HTTPS_PROXY).toBe('https://proxy:8443')
+  })
+
   it('defaults to process.env when no source is given', () => {
     const prev = process.env.ANTHROPIC_API_KEY
     process.env.ANTHROPIC_API_KEY = 'sk-ant-leaky'

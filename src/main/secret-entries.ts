@@ -85,3 +85,44 @@ export function buildSecretEntriesForAgent(
   }
   return buildSecretEntriesFromSessionConfig({ secretEnvVars, apiKeys: agent.config?.api_keys })
 }
+
+/**
+ * Secret entries for EVERY secret this installation has ever stored, plus
+ * every agent's provider API keys — not scoped to one agent or one task.
+ *
+ * `buildSecretEntriesForAgent` only covers the secrets a task's CURRENT
+ * agent is configured with right now. That misses: a task whose agent was
+ * later reassigned or deleted (the row's `agent_id` no longer resolves, or
+ * resolves to a different agent than the one that actually produced the
+ * transcript); a secret that was removed from an agent's `secret_ids` after
+ * the run that leaked it; and a value that leaked into one agent's
+ * transcript but belongs to another agent entirely (shared secrets, copied
+ * context, subtask handoff). A one-time historical scrub should treat every
+ * secret value this app has ever held as something that COULD be sitting in
+ * old transcript text, regardless of which task/agent row it's currently
+ * attached to. Used by the migration and by `get_messages`' backfill path.
+ */
+export function buildAllKnownSecretEntries(
+  db: Pick<DatabaseManager, 'getAgents' | 'getSecrets' | 'getSecretsWithValues'>
+): SecretEntry[] {
+  const entries: SecretEntry[] = []
+
+  const allSecretIds = db.getSecrets().map((s) => s.id)
+  for (const s of db.getSecretsWithValues(allSecretIds)) {
+    entries.push({ name: s.env_var_name, value: s.value })
+  }
+
+  for (const agent of db.getAgents()) {
+    const apiKeys = agent.config?.api_keys
+    if (apiKeys?.openai) entries.push({ name: 'OPENAI_API_KEY', value: apiKeys.openai })
+    if (apiKeys?.anthropic) entries.push({ name: 'ANTHROPIC_API_KEY', value: apiKeys.anthropic })
+    if (apiKeys?.cursor) entries.push({ name: 'CURSOR_AUTH_TOKEN', value: apiKeys.cursor })
+  }
+
+  for (const key of KNOWN_PROVIDER_CREDENTIAL_ENV_VARS) {
+    const value = process.env[key]
+    if (value) entries.push({ name: key, value })
+  }
+
+  return entries
+}

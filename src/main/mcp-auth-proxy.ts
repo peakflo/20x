@@ -11,10 +11,13 @@
  * On every forwarded request the proxy calls a per-target token provider to
  * inject a fresh Authorization header, so tokens are never stale — even in
  * sessions that run for hours — AND never sit in a config blob that outlives
- * the request.
+ * the request. Servers with a plain static header instead (a user-typed
+ * Authorization or API-key header, no refresh needed) register that header
+ * value directly with the proxy instead of a token provider — same
+ * argv-exposure problem, simpler fix.
  *
  * Flow:
- *   1. Agent session starts → registerMcpProxyTarget(targetUrl, label, getToken)
+ *   1. Agent session starts → registerMcpProxyTarget(registrationKey, targetUrl, label, getToken)
  *   2. buildMcpServersForAdapter sets MCP url to http://127.0.0.1:<port>/<id>/…
  *   3. MCP client sends request → proxy calls getToken() → forwards to real server
  *   4. Real server response is piped back to MCP client unchanged
@@ -58,8 +61,28 @@ const targetLabels = new Map<string, string>()
 // enterprise-only call sites).
 const tokenProviders = new Map<string, () => Promise<string | null | undefined>>()
 
-// Reverse lookup: target URL → ID (deduplicates repeated registrations)
-const targetsByUrl = new Map<string, string>()
+// Registration ID → static extra headers (e.g. a user-typed `Authorization`
+// or `X-API-Key` on a plain remote MCP server that has no OAuth/enterprise
+// token refresh). These are injected server-side on every forwarded request
+// so the value itself never has to appear in the mcpServers config object
+// handed to a harness — which for at least one harness is serialized onto
+// its spawned process's argv. Merged in before any dynamic `tokenProvider`
+// result, so a dynamic Authorization (OAuth/enterprise JWT) still wins if
+// both are present for the same registration.
+const staticHeaders = new Map<string, Record<string, string>>()
+
+// Reverse lookup: caller-supplied registration key → ID (deduplicates
+// repeated registrations from the SAME mcpServer config row across
+// polling/prompt cycles). Deliberately NOT keyed by target URL: two
+// different server rows (e.g. the same shared endpoint added twice, once
+// per account) can share a URL while needing separate tokens — keying by
+// URL would silently hand one account's requests the other's token
+// (whichever registered last), a cross-account access bug.
+const targetsByKey = new Map<string, string>()
+
+// ID → the registration key it was registered under (so unregister can
+// clean up targetsByKey without the caller having to remember its own key).
+const keyById = new Map<string, string>()
 
 // Track integrations that have already shown a JWT-failure notification this app run.
 // Prevents spamming the user with repeated notifications for the same integration.
@@ -70,29 +93,40 @@ export function getMcpAuthProxyPort(): number | null {
 }
 
 /**
- * Register a remote MCP server URL and return a localhost proxy URL
- * that transparently injects a fresh Authorization header (from `getToken`,
- * or the enterprise JWT default when omitted) on every request.
+ * Register a remote MCP server and return a localhost proxy URL that
+ * transparently injects a fresh Authorization header (from `getToken`, or
+ * the enterprise JWT default when omitted) on every request.
  *
- * If the same targetUrl was already registered, returns the existing
- * proxy URL (prevents leaking IDs when buildMcpServersForAdapter is
- * called on every prompt for Claude Code adapter).
+ * `registrationKey` identifies the MCP SERVER CONFIG ROW this registration
+ * belongs to (callers pass the row's own id) — NOT the target URL. If the
+ * same key was already registered, its existing proxy URL is reused
+ * (prevents leaking IDs when buildMcpServersForAdapter is called on every
+ * prompt). Two different rows that happen to share a target URL (the same
+ * endpoint added twice under two different accounts, say) get two SEPARATE
+ * registrations and tokens, never one shared one.
  *
  * Returns null if the proxy is not running.
  */
 export function registerMcpProxyTarget(
+  registrationKey: string,
   targetUrl: string,
   label?: string,
-  getToken?: () => Promise<string | null | undefined>
+  getToken?: () => Promise<string | null | undefined>,
+  headers?: Record<string, string>
 ): string | null {
   if (!port) return null
 
-  // Reuse existing registration for the same target URL
-  const existingId = targetsByUrl.get(targetUrl)
+  // Reuse existing registration for the same caller-supplied key.
+  const existingId = targetsByKey.get(registrationKey)
   if (existingId) {
-    // Update label/token provider if new ones are provided
+    // Update url/label/token provider if they changed (e.g. the server's
+    // URL or credential was edited, or the enterprise dev-server URL moved).
+    targets.set(existingId, targetUrl)
     if (label) targetLabels.set(existingId, label)
     if (getToken) tokenProviders.set(existingId, getToken)
+    // Always set (even to {}) so a header that was removed by the caller is
+    // actually cleared here too, not left stale from a previous registration.
+    if (headers !== undefined) staticHeaders.set(existingId, headers)
     return `http://127.0.0.1:${port}/${existingId}`
   }
 
@@ -103,9 +137,11 @@ export function registerMcpProxyTarget(
   // /1, /2, /3. 16 random bytes makes a link a genuine per-session capability.
   const id = randomBytes(16).toString('hex')
   targets.set(id, targetUrl)
-  targetsByUrl.set(targetUrl, id)
+  targetsByKey.set(registrationKey, id)
+  keyById.set(id, registrationKey)
   if (label) targetLabels.set(id, label)
   if (getToken) tokenProviders.set(id, getToken)
+  if (headers !== undefined) staticHeaders.set(id, headers)
   console.log(`[McpAuthProxy] Registered target ${id} (${label || 'unnamed'}) → ${targetUrl}`)
   return `http://127.0.0.1:${port}/${id}`
 }
@@ -119,11 +155,15 @@ export function unregisterMcpProxyTarget(proxyUrl: string): void {
     const url = new URL(proxyUrl)
     const id = url.pathname.split('/')[1]
     if (id && targets.has(id)) {
-      const targetUrl = targets.get(id)!
       targets.delete(id)
-      targetsByUrl.delete(targetUrl)
+      const key = keyById.get(id)
+      if (key) {
+        targetsByKey.delete(key)
+        keyById.delete(id)
+      }
       targetLabels.delete(id)
       tokenProviders.delete(id)
+      staticHeaders.delete(id)
       console.log(`[McpAuthProxy] Unregistered target ${id}`)
     }
   } catch {
@@ -170,9 +210,11 @@ export function stopMcpAuthProxy(): void {
     port = null
   }
   targets.clear()
-  targetsByUrl.clear()
+  targetsByKey.clear()
+  keyById.clear()
   targetLabels.clear()
   tokenProviders.clear()
+  staticHeaders.clear()
   notifiedJwtFailures.clear()
   authRef = null
 }
@@ -224,41 +266,20 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
     targetUrl.search = reqUrl.search
 
     // Get a fresh token: the target's own provider (OAuth MCP token, etc.)
-    // if it registered one, else the legacy enterprise-JWT default.
+    // if it registered one, else the legacy enterprise-JWT default. A
+    // registration that only carries static headers (a user-typed
+    // Authorization/X-API-Key, no refreshable token) has neither — that's
+    // fine, it doesn't need one.
     const tokenProvider = tokenProviders.get(id) ?? (authRef ? () => authRef!.getJwt() : null)
-    if (!tokenProvider) {
+    const extraHeaders = staticHeaders.get(id)
+
+    if (!tokenProvider && !extraHeaders) {
       res.writeHead(503, { 'Content-Type': 'text/plain' })
       res.end('Auth not available')
       return
     }
 
     const integrationLabel = targetLabels.get(id) || `target ${id}`
-
-    let jwt: string
-    try {
-      const token = await tokenProvider()
-      if (!token) throw new Error('No token available')
-      jwt = token
-    } catch (err) {
-      console.error(`[McpAuthProxy] Failed to get token for "${integrationLabel}":`, err)
-
-      // Notify the user once per integration per app run
-      if (!notifiedJwtFailures.has(integrationLabel)) {
-        notifiedJwtFailures.add(integrationLabel)
-        try {
-          new Notification({
-            title: 'MCP Auth Failed',
-            body: `Could not authenticate "${integrationLabel}" — please sign in again.`
-          }).show()
-        } catch {
-          // Notification may fail in headless / test environments — ignore
-        }
-      }
-
-      res.writeHead(502, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: `Failed to obtain auth token for "${integrationLabel}"` }))
-      return
-    }
 
     // Build forwarded headers — copy everything except host
     const forwardHeaders: Record<string, string | string[] | undefined> = {}
@@ -268,7 +289,45 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       if (key.toLowerCase() === 'connection') continue
       forwardHeaders[key] = value
     }
-    forwardHeaders['authorization'] = `Bearer ${jwt}`
+
+    // Static headers (e.g. a plain API key) go in first…
+    if (extraHeaders) {
+      for (const [key, value] of Object.entries(extraHeaders)) {
+        forwardHeaders[key.toLowerCase()] = value
+      }
+    }
+
+    // …then a dynamic token (OAuth/enterprise JWT), if this registration has
+    // one, overwrites any static Authorization — the refreshed token always
+    // wins over a stale static value.
+    if (tokenProvider) {
+      let jwt: string
+      try {
+        const token = await tokenProvider()
+        if (!token) throw new Error('No token available')
+        jwt = token
+      } catch (err) {
+        console.error(`[McpAuthProxy] Failed to get token for "${integrationLabel}":`, err)
+
+        // Notify the user once per integration per app run
+        if (!notifiedJwtFailures.has(integrationLabel)) {
+          notifiedJwtFailures.add(integrationLabel)
+          try {
+            new Notification({
+              title: 'MCP Auth Failed',
+              body: `Could not authenticate "${integrationLabel}" — please sign in again.`
+            }).show()
+          } catch {
+            // Notification may fail in headless / test environments — ignore
+          }
+        }
+
+        res.writeHead(502, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: `Failed to obtain auth token for "${integrationLabel}"` }))
+        return
+      }
+      forwardHeaders['authorization'] = `Bearer ${jwt}`
+    }
     forwardHeaders['host'] = targetUrl.host
 
     // Choose http or https

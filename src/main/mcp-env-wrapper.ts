@@ -32,6 +32,29 @@ function shellEscapeSingleQuote(value: string): string {
   return value.replace(/'/g, "'\\''")
 }
 
+/** POSIX env-var-name shape: a letter/underscore followed by letters, digits, underscores. */
+const VALID_ENV_VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * Drops any entry whose key isn't a plausible env var name instead of
+ * writing it to the loader file. Defense in depth: every call site today
+ * sources `env` from server-config fields the user themselves typed, but a
+ * malformed/injected key (e.g. containing `=`, a newline, or control
+ * characters) could otherwise corrupt the line-based "NAME=value" format
+ * both loaders parse and smuggle extra lines/vars past the intended entry.
+ */
+function sanitizeEnvEntries(env: Record<string, string>): Array<[string, string]> {
+  const entries: Array<[string, string]> = []
+  for (const [key, value] of Object.entries(env)) {
+    if (!VALID_ENV_VAR_NAME.test(key)) {
+      console.warn(`[McpEnvWrapper] Skipping local MCP env var with invalid name: ${JSON.stringify(key)}`)
+      continue
+    }
+    entries.push([key, value])
+  }
+  return entries
+}
+
 const POSIX_LOADER = `#!/bin/bash
 # 20x MCP local-server env loader.
 # Sources a 0600 env file (first arg) then execs the real command (remaining
@@ -46,16 +69,42 @@ exec "$@"
 `
 
 const WINDOWS_LOADER = `# 20x MCP local-server env loader (PowerShell).
+# Each line of the env file is "NAME=<base64>" — the value is base64-encoded
+# so this loader never has to guess a text encoding and embedded newlines
+# (e.g. a PEM private key) survive round-trip instead of being flattened to
+# spaces by the writer or split across lines by the reader.
 $envFile = $args[0]
 if (Test-Path $envFile) {
-  Get-Content $envFile | ForEach-Object {
-    if ($_ -match '^([^=]+)=([\\s\\S]*)$') {
-      [Environment]::SetEnvironmentVariable($Matches[1], $Matches[2], 'Process')
+  Get-Content -LiteralPath $envFile -Encoding UTF8 | ForEach-Object {
+    if ($_ -match '^([^=]+)=(.*)$') {
+      $name = $Matches[1]
+      $bytes = [Convert]::FromBase64String($Matches[2])
+      $value = [System.Text.Encoding]::UTF8.GetString($bytes)
+      [Environment]::SetEnvironmentVariable($name, $value, 'Process')
     }
   }
 }
+# The inner slice below is guarded explicitly instead of being taken
+# unconditionally: when there are zero trailing args (just the command, no
+# arguments to it), slicing from index 1 to (Count - 1) with Count equal to 1
+# produces a DESCENDING range whose first element is out of bounds (silently
+# $null in PowerShell) and whose second element duplicates the command itself
+# — corrupting the argument list instead of producing an empty one. Splatting
+# with @ (not a bare array variable) also matters: PowerShell passes a bare
+# array variable as a single argument, not one argument per element.
+if ($args.Count -lt 2) {
+  Write-Error '20x MCP env loader: no command given'
+  exit 1
+}
 $rest = $args[1..($args.Count - 1)]
-& $rest[0] $rest[1..($rest.Count - 1)]
+$cmd = $rest[0]
+if ($rest.Count -gt 1) {
+  $cmdArgs = @($rest[1..($rest.Count - 1)])
+} else {
+  $cmdArgs = @()
+}
+& $cmd @cmdArgs
+exit $LASTEXITCODE
 `
 
 function ensureLoaderScript(dir: string, isWin: boolean): string {
@@ -87,11 +136,16 @@ export function writeLocalMcpEnvWrapper(
   const dir = envDir()
   const wrapperPath = ensureLoaderScript(dir, isWin)
 
+  const sanitized = sanitizeEnvEntries(env)
+
   if (isWin) {
     const envFile = join(dir, `${serverId}.env.txt`)
-    const lines = Object.entries(env)
-      .map(([k, v]) => `${k}=${v.replace(/\r?\n/g, ' ')}`)
-      .join('\n')
+    // Base64-encode every value: the loader otherwise has to guess a text
+    // encoding for Get-Content, and a value containing a real newline (a PEM
+    // private key, a multi-line token) would either get flattened to spaces
+    // on write or split across multiple garbage lines on read. Base64 is
+    // pure ASCII and round-trips exactly regardless of either.
+    const lines = sanitized.map(([k, v]) => `${k}=${Buffer.from(v, 'utf-8').toString('base64')}`).join('\n')
     writeFileSync(envFile, lines + '\n', 'utf-8')
     try {
       chmodSync(envFile, 0o600)
@@ -105,9 +159,7 @@ export function writeLocalMcpEnvWrapper(
   }
 
   const envFile = join(dir, `${serverId}.env.sh`)
-  const lines = Object.entries(env)
-    .map(([k, v]) => `export ${k}='${shellEscapeSingleQuote(v)}'`)
-    .join('\n')
+  const lines = sanitized.map(([k, v]) => `export ${k}='${shellEscapeSingleQuote(v)}'`).join('\n')
   writeFileSync(envFile, lines + '\n', 'utf-8')
   chmodSync(envFile, 0o600)
 
