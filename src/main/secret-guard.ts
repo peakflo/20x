@@ -101,18 +101,39 @@ const CHAIN_SPLIT = /[;&\n]+/
 // guard bypassed via one extra pipe stage. Narrowed to the specific,
 // standard credential-handoff idioms the review named: `gh`/`docker`/
 // `npm`/`helm`'s own login subcommands (consuming a secret via THEIR
-// stdin, not printing it), `aws ecr(-public) get-login-password`-style
-// targets, and a generic fallback for any other CLI using the same
-// well-known `--with-token`/`--password-stdin` flag idiom for its own
-// login/auth subcommand.
-const SAFE_CREDENTIAL_SINK_PATTERNS: RegExp[] = [
-  cmdPattern('gh\\s+auth\\s+login\\b[^\\n]*--with-token\\b'),
-  cmdPattern('docker\\s+login\\b[^\\n]*--password-stdin\\b'),
-  cmdPattern('npm\\s+(?:login|adduser)\\b[^\\n]*--authtoken\\b'),
-  cmdPattern('helm\\s+registry\\s+login\\b[^\\n]*--password-stdin\\b'),
-  cmdPattern('aws\\s+ecr(?:-public)?\\s+get-login-password\\b'),
-  cmdPattern('\\S+\\s+(?:login|auth\\s+login)\\b[^\\n]*--(?:with-token|password-stdin)\\b')
+// stdin, not printing it) and `aws ecr(-public) get-login-password`-style
+// targets.
+//
+// Re-review (round 4, P1): the original version of this list ALSO had a
+// generic `\S+\s+(?:login|auth\s+login)\b[^\n]*--(?:with-token|password-
+// stdin)\b` fallback for "any other CLI using the same idiom" — but
+// `\S+` matches literally any command word, "login" matched as plain
+// ARGUMENT TEXT (not necessarily a subcommand), and `[^\n]*FLAG\b` matched
+// the flag as a SUBSTRING anywhere later, not a real standalone argument.
+// `echo "$T" | tee login ./--password-stdin` satisfied all three loosely
+// enough to pass — `tee` is not a login CLI at all, "login" there is just
+// `tee`'s output-filename argument, and "--password-stdin" is a substring
+// of "./--password-stdin", not an actual flag token. Dropped the generic
+// fallback entirely rather than try to tighten it further (per the
+// review's own suggested alternative) — only these named, specific CLIs
+// are recognized. Every flag below is now also required to appear as its
+// OWN whitespace-delimited argument token (`(?:\s+\S+)*\s+--flag\b`, not
+// `[^\n]*--flag\b`), so a flag-shaped SUBSTRING glued onto another token
+// (`./--password-stdin`) no longer matches either — defense in depth for
+// these named patterns too, not just the dropped generic one.
+//
+// Single source of truth: these are SOURCE STRINGS, not compiled
+// RegExps, specifically so `buildGuardFunctionSource()` below can embed
+// the exact same list into OpenCode's generated plugin via
+// `JSON.stringify` instead of a hand-duplicated copy that could drift.
+const SAFE_CREDENTIAL_SINK_SOURCES: string[] = [
+  'gh\\s+auth\\s+login\\b(?:\\s+\\S+)*\\s+--with-token\\b',
+  'docker\\s+login\\b(?:\\s+\\S+)*\\s+--password-stdin\\b',
+  'npm\\s+(?:login|adduser)\\b(?:\\s+\\S+)*\\s+--authtoken\\b',
+  'helm\\s+registry\\s+login\\b(?:\\s+\\S+)*\\s+--password-stdin\\b',
+  'aws\\s+ecr(?:-public)?\\s+get-login-password\\b'
 ]
+const SAFE_CREDENTIAL_SINK_PATTERNS: RegExp[] = SAFE_CREDENTIAL_SINK_SOURCES.map((src) => cmdPattern(src))
 
 /**
  * True when EVERY `|`-delimited stage after the matched echo/printf is a
@@ -215,14 +236,12 @@ export function buildGuardFunctionSource(): string {
     '    return s;',
     '  }',
     '  function cmdPattern(src) { return new RegExp("^" + src); }',
-    '  var safeSinkPatterns = [',
-    '    cmdPattern("gh\\\\s+auth\\\\s+login\\\\b[^\\\\n]*--with-token\\\\b"),',
-    '    cmdPattern("docker\\\\s+login\\\\b[^\\\\n]*--password-stdin\\\\b"),',
-    '    cmdPattern("npm\\\\s+(?:login|adduser)\\\\b[^\\\\n]*--authtoken\\\\b"),',
-    '    cmdPattern("helm\\\\s+registry\\\\s+login\\\\b[^\\\\n]*--password-stdin\\\\b"),',
-    '    cmdPattern("aws\\\\s+ecr(?:-public)?\\\\s+get-login-password\\\\b"),',
-    '    cmdPattern("\\\\S+\\\\s+(?:login|auth\\\\s+login)\\\\b[^\\\\n]*--(?:with-token|password-stdin)\\\\b")',
-    '  ];',
+    // Re-review (round 4, P1): embedded from the SAME
+    // SAFE_CREDENTIAL_SINK_SOURCES array checkSecretDumpGuard uses, via
+    // JSON.stringify, instead of a hand-copied literal list that could
+    // silently drift out of sync with it.
+    `  var safeSinkSources = ${JSON.stringify(SAFE_CREDENTIAL_SINK_SOURCES)};`,
+    '  var safeSinkPatterns = safeSinkSources.map(function(src) { return cmdPattern(src); });',
     '  function allStagesAreSafeCredentialSinks(restOfChain) {',
     '    var stages = restOfChain.split("|").slice(1).map(function(s) { return stripWrapperPrefixes(s.trim()); }).filter(Boolean);',
     '    if (stages.length === 0) return false;',

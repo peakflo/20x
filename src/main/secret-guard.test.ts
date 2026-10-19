@@ -119,10 +119,37 @@ describe('checkSecretDumpGuard', () => {
     ).toBe(true)
   })
 
-  it('recognizes the other named safe sinks too (npm, helm, aws ecr, and the generic --with-token/--password-stdin idiom)', () => {
+  it('recognizes the other named safe sinks too (npm, helm)', () => {
     expect(checkSecretDumpGuard('echo "$TOKEN" | npm login --authtoken', ['TOKEN']).blocked).toBe(false)
     expect(checkSecretDumpGuard('echo "$TOKEN" | helm registry login --password-stdin', ['TOKEN']).blocked).toBe(false)
-    expect(checkSecretDumpGuard('echo "$TOKEN" | glab auth login --with-token', ['TOKEN']).blocked).toBe(false)
+  })
+
+  // Bug, re-review (round 4, P1): the original fix's generic fallback
+  // (`\S+\s+(?:login|auth\s+login)\b[^\n]*--(?:with-token|password-stdin)\b`)
+  // matched FAR too loosely — any command word, "login" as plain argument
+  // text (not necessarily a subcommand), and the flag as a substring
+  // anywhere later rather than a real standalone argument. This exact
+  // command satisfied all three without actually being a credential
+  // handoff at all: `tee` is not a login CLI, "login" here is just its
+  // output filename, and "--password-stdin" is a substring of
+  // "./--password-stdin", not a flag. The generic fallback is removed
+  // entirely now — only the named CLIs above are recognized, and a CLI
+  // not on that list (glab, az, or anything else) is blocked too, even
+  // with a real --with-token/--password-stdin flag.
+  it('BLOCKS the tee/login/--password-stdin bypass the generic fallback used to allow', () => {
+    expect(checkSecretDumpGuard('echo "$TOKEN" | tee login ./--password-stdin', ['TOKEN']).blocked).toBe(true)
+  })
+
+  it('a CLI not on the named list is still blocked, even with a real-looking --with-token flag (the generic fallback is gone)', () => {
+    expect(checkSecretDumpGuard('echo "$TOKEN" | glab auth login --with-token', ['TOKEN']).blocked).toBe(true)
+  })
+
+  // Defense in depth for the NAMED patterns too: the flag must be its own
+  // whitespace-delimited argument, not a substring glued onto another
+  // token.
+  it('a named CLI with the flag glued onto another argument (not a real flag token) is still blocked', () => {
+    expect(checkSecretDumpGuard('echo "$TOKEN" | docker login ./--password-stdin', ['TOKEN']).blocked).toBe(true)
+    expect(checkSecretDumpGuard('echo "$TOKEN" | gh auth login ./--with-token', ['TOKEN']).blocked).toBe(true)
   })
 })
 
