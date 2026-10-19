@@ -2886,6 +2886,90 @@ describe('AgentManager session ID re-keying redirect', () => {
     expect(cleanupLocalMcpEnvFile).toHaveBeenCalledWith('local-server-1')
   })
 
+  // Major finding, re-review (round 3): stopSession used to tear down a
+  // shared MCP server row's proxy registration / env file the moment ANY
+  // ONE session using it stopped, even while another live session (a
+  // concurrent task on the same agent, or a different agent pointed at the
+  // same row) still depended on it — breaking that other session's MCP
+  // access for the rest of its life (it never rebuilds mcpServers for an
+  // already-running process).
+  it('stopSession does NOT tear down a shared MCP row while another live session still uses it, but does once that is the last one', async () => {
+    const remoteServer = { id: 'remote-server-1', type: 'remote', name: 'Remote MCP' }
+    const localServer = { id: 'local-server-1', type: 'local', name: 'Local MCP' }
+    const mockDb = {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test', agent_id: 'agent-1' })),
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'Agent',
+        config: { mcp_servers: ['remote-server-1', 'local-server-1'] }
+      })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn((id: string) => (id === 'remote-server-1' ? remoteServer : id === 'local-server-1' ? localServer : null)),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null)
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+
+    const scrubberA = new SecretScrubber()
+    const scrubberB = new SecretScrubber()
+    // Two concurrent sessions — same agent, same shared MCP row — each with
+    // its own scrubber instance registered against that row (mirrors what
+    // buildMcpServersForAdapter does for every session that resolves it).
+    ;(mgr as any).sessions.set('session-1', {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      scrubber: scrubberA
+    })
+    ;(mgr as any).sessions.set('session-2', {
+      agentId: 'agent-1',
+      taskId: 'task-2',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      scrubber: scrubberB
+    })
+    ;(mgr as any).mcpServerScrubbersByKey.set('remote-server-1', new Set([scrubberA, scrubberB]))
+
+    const { unregisterMcpProxyTargetByKey } = await import('./mcp-auth-proxy')
+    const { cleanupLocalMcpEnvFile } = await import('./mcp-env-wrapper')
+    // This describe block has no local beforeEach(vi.clearAllMocks()) —
+    // clear these two explicitly so an earlier test's call history in this
+    // same block can't make the "not torn down yet" assertions below pass
+    // for the wrong reason.
+    vi.mocked(unregisterMcpProxyTargetByKey).mockClear()
+    vi.mocked(cleanupLocalMcpEnvFile).mockClear()
+
+    await mgr.stopSession('session-1')
+
+    // session-2 is still live and still references this row — must NOT be
+    // torn down out from under it.
+    expect(unregisterMcpProxyTargetByKey).not.toHaveBeenCalled()
+    expect(cleanupLocalMcpEnvFile).not.toHaveBeenCalled()
+    // But session-1's own scrubber is removed from the row's registry —
+    // that's always safe, regardless of who else still uses the row.
+    expect((mgr as any).mcpServerScrubbersByKey.get('remote-server-1').has(scrubberA)).toBe(false)
+    expect((mgr as any).mcpServerScrubbersByKey.get('remote-server-1').has(scrubberB)).toBe(true)
+
+    await mgr.stopSession('session-2')
+
+    // Now the last live user of this row is gone — safe to tear down.
+    expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
+    expect(cleanupLocalMcpEnvFile).toHaveBeenCalledWith('local-server-1')
+  })
+
   it('cleanupHeartbeatSession fully tears down heartbeat sessions without resetting task status', async () => {
     const mockDb = createMockDb()
     const mgr = new AgentManager(mockDb)
