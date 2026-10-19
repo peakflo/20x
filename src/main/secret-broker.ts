@@ -29,7 +29,7 @@
  */
 
 import { createServer, type Server as HttpServer, type IncomingMessage } from 'http'
-import { writeFileSync, chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync } from 'fs'
+import { writeFileSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync } from 'fs'
 import { join } from 'path'
 import { createHash, timingSafeEqual } from 'crypto'
 import { app } from 'electron'
@@ -266,8 +266,12 @@ export function writeSecretTokenFile(token: string): string {
   const dir = secretTokenDir()
   const name = createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 32)
   const path = join(dir, `${name}.token`)
-  writeFileSync(path, token, 'utf-8')
-  chmodSync(path, 0o600)
+  // Re-review (round 3, Minor): mode set at creation time, not via a
+  // separate chmod call afterward — write-then-chmod leaves a brief window
+  // where the file exists with default (umask-dependent, often
+  // world/group-readable) permissions before the chmod call narrows it,
+  // during which another local user could read the token.
+  writeFileSync(path, token, { encoding: 'utf-8', mode: 0o600 })
   return path
 }
 
@@ -286,6 +290,30 @@ export function deleteSecretTokenFile(token: string): void {
     if (existsSync(path)) unlinkSync(path)
   } catch {
     // Best-effort.
+  }
+}
+
+/**
+ * Deletes every leftover token file from a previous run — call once at app
+ * startup, before any session starts (same pattern as
+ * `cleanupStaleLocalMcpEnvFiles` in mcp-env-wrapper.ts). The broker's own
+ * `activeSessions` map starts empty on every app launch, so a token file on
+ * disk at startup can never correspond to a session this process actually
+ * knows about — it's definitely stale, most commonly left behind by a force
+ * quit or crash that skipped `deleteSecretTokenFile`. Minor finding,
+ * re-review (round 3): nothing previously swept these up.
+ */
+export function cleanupStaleSecretTokenFiles(): void {
+  const dir = secretTokenDir()
+  if (!existsSync(dir)) return
+  for (const entry of readdirSync(dir)) {
+    if (!entry.endsWith('.token')) continue
+    try {
+      const path = join(dir, entry)
+      if (statSync(path).isFile()) unlinkSync(path)
+    } catch {
+      // Best-effort.
+    }
   }
 }
 

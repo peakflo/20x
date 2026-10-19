@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { safeStorage } from 'electron'
-import { existsSync, readFileSync, rmSync } from 'fs'
+import { existsSync, readFileSync, readdirSync, rmSync } from 'fs'
 import { join } from 'path'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import type { DatabaseManager } from './database'
@@ -21,12 +21,46 @@ let rawDb: import('better-sqlite3').Database
 const REAL_PREFIX = Buffer.from('v10', 'latin1')
 const BACKUP_DIR = '/tmp/pf-desktop-test/secret-reencrypt-backups'
 
+// XOR-obfuscated, not a readable prefix+plaintext concatenation — round-trip
+// correct (XOR twice = identity) but, unlike plain ASCII text, essentially
+// never valid UTF-8 on its own (verified: every non-empty test fixture
+// value in this file fails isValidUtf8 once XORed). Re-review (round 3,
+// P2): `isPlaintextFallback` now requires an ACTUAL decrypt success before
+// trusting the v10/v11 prefix alone (a plaintext secret whose value happens
+// to start with "v10"/"v11" would otherwise be misclassified as real
+// ciphertext forever) — which falls back to the SAME isValidUtf8 check the
+// no-prefix path already used. A mock that produces plain-ASCII "encrypted"
+// bytes would trivially pass that UTF-8 check and defeat the very test below
+// (P0) that checks a real-but-undecryptable row is left alone, not
+// mistaken for plaintext.
+function obfuscate(buf: Buffer): Buffer {
+  return Buffer.from(buf.map((b) => b ^ 0xff))
+}
+
+// Stands in for what a real AEAD cipher's authentication tag guarantees:
+// decrypting bytes that were never genuinely produced by `encryptString`
+// MUST fail, not silently "succeed" with garbage. Without this, a row whose
+// plaintext VALUE just happens to start with "v10" (prefix + arbitrary text
+// right after it) would decrypt "successfully" under a naive mock — the
+// mock would deobfuscate whatever bytes follow the prefix and return THAT
+// as a string, with no failure signal — even though those bytes were never
+// actually encrypted. A real safeStorage/os_crypt decrypt call authenticates
+// the ciphertext and throws for exactly this case; this magic marker makes
+// the mock do the same.
+const AEAD_MAGIC = Buffer.from('FAKEAEADTAG', 'latin1')
+
 beforeEach(() => {
   ;({ db, rawDb } = createTestDb())
-  vi.mocked(safeStorage.encryptString).mockImplementation((value: string) => Buffer.concat([REAL_PREFIX, Buffer.from(value, 'utf8')]))
+  vi.mocked(safeStorage.encryptString).mockImplementation((value: string) =>
+    Buffer.concat([REAL_PREFIX, AEAD_MAGIC, obfuscate(Buffer.from(value, 'utf8'))])
+  )
   vi.mocked(safeStorage.decryptString).mockImplementation((buf: Buffer) => {
     if (!buf.subarray(0, REAL_PREFIX.length).equals(REAL_PREFIX)) throw new Error('not actually encrypted')
-    return buf.subarray(REAL_PREFIX.length).toString('utf8')
+    const afterPrefix = buf.subarray(REAL_PREFIX.length)
+    if (!afterPrefix.subarray(0, AEAD_MAGIC.length).equals(AEAD_MAGIC)) {
+      throw new Error('authentication failed — not genuinely encrypted data (simulated AEAD tag check)')
+    }
+    return obfuscate(afterPrefix.subarray(AEAD_MAGIC.length)).toString('utf8')
   })
   rmSync(BACKUP_DIR, { recursive: true, force: true })
 })
@@ -166,6 +200,44 @@ describe('reencryptPlaintextFallbackRows', () => {
     expect(db.getSecretsWithValues([secret.id])).toEqual([])
   })
 
+  // P2, re-review (round 3): the OTHER direction of the same ambiguity —
+  // a genuinely plaintext secret whose VALUE happens to start with the
+  // literal characters "v10" (coincidence, not encryption) used to be
+  // misclassified as real ciphertext on the prefix bytes alone, then left
+  // permanently unreadable (every future decrypt attempt throws, and it
+  // was never even counted/warned about as a plaintext row). The prefix
+  // alone is no longer trusted — an actual decrypt attempt must succeed
+  // first.
+  it('recovers a genuinely plaintext row whose VALUE happens to start with "v10" (prefix collision, not encryption)', () => {
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false)
+    const now = new Date().toISOString()
+    const coincidentalValue = 'v10-my-passphrase-not-actually-encrypted'
+    rawDb.prepare(`
+      INSERT INTO secrets (id, name, description, env_var_name, value, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('legacy-prefix-collision', 'Legacy', '', 'MY_SECRET', Buffer.from(coincidentalValue, 'utf8'), now, now)
+
+    // Sanity: this row really does start with the real safeStorage prefix
+    // bytes, purely because of what the plaintext VALUE happens to be.
+    const stored = (rawDb.prepare('SELECT value FROM secrets WHERE id = ?').get('legacy-prefix-collision') as { value: Buffer }).value
+    expect(stored.subarray(0, 3).toString('latin1')).toBe('v10')
+
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true)
+    expect(db.countPlaintextFallbackRows().secrets).toBe(1) // correctly identified, not silently ignored
+    expect(db.reencryptPlaintextFallbackRows().secrets).toBe(1)
+
+    // Now genuinely, properly encrypted — and reads back correctly.
+    const [withValue] = db.getSecretsWithValues(['legacy-prefix-collision'])
+    expect(withValue.value).toBe(coincidentalValue)
+  })
+
+  // P1, re-review (round 3): the backup used to be appended to one shared
+  // `backup.jsonl` that NOTHING ever trimmed — despite a comment claiming
+  // "these are never real secrets," every plaintext row's real secret
+  // value sat there in base64 forever. Each row now gets its OWN backup
+  // file, which this test intercepts mid-migration (before the UPDATE
+  // commits) to prove it genuinely existed and held the right bytes —
+  // and the next test proves it's gone again once the migration finishes.
   it('backs up the original bytes to disk before re-encrypting a genuinely legacy plaintext row', () => {
     vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false)
     const now = new Date().toISOString()
@@ -175,15 +247,44 @@ describe('reencryptPlaintextFallbackRows', () => {
     `).run('legacy-backup-1', 'Legacy', '', 'MY_SECRET', Buffer.from('leaked-secret-123456', 'utf8'), now, now)
 
     vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true)
-    expect(existsSync(join(BACKUP_DIR, 'backup.jsonl'))).toBe(false)
+    expect(existsSync(BACKUP_DIR)).toBe(false)
+
+    // backupBeforeReencrypt runs BEFORE safeStorage.encryptString, which
+    // runs BEFORE the UPDATE that would make the backup file redundant —
+    // so wrapping encryptString is a clean place to observe the file
+    // while it still exists, without reaching into private methods.
+    let backupContentsAtEncryptTime: string | undefined
+    const realEncryptString = vi.mocked(safeStorage.encryptString).getMockImplementation()!
+    vi.mocked(safeStorage.encryptString).mockImplementation((value: string) => {
+      const files = existsSync(BACKUP_DIR) ? readdirSync(BACKUP_DIR) : []
+      const backupFile = files.find((f) => f.startsWith('secrets-legacy-backup-1-value-'))
+      if (backupFile) backupContentsAtEncryptTime = readFileSync(join(BACKUP_DIR, backupFile), 'utf-8')
+      return realEncryptString(value)
+    })
+
     expect(db.reencryptPlaintextFallbackRows().secrets).toBe(1)
 
-    const backupPath = join(BACKUP_DIR, 'backup.jsonl')
-    expect(existsSync(backupPath)).toBe(true)
-    const entry = JSON.parse(readFileSync(backupPath, 'utf-8').trim().split('\n')[0])
-    expect(entry.table).toBe('secrets')
-    expect(entry.id).toBe('legacy-backup-1')
-    expect(Buffer.from(entry.original_base64, 'base64').toString('utf8')).toBe('leaked-secret-123456')
+    expect(backupContentsAtEncryptTime).toBeDefined()
+    expect(Buffer.from(backupContentsAtEncryptTime!, 'base64').toString('utf8')).toBe('leaked-secret-123456')
+  })
+
+  // P1, re-review (round 3): "remove the file once the migration ends" —
+  // once every row's own backup has been individually deleted right after
+  // its UPDATE commits, nothing should remain on disk at all.
+  it('leaves no backup file behind once the migration completes successfully', () => {
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(false)
+    const now = new Date().toISOString()
+    rawDb.prepare(`
+      INSERT INTO secrets (id, name, description, env_var_name, value, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('legacy-backup-2', 'Legacy', '', 'MY_SECRET', Buffer.from('leaked-secret-123456', 'utf8'), now, now)
+
+    vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true)
+    expect(db.reencryptPlaintextFallbackRows().secrets).toBe(1)
+
+    // Not just "no file with the old shared name" — the whole directory
+    // is gone (cleaned up once it had nothing left in it).
+    expect(existsSync(BACKUP_DIR)).toBe(false)
   })
 })
 

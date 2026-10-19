@@ -38,7 +38,7 @@ import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
 import { UI_COMMAND_CHANNEL } from '../shared/ui-commands'
 import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiCommandSender, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
-import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
+import { startSecretBroker, stopSecretBroker, writeSecretLoaderScript, cleanupStaleSecretTokenFiles } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
@@ -1370,6 +1370,11 @@ app.whenReady().then(async () => {
     const brokerPort = await startSecretBroker(db)
     console.log(`[Main] Secret broker started on port ${brokerPort}`)
     writeSecretLoaderScript()
+    // Minor finding, re-review (round 3): nothing swept up stale token
+    // files left behind by a force quit/crash before this fix — the
+    // broker's own session map always starts empty on launch, so anything
+    // on disk at this point is definitely stale.
+    cleanupStaleSecretTokenFiles()
   } catch (err) {
     console.error('[Main] Failed to start secret broker:', err)
   }

@@ -2,7 +2,7 @@ import { isWorkfloLinkedTask } from './workflo-task-sync'
 import Database from 'better-sqlite3'
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
-import { existsSync, mkdirSync, rmSync, appendFileSync, chmodSync } from 'fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync, unlinkSync, readdirSync, rmdirSync } from 'fs'
 import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
 import { desktopBrandName } from './brand'
@@ -1193,7 +1193,7 @@ function isValidUtf8(value: Buffer): boolean {
  * `value.toString('utf8')` directly, never what real encrypted bytes look
  * like).
  *
- * The previous version used "safeStorage.decryptString throws" as the ONLY
+ * The original version used "safeStorage.decryptString throws" as the ONLY
  * signal, which also fires for a row that WAS properly encrypted but can no
  * longer be decrypted for a reason that has nothing to do with it being
  * plaintext — the OS keychain/keyring entry was reset, the Linux
@@ -1202,10 +1202,32 @@ function isValidUtf8(value: Buffer): boolean {
  * overwrite the real ciphertext with a UTF-8 misreading of binary bytes,
  * destroying the secret permanently — the exact failure mode this positive
  * check exists to rule out.
+ *
+ * Re-review (round 3, P2): the byte-prefix check alone has its own
+ * blind spot in the OTHER direction — a genuinely plaintext secret whose
+ * VALUE happens to start with the literal characters "v10"/"v11" (e.g. a
+ * password "v10-my-passphrase") would be misclassified as real ciphertext
+ * on prefix bytes alone, then permanently left unreadable (every future
+ * decrypt attempt throws, and it would never even be counted/warned about
+ * as a plaintext row). The prefix is no longer trusted by itself: when
+ * present, an ACTUAL decrypt attempt must succeed before this returns
+ * `false` (real ciphertext). If decrypt fails despite the prefix, this
+ * still falls back to the UTF-8 check — real encrypted bytes essentially
+ * never happen to be valid UTF-8, so that remains a reliable discriminator
+ * even in this narrower, decrypt-already-failed case.
  */
 function isPlaintextFallback(value: Buffer): boolean {
-  if (hasSafeStoragePrefix(value)) return false
-  return isValidUtf8(value)
+  if (!hasSafeStoragePrefix(value)) {
+    // No ciphertext-looking prefix at all — skip the decrypt attempt
+    // entirely (avoids touching the OS keychain for the common case).
+    return isValidUtf8(value)
+  }
+  try {
+    safeStorage.decryptString(value)
+    return false // decrypted cleanly -- genuinely ciphertext, not plaintext
+  } catch {
+    return isValidUtf8(value)
+  }
 }
 
 /**
@@ -4251,45 +4273,66 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return { secrets, oauthTokens }
   }
 
+  private secretReencryptBackupDir(): string {
+    return join(app.getPath('userData'), 'secret-reencrypt-backups')
+  }
+
   /**
-   * Appends the ORIGINAL bytes of a row about to be overwritten to a
+   * Writes the ORIGINAL bytes of a row about to be overwritten to its OWN
    * backup file, before the UPDATE that overwrites them runs — the backup
-   * requirement the re-review asked for. Append-only (never rewritten), so
-   * a crash mid-migration can't corrupt earlier entries, and one file holds
-   * every backup ever taken (harmless to keep; these are never real
-   * secrets by the time they're backed up here — see the call sites, which
-   * only reach this for a row already positively identified as the
-   * plaintext-fallback case, not a real encrypted one). 0600, outside the
-   * workspace, in the app's own private data directory.
+   * requirement the re-review asked for. Returns the file's path; the
+   * caller deletes it the moment the row's UPDATE actually succeeds (see
+   * `reencryptPlaintextFallbackRows`) — it only survives on disk if that
+   * specific UPDATE never got to run.
+   *
+   * Re-review (P1): this used to append every row's original bytes to one
+   * shared, never-rewritten `backup.jsonl` with a comment claiming "these
+   * are never real secrets" — which was simply wrong. A row this function
+   * is called for IS, by construction, a real plaintext secret that just
+   * hasn't been encrypted yet (that's the entire premise of
+   * `isPlaintextFallback`); appending it to a log nothing ever trims kept
+   * every one of them in plaintext on disk forever, permanently, which is
+   * strictly worse than the single bounded window this backup is supposed
+   * to cover. One file per row/column, deleted right after its own UPDATE
+   * commits, closes that window back down to "exists only between the
+   * backup write and the UPDATE it protects."
    */
-  private backupBeforeReencrypt(table: 'secrets' | 'oauth_tokens', id: string, column: string, original: Buffer): void {
+  private backupBeforeReencrypt(table: 'secrets' | 'oauth_tokens', id: string, column: string, original: Buffer): string {
+    const dir = this.secretReencryptBackupDir()
     try {
-      const dir = join(app.getPath('userData'), 'secret-reencrypt-backups')
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
-      const path = join(dir, 'backup.jsonl')
-      const line = JSON.stringify({
-        at: new Date().toISOString(),
-        table,
-        id,
-        column,
-        // Backed up as base64, not re-decoded — this file exists purely so
-        // the original bytes can be restored by hand if a re-encrypt ever
-        // turns out to have been wrong; nothing in 20x itself reads it back.
-        original_base64: original.toString('base64')
-      })
-      appendFileSync(path, line + '\n', 'utf-8')
-      try {
-        chmodSync(path, 0o600)
-      } catch {
-        // Best-effort — the directory is already 0700.
-      }
+      const path = join(dir, `${table}-${id}-${column}-${createId()}.bak`)
+      // Backed up as base64, not re-decoded — this file exists purely so
+      // the original bytes can be restored by hand in the unlikely case a
+      // re-encrypt attempt is interrupted; nothing in 20x itself reads it
+      // back. 0600 from creation (not chmod'd after writing with default
+      // permissions — no window where the file is readable by anyone else).
+      writeFileSync(path, original.toString('base64'), { mode: 0o600 })
+      return path
     } catch (err) {
-      // Best-effort: failing to WRITE a backup must not block refusing to
-      // lose the original value — but it does mean we should not proceed
-      // with the re-encrypt for this row, since re-encrypting without a
-      // backup is exactly the risk this exists to cover. Re-throw so the
-      // caller skips this row instead of overwriting it unbacked-up.
+      // Failing to WRITE a backup must not block refusing to lose the
+      // original value — the caller must skip this row's re-encrypt
+      // entirely rather than overwrite it unbacked-up. Re-throw so it does.
       throw new Error(`Failed to write re-encrypt backup, skipping this row to avoid an unbacked-up overwrite: ${err}`)
+    }
+  }
+
+  /** Best-effort: deletes a single row backup file. Never throws — a failed cleanup must not undo an already-successful re-encrypt. */
+  private deleteReencryptBackup(path: string): void {
+    try {
+      unlinkSync(path)
+    } catch (err) {
+      console.error(`[DatabaseManager] Could not delete re-encrypt backup file ${path} (the row itself was re-encrypted fine):`, err)
+    }
+  }
+
+  /** Best-effort: removes the backup directory once it's empty — "remove the file once the migration ends" for the common case where every row's backup was already individually deleted. Leaves it in place (with whatever un-deleted backups remain) if it's not empty — those still protect a row that didn't finish re-encrypting. */
+  private cleanupReencryptBackupDirIfEmpty(): void {
+    try {
+      const dir = this.secretReencryptBackupDir()
+      if (existsSync(dir) && readdirSync(dir).length === 0) rmdirSync(dir)
+    } catch {
+      // Best-effort — leaving an empty directory behind is harmless.
     }
   }
 
@@ -4311,8 +4354,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const secretRows = this.db.prepare('SELECT id, value FROM secrets').all() as Array<{ id: string; value: Buffer }>
     for (const row of secretRows) {
       if (!isPlaintextFallback(row.value)) continue
+      let backupPath: string
       try {
-        this.backupBeforeReencrypt('secrets', row.id, 'value', row.value)
+        backupPath = this.backupBeforeReencrypt('secrets', row.id, 'value', row.value)
       } catch (err) {
         console.error(`[DatabaseManager] Skipping re-encrypt of secret ${row.id}:`, err)
         continue
@@ -4320,6 +4364,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       const reencrypted = safeStorage.encryptString(row.value.toString('utf8'))
       this.db.prepare('UPDATE secrets SET value = ? WHERE id = ?').run(reencrypted, row.id)
       secrets++
+      // P1 fix: delete the backup the moment it's no longer needed, instead
+      // of letting it (and every other row's) accumulate forever.
+      this.deleteReencryptBackup(backupPath)
     }
 
     let oauthTokens = 0
@@ -4330,11 +4377,13 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       const accessIsPlaintext = isPlaintextFallback(row.access_token)
       const refreshIsPlaintext = row.refresh_token ? isPlaintextFallback(row.refresh_token) : false
       if (!accessIsPlaintext && !refreshIsPlaintext) continue
+      const backupPaths: string[] = []
       try {
-        if (accessIsPlaintext) this.backupBeforeReencrypt('oauth_tokens', row.id, 'access_token', row.access_token)
-        if (refreshIsPlaintext && row.refresh_token) this.backupBeforeReencrypt('oauth_tokens', row.id, 'refresh_token', row.refresh_token)
+        if (accessIsPlaintext) backupPaths.push(this.backupBeforeReencrypt('oauth_tokens', row.id, 'access_token', row.access_token))
+        if (refreshIsPlaintext && row.refresh_token) backupPaths.push(this.backupBeforeReencrypt('oauth_tokens', row.id, 'refresh_token', row.refresh_token))
       } catch (err) {
         console.error(`[DatabaseManager] Skipping re-encrypt of OAuth token ${row.id}:`, err)
+        for (const p of backupPaths) this.deleteReencryptBackup(p) // clean up whichever backup DID succeed before the other failed
         continue
       }
       const newAccess = accessIsPlaintext ? safeStorage.encryptString(row.access_token.toString('utf8')) : row.access_token
@@ -4343,7 +4392,13 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
         : row.refresh_token
       this.db.prepare('UPDATE oauth_tokens SET access_token = ?, refresh_token = ? WHERE id = ?').run(newAccess, newRefresh, row.id)
       oauthTokens++
+      for (const p of backupPaths) this.deleteReencryptBackup(p)
     }
+
+    // "Remove the file once the migration ends" — the directory as a
+    // whole, once every row backup created during this run has already
+    // been individually deleted above.
+    this.cleanupReencryptBackupDirIfEmpty()
 
     if (secrets > 0 || oauthTokens > 0) {
       console.log(`[DatabaseManager] Re-encrypted ${secrets} secret(s) and ${oauthTokens} OAuth token row(s) that were stored as plaintext`)
