@@ -1,6 +1,6 @@
 import type { BrowserRecordingManifest } from '@shared/browser-recording'
 import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '@shared/browser-session-import'
-import type { UiCommand } from '@shared/ui-commands'
+import type { UiCommandAck, UiCommandEnvelope } from '@shared/ui-commands'
 import type { TaskRunDuration } from '@shared/task-run-duration'
 import type {
   WorkfloTask,
@@ -607,7 +607,8 @@ interface ElectronAPI {
   }
   ui: {
     publishState: (state: Record<string, unknown>) => Promise<void>
-    onCommand: (callback: (command: UiCommand) => void) => () => void
+    onCommand: (callback: (envelope: UiCommandEnvelope) => void) => () => void
+    sendCommandResult: (ack: UiCommandAck) => Promise<void>
   }
   voice: {
     getSnapshot: () => Promise<VoiceSnapshot>

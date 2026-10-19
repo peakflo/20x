@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { handleRoute, setTaskApiNotifier, setTaskApiUiState } from './task-api-server'
-import { UI_COMMAND_CHANNEL } from '../shared/ui-commands'
+import { handleRoute, resolveTaskApiUiCommand, setTaskApiUiCommandSender, setTaskApiUiState } from './task-api-server'
+import { UI_COMMAND_TIMEOUT_MS, type UiCommandEnvelope, type UiCommandResult } from '../shared/ui-commands'
 import type { TaskRecord } from './database'
 
 /**
  * The tools that drive the window.
  *
- * The rule these tests protect: a command that reaches no window is a failure.
- * An agent told "done" would go on to describe a screen the user never saw.
+ * The rule these tests protect: a command that reaches no window, that the
+ * window refuses, or that the window never confirms is a failure. An agent told
+ * "done" would go on to describe a screen the user never saw.
  */
 
 vi.mock('./artifacts', () => ({
@@ -31,7 +32,10 @@ function makeDb() {
   }
 }
 
-let sent: Array<{ channel: string; data: unknown }>
+let sent: Array<{ data: UiCommandEnvelope['command'] }>
+/** What the fake window answers. Null: it says nothing. */
+let windowAnswer: ((command: UiCommandEnvelope['command']) => (UiCommandResult & { state?: unknown }) | null) | null
+let windowReachable: boolean
 
 /** A window is open, showing `view`, with `panels` on the canvas. */
 function windowShowing(view: string, panels: Array<{ taskId: string | null }> = []): void {
@@ -39,8 +43,20 @@ function windowShowing(view: string, panels: Array<{ taskId: string | null }> = 
 }
 
 beforeEach(() => {
+  vi.useRealTimers()
   sent = []
-  setTaskApiNotifier((channel, data) => sent.push({ channel, data }))
+  windowReachable = true
+  windowAnswer = () => ({ applied: true })
+  setTaskApiUiCommandSender((envelope) => {
+    if (!windowReachable) return false
+    sent.push({ data: envelope.command })
+    // The renderer answers asynchronously, over IPC.
+    queueMicrotask(() => {
+      const answer = windowAnswer?.(envelope.command)
+      if (answer) resolveTaskApiUiCommand({ requestId: envelope.requestId, ...answer } as never)
+    })
+    return true
+  })
   windowShowing('tasks')
 })
 
@@ -64,7 +80,7 @@ describe('navigate', () => {
   it('sends the user to a view', async () => {
     const result = (await handle('/navigate', { view: 'canvas' })) as { success: boolean }
     expect(result.success).toBe(true)
-    expect(sent[0]).toEqual({ channel: UI_COMMAND_CHANNEL, data: { kind: 'navigate', view: 'canvas', settingsTab: undefined } })
+    expect(sent[0]).toEqual({ data: { kind: 'navigate', view: 'canvas', settingsTab: undefined } })
   })
 
   it('carries a settings tab', async () => {
@@ -190,5 +206,63 @@ describe('open_artifact', () => {
     expect(result.error).toMatch(/artifact not found/i)
     expect(result.artifacts?.[0].artifact_id).toBe('art-1')
     expect(sent).toHaveLength(0)
+  })
+})
+
+describe('the window has to confirm', () => {
+  it('reports the reason when the window could not carry the command out', async () => {
+    // The 2026-10-19 report: a completed task the window had not loaded was
+    // refused by the renderer, and the tool still said success.
+    windowShowing('canvas')
+    windowAnswer = () => ({ applied: false, detail: 'That task could not be loaded' })
+    const result = (await handle('/open_task', { task_id: 't1', where: 'canvas' })) as { error?: string; success?: boolean }
+    expect(result.success).toBeUndefined()
+    expect(result.error).toBe('That task could not be loaded')
+  })
+
+  it('fails when the window never answers', async () => {
+    vi.useFakeTimers()
+    windowAnswer = () => null
+    const pending = handle('/navigate', { view: 'canvas' }) as Promise<{ error?: string }>
+    await vi.advanceTimersByTimeAsync(UI_COMMAND_TIMEOUT_MS + 1)
+    expect((await pending).error).toMatch(/did not confirm/i)
+  })
+
+  it('fails when the window is gone before it can answer', async () => {
+    windowAnswer = () => null
+    const pending = handle('/navigate', { view: 'canvas' }) as Promise<{ error?: string }>
+    setTaskApiUiState(null)
+    expect((await pending).error).toMatch(/closed/i)
+  })
+
+  it('fails when the command cannot be delivered', async () => {
+    windowReachable = false
+    const result = (await handle('/navigate', { view: 'canvas' })) as { error?: string }
+    expect(result.error).toMatch(/cannot be reached/i)
+  })
+
+  it('caches the screen the window answers with, so get_ui_state shows the new panel at once', async () => {
+    windowShowing('canvas', [])
+    windowAnswer = () => ({
+      applied: true,
+      state: {
+        view: 'canvas',
+        selectedTaskId: 't1',
+        visibleTaskIds: ['t1'],
+        canvas: { viewport: { x: 0, y: 0, zoom: 1 }, panels: [{ panelId: 'p1', type: 'task', taskId: 't1', x: 5, y: 6, width: 1020, height: 780 }] },
+      },
+    })
+    const result = (await handle('/open_task', { task_id: 't1', where: 'canvas' })) as { success: boolean; panel?: { x: number } }
+    expect(result.success).toBe(true)
+    expect(result.panel).toMatchObject({ taskId: 't1', x: 5 })
+
+    const state = (await handle('/get_ui_state')) as { selectedTaskId: string; visibleTaskIds: string[]; canvas: { panels: Array<{ taskId: string }> } }
+    expect(state.selectedTaskId).toBe('t1')
+    expect(state.visibleTaskIds).toContain('t1')
+    expect(state.canvas.panels.map((p) => p.taskId)).toEqual(['t1'])
+
+    // …and so a move straight after is accepted rather than refused as "no panel".
+    const moved = (await handle('/move_task_panel', { task_id: 't1', x: 1, y: 2 })) as { success?: boolean }
+    expect(moved.success).toBe(true)
   })
 })

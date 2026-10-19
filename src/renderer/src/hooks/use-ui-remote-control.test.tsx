@@ -9,7 +9,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import { UI_PUBLISH_THROTTLE_MS, useUiRemoteControl } from './use-ui-remote-control'
 import { useUIStore } from '@/stores/ui-store'
 import { useTaskStore } from '@/stores/task-store'
-import type { UiCommand } from '@shared/ui-commands'
+import type { UiCommandAck, UiCommandEnvelope } from '@shared/ui-commands'
 
 /**
  * The window reports the screen and takes commands.
@@ -24,12 +24,14 @@ function Harness(): null {
 }
 
 let published: Array<Record<string, unknown>>
-let commandListener: ((command: UiCommand) => void) | null
+let commandListener: ((envelope: UiCommandEnvelope) => void) | null
+let acks: UiCommandAck[]
 
 beforeEach(() => {
   vi.useFakeTimers()
   published = []
   commandListener = null
+  acks = []
   useTaskStore.setState({ tasks: [{ id: 't1', title: 'Fix login' }] as never, selectedTaskId: null })
   useUIStore.setState({ sidebarView: 'dashboard', activeModal: null, dashboardPreviewTaskId: null })
   ;(window as unknown as { electronAPI: unknown }).electronAPI = {
@@ -37,7 +39,10 @@ beforeEach(() => {
       publishState: vi.fn(async (state: Record<string, unknown>) => {
         published.push(state)
       }),
-      onCommand: (callback: (command: UiCommand) => void) => {
+      sendCommandResult: vi.fn(async (ack: UiCommandAck) => {
+        acks.push(ack)
+      }),
+      onCommand: (callback: (envelope: UiCommandEnvelope) => void) => {
         commandListener = callback
         return () => {
           commandListener = null
@@ -86,17 +91,27 @@ describe('useUiRemoteControl', () => {
     expect(published).toHaveLength(0)
   })
 
-  it('applies a command and reports the result at once', () => {
+  it('applies a command and reports the result at once', async () => {
     render(<Harness />)
     published.length = 0
 
-    act(() => {
-      commandListener?.({ kind: 'navigate', view: 'canvas' })
+    await act(async () => {
+      commandListener?.({ requestId: 'r1', command: { kind: 'navigate', view: 'canvas' } })
     })
 
     expect(useUIStore.getState().sidebarView).toBe('canvas')
     // The next tool call must see the screen this command produced.
     expect(published.at(-1)).toMatchObject({ view: 'canvas' })
+    // Main is told what happened, with the screen after it.
+    expect(acks).toEqual([expect.objectContaining({ requestId: 'r1', applied: true, state: expect.objectContaining({ view: 'canvas' }) })])
+  })
+
+  it('answers with the reason when a command could not be applied', async () => {
+    render(<Harness />)
+    await act(async () => {
+      commandListener?.({ requestId: 'r2', command: { kind: 'move_task_panel', taskId: 't1', x: 0, y: 0 } })
+    })
+    expect(acks).toEqual([expect.objectContaining({ requestId: 'r2', applied: false, detail: 'That task has no panel on the canvas' })])
   })
 
   it('stops listening when it is unmounted', () => {

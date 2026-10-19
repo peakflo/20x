@@ -36,7 +36,8 @@ import { buildWorkspaceStates, sweepLeakedWorkspaceProcesses, readDiskSpace, wor
 import { WORKSPACES_DIR, listWorkspaceDirs } from './workspace-paths'
 import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
-import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
+import { UI_COMMAND_CHANNEL } from '../shared/ui-commands'
+import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiCommandSender, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
@@ -581,6 +582,17 @@ function createWindow(): void {
       mainWindow.webContents.send(channel, data)
     }
     broadcastToMobileClients(channel, data)
+  })
+
+  // UI commands go to the main window only — the same renderer that publishes
+  // the screen `get_ui_state` reports — and never to mobile clients. The
+  // renderer answers each one on UI_COMMAND_RESULT_CHANNEL.
+  setTaskApiUiCommandSender((envelope) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false
+    const wc = mainWindow.webContents
+    if (wc.isDestroyed() || wc.isCrashed()) return false
+    wc.send(UI_COMMAND_CHANNEL, envelope)
+    return true
   })
 
   // An MCP caller has no window, so the main-process loop is what honours the

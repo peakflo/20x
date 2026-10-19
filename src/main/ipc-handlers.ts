@@ -12,7 +12,8 @@ import WebSocket from 'ws'
 import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
 import { getPendingPin, broadcastToMobileClients } from './mobile-api-server'
 import { sendMobilePush } from './mobile-push'
-import { setTaskApiUiState } from './task-api-server'
+import { resolveTaskApiUiCommand, setTaskApiUiState } from './task-api-server'
+import { UI_COMMAND_RESULT_CHANNEL, type UiCommandAck } from '../shared/ui-commands'
 import { panelBrowserBroker } from './panel-browser-broker'
 import { getAgentBrowserSession } from './agent-browser-session'
 import { listBrowserImportSources, importBrowserSessions, clearImportedBrowserSessions, normalizeDomains } from './browser-session-import'
@@ -2702,6 +2703,12 @@ else:
   // read it without waiting for a round trip to the window.
   ipcMain.handle('ui:publishState', (_, state: Record<string, unknown>) => {
     setTaskApiUiState(state ?? {})
+  })
+
+  // The renderer's answer to one UI command (see sendUiCommand). Without it a
+  // tool call cannot tell an applied command from one the window dropped.
+  ipcMain.handle(UI_COMMAND_RESULT_CHANNEL, (_, ack: UiCommandAck) => {
+    resolveTaskApiUiCommand(ack)
   })
 
   // ── Voice control handlers (design §5.1) ────────────────────────────────

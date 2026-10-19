@@ -1,7 +1,7 @@
 import { useUIStore } from '@/stores/ui-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
-import { useCanvasStore } from '@/stores/canvas-store'
+import { useCanvasStore, DEFAULT_PANEL_HEIGHT, DEFAULT_PANEL_WIDTH, type CanvasViewCommand } from '@/stores/canvas-store'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { SETTINGS_TABS, SettingsTab } from '@/types'
 import {
@@ -36,8 +36,70 @@ function resolveArtifactTabId(taskId: string, artifactId: string): string | null
   return match?.id ?? null
 }
 
-function isKnownTask(taskId: string): boolean {
-  return useTaskStore.getState().tasks.some((task) => task.id === taskId)
+/**
+ * How long a command waits for the canvas to carry out a viewport change. The
+ * canvas may have to mount first (the command can switch to it). Shorter than
+ * the main-process timeout, so the window answers with a reason of its own.
+ */
+export const UI_VIEW_COMMAND_TIMEOUT_MS = 3000
+
+/**
+ * The task, loading it if the window does not have it yet.
+ *
+ * The window only holds open tasks and the completed ones already paged in, so
+ * a completed task (or a completed subtask) is usually absent. Refusing those
+ * made `open_task` a silent no-op for most of a user's history.
+ */
+async function loadTask(taskId: string): Promise<boolean> {
+  if (useTaskStore.getState().tasks.some((task) => task.id === taskId)) return true
+  const task = await useTaskStore.getState().ensureTask(taskId)
+  return Boolean(task)
+}
+
+/**
+ * Queues a viewport change and waits for the canvas to report it done. False
+ * when the canvas could not do it, or did not get to it in time.
+ */
+async function runViewCommand(command: CanvasViewCommand): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const timeout = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), UI_VIEW_COMMAND_TIMEOUT_MS)
+  })
+  try {
+    return await Promise.race([useCanvasStore.getState().requestViewCommand(command), timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/** The canvas restores its panels on first mount; adding one before that would be overwritten. */
+async function ensureCanvasLoaded(): Promise<void> {
+  const canvas = useCanvasStore.getState()
+  if (!canvas.isLoaded) await canvas.loadCanvas()
+}
+
+/**
+ * Puts a panel for the task at the centre of what the canvas shows, right now
+ * in the store — not through the canvas's "pending task" queue, which runs on
+ * a later render and quietly drops a task it cannot find.
+ */
+function addTaskPanelAtViewportCentre(taskId: string): string {
+  const canvas = useCanvasStore.getState()
+  const task = useTaskStore.getState().tasks.find((t) => t.id === taskId)
+  const vp = canvas.viewport
+  const width = typeof window !== 'undefined' ? window.innerWidth : 0
+  const height = typeof window !== 'undefined' ? window.innerHeight : 0
+  const zoom = vp.zoom > 0 ? vp.zoom : 1
+  const offset = (canvas.panels.length % 5) * 30
+  return canvas.addPanel({
+    type: 'task',
+    title: task?.title ?? taskId,
+    refId: taskId,
+    x: (width / 2 - vp.x) / zoom - DEFAULT_PANEL_WIDTH / 2 + offset,
+    y: (height / 2 - vp.y) / zoom - DEFAULT_PANEL_HEIGHT / 2 + offset,
+    width: DEFAULT_PANEL_WIDTH,
+    height: DEFAULT_PANEL_HEIGHT,
+  })
 }
 
 function toSettingsTab(value: string | undefined): SettingsTab | null {
@@ -46,7 +108,12 @@ function toSettingsTab(value: string | undefined): SettingsTab | null {
   return match ? match.value : null
 }
 
-export function applyUiCommand(command: UiCommand): UiCommandResult {
+/**
+ * Applies one command and resolves with what really happened. The result is
+ * sent back to main, which reports it as the tool result — so `applied: true`
+ * must mean the screen changed, not that the command arrived.
+ */
+export async function applyUiCommand(command: UiCommand): Promise<UiCommandResult> {
   const ui = useUIStore.getState()
 
   switch (command.kind) {
@@ -65,20 +132,21 @@ export function applyUiCommand(command: UiCommand): UiCommandResult {
     }
 
     case 'open_task': {
-      if (!isKnownTask(command.taskId)) return { applied: false, detail: 'That task is not loaded' }
+      if (!(await loadTask(command.taskId))) return { applied: false, detail: 'That task could not be loaded' }
       useTaskStore.getState().selectTask(command.taskId)
 
       if (command.where === 'canvas') {
-        const existing = findTaskPanel(command.taskId)
+        await ensureCanvasLoaded()
         if (ui.activeModal === 'settings') ui.closeModal()
-        if (existing) {
-          // Already on the canvas: bring the user to it rather than
-          // opening a second copy.
-          ui.setSidebarView('canvas')
-          ui.closeDashboardPreview()
-          useCanvasStore.getState().requestViewCommand({ kind: 'focus_task', taskId: command.taskId })
-        } else {
-          ui.openTaskOnCanvas(command.taskId)
+        ui.closeDashboardPreview()
+        let panelId = findTaskPanel(command.taskId)?.id
+        if (!panelId) panelId = addTaskPanelAtViewportCentre(command.taskId)
+        useCanvasStore.getState().setSelectedPanelId(panelId)
+        ui.setSidebarView('canvas')
+        // Centre it. The panel is already in the store, so it is on the canvas
+        // either way; failing to centre is reported, not hidden.
+        if (!(await runViewCommand({ kind: 'focus_task', taskId: command.taskId }))) {
+          return { applied: false, detail: 'The task panel was added, but the canvas could not centre it' }
         }
         return { applied: true }
       }
@@ -111,24 +179,23 @@ export function applyUiCommand(command: UiCommand): UiCommandResult {
     }
 
     case 'set_canvas_view': {
-      const canvas = useCanvasStore.getState()
-      if (command.mode === 'fit_all' && canvas.panels.length === 0) {
+      await ensureCanvasLoaded()
+      if (command.mode === 'fit_all' && useCanvasStore.getState().panels.length === 0) {
         return { applied: false, detail: 'The canvas is empty' }
       }
-      canvas.requestViewCommand(
+      // The canvas carries this out with its own rect, so it has to be shown.
+      if (ui.activeModal === 'settings') ui.closeModal()
+      ui.setSidebarView('canvas')
+      const applied = await runViewCommand(
         command.mode === 'zoom'
           ? { kind: 'zoom', zoom: command.zoom ?? 1 }
           : { kind: command.mode }
       )
-      // The canvas carries this out with its own rect; if it is not mounted
-      // the intent simply waits there.
-      if (ui.activeModal === 'settings') ui.closeModal()
-      ui.setSidebarView('canvas')
-      return { applied: true }
+      return applied ? { applied: true } : { applied: false, detail: 'The canvas did not apply the view change' }
     }
 
     case 'open_artifact': {
-      if (!isKnownTask(command.taskId)) return { applied: false, detail: 'That task is not loaded' }
+      if (!(await loadTask(command.taskId))) return { applied: false, detail: 'That task could not be loaded' }
 
       // The caller names the artifact by its registry ID. The tab is keyed
       // differently — the registry ID is the workpiece key — so the tab is
@@ -148,6 +215,26 @@ export function applyUiCommand(command: UiCommand): UiCommandResult {
   }
 }
 
+/**
+ * Task IDs on screen, most relevant first: the selected task and every task
+ * with a canvas panel, then the rest of the loaded list. Capped like the panels.
+ * Without the first two, a task opened from history sat past the cap and an
+ * agent could not see that it had been opened.
+ */
+function listVisibleTaskIds(
+  loaded: Array<{ id: string }>,
+  selected: string | null,
+  panels: Array<{ type: string; refId?: string | null }>
+): string[] {
+  const ids = new Set<string>()
+  if (selected) ids.add(selected)
+  for (const panel of panels) {
+    if (panel.type === 'task' && panel.refId) ids.add(panel.refId)
+  }
+  for (const task of loaded) ids.add(task.id)
+  return [...ids].slice(0, UI_MAX_PUBLISHED_PANELS)
+}
+
 /** The screen, as an agent tool reads it. */
 export function collectUiState(): UiStateSnapshot {
   const ui = useUIStore.getState()
@@ -165,7 +252,7 @@ export function collectUiState(): UiStateSnapshot {
     mastermindOpen: ui.showOrchestrator,
     settingsTab: ui.activeModal === 'settings' ? ui.settingsTab : null,
     waitingForYou: Boolean(session?.pendingApproval),
-    visibleTaskIds: tasks.tasks.slice(0, 50).map((task) => task.id),
+    visibleTaskIds: listVisibleTaskIds(tasks.tasks, selected, canvas.panels),
     canvas: {
       viewport: canvas.viewport,
       // Capped: a canvas can hold more panels than a tool reply should carry.

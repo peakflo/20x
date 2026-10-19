@@ -3,7 +3,7 @@ import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } f
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { createBrandFlagCache } from './brand-cache'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
-import { UI_COMMAND_CHANNEL, type UiCommand } from '../shared/ui-commands'
+import { UI_COMMAND_CHANNEL, UI_COMMAND_RESULT_CHANNEL, type UiCommandAck, type UiCommandEnvelope } from '../shared/ui-commands'
 import type { TaskRunDuration } from '../shared/task-run-duration'
 import {
   USAGE_LIMITS_UPDATED_CHANNEL,
@@ -686,11 +686,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ui: {
     publishState: (state: Record<string, unknown>): Promise<void> =>
       ipcRenderer.invoke('ui:publishState', state),
-    onCommand: (callback: (command: UiCommand) => void): (() => void) => {
-      const handler = (_: unknown, command: UiCommand): void => callback(command)
+    onCommand: (callback: (envelope: UiCommandEnvelope) => void): (() => void) => {
+      const handler = (_: unknown, envelope: UiCommandEnvelope): void => callback(envelope)
       ipcRenderer.on(UI_COMMAND_CHANNEL, handler)
       return () => ipcRenderer.removeListener(UI_COMMAND_CHANNEL, handler)
-    }
+    },
+    sendCommandResult: (ack: UiCommandAck): Promise<void> =>
+      ipcRenderer.invoke(UI_COMMAND_RESULT_CHANNEL, ack)
   },
   voice: {
     getSnapshot: (): Promise<unknown> => ipcRenderer.invoke('voice:getSnapshot'),

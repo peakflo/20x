@@ -24,6 +24,17 @@ export const UI_CANVAS_VIEW_MODES = ['fit_all', 'reset', 'zoom'] as const
 export type UiCanvasViewMode = (typeof UI_CANVAS_VIEW_MODES)[number]
 
 export const UI_COMMAND_CHANNEL = 'ui:command'
+/** The renderer answers every command on this channel, with the same request ID. */
+export const UI_COMMAND_RESULT_CHANNEL = 'ui:commandResult'
+
+/**
+ * How long main waits for the window to confirm a command.
+ *
+ * Opening a completed task loads it from the database first, and a viewport
+ * change waits for the canvas to lay out, so this is generous. A window that
+ * says nothing in this time is reported as a failure, never as a success.
+ */
+export const UI_COMMAND_TIMEOUT_MS = 5000
 
 /** The zoom range the canvas itself enforces. Kept here so main can refuse early. */
 export const UI_CANVAS_MIN_ZOOM = 0.1
@@ -37,11 +48,26 @@ export type UiCommand =
   | { kind: 'set_canvas_view'; mode: UiCanvasViewMode; zoom?: number }
   | { kind: 'open_artifact'; taskId: string; artifactId: string }
 
+/** One command as it travels to the window: the renderer echoes `requestId` back. */
+export interface UiCommandEnvelope {
+  requestId: string
+  command: UiCommand
+}
+
 /** What the renderer did with one command. Reported back for the tool result. */
 export interface UiCommandResult {
   applied: boolean
   /** Short, user-facing reason when nothing happened. */
   detail?: string
+}
+
+/**
+ * The renderer's answer to one command: the outcome plus the screen right after
+ * it, so the next `get_ui_state` already shows what the command did.
+ */
+export interface UiCommandAck extends UiCommandResult {
+  requestId: string
+  state?: UiStateSnapshot
 }
 
 /** A canvas panel as an agent sees it: addressed by task, not by panel ID. */

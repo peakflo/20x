@@ -4,6 +4,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useCanvasStore } from '@/stores/canvas-store'
 import { applyUiCommand, collectUiState } from '@/lib/ui-remote-control'
+import type { UiCommandEnvelope, UiCommandResult } from '@shared/ui-commands'
 
 /** How long the window waits before republishing. */
 export const UI_PUBLISH_THROTTLE_MS = 250
@@ -56,12 +57,8 @@ export function useUiRemoteControl(): void {
     const offPanels = useCanvasStore.subscribe((s) => s.panels, publish)
     const offViewport = useCanvasStore.subscribe((s) => s.viewport, publish)
 
-    const offCommand = window.electronAPI.ui.onCommand?.((command) => {
-      applyUiCommand(command)
-      // Past the throttle on purpose: the next tool call must see the result of
-      // this command, not the screen that was there before it. A command is one
-      // tool call, so this cannot be used to make the window busy.
-      publishNow()
+    const offCommand = window.electronAPI.ui.onCommand?.((envelope) => {
+      void handleCommand(envelope, publishNow)
     })
 
     return () => {
@@ -74,4 +71,29 @@ export function useUiRemoteControl(): void {
       offCommand?.()
     }
   }, [])
+}
+
+/**
+ * Applies one command and answers main with the outcome and the screen right
+ * after it. Main does not report success until this answer arrives, so a
+ * command the window could not carry out comes back to the agent as an error.
+ */
+export async function handleCommand(envelope: UiCommandEnvelope, publishNow: () => void): Promise<void> {
+  const { requestId, command } = envelope
+  let result: UiCommandResult
+  try {
+    result = await applyUiCommand(command)
+  } catch (err) {
+    console.error('[ui-remote-control] command failed:', err)
+    result = { applied: false, detail: err instanceof Error ? err.message : 'The window could not apply the change' }
+  }
+  // Past the throttle on purpose: the next tool call must see the result of
+  // this command, not the screen that was there before it. A command is one
+  // tool call, so this cannot be used to make the window busy.
+  publishNow()
+  try {
+    await window.electronAPI.ui.sendCommandResult({ requestId, ...result, state: collectUiState() })
+  } catch (err) {
+    console.error('[ui-remote-control] could not report a command result:', err)
+  }
 }

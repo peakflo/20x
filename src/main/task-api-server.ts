@@ -24,11 +24,13 @@ import type { AgentManager } from './agent-manager'
 import {
   UI_CANVAS_MAX_ZOOM,
   UI_CANVAS_MIN_ZOOM,
-  UI_COMMAND_CHANNEL,
+  UI_COMMAND_TIMEOUT_MS,
   isUiCanvasViewMode,
   isUiOpenTaskTarget,
   isUiViewName,
   type UiCommand,
+  type UiCommandAck,
+  type UiCommandEnvelope,
   type UiOpenTaskTarget
 } from '../shared/ui-commands'
 import { buildSimilarTasksQuery } from './task-search'
@@ -83,6 +85,50 @@ let uiState: Record<string, unknown> = { available: false }
 export function setTaskApiUiState(state: Record<string, unknown> | null): void {
   // Null clears it. A closed window must not keep reporting a stale screen.
   uiState = state ? { ...state, available: true, updatedAt: Date.now() } : { available: false }
+  // Nothing will answer a command sent to a window that has gone.
+  if (!state) failPendingUiCommands('The 20x window closed before it confirmed the change')
+}
+
+/**
+ * Delivers one command to the window the user is looking at. Returns false
+ * when there is no such window. Wired in index.ts to the main window only, so
+ * a command and the `get_ui_state` it is checked against come from the same
+ * renderer.
+ */
+type UiCommandSender = (envelope: UiCommandEnvelope) => boolean
+let uiCommandSender: UiCommandSender | null = null
+
+export function setTaskApiUiCommandSender(fn: UiCommandSender | null): void {
+  uiCommandSender = fn
+}
+
+interface PendingUiCommand {
+  resolve: (ack: UiCommandAck | { timeout: true; reason: string }) => void
+  timer: ReturnType<typeof setTimeout>
+}
+const pendingUiCommands = new Map<string, PendingUiCommand>()
+
+function failPendingUiCommands(reason: string): void {
+  for (const [requestId, pending] of pendingUiCommands) {
+    clearTimeout(pending.timer)
+    pendingUiCommands.delete(requestId)
+    pending.resolve({ timeout: true, reason })
+  }
+}
+
+/**
+ * The renderer's answer to one command. The screen it carries is cached
+ * before the tool call returns, so a `get_ui_state` straight after already
+ * shows the result.
+ */
+export function resolveTaskApiUiCommand(ack: UiCommandAck): void {
+  if (!ack || typeof ack.requestId !== 'string') return
+  const pending = pendingUiCommands.get(ack.requestId)
+  if (!pending) return
+  clearTimeout(pending.timer)
+  pendingUiCommands.delete(ack.requestId)
+  if (ack.state) setTaskApiUiState(ack.state as unknown as Record<string, unknown>)
+  pending.resolve(ack)
 }
 
 /** The canvas panels the window last published, or none when it published none. */
@@ -112,15 +158,43 @@ function requireCanvasPanel(taskId: string): { error: string } | null {
 }
 
 /**
- * Pushes one command to the window.
+ * Pushes one command to the window and waits for it to say what it did.
  *
- * A command that reaches no window is a failure, not a success: an agent that
- * is told "done" would go on to describe a screen the user never saw.
+ * A command that reaches no window, that the window refuses, or that the
+ * window never confirms is a failure, not a success: an agent that is told
+ * "done" would go on to describe a screen the user never saw.
  */
-function sendUiCommand(command: UiCommand): { success: true; command: string } | { error: string } {
+async function sendUiCommand(command: UiCommand): Promise<{ success: true; command: string } | { error: string }> {
   if (!uiState.available) return { error: 'No 20x window is open' }
-  if (!notifyRenderer) return { error: 'The window cannot be reached' }
-  notifyRenderer(UI_COMMAND_CHANNEL, command)
+  if (!uiCommandSender) return { error: 'The window cannot be reached' }
+
+  const requestId = randomUUID()
+  const answer = new Promise<UiCommandAck | { timeout: true; reason: string }>((resolve) => {
+    const timer = setTimeout(() => {
+      pendingUiCommands.delete(requestId)
+      resolve({ timeout: true, reason: `The 20x window did not confirm the change within ${UI_COMMAND_TIMEOUT_MS / 1000}s` })
+    }, UI_COMMAND_TIMEOUT_MS)
+    pendingUiCommands.set(requestId, { resolve, timer })
+  })
+
+  let delivered = false
+  try {
+    delivered = uiCommandSender({ requestId, command })
+  } catch (err) {
+    console.error('[TaskApiServer] UI command send failed:', err)
+  }
+  if (!delivered) {
+    const pending = pendingUiCommands.get(requestId)
+    if (pending) {
+      clearTimeout(pending.timer)
+      pendingUiCommands.delete(requestId)
+    }
+    return { error: 'The window cannot be reached' }
+  }
+
+  const ack = await answer
+  if ('timeout' in ack) return { error: ack.reason }
+  if (!ack.applied) return { error: ack.detail || 'The window did not apply the change' }
   return { success: true, command: command.kind }
 }
 
@@ -998,8 +1072,11 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         return { error: 'where must be one of auto, workspace, canvas, modal' }
       }
       const where = requested === 'auto' ? resolveOpenTaskTarget() : requested
-      const result = sendUiCommand({ kind: 'open_task', taskId, where })
-      return 'error' in result ? result : { ...result, where, task_title: task.title }
+      const result = await sendUiCommand({ kind: 'open_task', taskId, where })
+      if ('error' in result) return result
+      // The window answered with its screen, so the panel it placed is known.
+      const panel = where === 'canvas' ? readCanvasPanels().find((p) => p.taskId === taskId) : undefined
+      return { ...result, where, task_title: task.title, ...(panel ? { panel } : {}) }
     }
 
     case '/move_task_panel': {

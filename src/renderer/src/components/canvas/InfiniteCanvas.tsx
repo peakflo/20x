@@ -603,29 +603,38 @@ export function InfiniteCanvas() {
 
   useEffect(() => {
     if (!pendingViewCommand) return
-    useCanvasStore.getState().clearViewCommand()
     commitViewport()
 
-    const rect = containerRef.current?.getBoundingClientRect()
-    if (!rect) return
-
-    switch (pendingViewCommand.kind) {
-      case 'fit_all':
-        fitToContent(rect.width, rect.height)
-        return
-      case 'reset':
-        resetViewport()
-        return
-      case 'zoom':
-        zoomTo(pendingViewCommand.zoom, rect.width / 2, rect.height / 2)
-        return
-      case 'focus_task': {
-        const target = useCanvasStore
-          .getState()
-          .panels.find((p) => p.type === 'task' && p.refId === pendingViewCommand.taskId)
-        if (target) focusPanel(target.id, rect.width, rect.height)
+    // The outcome settles the requester's promise, so an agent tool call is
+    // told when the canvas could not do it rather than "success".
+    const applied = ((): boolean => {
+      const rect = containerRef.current?.getBoundingClientRect()
+      if (!rect) return false
+      // fitToContent / focusPanel ignore a container that is not laid out.
+      const laidOut = rect.width >= 10 && rect.height >= 10
+      switch (pendingViewCommand.kind) {
+        case 'fit_all':
+          if (!laidOut || useCanvasStore.getState().panels.length === 0) return false
+          fitToContent(rect.width, rect.height)
+          return true
+        case 'reset':
+          resetViewport()
+          return true
+        case 'zoom':
+          zoomTo(pendingViewCommand.zoom, rect.width / 2, rect.height / 2)
+          return true
+        case 'focus_task': {
+          const target = useCanvasStore
+            .getState()
+            .panels.find((p) => p.type === 'task' && p.refId === pendingViewCommand.taskId)
+          if (!target || !laidOut) return false
+          focusPanel(target.id, rect.width, rect.height)
+          return true
+        }
       }
-    }
+      return false
+    })()
+    useCanvasStore.getState().clearViewCommand(applied)
   }, [pendingViewCommand, fitToContent, resetViewport, zoomTo, focusPanel, commitViewport])
 
   const scheduleViewportUpdate = useCallback(() => {

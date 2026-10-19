@@ -221,8 +221,14 @@ interface CanvasState {
    * carries it out with its own rect on the next render.
    */
   pendingViewCommand: CanvasViewCommand | null
-  requestViewCommand: (command: CanvasViewCommand) => void
-  clearViewCommand: () => void
+  /**
+   * Queues a viewport change for the mounted canvas. Resolves true once the
+   * canvas has carried it out, false if it was superseded or could not be
+   * applied. Callers that do not care may ignore the promise.
+   */
+  requestViewCommand: (command: CanvasViewCommand) => Promise<boolean>
+  /** Takes the pending command off the queue; `applied` settles its promise. */
+  clearViewCommand: (applied?: boolean) => void
 
   // Persistence
   isLoaded: boolean
@@ -269,6 +275,14 @@ interface CanvasState {
 
 let panelCounter = 0
 let edgeCounter = 0
+
+/** Settles the promise returned by the pending `requestViewCommand`. */
+let pendingViewResolver: ((applied: boolean) => void) | null = null
+function settleViewCommand(applied: boolean): void {
+  const resolve = pendingViewResolver
+  pendingViewResolver = null
+  resolve?.(applied)
+}
 
 /** Debounced persist of canvas state to SQLite settings table */
 function scheduleSave() {
@@ -509,8 +523,15 @@ export const useCanvasStore = create<CanvasState>()(subscribeWithSelector((set, 
   },
 
   // Viewport commands from outside the canvas
-  requestViewCommand: (command) => set({ pendingViewCommand: command }),
-  clearViewCommand: () => {
+  requestViewCommand: (command) => {
+    // A newer command replaces one the canvas has not run yet.
+    settleViewCommand(false)
+    const settled = new Promise<boolean>((resolve) => { pendingViewResolver = resolve })
+    set({ pendingViewCommand: command })
+    return settled
+  },
+  clearViewCommand: (applied = true) => {
+    settleViewCommand(applied)
     if (!get().pendingViewCommand) return
     set({ pendingViewCommand: null })
   },
