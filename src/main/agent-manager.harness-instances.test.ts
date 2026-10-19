@@ -92,6 +92,8 @@ function setup(opts: {
     getSkillsByIds: vi.fn(() => []),
     getTasks: vi.fn(() => []),
     usage: { getProviderUsageLimits: vi.fn(() => []) },
+    openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: task.id, sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
+    closeTaskRun: vi.fn(() => null),
   } as unknown as ConstructorParameters<typeof AgentManager>[0]
   const manager = new AgentManager(db)
   // As at startup: every stored account is checked once, before any resume.

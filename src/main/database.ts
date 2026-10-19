@@ -493,6 +493,50 @@ export interface AppFocusIntervalRecord {
   lastHeartbeatMs: number
 }
 
+/** Raw `task_runs` row, snake_case as stored. */
+interface TaskRunRow {
+  id: string
+  task_id: string
+  session_id: string
+  started_at: number
+  ended_at: number | null
+  end_reason: string | null
+}
+
+/**
+ * One agent run (session) on a task, closed with an honest end reason. See
+ * src/main/orchestration/run-finalization.ts (writer/classifier).
+ */
+export interface TaskRunRecord {
+  id: string
+  taskId: string
+  sessionId: string
+  startedAt: number
+  /** Null while the run is still in progress. */
+  endedAt: number | null
+  /** 'completed' | 'stopped_early' | 'error' | 'interrupted' | 'limit' | 'user_stop' — free-form, not an enum. */
+  endReason: string | null
+}
+
+function deserializeTaskRun(row: TaskRunRow): TaskRunRecord {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    sessionId: row.session_id,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    endReason: row.end_reason
+  }
+}
+
+/** Stored idempotency receipt for an orchestration MCP tool call. */
+export interface OrchestrationReceiptRecord {
+  scope: string
+  clientRequestId: string
+  result: unknown
+  createdAt: number
+}
+
 export interface TaskRecord {
   server_pending_edits?: Record<string, unknown>
   server_managed?: boolean
@@ -1623,6 +1667,56 @@ export class DatabaseManager {
       );
       CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_started ON app_focus_intervals(started_at_ms);
       CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_ended ON app_focus_intervals(ended_at_ms);
+
+      -- task_wakeups (durable, deduplicated parent wake-ups) is created and
+      -- owned entirely by TaskWakeupStore — see
+      -- src/main/orchestration/task-wakeups.ts. It mirrors
+      -- usage-limit-recovery.ts's shape (a self-contained store + sweep
+      -- against the raw better-sqlite3 handle) rather than living here.
+
+      -- Idempotency receipts for orchestration MCP tools (create_task,
+      -- create_subtask, start_task, send_message). A caller that retries with
+      -- the same (scope, client_request_id) gets the stored result back
+      -- instead of a duplicate side effect. Expired (see
+      -- ORCHESTRATION_RECEIPT_TTL_MS) rows are pruned opportunistically, not
+      -- on a timer. New table, so no SCHEMA_VERSION bump is needed.
+      CREATE TABLE IF NOT EXISTS orchestration_receipts (
+        scope TEXT NOT NULL,
+        client_request_id TEXT NOT NULL,
+        result TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (scope, client_request_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_orchestration_receipts_created ON orchestration_receipts(created_at);
+
+      -- One row per agent run (session) on a task, closed with an honest
+      -- end_reason ('completed' | 'stopped_early' | 'error' | 'interrupted' |
+      -- 'limit' | 'user_stop') once the run actually ends. This is what lets
+      -- the UI and the wake-up composer tell a genuinely finished run apart
+      -- from one that merely went idle. New table, so no SCHEMA_VERSION bump
+      -- is needed. See src/main/orchestration/run-finalization.ts.
+      CREATE TABLE IF NOT EXISTS task_runs (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        end_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(task_id, started_at);
+      CREATE INDEX IF NOT EXISTS idx_task_runs_session ON task_runs(session_id);
+
+      -- Persisted automation retry counters (task-automation-scheduler.ts),
+      -- replacing the old in-memory failedStarts/failedCompletions Maps that
+      -- reset on every restart. One row per (task_id, kind). New table, so no
+      -- SCHEMA_VERSION bump is needed.
+      CREATE TABLE IF NOT EXISTS automation_retry_counts (
+        task_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (task_id, kind)
+      );
     `)
   }
 
@@ -3081,6 +3175,130 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       SELECT MAX(created_at) AS m FROM transcript_parts WHERE task_id = ? AND created_at > ?
     `).get(taskId, afterMs) as { m: number | null }
     return row.m ?? null
+  }
+
+  // task_wakeups CRUD lives entirely in TaskWakeupStore (see
+  // src/main/orchestration/task-wakeups.ts) against the raw better-sqlite3
+  // handle — not duplicated here.
+
+  // ── orchestration_receipts ───────────────────────────────────
+  // Idempotency for create_task / create_subtask / start_task / send_message.
+  // See src/main/orchestration/idempotency.ts.
+
+  /** The stored result for a prior call with this (scope, client_request_id), or null if none (or expired — callers prune separately). */
+  getOrchestrationReceipt(scope: string, clientRequestId: string): OrchestrationReceiptRecord | null {
+    if (!this.ensureDbOpen()) return null
+    const row = this.db.prepare(`
+      SELECT * FROM orchestration_receipts WHERE scope = ? AND client_request_id = ?
+    `).get(scope, clientRequestId) as { scope: string; client_request_id: string; result: string; created_at: number } | undefined
+    if (!row) return null
+    let result: unknown = null
+    try {
+      result = JSON.parse(row.result)
+    } catch {
+      result = null
+    }
+    return { scope: row.scope, clientRequestId: row.client_request_id, result, createdAt: row.created_at }
+  }
+
+  /**
+   * Stores a receipt for a (scope, client_request_id) pair. `ON CONFLICT DO
+   * NOTHING` — if a concurrent caller already stored one for this exact key,
+   * the earlier result wins (read it back with getOrchestrationReceipt
+   * instead of trusting the input just written).
+   */
+  putOrchestrationReceipt(scope: string, clientRequestId: string, result: unknown, createdAtMs: number): void {
+    if (!this.ensureDbOpen()) return
+    this.db.prepare(`
+      INSERT INTO orchestration_receipts (scope, client_request_id, result, created_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(scope, client_request_id) DO NOTHING
+    `).run(scope, clientRequestId, JSON.stringify(result ?? null), createdAtMs)
+  }
+
+  /** Deletes receipts older than `maxAgeMs` (default 7 days). Called opportunistically, not on a timer. */
+  pruneExpiredOrchestrationReceipts(nowMs: number, maxAgeMs: number): number {
+    if (!this.ensureDbOpen()) return 0
+    const result = this.db.prepare(`DELETE FROM orchestration_receipts WHERE created_at < ?`).run(nowMs - maxAgeMs)
+    return result.changes
+  }
+
+  // ── task_runs ─────────────────────────────────────────────────
+  // Honest run-end classification. See src/main/orchestration/run-finalization.ts.
+
+  /** Opens a run row for a session, unless one is already open (idempotent — a duplicate "session started" signal is a no-op). */
+  openTaskRun(input: { taskId: string; sessionId: string; startedAtMs: number }): TaskRunRecord {
+    if (!this.ensureDbOpen()) throw new Error('Database not open')
+    const existing = this.getOpenTaskRunForSession(input.sessionId)
+    if (existing) return existing
+
+    const id = createId()
+    this.db.prepare(`
+      INSERT INTO task_runs (id, task_id, session_id, started_at, ended_at, end_reason)
+      VALUES (?, ?, ?, ?, NULL, NULL)
+    `).run(id, input.taskId, input.sessionId, input.startedAtMs)
+    return { id, taskId: input.taskId, sessionId: input.sessionId, startedAt: input.startedAtMs, endedAt: null, endReason: null }
+  }
+
+  /** The currently-open run for a session, if any. */
+  getOpenTaskRunForSession(sessionId: string): TaskRunRecord | undefined {
+    if (!this.ensureDbOpen()) return undefined
+    const row = this.db.prepare(`
+      SELECT * FROM task_runs WHERE session_id = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1
+    `).get(sessionId) as TaskRunRow | undefined
+    return row ? deserializeTaskRun(row) : undefined
+  }
+
+  /** Closes the open run for a session with a classified end reason. Idempotent: a session with nothing open is a no-op and returns null. */
+  closeTaskRun(sessionId: string, endedAtMs: number, endReason: string): TaskRunRecord | null {
+    if (!this.ensureDbOpen()) return null
+    const existing = this.getOpenTaskRunForSession(sessionId)
+    if (!existing) return null
+    const resolvedEndedAtMs = Math.max(endedAtMs, existing.startedAt)
+    this.db.prepare(`UPDATE task_runs SET ended_at = ?, end_reason = ? WHERE id = ?`).run(resolvedEndedAtMs, endReason, existing.id)
+    return { ...existing, endedAt: resolvedEndedAtMs, endReason }
+  }
+
+  /** Most recent run for a task (open or closed) — what the UI shows as "why it stopped". */
+  getLatestTaskRun(taskId: string): TaskRunRecord | undefined {
+    if (!this.ensureDbOpen()) return undefined
+    const row = this.db.prepare(`
+      SELECT * FROM task_runs WHERE task_id = ? ORDER BY started_at DESC LIMIT 1
+    `).get(taskId) as TaskRunRow | undefined
+    return row ? deserializeTaskRun(row) : undefined
+  }
+
+  /** Every run left open — restart-repair's candidate list (no live session can exist for any of these at cold start). */
+  getOpenTaskRuns(): TaskRunRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const rows = this.db.prepare(`SELECT * FROM task_runs WHERE ended_at IS NULL`).all() as TaskRunRow[]
+    return rows.map(deserializeTaskRun)
+  }
+
+  // ── automation_retry_counts ──────────────────────────────────
+  // Persisted replacement for task-automation-scheduler.ts's in-memory
+  // failedStarts/failedCompletions Maps, so a restart doesn't forgive a task
+  // that was already exhausting its retry budget.
+
+  getAutomationRetryCount(taskId: string, kind: string): number {
+    if (!this.ensureDbOpen()) return 0
+    const row = this.db.prepare(`SELECT attempts FROM automation_retry_counts WHERE task_id = ? AND kind = ?`).get(taskId, kind) as { attempts: number } | undefined
+    return row?.attempts ?? 0
+  }
+
+  bumpAutomationRetryCount(taskId: string, kind: string, nowMs: number): number {
+    if (!this.ensureDbOpen()) return 0
+    this.db.prepare(`
+      INSERT INTO automation_retry_counts (task_id, kind, attempts, updated_at)
+      VALUES (?, ?, 1, ?)
+      ON CONFLICT(task_id, kind) DO UPDATE SET attempts = attempts + 1, updated_at = ?
+    `).run(taskId, kind, nowMs, nowMs)
+    return this.getAutomationRetryCount(taskId, kind)
+  }
+
+  clearAutomationRetryCount(taskId: string, kind: string): void {
+    if (!this.ensureDbOpen()) return
+    this.db.prepare(`DELETE FROM automation_retry_counts WHERE task_id = ? AND kind = ?`).run(taskId, kind)
   }
 
   /**

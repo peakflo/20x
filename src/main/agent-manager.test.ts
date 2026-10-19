@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { join } from 'path'
+import Database from 'better-sqlite3'
 import { AgentManager } from './agent-manager'
 import { SessionStatus, TaskStatus } from '../shared/constants'
 import { MessagePartType, MessageRole, SessionStatusType } from './adapters/coding-agent-adapter'
@@ -168,6 +169,17 @@ function createMockDb(agentConfig: Record<string, unknown> = {}) {
     getEarliestAgentRunIntervalStart: vi.fn(() => null),
     getTasksShippedCount: vi.fn(() => 0),
     getLatestTranscriptActivityAfter: vi.fn(() => null),
+    // task_runs (honest run-end classification) — not under test here,
+    // stubbed so doSendAdapterMessage/transitionToIdle's unconditional calls
+    // don't throw. See orchestration/run-finalization.ts and its own tests
+    // for the actual classification behavior.
+    openTaskRun: vi.fn((input: { taskId: string; sessionId: string; startedAtMs: number }) => ({
+      id: 'run-1', taskId: input.taskId, sessionId: input.sessionId, startedAt: input.startedAtMs, endedAt: null, endReason: null
+    })),
+    getOpenTaskRunForSession: vi.fn(() => undefined),
+    closeTaskRun: vi.fn(() => null),
+    getLatestTaskRun: vi.fn(() => undefined),
+    getOpenTaskRuns: vi.fn(() => []),
   } as unknown as ConstructorParameters<typeof AgentManager>[0]
 }
 
@@ -1730,6 +1742,8 @@ describe('AgentManager transitionToIdle — completing without review', () => {
       // A parent is never completed while a child is unfinished, so the
       // completion path always asks for subtasks.
       getSubtasks: vi.fn(() => [] as unknown[]),
+      openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: 'task-1', sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
+      closeTaskRun: vi.fn(() => null),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
   }
 
@@ -1747,6 +1761,11 @@ describe('AgentManager transitionToIdle — completing without review', () => {
       seenMessageIds: new Set<string>(),
       seenPartIds: new Set<string>(),
       partContentLengths: new Map<string, string>(),
+      // This fixture simulates a genuinely finished turn (the agent's last
+      // visible action was a final text answer), not a turn cut short —
+      // classifyIdleEnd reads these to tell the two apart.
+      lastPartRole: 'assistant',
+      lastPartType: 'text',
     }
     ;(mgr as any).sessions.set('session-1', session)
     return { mgr, session }
@@ -1795,6 +1814,8 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
       // A parent is never completed while a child is unfinished, so the
       // completion path always asks for subtasks.
       getSubtasks: vi.fn(() => [] as unknown[]),
+      openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: 'task-1', sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
+      closeTaskRun: vi.fn(() => null),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
   }
 
@@ -2145,6 +2166,8 @@ describe('AgentManager session ID re-keying redirect', () => {
       getSecretsByIds: vi.fn(() => []),
       getSecretsWithValues: vi.fn(() => []),
       getSetting: vi.fn(() => null),
+      openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: 'task-1', sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
+      closeTaskRun: vi.fn(() => null),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 
     const mgr = new AgentManager(mockDb)
@@ -3802,8 +3825,13 @@ describe('AgentManager event-driven parent wake-up', () => {
   function buildManager(tasks: Record<string, Record<string, unknown>>, subtasks: Record<string, unknown>[]) {
     const mockDb = createMockDb({})
     Object.assign(mockDb as any, {
-      getTask: vi.fn((id: string) => tasks[id]),
+      // notifyParentOfSubtaskCompletion looks up both the parent AND the
+      // subtask that just transitioned (for the wake-up's reason/payload) —
+      // fall back to the subtasks list so a subtask id resolves too.
+      getTask: vi.fn((id: string) => tasks[id] ?? subtasks.find((s) => s.id === id)),
       getSubtasks: vi.fn(() => subtasks),
+      // TaskWakeupStore needs a real sqlite handle to create its table against.
+      db: new Database(':memory:'),
     })
     const mgr = new AgentManager(mockDb)
     vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
@@ -3819,13 +3847,17 @@ describe('AgentManager event-driven parent wake-up', () => {
       { id: 'sub-2', title: 'Child B', status: TaskStatus.Completed },
     ])
 
+    // notifyParentOfSubtaskCompletion enqueues a durable wake-up row for the
+    // specific child that just transitioned, and delivers immediately since
+    // the parent is idle. (Child B's own transition would enqueue its own row
+    // the same way — combining several pending rows into one message is
+    // covered in orchestration/task-wakeups.test.ts.)
     await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
 
     expect(wakeSpy).toHaveBeenCalledOnce()
     const [taskId, message] = wakeSpy.mock.calls[0]
     expect(taskId).toBe('parent-1')
     expect(message).toContain('Child A')
-    expect(message).toContain('Child B')
     expect(message).toContain('terminal state')
   })
 
@@ -3852,7 +3884,9 @@ describe('AgentManager event-driven parent wake-up', () => {
     const [taskId, message] = wakeSpy.mock.calls[0]
     expect(taskId).toBe('parent-1')
     expect(message).toContain('Child A')
-    expect(message).toContain('Child B')
+    // Child B (not_started) never produced a wake-up of its own, so it has no
+    // "result" to report — unlike the old implementation, the message lists
+    // only children with an actual outcome, not every sibling's current state.
     expect(message).toContain('agent_working')
   })
 
@@ -5103,6 +5137,8 @@ describe('AgentManager serverOverloaded retry on the initial turn', () => {
       getSetting: vi.fn(() => null),
       setSetting: vi.fn(),
       deleteSetting: vi.fn(),
+      openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: 'task-1', sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
+      closeTaskRun: vi.fn(() => null),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 
     const manager = new AgentManager(mockDb)

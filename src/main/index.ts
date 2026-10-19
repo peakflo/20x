@@ -38,6 +38,7 @@ import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
 import { UI_COMMAND_CHANNEL } from '../shared/ui-commands'
 import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiCommandSender, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
+import { runRestartRepair } from './orchestration/restart-repair'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
@@ -1099,6 +1100,25 @@ app.whenReady().then(async () => {
   } catch (err) {
     console.warn('[Main] Harness account check failed:', err)
   }
+
+  // Restart repair: shutdown stops every in-memory session but leaves its
+  // task's DB row exactly as it was — `agent_working` or `triaging` forever,
+  // per the orphansIgnoreTaskState note above. Must run BEFORE the automation
+  // scheduler's first pass (started later, on 'ready-to-show') so a repaired
+  // task — reset to not_started, or auto-resumed — is visible to that pass
+  // immediately instead of a tick later.
+  try {
+    const repairSummary = await runRestartRepair(db, agentManager)
+    if (repairSummary.autoResumed.length || repairSummary.needsResume.length || repairSummary.needsAttention.length || repairSummary.triagingReset.length) {
+      console.log('[Main] Restart repair:', repairSummary)
+    }
+  } catch (err) {
+    console.error('[Main] Restart repair failed:', err)
+  }
+  // Deliver every pending parent wake-up that is still valid from before this
+  // restart, then keep sweeping for parents that were busy or a send that
+  // failed. See orchestration/task-wakeups.ts.
+  agentManager.startWakeupDelivery()
   githubManager = new GitHubManager()
   gitlabManager = new GitLabManager()
   worktreeManager = new WorktreeManager(db)

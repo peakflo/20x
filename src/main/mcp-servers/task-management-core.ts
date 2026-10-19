@@ -281,6 +281,7 @@ const mastermindTools: Tool[] = [
         cron: { type: 'string', description: 'Cron expression for recurring tasks (e.g. "0 9 * * 1-5" for weekdays at 9am). Standard 5-field cron syntax: minute hour day-of-month month day-of-week.' },
         auto_start_agent: { type: 'boolean', description: 'Hand the task to its assigned agent automatically as soon as it is created or becomes due, instead of waiting for someone to press start. Set this on a recurring task so every occurrence runs by itself.' },
         auto_complete_without_review: { type: 'boolean', description: 'Complete the task automatically when its agent finishes, instead of leaving it for review. Needed for a task that must finish with no 20x window open.' },
+        client_request_id: { type: 'string', description: 'Use the same id when retrying this call (e.g. after a timeout or a dropped response) so the retry returns the original result instead of creating a duplicate task.' },
       },
       required: ['title']
     }
@@ -401,7 +402,8 @@ const mastermindTools: Tool[] = [
             },
             required: ['id', 'name', 'type']
           }
-        }
+        },
+        client_request_id: { type: 'string', description: 'Use the same id when retrying this call (e.g. after a timeout or a dropped response) so the retry returns the original result instead of creating a duplicate subtask.' }
       },
       required: ['parent_task_id', 'title']
     }
@@ -414,7 +416,8 @@ const mastermindTools: Tool[] = [
       properties: {
         task_id: { type: 'string', description: 'Task or subtask ID to start' },
         prefer_subtasks: { type: 'boolean', description: 'When task_id is a parent task, prefer starting the next eligible subtask first. Defaults to true.' },
-        allow_triage: { type: 'boolean', description: 'When task_id has no assigned agent, allow the default agent to triage+start it. Defaults to true.' }
+        allow_triage: { type: 'boolean', description: 'When task_id has no assigned agent, allow the default agent to triage+start it. Defaults to true.' },
+        client_request_id: { type: 'string', description: 'Use the same id when retrying this call (e.g. after a timeout or a dropped response) so the retry returns the original result instead of starting the task twice.' }
       },
       required: ['task_id']
     }
@@ -490,7 +493,8 @@ const mastermindTools: Tool[] = [
       type: 'object',
       properties: {
         task_id: { type: 'string', description: 'Task ID' },
-        text: { type: 'string', description: 'What to say to the agent' }
+        text: { type: 'string', description: 'What to say to the agent' },
+        client_request_id: { type: 'string', description: 'Use the same id when retrying this call (e.g. after a timeout or a dropped response) so the retry returns the original result instead of sending the message twice.' }
       },
       required: ['task_id', 'text']
     }
@@ -892,7 +896,8 @@ const subtaskTools: Tool[] = [
         description: { type: 'string', description: 'Subtask description with context and instructions' },
         agent_id: { type: 'string', description: 'Agent ID to assign (use list_agents to find available agents)' },
         skill_ids: { type: 'array', items: { type: 'string' }, description: 'Skill IDs to assign' },
-        labels: { type: 'array', items: { type: 'string' }, description: 'Labels for the subtask' }
+        labels: { type: 'array', items: { type: 'string' }, description: 'Labels for the subtask' },
+        client_request_id: { type: 'string', description: 'Use the same id when retrying this call (e.g. after a timeout or a dropped response) so the retry returns the original result instead of creating a duplicate subtask.' }
       },
       required: ['title']
     }
@@ -903,7 +908,8 @@ const subtaskTools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        task_id: { type: 'string', description: 'Sibling subtask ID to start' }
+        task_id: { type: 'string', description: 'Sibling subtask ID to start' },
+        client_request_id: { type: 'string', description: 'Use the same id when retrying this call (e.g. after a timeout or a dropped response) so the retry returns the original result instead of starting the task twice.' }
       },
       required: ['task_id']
     }
@@ -1017,7 +1023,7 @@ async function handleScopedCall(
       if (!sibIdsForStart.includes(args.task_id)) {
         return { error: 'Access denied: task is not a sibling subtask' }
       }
-      return invoke('/start_task', { task_id: args.task_id, prefer_subtasks: false })
+      return invoke('/start_task', { ...args, task_id: args.task_id, prefer_subtasks: false })
     }
 
     case 'wait_for_sibling_subtasks': {
