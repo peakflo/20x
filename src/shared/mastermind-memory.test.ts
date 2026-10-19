@@ -138,6 +138,34 @@ describe('containsLikelySecret', () => {
     expect(containsLikelySecret('Remind me to rotate the password next quarter.').found).toBe(false)
   })
 
+  // Round-2 review false positive: the old "credential assignment" pattern
+  // flagged ANY word right after "is" as a secret value, so a sentence that
+  // merely says where a credential lives tripped it just as hard as an
+  // actual leaked value would.
+  it('allows "The password is stored in 1Password" — ordinary prose, not a leaked value', () => {
+    expect(containsLikelySecret('The password is stored in 1Password.').found).toBe(false)
+  })
+
+  it('allows other plain-English words right after a credential label', () => {
+    for (const sentence of [
+      'The api_key is hidden from the UI by default.',
+      'Our secret is safe with the platform team.',
+      'The access_key is required before this script runs.'
+    ]) {
+      expect(containsLikelySecret(sentence).found).toBe(false)
+    }
+  })
+
+  it('still catches a real value right after the same labels', () => {
+    for (const sentence of [
+      'The password is Tr0ub4dor&3.',
+      'The api_key is a1b2c3d4e5f6g7h8.',
+      'The secret is correct-horse-battery-staple-9.'
+    ]) {
+      expect(containsLikelySecret(sentence).found).toBe(true)
+    }
+  })
+
   const morePatterns = [
     ['OpenAI project key (sk-proj-)', 'the key is sk-proj-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGH'],
     ['GitHub fine-grained token', 'github_pat_11ABCDEFG0abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWX'],

@@ -191,6 +191,37 @@ describe('Mastermind memory full-text search (searchMemories)', () => {
       const results = db.searchMemories('发布分支总是')
       expect(results).toHaveLength(1)
     })
+
+    // Round-2 review fix: unicode61 treats a whole contiguous CJK run as ONE
+    // token, so a true substring of a longer run used to never match via
+    // FTS MATCH — only a query equal to the ENTIRE tokenised run worked, even
+    // though a user typing a partial phrase expects it to find the memory
+    // (exactly the search experience Latin/Cyrillic queries already get at
+    // the word level). searchMemories now falls back to a LIKE substring
+    // scan when the query contains CJK text and FTS found nothing.
+    it('finds a memory by a genuine PARTIAL CJK phrase, not just the whole tokenised run', () => {
+      db.createMemory({ content: '发布分支总是 main，不是 master。', kind: 'fact' })
+
+      // "发布分支" is a real substring of the tokenised run "发布分支总是", but
+      // is not the whole run — the case that used to return zero matches.
+      const results = db.searchMemories('发布分支')
+      expect(results).toHaveLength(1)
+      expect(results[0].content).toContain('发布分支总是')
+    })
+
+    it('a partial CJK phrase that is not actually contained anywhere still finds nothing', () => {
+      db.createMemory({ content: '发布分支总是 main，不是 master。', kind: 'fact' })
+
+      const results = db.searchMemories('完全不相关', {}, { allowFallbackToList: false })
+      expect(results).toHaveLength(0)
+    })
+
+    it('a Japanese partial phrase (Katakana/Hiragana) also finds its memory via the LIKE fallback', () => {
+      db.createMemory({ content: 'デプロイは金曜日に行われます。', kind: 'procedure' })
+
+      const results = db.searchMemories('デプロイ')
+      expect(results.map((m) => m.content)).toContain('デプロイは金曜日に行われます。')
+    })
   })
 
   describe('allowFallbackToList option', () => {

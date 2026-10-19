@@ -1171,4 +1171,46 @@ describe('OpencodeAdapter', () => {
       expect(result).toEqual([])
     })
   })
+
+  describe('registerMcpServers — credential redaction in logs', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    // The memory token (and any other credential-shaped header) must never
+    // reach the main log, even though it IS sent to OpenCode over the real
+    // mcp.add call — this was the exact leak the round-2 review found
+    // (console.log(..., JSON.stringify(mcpAddConfig)) printed the raw headers).
+    it('never logs the raw memory token, while still sending it to OpenCode', async () => {
+      const adapter = new OpencodeAdapter()
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      const mockClient = {
+        mcp: {
+          add: vi.fn().mockResolvedValue({ data: { 'task-management': { status: 'connected' } } }),
+          connect: vi.fn()
+        }
+      }
+
+      await (adapter as any).registerMcpServers(mockClient, {
+        'task-management': {
+          type: 'http',
+          url: 'http://127.0.0.1:1234/mcp',
+          headers: { 'x-mastermind-memory-token': 'tok-super-secret' }
+        }
+      })
+
+      // The real OpenCode call still gets the actual token — only the log is redacted.
+      expect(mockClient.mcp.add).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            config: expect.objectContaining({ headers: { 'x-mastermind-memory-token': 'tok-super-secret' } })
+          })
+        })
+      )
+
+      const loggedText = logSpy.mock.calls.map((call) => call.join(' ')).join('\n')
+      expect(loggedText).not.toContain('tok-super-secret')
+      expect(loggedText).toContain('[redacted]')
+    })
+  })
 })
