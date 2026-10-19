@@ -90,3 +90,54 @@ Electron does not complete graceful shutdown on macOS.
 
 Optional later blocks include recording history, a step viewer, metrics, input
 mapping, test results, and a failure log. They are outside this implementation.
+
+## Task-side one-click capture
+
+With an assigned task open on the canvas, use **Record browser** beside the
+browser connection handle. This creates a browser, connects it to that task,
+and starts recording on its first `dom-ready` event. Wait for **Stop recording**
+before demonstrating. Navigate to the starting page, demonstrate, then select
+**Stop recording**. Check the saved/notification notice. Failed automatic starts
+show an error; use the panel's **Record** button to retry deliberately.
+
+The request is consumed once and excluded from persisted canvas state. Reloads,
+subsequent navigation, and app restart do not repeat it. The ordinary globe
+handle still opens a linked browser without recording; dragging it still connects
+an existing browser. Existing panels continue to use their own Record/Stop.
+
+Counting from an assigned task already open on the canvas, capture previously
+required four user stages: open/link browser, Record, demonstrate, Stop. The new
+path requires three: Record browser, demonstrate, Stop. This counts the whole
+site-specific demonstration as one stage in both paths; it excludes setup,
+authentication, workflow review, and test authorization, which are unchanged.
+The older separate Add Browser + drag-to-connect route needs an extra linking
+stage, but is not the baseline used for the reduction claim.
+
+## Handoff to workflow-builder
+
+Give the connected task the destination and workflow-creation goal before
+recording. Stop saves first and sends that task the exact recording ID and
+browser_recording_* calls. No copying files or attaching the recording again is
+needed. The agent follows its existing task instructions: read the manifest,
+read every steps page, inspect relevant snapshots, reconstruct semantic actions
+and checkpoints, then use the selected destination's workflow authoring tools.
+A typical workflow is input -> browser_task -> output. Inspect current node
+schemas/defaults; do not transfer transient @refs or assume browser cookies move
+to the workflow's separate browser session. Validate the draft and inspect actual
+action/final-page evidence when testing is authorized. Successful execution alone
+does not establish faithful replay.
+
+The desktop recording tools do not upload recordings to the workflow-builder
+extension API automatically. That API's /api/browser-recordings route accepts
+its own validated capture/image envelope, persists task attachments, and hands a
+draft request to the default agent. Its recording_get/steps/snapshot tools refer
+to that backend task, whereas browser_recording_* refer to local desktop records.
+Use the existing local task-agent MCP handoff for desktop captures; do not submit
+a local manifest alone to the extension endpoint or create a second backend task.
+
+### Review mockups
+
+The before/after mockups illustrate the capture controls and stage count; they
+are design illustrations rather than deployed-release screenshots.
+
+![Before and after browser recording flow](images/browser-recording-flow-mockups.png)

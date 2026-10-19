@@ -21,6 +21,8 @@ const active = { id: 'recording', panelId: 'panel', title: 'Portal', status: 're
 describe('browser recording controls', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    useCanvasStore.getState().panels[0].recordOnReady = undefined
+    mocks.update.mockImplementation((id, changes) => Object.assign(useCanvasStore.getState().panels.find(p => p.id === id)!, changes))
     useCanvasStore.getState().edges.splice(0)
     useCanvasStore.getState().panels.splice(1)
     mocks.status.mockResolvedValue({ recording: null })
@@ -43,9 +45,38 @@ describe('browser recording controls', () => {
 
   function mount() {
     const result = render(<BrowserPanelContent panelId="panel" />)
-    Object.assign(result.container.querySelector('webview')!, { getWebContentsId: () => 10 })
+    Object.assign(result.container.querySelector('webview')!, { getWebContentsId: () => 10, executeJavaScript: vi.fn().mockResolvedValue(null) })
     return result
   }
+
+  it('starts the linked task request on readiness exactly once across navigation', async () => {
+    const state = useCanvasStore.getState()
+    state.panels[0].recordOnReady = true
+    state.panels.push({ id: 'task-panel', type: 'task', refId: 'task-new' } as never)
+    state.edges.push({ id: 'edge', fromPanelId: 'panel', toPanelId: 'task-panel', edgeType: 'browser' })
+    const result = mount()
+    expect(mocks.start).not.toHaveBeenCalled()
+    const webview = result.container.querySelector('webview')!
+    act(() => { webview.dispatchEvent(new Event('dom-ready')) })
+    await screen.findByRole('button', { name: '■ Stop recording' })
+    expect(mocks.register).toHaveBeenCalledWith({ panelId: 'panel', webContentsId: 10, taskIds: ['task-new'] })
+    act(() => { webview.dispatchEvent(new Event('dom-ready')) })
+    expect(mocks.start).toHaveBeenCalledTimes(1)
+    expect(mocks.stop).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '■ Stop recording' }))
+    await waitFor(() => expect(mocks.notify).toHaveBeenCalledTimes(1))
+  })
+
+  it('exposes a failed automatic start and allows manual retry', async () => {
+    useCanvasStore.getState().panels[0].recordOnReady = true
+    mocks.start.mockResolvedValueOnce({ error: 'Snapshot failed.' })
+    const result = mount()
+    act(() => { result.container.querySelector('webview')!.dispatchEvent(new Event('dom-ready')) })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Snapshot failed.')
+    fireEvent.click(screen.getByRole('button', { name: '● Record' }))
+    await screen.findByRole('button', { name: '■ Stop recording' })
+    expect(mocks.start).toHaveBeenCalledTimes(2)
+  })
 
   it('saves before notification and prevents duplicate Stop calls', async () => {
     mount()

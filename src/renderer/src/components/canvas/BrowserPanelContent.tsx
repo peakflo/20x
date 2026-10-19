@@ -167,6 +167,23 @@ export function BrowserPanelContent({
     }
   }
 
+  // Consume the task-side request once the document can be captured.
+  // Repeated dom-ready events must never toggle an active recording off.
+  const startRequestedRecording = useRef<() => void>(() => {})
+  startRequestedRecording.current = () => {
+    const panel = useCanvasStore.getState().panels.find((item) => item.id === panelId)
+    if (!panel?.recordOnReady || recordingLock.current) return
+    updatePanel(panelId, { recordOnReady: undefined })
+    if (!recording) void toggleRecording()
+  }
+  useEffect(() => {
+    const webview = webviewRef.current
+    if (!webview) return
+    const ready = () => startRequestedRecording.current()
+    webview.addEventListener('dom-ready', ready)
+    return () => webview.removeEventListener('dom-ready', ready)
+  }, [panelId])
+
   // ── Bot-detection block state ───────────────────────────────
   // When a site (e.g. Xero via Akamai) blocks the embedded webview, we show
   // a banner offering to open the URL in the system browser instead.

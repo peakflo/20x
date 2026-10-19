@@ -430,7 +430,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
 
   // ── Create connected browser panel (from side handle click) ──
   const handleCreateBrowser = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.MouseEvent, recordOnReady = false) => {
       e.stopPropagation()
       e.preventDefault()
       // Place new browser panel to the right of this panel with a gap
@@ -441,6 +441,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
       const newId = addPanel({
         type: 'browser',
         title: 'Browser',
+        recordOnReady,
         x: newX,
         y: newY,
         width: DEFAULT_PANEL_WIDTH,
@@ -669,6 +670,15 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
             zIndex: 10,
           }}
         >
+          <button
+            title="Open a linked browser and start recording when ready"
+            aria-label="Record browser"
+            className="mb-2 rounded bg-orange-500/20 px-2 py-1 text-xs text-orange-300 whitespace-nowrap"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => handleCreateBrowser(e, true)}
+          >
+            ● Record browser
+          </button>
           <button
             onMouseDown={(e) => {
               e.stopPropagation()

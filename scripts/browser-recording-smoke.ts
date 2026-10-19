@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PanelBrowserBroker } from '../src/main/panel-browser-broker'
+import { AGENT_BROWSER_PARTITION } from '../src/shared/agent-browser-session'
 
 const profile = mkdtempSync(join(tmpdir(), '20x-recording-smoke-'))
 app.setPath('userData', profile)
@@ -39,12 +40,12 @@ async function run() {
   const address = server.address()
   assert(address && typeof address !== 'string')
   const base = `http://127.0.0.1:${address.port}`
-  window = new BrowserWindow({ show: true, width: 800, height: 400, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  window = new BrowserWindow({ show: true, width: 800, height: 400, webPreferences: { partition: AGENT_BROWSER_PARTITION, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
   const wc = window.webContents
   await wc.loadURL(base)
   window.focus()
   wc.focus()
-  broker.registerPanel('fixture-panel', wc.id, ['task-a', 'task-b'])
+  assert(broker.registerPanel('fixture-panel', wc.id, ['task-a', 'task-b']), 'Fixture must register in the agent browser session')
   const started = await broker.startRecording('fixture-panel', 'Local fixture')
   assert('ok' in started, JSON.stringify(started))
   const id = started.recording.id

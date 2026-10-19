@@ -41,6 +41,8 @@ export interface CanvasPanelData {
   /** URL for webpage panels */
   url?: string
   /** Browser session name (for browser panels) */
+  /** One-shot explicit capture request; never persisted across app restarts. */
+  recordOnReady?: boolean
   browserSessionId?: string
   /** WebSocket streaming port (for browser panels) */
   streamPort?: number
@@ -275,7 +277,7 @@ function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
     const { viewport, panels, edges, nextZIndex } = useCanvasStore.getState()
-    const data: CanvasPersistedState = { viewport, panels, edges, nextZIndex }
+    const data: CanvasPersistedState = { viewport, panels: panels.map((panel) => ({ ...panel, recordOnReady: undefined })), edges, nextZIndex }
     settingsApi.set(CANVAS_STORAGE_KEY, JSON.stringify(data)).catch((err) => {
       console.error('[Canvas] Failed to persist state:', err)
     })
