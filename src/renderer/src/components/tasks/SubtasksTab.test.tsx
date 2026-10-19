@@ -31,4 +31,17 @@ describe('SubtasksTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Other' }))
     expect(screen.getByText('No subtasks match this search.')).toBeInTheDocument()
   })
+
+  it('opens a subtask beside its parent without navigating the current panel', () => {
+    const onNavigateToTask = vi.fn()
+    const onOpenSubtaskInWindow = vi.fn()
+    const view = render(<SubtasksTab subtasks={subtasks} onNavigateToTask={onNavigateToTask} onOpenSubtaskInWindow={onOpenSubtaskInWindow} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Check the view in a separate window' }))
+    expect(onOpenSubtaskInWindow).toHaveBeenCalledExactlyOnceWith('review')
+    expect(onNavigateToTask).not.toHaveBeenCalled()
+
+    view.rerender(<SubtasksTab subtasks={subtasks} onNavigateToTask={onNavigateToTask} />)
+    expect(screen.queryByRole('button', { name: 'Open Check the view in a separate window' })).not.toBeInTheDocument()
+  })
 })

@@ -93,7 +93,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
 const noopFn = vi.fn()
 const noopAsync = vi.fn().mockResolvedValue(undefined)
 
-function renderWorkspace(task: WorkfloTask, agents: Agent[] = [makeAgent()]) {
+function renderWorkspace(task: WorkfloTask, agents: Agent[] = [makeAgent()], onOpenSubtaskInWindow?: (taskId: string) => void) {
   return render(
     <TaskWorkspace
       task={task}
@@ -105,6 +105,7 @@ function renderWorkspace(task: WorkfloTask, agents: Agent[] = [makeAgent()]) {
       onCompleteTask={noopFn}
       onAssignAgent={noopFn}
       onUpdateTask={noopAsync}
+      onOpenSubtaskInWindow={onOpenSubtaskInWindow}
     />
   )
 }
@@ -178,6 +179,19 @@ describe('TaskWorkspace completed artifacts', () => {
 })
 
 describe('TaskWorkspace subtasks tab', () => {
+  it('offers the canvas open action in the Subtasks tab', () => {
+    const task = makeRendererTask({ session_id: null })
+    const subtask = makeRendererTask({ id: 'child-1', title: 'Build the view', parent_task_id: task.id })
+    const onOpenSubtaskInWindow = vi.fn()
+    useTaskStore.setState({ tasks: [task, subtask] })
+
+    renderWorkspace(task, [makeAgent()], onOpenSubtaskInWindow)
+    fireEvent.click(screen.getByRole('button', { name: 'Subtasks' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open Build the view in a separate window' }))
+
+    expect(onOpenSubtaskInWindow).toHaveBeenCalledExactlyOnceWith('child-1')
+  })
+
   it('shows the right rail before an agent session starts', () => {
     const task = makeRendererTask({ session_id: null })
     const working = makeRendererTask({ id: 'working-1', title: 'Build the view', parent_task_id: task.id, status: TaskStatus.AgentWorking })

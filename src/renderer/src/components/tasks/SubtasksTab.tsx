@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowUpRight, Search } from 'lucide-react'
+import { Search, SquareArrowOutUpRight } from 'lucide-react'
 import type { WorkfloTask } from '@/types'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { cn } from '@/lib/utils'
@@ -8,9 +8,10 @@ import { filterSubtasks, SUBTASK_FILTERS, type SubtaskFilter } from '@shared/sub
 interface SubtasksTabProps {
   subtasks: WorkfloTask[]
   onNavigateToTask?: (taskId: string) => void
+  onOpenSubtaskInWindow?: (taskId: string) => void
 }
 
-export function SubtasksTab({ subtasks, onNavigateToTask }: SubtasksTabProps) {
+export function SubtasksTab({ subtasks, onNavigateToTask, onOpenSubtaskInWindow }: SubtasksTabProps) {
   const [filter, setFilter] = useState<SubtaskFilter>('all')
   const [query, setQuery] = useState('')
   const visible = filterSubtasks(subtasks, filter, query)
@@ -45,13 +46,19 @@ export function SubtasksTab({ subtasks, onNavigateToTask }: SubtasksTabProps) {
         {visible.length === 0 ? (
           <p className="px-2 py-8 text-center text-sm text-muted-foreground">No subtasks match this search.</p>
         ) : visible.map((subtask) => (
-          <button key={subtask.id} type="button" onClick={() => onNavigateToTask?.(subtask.id)} disabled={!onNavigateToTask} className="group flex w-full items-start justify-between gap-3 rounded-md px-3 py-3 text-left hover:bg-accent/50 disabled:cursor-default" aria-label={`Open subtask ${subtask.title}`}>
-            <span className="min-w-0 space-y-1.5">
-              <span className="block break-words text-sm font-medium text-foreground">{subtask.title}</span>
-              <TaskStatusBadge status={subtask.status} />
-            </span>
-            {onNavigateToTask && <ArrowUpRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" />}
-          </button>
+          <div key={subtask.id} className="flex items-start rounded-md hover:bg-accent/50">
+            <button type="button" onClick={() => onNavigateToTask?.(subtask.id)} disabled={!onNavigateToTask} className="min-w-0 flex-1 px-3 py-3 text-left disabled:cursor-default" aria-label={`Open subtask ${subtask.title}`}>
+              <span className="min-w-0 space-y-1.5">
+                <span className="block break-words text-sm font-medium text-foreground">{subtask.title}</span>
+                <TaskStatusBadge status={subtask.status} />
+              </span>
+            </button>
+            {onOpenSubtaskInWindow && (
+              <button type="button" onClick={() => onOpenSubtaskInWindow(subtask.id)} title="Open in a separate window" aria-label={`Open ${subtask.title} in a separate window`} className="mr-2 mt-2 shrink-0 rounded p-1 text-muted-foreground/50 transition-colors hover:bg-accent hover:text-foreground">
+                <SquareArrowOutUpRight className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         ))}
       </div>
     </div>

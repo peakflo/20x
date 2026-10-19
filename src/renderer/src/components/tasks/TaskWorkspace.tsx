@@ -1158,7 +1158,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
       onToggleOpen={() => setArtifactsOpen(task.id, false)}
       onToggleRail={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
       details={detailsView}
-      subtasks={<SubtasksTab subtasks={subtasks} onNavigateToTask={onNavigateToTask} />}
+      subtasks={<SubtasksTab subtasks={subtasks} onNavigateToTask={onNavigateToTask} onOpenSubtaskInWindow={onOpenSubtaskInWindow} />}
       changes={<ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} onPullRequests={handlePullRequests} />}
       output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={!isTaskClosed(task.status)} onComplete={handleCompleteTask} taskUpdatedAt={task.updated_at} />}
       className="min-w-[320px] flex-1 border-l border-border/50 pt-12"
