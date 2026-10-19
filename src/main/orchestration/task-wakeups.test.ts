@@ -130,7 +130,7 @@ describe('TaskWakeupQueue', () => {
     expect(message).toContain('child-2')
   })
 
-  it('never delivers to a completed parent', async () => {
+  it('never delivers to a completed parent, and retires the row instead of leaving it pending forever', async () => {
     ctx = makeContext({ completed: true })
     const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', 'child_ready')
     await queue.enqueueAndTryDeliver({
@@ -143,10 +143,43 @@ describe('TaskWakeupQueue', () => {
     expect(send).not.toHaveBeenCalled()
     await queue.tryDeliver('parent-1')
     expect(send).not.toHaveBeenCalled()
-    expect(store.listPending('parent-1')).toHaveLength(1)
+    // Retired, not left pending — a later reopen of the parent must not
+    // suddenly surface a stale wake-up from before it completed.
+    expect(store.listPending('parent-1')).toHaveLength(0)
   })
 
-  it('retries a failed send and records the error without dropping the wake-up', async () => {
+  it('retires pending rows the moment a parent is found to no longer exist (deleted)', async () => {
+    ctx = makeContext({ exists: false })
+    const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', 'child_ready')
+    store.enqueue(
+      { parentTaskId: 'parent-1', childTaskId: 'child-1', reason: 'child_ready', deliveryId, payload: { childTitle: 'Child', childStatus: 'ready_for_review' } },
+      now
+    )
+    await queue.tryDeliver('parent-1')
+    expect(send).not.toHaveBeenCalled()
+    expect(store.listPending('parent-1')).toHaveLength(0)
+  })
+
+  it('calls onGivenUp with the retired wake-ups when a parent is completed or gone', async () => {
+    const onGivenUp = vi.fn()
+    ctx = makeContext({ completed: true })
+    queue = new TaskWakeupQueue({ store, getDeliveryContext: () => ctx, send, onGivenUp, now: () => now })
+    const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', 'child_ready')
+    store.enqueue(
+      { parentTaskId: 'parent-1', childTaskId: 'child-1', reason: 'child_ready', deliveryId, payload: { childTitle: 'Child', childStatus: 'ready_for_review' } },
+      now
+    )
+
+    await queue.tryDeliver('parent-1')
+
+    expect(onGivenUp).toHaveBeenCalledTimes(1)
+    const [parentArg, wakeupsArg] = onGivenUp.mock.calls[0]
+    expect(parentArg).toBe('parent-1')
+    expect(wakeupsArg).toHaveLength(1)
+    expect(wakeupsArg[0].childTaskId).toBe('child-1')
+  })
+
+  it('retries a failed send and records the error without dropping the wake-up, backing off before the next attempt', async () => {
     send.mockRejectedValueOnce(new Error('network down'))
     const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', 'child_ready')
     await queue.enqueueAndTryDeliver({
@@ -162,9 +195,45 @@ describe('TaskWakeupQueue', () => {
     expect(pending[0].attempts).toBe(1)
     expect(pending[0].lastError).toContain('network down')
 
+    // Immediately retrying must NOT hammer a send that just failed — the row
+    // is still pending, but not yet due.
+    await queue.tryDeliver('parent-1')
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(store.listPending('parent-1')).toHaveLength(1)
+
+    // Once its backoff window has elapsed, the retry goes through.
+    now += 60_000
     await queue.tryDeliver('parent-1')
     expect(send).toHaveBeenCalledTimes(2)
     expect(store.listPending('parent-1')).toHaveLength(0)
+  })
+
+  it('gives up permanently after the max delivery attempts, instead of retrying forever', async () => {
+    const onGivenUp = vi.fn()
+    send.mockRejectedValue(new Error('permanently down'))
+    queue = new TaskWakeupQueue({ store, getDeliveryContext: () => ctx, send, onGivenUp, now: () => now })
+    const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', 'child_ready')
+    await queue.enqueueAndTryDeliver({
+      parentTaskId: 'parent-1',
+      childTaskId: 'child-1',
+      reason: 'child_ready',
+      deliveryId,
+      payload: { childTitle: 'Child', childStatus: 'ready_for_review' }
+    })
+
+    // Keep retrying, advancing past each exponential backoff window.
+    for (let i = 0; i < 5; i++) {
+      now += 30 * 60 * 1000 // past even the capped 30-minute backoff
+      await queue.tryDeliver('parent-1')
+    }
+
+    expect(onGivenUp).toHaveBeenCalledTimes(1)
+    // No more pending rows to retry, and no further send is attempted.
+    expect(store.listPending('parent-1')).toHaveLength(0)
+    const callsAtGiveUp = send.mock.calls.length
+    now += 30 * 60 * 1000
+    await queue.tryDeliver('parent-1')
+    expect(send.mock.calls.length).toBe(callsAtGiveUp)
   })
 
   it('a restart in the middle delivers every pending row on the first sweep', async () => {
@@ -179,5 +248,59 @@ describe('TaskWakeupQueue', () => {
     expect(send).toHaveBeenCalledTimes(1)
     expect(store.listPending('parent-1')).toHaveLength(0)
     freshQueue.stop()
+  })
+
+  it('prunes long-delivered rows from a sweep, throttled to once an hour', async () => {
+    const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', 'child_ready')
+    const enqueued = store.enqueue(
+      { parentTaskId: 'parent-1', childTaskId: 'child-1', reason: 'child_ready', deliveryId, payload: { childTitle: 'Child', childStatus: 'ready_for_review' } },
+      now
+    )
+    store.markDelivered([enqueued!.id], now)
+
+    now += 8 * 24 * 60 * 60 * 1000 // past the 7-day delivered-retention window
+    await queue.sweep()
+
+    const remaining = (store as unknown as { db: import('better-sqlite3').Database }).db
+      .prepare("SELECT COUNT(*) as n FROM task_wakeups WHERE parent_task_id = 'parent-1'").get() as { n: number }
+    expect(remaining.n).toBe(0)
+  })
+})
+
+describe('TaskWakeupStore.markObserved', () => {
+  it('marks a pending wake-up delivered without calling send, when the parent already observed it elsewhere', async () => {
+    const deliveryId = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', 'child_ready')
+    store.enqueue(
+      { parentTaskId: 'parent-1', childTaskId: 'child-1', reason: 'child_ready', deliveryId, payload: { childTitle: 'Child', childStatus: 'ready_for_review' } },
+      now
+    )
+    expect(store.listPending('parent-1')).toHaveLength(1)
+
+    const consumed = store.markObserved('parent-1', 'child-1', now)
+
+    expect(consumed).toBe(1)
+    expect(store.listPending('parent-1')).toHaveLength(0)
+    await queue.tryDeliver('parent-1')
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('is a no-op (returns 0) when there is nothing pending for that child', () => {
+    expect(store.markObserved('parent-1', 'no-such-child', now)).toBe(0)
+  })
+
+  it('on the queue, only consumes the matching child — a sibling wake-up still gets delivered normally', async () => {
+    const d1 = computeWakeupDeliveryId('parent-1', 'child-1', '2026-10-19T00:00:00.000Z', 'child_ready')
+    const d2 = computeWakeupDeliveryId('parent-1', 'child-2', '2026-10-19T00:00:00.000Z', 'child_ready')
+    store.enqueue({ parentTaskId: 'parent-1', childTaskId: 'child-1', reason: 'child_ready', deliveryId: d1, payload: { childTitle: 'Child 1', childStatus: 'ready_for_review' } }, now)
+    store.enqueue({ parentTaskId: 'parent-1', childTaskId: 'child-2', reason: 'child_ready', deliveryId: d2, payload: { childTitle: 'Child 2', childStatus: 'ready_for_review' } }, now)
+
+    queue.markObserved('parent-1', 'child-1')
+    ctx = makeContext({ subtasks: [subtask('ready_for_review', 'child-1'), subtask('ready_for_review', 'child-2')] })
+    await queue.tryDeliver('parent-1')
+
+    expect(send).toHaveBeenCalledTimes(1)
+    const message = send.mock.calls[0][1]
+    expect(message).toContain('child-2')
+    expect(message).not.toContain('child-1')
   })
 })
