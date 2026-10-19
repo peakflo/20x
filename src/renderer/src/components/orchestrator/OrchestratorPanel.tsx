@@ -23,6 +23,25 @@ interface MemorySavedToastState {
   previous?: MastermindMemory
 }
 
+/**
+ * Who actually wrote a memory, for the save toast — `source` is always
+ * derived server-side now (task-api-server.ts), so it's a real identity:
+ * `agent:<id>` (Mastermind's own session, or any other trusted agent with
+ * no task), `agent:<id>/task:<id>` (a trusted task agent), `user-stated`
+ * (Settings UI) or `imported`. The toast used to just say "Mastermind
+ * saved…" regardless of which of those actually wrote it.
+ */
+function describeMemorySource(source: string, agents: Agent[]): string {
+  if (source === 'user-stated') return 'You'
+  if (source === 'imported') return 'An import'
+  const match = /^agent:([^/]+)/.exec(source)
+  if (match) {
+    const agent = agents.find((a) => a.id === match[1])
+    return agent?.name ?? 'An agent'
+  }
+  return 'Mastermind'
+}
+
 /** Start the agent at app start, so the first sentence does not wait for it. */
 export const MASTERMIND_PREWARM_SETTING = 'mastermind_prewarm'
 
@@ -45,7 +64,10 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
   // "what you remember" block is injected into the first prompt (see
   // AgentManager.buildMastermindMemoryInjection).
   const [rememberingCount, setRememberingCount] = useState<number | null>(null)
-  const [savedToast, setSavedToast] = useState<MemorySavedToastState | null>(null)
+  // A burst of saves (e.g. "Save what I learned" proposing several memories
+  // in a row) accumulates here instead of each new one replacing the last —
+  // otherwise only the final save in a burst stayed undoable.
+  const [savedToasts, setSavedToasts] = useState<MemorySavedToastState[]>([])
   const savedToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** True once "Save what I learned" has been asked for this conversation and a second click actually clears. */
   const [pendingClearAfterLearn, setPendingClearAfterLearn] = useState(false)
@@ -77,11 +99,14 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
   // (see buildMastermindMemoryInjection's sibling route handlers in
   // task-api-server.ts /remember) — `previous` is only set then, and Undo
   // uses it to put the exact prior content back instead of just deleting.
+  // A burst of saves (e.g. "Save what I learned" proposing several at once)
+  // accumulates into the same toast instead of each one replacing the
+  // last — the whole burst stays undoable, not just whichever came last.
   useEffect(() => {
     return onMastermindMemorySaved((event) => {
-      setSavedToast(event)
+      setSavedToasts((prev) => [...prev, event])
       if (savedToastTimerRef.current) clearTimeout(savedToastTimerRef.current)
-      savedToastTimerRef.current = setTimeout(() => setSavedToast(null), MEMORY_SAVED_TOAST_MS)
+      savedToastTimerRef.current = setTimeout(() => setSavedToasts([]), MEMORY_SAVED_TOAST_MS)
     })
   }, [])
 
@@ -91,22 +116,43 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     }
   }, [])
 
-  const handleUndoMemorySave = useCallback(async () => {
-    if (!savedToast) return
-    if (savedToast.previous) {
-      await memoryApi.update(savedToast.memory.id, {
-        content: savedToast.previous.content,
-        kind: savedToast.previous.kind,
-        scope: savedToast.previous.scope,
-        importance: savedToast.previous.importance,
-        pinned: savedToast.previous.pinned
+  /** Reverts one save: restores the exact previous content (and its own source) on an update, or deletes a new memory. */
+  const undoOneMemorySave = useCallback(async (toast: MemorySavedToastState) => {
+    if (toast.previous) {
+      await memoryApi.update(toast.memory.id, {
+        content: toast.previous.content,
+        kind: toast.previous.kind,
+        scope: toast.previous.scope,
+        importance: toast.previous.importance,
+        pinned: toast.previous.pinned,
+        source: toast.previous.source
       })
     } else {
-      await memoryApi.delete(savedToast.memory.id)
+      await memoryApi.delete(toast.memory.id)
     }
+  }, [])
+
+  const handleUndoMemorySave = useCallback(async () => {
+    if (savedToasts.length !== 1) return
+    await undoOneMemorySave(savedToasts[0])
     if (savedToastTimerRef.current) clearTimeout(savedToastTimerRef.current)
-    setSavedToast(null)
-  }, [savedToast])
+    setSavedToasts([])
+  }, [savedToasts, undoOneMemorySave])
+
+  /** Undoes every save in the current burst, most recent first. */
+  const handleUndoAllMemorySaves = useCallback(async () => {
+    const toUndo = [...savedToasts].reverse()
+    if (savedToastTimerRef.current) clearTimeout(savedToastTimerRef.current)
+    setSavedToasts([])
+    for (const toast of toUndo) {
+      await undoOneMemorySave(toast)
+    }
+  }, [savedToasts, undoOneMemorySave])
+
+  const handleDismissMemorySaveToast = useCallback(() => {
+    if (savedToastTimerRef.current) clearTimeout(savedToastTimerRef.current)
+    setSavedToasts([])
+  }, [])
 
   /**
    * "Clear conversation", with the optional "Save what I learned" offer
@@ -114,8 +160,10 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
    * there is a live conversation, the first click only asks Mastermind to
    * propose memories (each proposal still goes through the normal save
    * toast + Undo above) — it does not clear yet, so nothing is lost while
-   * the agent is still replying. The button becomes "Clear conversation
-   * now" until the second click actually clears.
+   * the agent is still replying, and so it doesn't need its own
+   * confirmation. The button becomes "Clear conversation now" until the
+   * second click, which — like the direct-clear path below — actually
+   * discards the conversation and is confirmed first.
    *
    * Clearing goes through agentSessionApi.clearMastermind(), not the plain
    * stop() used elsewhere: stop() only destroys the live backend session —
@@ -125,6 +173,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
    */
   const handleClearConversation = useCallback(async () => {
     if (pendingClearAfterLearn) {
+      if (!confirm('Clear this conversation now? Mastermind starts fresh next time — this cannot be undone.')) return
       await agentSessionApi.clearMastermind()
       removeSession(MASTERMIND_SESSION_ID)
       setRememberingCount(null)
@@ -139,6 +188,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       return
     }
 
+    if (!confirm('Clear this conversation? Mastermind starts fresh next time — this cannot be undone.')) return
     await agentSessionApi.clearMastermind()
     removeSession(MASTERMIND_SESSION_ID)
     setRememberingCount(null)
@@ -304,23 +354,42 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
     // hairline, fill and shadow. It was the one panel still sitting flush and
     // square against the work.
     <div className="native-backdrop-panel relative flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-card">
-      {/* "Mastermind saved a memory" toast, with Undo */}
-      {savedToast && (
+      {/* "<source> saved a memory" toast, with Undo — groups into a single
+          "Undo all" once a burst (e.g. "Save what I learned") lands more
+          than one at a time. */}
+      {savedToasts.length === 1 && (
         <div className="absolute bottom-3 left-3 right-3 z-10 flex items-center justify-between gap-3 rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-lg">
           <span className="truncate text-popover-foreground">
             <BrainCircuit className="mr-1.5 inline h-3.5 w-3.5 text-muted-foreground" />
-            {savedToast.updated
-              ? 'Mastermind updated a memory: '
-              : savedToast.deduped
-                ? 'Mastermind merged a near-identical memory: '
-                : 'Mastermind saved a memory: '}
-            <span className="text-muted-foreground">{savedToast.memory.content}</span>
+            {describeMemorySource(savedToasts[0].memory.source, agents)}{' '}
+            {savedToasts[0].updated
+              ? 'updated a memory: '
+              : savedToasts[0].deduped
+                ? 'merged a near-identical memory: '
+                : 'saved a memory: '}
+            <span className="text-muted-foreground">{savedToasts[0].memory.content}</span>
           </span>
           <div className="flex shrink-0 items-center gap-1">
             <Button variant="ghost" size="sm" onClick={handleUndoMemorySave} className="h-6 px-2 text-xs">
               Undo
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => setSavedToast(null)} aria-label="Dismiss" className="h-6 w-6">
+            <Button variant="ghost" size="icon" onClick={handleDismissMemorySaveToast} aria-label="Dismiss" className="h-6 w-6">
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      )}
+      {savedToasts.length > 1 && (
+        <div className="absolute bottom-3 left-3 right-3 z-10 flex items-center justify-between gap-3 rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-lg">
+          <span className="truncate text-popover-foreground">
+            <BrainCircuit className="mr-1.5 inline h-3.5 w-3.5 text-muted-foreground" />
+            Saved {savedToasts.length} memories
+          </span>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={handleUndoAllMemorySaves} className="h-6 px-2 text-xs">
+              Undo all
+            </Button>
+            <Button variant="ghost" size="icon" onClick={handleDismissMemorySaveToast} aria-label="Dismiss" className="h-6 w-6">
               <X className="h-3 w-3" />
             </Button>
           </div>

@@ -15,12 +15,21 @@
  *   /mcp                                        full orchestration tool set
  *   /mcp?task=<id>&parent=<id>                  subtask set, parent + siblings only
  *   /mcp?...&artifact=<id>                      pins artifact writes to one task
- *   /mcp?...&memory=1                           adds the mastermind memory tools
+ *   /mcp?...&memoryToken=<token>                adds the mastermind memory tools
  *                                                (Mastermind sessions, or any agent
  *                                                the user marked memory-trusted)
  *
- * The parameters are an address, not a credential. The Task API server they
- * reach has no authentication either, and it listens only on 127.0.0.1.
+ * `task`/`parent`/`artifact` are an address, not a credential — the Task API
+ * server they reach has no authentication, and it listens only on
+ * 127.0.0.1. `memoryToken` is the one exception: it IS a credential (see
+ * TaskMcpScope.memoryToken and task-api-server.ts's requireMemoryToken).
+ * Memory is auto-injected into Mastermind's context on every session, so
+ * unlike the others, a caller must prove it was actually granted memory
+ * access before a /remember etc. call is allowed to do anything — the tool
+ * list alone is not enforcement, since every route here is also reachable
+ * by a plain HTTP POST that skips the tool list entirely. The token travels
+ * the same way the secret broker's does (secret-broker.ts): a random value
+ * over loopback HTTP, matching this server's existing trust model.
  *
  * Each request is handled statelessly: one transport and one Server per request.
  * That needs no session table, so a resumed agent keeps working with the same
@@ -45,7 +54,7 @@ export function parseScopeFromUrl(url: URL): TaskMcpScope {
     parentTaskId: url.searchParams.get('parent') || null,
     taskId: taskId || null,
     artifactTaskId: url.searchParams.get('artifact') || taskId || null,
-    memoryAccess: url.searchParams.get('memory') === '1'
+    memoryToken: url.searchParams.get('memoryToken') || null
   }
 }
 
@@ -55,7 +64,7 @@ export function parseScopeFromUrl(url: URL): TaskMcpScope {
  */
 export function buildTaskMcpUrl(
   port: number,
-  scope: { taskId?: string | null; parentTaskId?: string | null; artifactTaskId?: string | null; memoryAccess?: boolean } = {}
+  scope: { taskId?: string | null; parentTaskId?: string | null; artifactTaskId?: string | null; memoryToken?: string | null } = {}
 ): string {
   const params = new URLSearchParams()
   if (scope.taskId) params.set('task', scope.taskId)
@@ -64,7 +73,7 @@ export function buildTaskMcpUrl(
   if (scope.artifactTaskId && scope.artifactTaskId !== scope.taskId) {
     params.set('artifact', scope.artifactTaskId)
   }
-  if (scope.memoryAccess) params.set('memory', '1')
+  if (scope.memoryToken) params.set('memoryToken', scope.memoryToken)
   const query = params.toString()
   return `http://127.0.0.1:${port}${TASK_MCP_PATH}${query ? `?${query}` : ''}`
 }
