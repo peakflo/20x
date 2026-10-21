@@ -58,6 +58,7 @@ import { listTaskArtifactEntries, readTaskArtifact, resolveTaskArtifactFilePath,
 import { renderTaskScadArtifact } from './scad-preview'
 import { readScadAttachment, renderScadAttachment, saveScadAttachment } from './scad-attachments'
 import { writeArtifactFileToClipboard } from './artifact-clipboard'
+import { writeClipboardAttachment, removeStagedClipboardFile } from './clipboard-attachments'
 import { ArtifactClipboardMode, type ArtifactCopyFileResult } from '../shared/artifacts'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { resolveTerminalCwd } from './terminal-cwd'
@@ -93,6 +94,10 @@ const MIME_MAP: Record<string, string> = {
 
 function getMimeType(filename: string): string {
   return MIME_MAP[extname(filename).toLowerCase()] || 'application/octet-stream'
+}
+
+function clipboardStagingDir(): string {
+  return join(app.getPath('temp'), '20x-clipboard-attachments')
 }
 
 const desktopBackdropStates = new WeakMap<BrowserWindow, { enabled: boolean }>()
@@ -351,6 +356,8 @@ export function registerIpcHandlers(
       const destPath = join(dir, `${id}-${filename}`)
 
       copyFileSync(filePath, destPath)
+      // Pasted screenshots are staged in a temp dir; drop the copy once saved.
+      removeStagedClipboardFile(clipboardStagingDir(), filePath)
 
       return {
         id,
@@ -361,6 +368,12 @@ export function registerIpcHandlers(
       }
     }
   )
+
+  // Pasted clipboard data without a file path (e.g. screenshots) is staged on
+  // disk so it can flow through the same path-based pipeline as picked files.
+  ipcMain.handle('attachments:stageClipboardFile', (_, filename: string, data: Uint8Array): string => {
+    return writeClipboardAttachment(clipboardStagingDir(), filename, data)
+  })
 
   ipcMain.handle('attachments:remove', (_, taskId: string, attachmentId: string) => {
     const dir = db.getAttachmentsDir(taskId)

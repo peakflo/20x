@@ -357,6 +357,10 @@ export const attachmentApi = {
     return window.electronAPI.attachments.save(taskId, filePath)
   },
 
+  stageClipboardFile: (filename: string, data: Uint8Array): Promise<string> => {
+    return window.electronAPI.attachments.stageClipboardFile(filename, data)
+  },
+
   remove: (taskId: string, attachmentId: string): Promise<void> => {
     return window.electronAPI.attachments.remove(taskId, attachmentId)
   },

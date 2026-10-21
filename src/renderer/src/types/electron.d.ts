@@ -328,6 +328,8 @@ interface ElectronAPI {
     saveScad: (taskId: string, attachmentId: string, content: string, expectedContent: string) => Promise<void>
     renderScad: (taskId: string, attachmentId: string) => Promise<string>
     pick: () => Promise<string[]>
+    /** Write pasted clipboard bytes (no on-disk path) to a temp file; returns its path. */
+    stageClipboardFile: (filename: string, data: Uint8Array) => Promise<string>
     save: (taskId: string, filePath: string) => Promise<FileAttachment>
     remove: (taskId: string, attachmentId: string) => Promise<void>
     open: (taskId: string, attachmentId: string) => Promise<void>

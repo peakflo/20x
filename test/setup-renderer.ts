@@ -88,6 +88,7 @@ const mockElectronAPI = {
   },
   attachments: {
     pick: vi.fn().mockResolvedValue([]),
+    stageClipboardFile: vi.fn().mockResolvedValue('/tmp/pasted-file'),
     save: vi.fn().mockResolvedValue({}),
     remove: vi.fn().mockResolvedValue(undefined),
     open: vi.fn().mockResolvedValue(undefined)

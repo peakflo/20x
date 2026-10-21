@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { AgentTranscriptPanel } from './AgentTranscriptPanel'
 import { SessionStatus } from '@/stores/agent-store'
+import { onShortcutFeedback } from '@/lib/keyboard-shortcuts'
 import { useArtifactStore } from '@/stores/artifact-store'
 import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
 
@@ -150,6 +151,71 @@ describe('AgentTranscriptPanel drag and drop attachments', () => {
         }
       ]
     })
+  })
+})
+
+describe('AgentTranscriptPanel clipboard paste attachments', () => {
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  function pasteData(files: File[], text = '') {
+    return {
+      files,
+      items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
+      types: files.length ? ['Files'] : ['text/plain'],
+      getData: (type: string) => (type === 'text/plain' ? text : '')
+    }
+  }
+
+  function renderComposer(onAddAttachmentPaths = vi.fn().mockResolvedValue([
+    { id: 'att-shot', filename: 'pasted-image.png', size: 2048, mime_type: 'image/png' }
+  ])) {
+    Object.assign(window, {
+      electronAPI: { ...window.electronAPI, webUtils: { getPathForFile: vi.fn(() => '') } }
+    })
+    render(
+      <AgentTranscriptPanel
+        messages={[]}
+        status={SessionStatus.IDLE}
+        onStop={() => undefined}
+        onSend={vi.fn()}
+        onAddAttachmentPaths={onAddAttachmentPaths}
+      />
+    )
+    return { onAddAttachmentPaths, textarea: screen.getByPlaceholderText('Write a message...') }
+  }
+
+  it('stages a pasted screenshot and shows it as a pending attachment chip', async () => {
+    const { onAddAttachmentPaths, textarea } = renderComposer()
+    const stage = vi.mocked(window.electronAPI.attachments.stageClipboardFile)
+    stage.mockResolvedValue('/tmp/staged/pasted-image.png')
+
+    const shot = new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' })
+    const notPrevented = fireEvent.paste(textarea, { clipboardData: pasteData([shot]) })
+
+    expect(notPrevented).toBe(false)
+    await waitFor(() => expect(onAddAttachmentPaths).toHaveBeenCalledWith(['/tmp/staged/pasted-image.png']))
+    expect(stage).toHaveBeenCalledWith(expect.stringMatching(/^pasted-image-\d{8}-\d{6}\.png$/), expect.any(Uint8Array))
+    expect(await screen.findByText('pasted-image.png')).toBeInTheDocument()
+  })
+
+  it('leaves text pastes to the textarea default behavior', () => {
+    const { onAddAttachmentPaths, textarea } = renderComposer()
+    const notPrevented = fireEvent.paste(textarea, { clipboardData: pasteData([], 'line 1\nline 2') })
+    expect(notPrevented).toBe(true)
+    expect(onAddAttachmentPaths).not.toHaveBeenCalled()
+  })
+
+  it('reports a failed paste instead of dropping it silently', async () => {
+    const feedback = vi.fn()
+    const unsubscribe = onShortcutFeedback(feedback)
+    const { textarea } = renderComposer(vi.fn().mockRejectedValue(new Error('disk full')))
+    const shot = new File([new Uint8Array([1])], 'image.png', { type: 'image/png' })
+    fireEvent.paste(textarea, { clipboardData: pasteData([shot]) })
+    await waitFor(() => expect(feedback).toHaveBeenCalledWith({ message: expect.stringContaining('disk full'), isError: true }))
+    unsubscribe()
   })
 })
 

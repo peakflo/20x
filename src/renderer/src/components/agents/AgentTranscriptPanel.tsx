@@ -16,6 +16,7 @@ import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
 import { SpeakMessageButton } from '@/components/voice/SpeakMessageButton'
 import { MASTERMIND_COMPOSER_KEY, registerComposer } from '@/lib/voice-dictation-target'
 import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
+import { useClipboardAttachmentPaste } from '@/hooks/use-clipboard-attachment-paste'
 import { InlineHtmlRender } from '@/components/artifacts/InlineHtmlRender'
 import { findMessageArtifact } from '@/components/artifacts/find-message-artifact'
 import { htmlRenderFileName } from '@shared/html-render'
@@ -1251,6 +1252,10 @@ export function AgentTranscriptPanel({
     setPendingAttachments((prev) => mergeAttachments(prev, added))
   }
 
+  // Cmd/Ctrl+V with a screenshot or copied files attaches them; plain text
+  // pastes (including multi-line text) keep the textarea's default behavior.
+  const handleComposerPaste = useClipboardAttachmentPaste(onAddAttachmentPaths ? handleAddAttachmentPaths : undefined)
+
   const handleRemoveAttachment = (id: string) => {
     setPendingAttachments((prev) => prev.filter((att) => att.id !== id))
   }
@@ -1585,6 +1590,7 @@ export function AgentTranscriptPanel({
                       handleSend()
                     }
                   }}
+                  onPaste={handleComposerPaste}
                   onInput={(event) => { autoResize(); setInputHasValue(!!event.currentTarget.value.trim()) }}
                   onChange={(event) => setInputHasValue(!!event.currentTarget.value.trim())}
                 />

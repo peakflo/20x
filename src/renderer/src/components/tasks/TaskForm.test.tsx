@@ -181,3 +181,48 @@ describe('TaskForm – auto-start / auto-complete toggles', () => {
     expect(submitted.auto_complete_without_review).toBe(false)
   })
 })
+
+describe('TaskForm – paste to attach', () => {
+  function screenshotClipboard() {
+    const shot = new File([new Uint8Array([1, 2, 3])], 'image.png', { type: 'image/png' })
+    return {
+      files: [shot],
+      items: [{ kind: 'file', type: 'image/png', getAsFile: () => shot }],
+      getData: () => ''
+    }
+  }
+
+  afterEach(() => vi.clearAllMocks())
+
+  it('adds a screenshot pasted into the description as a pending file of a new task', async () => {
+    vi.mocked(window.electronAPI.attachments.stageClipboardFile).mockResolvedValue('/tmp/staged/pasted-image-20261021-091530.png')
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(<TaskForm onSubmit={onSubmit} onCancel={vi.fn()} />)
+
+    const description = screen.getByPlaceholderText('Add details, context, or notes...')
+    expect(fireEvent.paste(description, { clipboardData: screenshotClipboard() })).toBe(false)
+    expect(await screen.findByText('pasted-image-20261021-091530.png')).toBeDefined()
+
+    fireEvent.change(screen.getByPlaceholderText('What needs to be done?'), { target: { value: 'Bug' } })
+    fireEvent.click(screen.getByText('Create Task'))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+    expect(onSubmit.mock.calls[0][0]._pendingFiles).toEqual([
+      expect.objectContaining({ filename: 'pasted-image-20261021-091530.png', sourcePath: '/tmp/staged/pasted-image-20261021-091530.png' })
+    ])
+  })
+
+  it('saves pasted files straight to an existing task and keeps text paste untouched', async () => {
+    vi.mocked(window.electronAPI.attachments.stageClipboardFile).mockResolvedValue('/tmp/staged/shot.png')
+    vi.mocked(window.electronAPI.attachments.save).mockResolvedValue({
+      id: 'a1', filename: 'shot.png', size: 3, mime_type: 'image/png', added_at: '2026-10-21T00:00:00Z'
+    })
+    render(<TaskForm task={makeTask()} onSubmit={vi.fn()} onCancel={vi.fn()} />)
+
+    const title = screen.getByPlaceholderText('What needs to be done?')
+    expect(fireEvent.paste(title, { clipboardData: { files: [], items: [], getData: () => 'plain text' } })).toBe(true)
+
+    fireEvent.paste(title, { clipboardData: screenshotClipboard() })
+    await waitFor(() => expect(window.electronAPI.attachments.save).toHaveBeenCalledWith('task-1', '/tmp/staged/shot.png'))
+    expect(await screen.findByText('shot.png')).toBeDefined()
+  })
+})

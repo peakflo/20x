@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect, type RefObject } from 'react'
 import { Paperclip, X, FileText, Download } from 'lucide-react'
 import { attachmentApi } from '@/lib/ipc-client'
+import { useClipboardAttachmentPaste } from '@/hooks/use-clipboard-attachment-paste'
 import { ScadAttachmentEditor } from '@/components/artifacts/viewers/ScadAttachmentEditor'
 import type { FileAttachment } from '@/types'
 
@@ -18,6 +19,12 @@ interface TaskAttachmentsProps {
   readOnly?: boolean
   pendingFiles?: PendingFile[]
   onPendingChange?: (files: PendingFile[]) => void
+  /**
+   * Element whose `paste` events (e.g. the surrounding form or task view) are
+   * checked for pasted files/screenshots, which are then attached here. Text
+   * pastes are untouched.
+   */
+  pasteTargetRef?: RefObject<HTMLElement | null>
 }
 
 function formatFileSize(bytes: number): string {
@@ -33,7 +40,8 @@ export function TaskAttachments({
   taskId,
   readOnly = false,
   pendingFiles = [],
-  onPendingChange
+  onPendingChange,
+  pasteTargetRef
 }: TaskAttachmentsProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [openScad, setOpenScad] = useState<FileAttachment | null>(null)
@@ -52,7 +60,7 @@ export function TaskAttachments({
       } else {
         const pending: PendingFile[] = filePaths.map((fp) => ({
           id: crypto.randomUUID(),
-          filename: fp.split('/').pop() || fp.split('\\').pop() || fp,
+          filename: fp.split(/[\\/]/).pop() || fp,
           size: 0,
           sourcePath: fp
         }))
@@ -61,6 +69,15 @@ export function TaskAttachments({
     },
     [taskId, items, onChange, pendingFiles, onPendingChange]
   )
+
+  const handlePaste = useClipboardAttachmentPaste(readOnly ? undefined : processFilePaths)
+
+  useEffect(() => {
+    const target = pasteTargetRef?.current
+    if (!target) return
+    target.addEventListener('paste', handlePaste)
+    return () => target.removeEventListener('paste', handlePaste)
+  }, [pasteTargetRef, handlePaste])
 
   const handleAdd = async () => {
     const filePaths = await attachmentApi.pick()
@@ -138,6 +155,7 @@ export function TaskAttachments({
       onDragEnter={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      onPaste={pasteTargetRef ? undefined : handlePaste}
     >
       {isDragging && (
         <div className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-primary/5 pointer-events-none">

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -53,6 +53,8 @@ export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
 
   // Collapsible "Additional fields" — collapsed by default, auto-expands on edit with values
   const [showMore, setShowMore] = useState(false)
+  // Pasting a screenshot/file anywhere in the form (title, description…) attaches it.
+  const formRef = useRef<HTMLFormElement>(null)
 
   useEffect(() => {
     if (task) {
@@ -129,7 +131,7 @@ export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
+    <form ref={formRef} onSubmit={handleSubmit} className="space-y-5">
       <div className="space-y-2">
         <Label htmlFor="title">Title</Label>
         <Input
@@ -160,6 +162,7 @@ export function TaskForm({ task, prefill, onSubmit, onCancel }: TaskFormProps) {
           taskId={task?.id ?? null}
           pendingFiles={pendingFiles}
           onPendingChange={setPendingFiles}
+          pasteTargetRef={formRef}
         />
       </div>
 

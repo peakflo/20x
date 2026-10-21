@@ -77,6 +77,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveScad: (taskId: string, attachmentId: string, content: string, expectedContent: string): Promise<void> => ipcRenderer.invoke('attachments:saveScad', taskId, attachmentId, content, expectedContent),
     renderScad: (taskId: string, attachmentId: string): Promise<string> => ipcRenderer.invoke('attachments:renderScad', taskId, attachmentId),
     pick: (): Promise<string[]> => ipcRenderer.invoke('attachments:pick'),
+    stageClipboardFile: (filename: string, data: Uint8Array): Promise<string> =>
+      ipcRenderer.invoke('attachments:stageClipboardFile', filename, data),
     save: (taskId: string, filePath: string): Promise<unknown> =>
       ipcRenderer.invoke('attachments:save', taskId, filePath),
     remove: (taskId: string, attachmentId: string): Promise<void> =>

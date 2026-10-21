@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { Pencil, Trash2, Calendar, User, Tag, Clock, Bot, Play, History, GitBranch, Plus, X, BookOpen, AlarmClockOff, BellRing, Folder, Repeat, Star, Sparkles, ListTree, ArrowLeft, ChevronRight, ChevronDown, GripVertical, Layers, Settings2, AlertCircle, SquareArrowOutUpRight, Terminal } from 'lucide-react'
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
@@ -411,6 +411,9 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
   const openTaskOnCanvas = useUIStore((s) => s.openTaskOnCanvas)
   const runDuration = useTaskRunDurations([task.id])[task.id]
   const isActive = !isTaskClosed(task.status)
+  // Pasting a screenshot/file anywhere in the task view (e.g. while editing the
+  // description) attaches it to the task.
+  const pasteTargetRef = useRef<HTMLDivElement>(null)
 
   // Ensure skills are loaded for badge display
   useEffect(() => {
@@ -427,7 +430,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div ref={pasteTargetRef} className="flex flex-col h-full">
       {displayMode === 'full' && (
       <div className="flex items-center justify-between border-b border-border/60 px-6 py-4 shrink-0">
         <div className="flex items-center gap-2.5">
@@ -792,6 +795,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
               items={task.attachments}
               onChange={onUpdateAttachments}
               taskId={task.id}
+              pasteTargetRef={pasteTargetRef}
             />
           </div>
 
