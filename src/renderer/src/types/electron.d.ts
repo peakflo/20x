@@ -19,6 +19,10 @@ import type {
   Secret,
   CreateSecretDTO,
   UpdateSecretDTO,
+  MastermindMemory,
+  CreateMemoryDTO,
+  UpdateMemoryDTO,
+  ListMemoriesFilterDTO,
   TaskSource,
   CreateTaskSourceDTO,
   UpdateTaskSourceDTO,
@@ -306,6 +310,7 @@ interface ElectronAPI {
     abort: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stopByTaskId: (taskId: string) => Promise<AgentSessionSuccessResult & { sessionId: string | null }>
+    clearMastermind: () => Promise<AgentSessionSuccessResult>
     send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[]) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
     sendByTaskId: (taskId: string, message: string, attachments?: AgentMessageAttachment[]) => Promise<AgentSessionSuccessResult & { sessionId: string | null; newSessionId?: string }>
     approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string) => Promise<AgentSessionSuccessResult>
@@ -407,6 +412,16 @@ interface ElectronAPI {
     create: (data: CreateSecretDTO) => Promise<Secret>
     update: (id: string, data: UpdateSecretDTO) => Promise<Secret | undefined>
     delete: (id: string) => Promise<boolean>
+  }
+  memories: {
+    list: (filter?: ListMemoriesFilterDTO) => Promise<MastermindMemory[]>
+    get: (id: string) => Promise<MastermindMemory | undefined>
+    create: (data: CreateMemoryDTO) => Promise<MastermindMemory>
+    update: (id: string, data: UpdateMemoryDTO) => Promise<MastermindMemory | undefined>
+    delete: (id: string) => Promise<boolean>
+    clearAll: (scope?: string) => Promise<number>
+    exportToFile: () => Promise<{ saved: boolean; filePath?: string }>
+    importFromFile: () => Promise<{ imported: number; skipped: number; duplicates: number; warning?: string } | { canceled: true } | { error: string }>
   }
   deps: {
     check: () => Promise<DepsStatus>
@@ -586,6 +601,9 @@ interface ElectronAPI {
   onUsageRecorded: (callback: (records: import('@shared/usage').TokenUsageRecord[]) => void) => () => void
   onAgentIncompatibleSession: (callback: (event: { taskId: string; agentId: string; error: string }) => void) => () => void
   onTaskUpdated: (callback: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => () => void
+  onMastermindMemoryContext: (callback: (event: { count: number; ids: string[] }) => void) => () => void
+  onMastermindMemorySaved: (callback: (event: { memory: MastermindMemory; deduped: boolean; updated: boolean; previous?: MastermindMemory }) => void) => () => void
+  onMastermindMemoryDeleted: (callback: (event: { id: string }) => void) => () => void
   onTaskSourceActionFailed: (callback: (event: { taskId: string; taskTitle: string; error: string }) => void) => () => void
   onTaskCreated: (callback: (event: { task: WorkfloTask }) => void) => () => void
   onTaskDeleted: (callback: (event: { taskId: string }) => void) => () => void

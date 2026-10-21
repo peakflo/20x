@@ -176,6 +176,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:stop', sessionId),
     stopByTaskId: (taskId: string): Promise<{ success: boolean; sessionId: string | null }> =>
       ipcRenderer.invoke('agentSession:stopByTaskId', taskId),
+    clearMastermind: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('agentSession:clearMastermind'),
     send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>): Promise<{ success: boolean; newSessionId?: string }> =>
       ipcRenderer.invoke('agentSession:send', sessionId, message, taskId, agentId, attachments),
     sendByTaskId: (taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>): Promise<{ success: boolean; sessionId: string | null; newSessionId?: string }> =>
@@ -299,6 +301,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('agent:incompatible-session', handler)
     return () => ipcRenderer.removeListener('agent:incompatible-session', handler)
   },
+  onMastermindMemoryContext: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('mastermind:memory-context', handler)
+    return () => ipcRenderer.removeListener('mastermind:memory-context', handler)
+  },
+  onMastermindMemorySaved: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('mastermind:memory-saved', handler)
+    return () => ipcRenderer.removeListener('mastermind:memory-saved', handler)
+  },
+  onMastermindMemoryDeleted: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('mastermind:memory-deleted', handler)
+    return () => ipcRenderer.removeListener('mastermind:memory-deleted', handler)
+  },
   onTaskUpdated: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('task:updated', handler)
@@ -400,6 +417,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     update: (id: string, data: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('secrets:update', id, data),
     delete: (id: string): Promise<boolean> => ipcRenderer.invoke('secrets:delete', id)
+  },
+  memories: {
+    list: (filter?: Record<string, unknown>): Promise<unknown[]> => ipcRenderer.invoke('memories:list', filter),
+    get: (id: string): Promise<unknown> => ipcRenderer.invoke('memories:get', id),
+    create: (data: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('memories:create', data),
+    update: (id: string, data: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('memories:update', id, data),
+    delete: (id: string): Promise<boolean> => ipcRenderer.invoke('memories:delete', id),
+    clearAll: (scope?: string): Promise<number> => ipcRenderer.invoke('memories:clearAll', scope),
+    exportToFile: (): Promise<{ saved: boolean; filePath?: string }> => ipcRenderer.invoke('memories:exportToFile'),
+    importFromFile: (): Promise<{ imported: number; skipped: number; duplicates: number; warning?: string } | { canceled: true } | { error: string }> =>
+      ipcRenderer.invoke('memories:importFromFile')
   },
   deps: {
     check: (): Promise<Record<string, { installed: boolean; version: string | null }>> =>

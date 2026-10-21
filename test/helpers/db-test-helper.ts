@@ -298,6 +298,40 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     );
     CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_started ON app_focus_intervals(started_at_ms);
     CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_ended ON app_focus_intervals(ended_at_ms);
+
+    CREATE TABLE IF NOT EXISTS mastermind_memories (
+      id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL DEFAULT 'global',
+      kind TEXT NOT NULL,
+      content TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'user-stated',
+      importance INTEGER NOT NULL DEFAULT 3,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_used_at TEXT,
+      expires_at TEXT,
+      pinned INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_mastermind_memories_scope ON mastermind_memories(scope);
+    CREATE INDEX IF NOT EXISTS idx_mastermind_memories_kind ON mastermind_memories(kind);
+    CREATE INDEX IF NOT EXISTS idx_mastermind_memories_pinned ON mastermind_memories(pinned);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS mastermind_memories_fts USING fts5(
+      content,
+      content='mastermind_memories',
+      content_rowid='rowid',
+      tokenize='porter unicode61 remove_diacritics 2'
+    );
+    CREATE TRIGGER IF NOT EXISTS mastermind_memories_fts_insert AFTER INSERT ON mastermind_memories BEGIN
+      INSERT INTO mastermind_memories_fts(rowid, content) VALUES (new.rowid, new.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS mastermind_memories_fts_update AFTER UPDATE OF content ON mastermind_memories BEGIN
+      INSERT INTO mastermind_memories_fts(mastermind_memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+      INSERT INTO mastermind_memories_fts(rowid, content) VALUES (new.rowid, new.content);
+    END;
+    CREATE TRIGGER IF NOT EXISTS mastermind_memories_fts_delete AFTER DELETE ON mastermind_memories BEGIN
+      INSERT INTO mastermind_memories_fts(mastermind_memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+    END;
   `)
 
   const manager = new DatabaseManager()

@@ -158,6 +158,16 @@ const mockElectronAPI = {
     update: vi.fn().mockResolvedValue({}),
     delete: vi.fn().mockResolvedValue(true)
   },
+  memories: {
+    list: vi.fn().mockResolvedValue([]),
+    get: vi.fn().mockResolvedValue(undefined),
+    create: vi.fn().mockResolvedValue({}),
+    update: vi.fn().mockResolvedValue({}),
+    delete: vi.fn().mockResolvedValue(true),
+    clearAll: vi.fn().mockResolvedValue(0),
+    exportToFile: vi.fn().mockResolvedValue({ saved: false }),
+    importFromFile: vi.fn().mockResolvedValue({ canceled: true })
+  },
   deps: {
     check: vi.fn().mockResolvedValue({ gh: false, opencode: false })
   },
@@ -200,6 +210,15 @@ const mockElectronAPI = {
   }),
   onTaskUpdated: vi.fn((cb: (event: { taskId: string; updates: Partial<WorkfloTask> }) => void) => {
     eventCallbacks.onTaskUpdated = cb
+    return vi.fn()
+  }),
+  onMastermindMemoryContext: vi.fn((_cb: (event: { count: number; ids: string[] }) => void) => {
+    return vi.fn()
+  }),
+  onMastermindMemorySaved: vi.fn((_cb: (event: unknown) => void) => {
+    return vi.fn()
+  }),
+  onMastermindMemoryDeleted: vi.fn((_cb: (event: { id: string }) => void) => {
     return vi.fn()
   }),
   onWorktreeProgress: vi.fn((cb: (event: WorktreeProgressEvent) => void) => {
