@@ -15,6 +15,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+
       - name: Get version and create tag
         run: |
           VERSION="v$(node -p "require('./package.json').version")"

@@ -160,7 +160,7 @@ Open a parent task and its subtasks as linked panels. Keep an embedded browser b
 
 ### Prerequisites
 
-- **Node.js** >= 22
+- **Node.js** >= 22.23.4 (22.x)
 - **pnpm** >= 9
 - **Git** (for worktree features)
 - **GitHub CLI** (optional, for GitHub repo features)

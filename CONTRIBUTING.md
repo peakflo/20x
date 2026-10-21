@@ -4,7 +4,7 @@ Thanks for your interest in contributing! Here's how to get started.
 
 ## Prerequisites
 
-- **Node.js** >= 22
+- **Node.js** >= 22.23.4 (22.x)
 - **pnpm** >= 9
 - **Git**
 
