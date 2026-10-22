@@ -2580,6 +2580,66 @@ describe('syncAttachmentsToWorkspace', () => {
   })
 })
 
+describe('syncMessageAttachmentsToWorkspace', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  /**
+   * Mastermind has no task row, so `syncAttachmentsToWorkspace` finds nothing.
+   * A pasted screenshot must still reach the agent's workspace.
+   */
+  it('copies message attachments for a session without a task row', () => {
+    const getAttachmentsDir = vi.fn(() => '/data/attachments/mastermind-session')
+    const mockDb = {
+      ...createMockDb(),
+      getTask: vi.fn(() => undefined),
+      getAttachmentsDir,
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+    const mgr = new AgentManager(mockDb)
+
+    mockedExistsSync.mockImplementation((path: any) => String(path).includes('att-1-pasted-image-20261022-101500.png'))
+
+    ;(mgr as any).syncMessageAttachmentsToWorkspace('mastermind-session', '/tmp/ws', [
+      { id: 'att-1', filename: 'pasted-image-20261022-101500.png', size: 2048, mime_type: 'image/png' },
+    ])
+
+    expect(getAttachmentsDir).toHaveBeenCalledWith('mastermind-session')
+    expect(mockedMkdirSync).toHaveBeenCalledWith(p('/tmp/ws', 'attachments'), { recursive: true })
+    expect(mockedCopyFileSync).toHaveBeenCalledWith(
+      p('/data/attachments/mastermind-session', 'att-1-pasted-image-20261022-101500.png'),
+      p('/tmp/ws', 'attachments', 'pasted-image-20261022-101500.png')
+    )
+  })
+
+  it('skips refs whose id or filename is not a plain file name', () => {
+    const mockDb = {
+      ...createMockDb(),
+      getAttachmentsDir: vi.fn(() => '/data/attachments/mastermind-session'),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+    const mgr = new AgentManager(mockDb)
+    mockedExistsSync.mockReturnValue(true)
+
+    ;(mgr as any).syncMessageAttachmentsToWorkspace('mastermind-session', '/tmp/ws', [
+      { id: 'att-1', filename: '../../escape.png', size: 1, mime_type: 'image/png' },
+      { id: '../att-2', filename: 'ok.png', size: 1, mime_type: 'image/png' },
+      { id: 'att-3', filename: '..', size: 1, mime_type: 'image/png' },
+      { id: 'att-4', filename: 'sub\\dir.png', size: 1, mime_type: 'image/png' },
+    ])
+
+    expect(mockedCopyFileSync).not.toHaveBeenCalled()
+  })
+
+  it('does nothing without attachments', () => {
+    const getAttachmentsDir = vi.fn()
+    const mgr = new AgentManager({ ...createMockDb(), getAttachmentsDir } as unknown as ConstructorParameters<typeof AgentManager>[0])
+    ;(mgr as any).syncMessageAttachmentsToWorkspace('mastermind-session', '/tmp/ws', undefined)
+    ;(mgr as any).syncMessageAttachmentsToWorkspace('mastermind-session', '/tmp/ws', [])
+    expect(getAttachmentsDir).not.toHaveBeenCalled()
+    expect(mockedCopyFileSync).not.toHaveBeenCalled()
+  })
+})
+
 describe('buildMessageWithAttachmentContext', () => {
   beforeEach(() => {
     vi.clearAllMocks()
