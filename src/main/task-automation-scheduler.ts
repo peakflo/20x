@@ -39,14 +39,13 @@ export class TaskAutomationScheduler {
 
   /** Tasks whose start/complete is in flight — prevents duplicate sessions across overlapping ticks. */
   private inFlight: Set<string> = new Set()
-  /** Tasks whose auto-start threw, with the attempt count, so a broken task can't be retried for ever. */
-  private failedStarts: Map<string, number> = new Map()
   /**
-   * Same idea for completion. A task whose source system refuses the close is
-   * put back into review by design — without this counter the sweep would call
-   * that failing upstream API again every single tick, for ever.
+   * Retry counters for auto-start ('start') and auto-complete ('complete')
+   * attempts, persisted in `automation_retry_counts` (see database.ts) so a
+   * restart doesn't forgive a task that was already exhausting its retry
+   * budget — a broken task that throws on every attempt would otherwise get
+   * MAX_START_ATTEMPTS fresh tries after every single restart, for ever.
    */
-  private failedCompletions: Map<string, number> = new Map()
   private readonly MAX_START_ATTEMPTS = 3
   private readonly MAX_COMPLETE_ATTEMPTS = 3
 
@@ -128,10 +127,9 @@ export class TaskAutomationScheduler {
       try {
         const result = await this.agentManager.startTask(task.id)
         console.log(`[TaskAutomation] Auto-started "${task.title}" (${task.id}): ${result.action}`)
-        this.failedStarts.delete(task.id)
+        this.dbManager.clearAutomationRetryCount(task.id, 'start')
       } catch (err) {
-        const attempts = (this.failedStarts.get(task.id) ?? 0) + 1
-        this.failedStarts.set(task.id, attempts)
+        const attempts = this.dbManager.bumpAutomationRetryCount(task.id, 'start', Date.now())
         console.error(
           `[TaskAutomation] Failed to auto-start task ${task.id} (attempt ${attempts}/${this.MAX_START_ATTEMPTS}):`,
           err
@@ -181,7 +179,7 @@ export class TaskAutomationScheduler {
     }
 
     return candidateIds
-      .filter((id) => (this.failedStarts.get(id) ?? 0) < this.MAX_START_ATTEMPTS)
+      .filter((id) => this.dbManager.getAutomationRetryCount(id, 'start') < this.MAX_START_ATTEMPTS)
       .map((id) => this.dbManager.getTask(id))
       .filter((task): task is TaskRecord => !!task && !isWorkfloLinkedTask(this.dbManager, task))
   }
@@ -251,7 +249,7 @@ export class TaskAutomationScheduler {
     `).all(TaskStatus.ReadyForReview) as { id: string }[]
 
     const candidates = rows.filter(
-      (row) => (this.failedCompletions.get(row.id) ?? 0) < this.MAX_COMPLETE_ATTEMPTS
+      (row) => this.dbManager.getAutomationRetryCount(row.id, 'complete') < this.MAX_COMPLETE_ATTEMPTS
     )
     if (candidates.length === 0) return
 
@@ -277,19 +275,17 @@ export class TaskAutomationScheduler {
       try {
         const completed = await this.agentManager.completeTaskWithoutReview(row.id)
         if (completed) {
-          this.failedCompletions.delete(row.id)
+          this.dbManager.clearAutomationRetryCount(row.id, 'complete')
           console.log(`[TaskAutomation] Auto-completed task ${row.id}`)
         } else {
-          const attempts = (this.failedCompletions.get(row.id) ?? 0) + 1
-          this.failedCompletions.set(row.id, attempts)
+          const attempts = this.dbManager.bumpAutomationRetryCount(row.id, 'complete', Date.now())
           console.log(
             `[TaskAutomation] Task ${row.id} refused completion upstream — left for review ` +
             `(attempt ${attempts}/${this.MAX_COMPLETE_ATTEMPTS})`
           )
         }
       } catch (err) {
-        const attempts = (this.failedCompletions.get(row.id) ?? 0) + 1
-        this.failedCompletions.set(row.id, attempts)
+        this.dbManager.bumpAutomationRetryCount(row.id, 'complete', Date.now())
         console.error(`[TaskAutomation] Failed to auto-complete task ${row.id}:`, err)
       } finally {
         this.inFlight.delete(row.id)

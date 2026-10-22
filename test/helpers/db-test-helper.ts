@@ -298,6 +298,40 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     );
     CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_started ON app_focus_intervals(started_at_ms);
     CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_ended ON app_focus_intervals(ended_at_ms);
+
+    -- Idempotency receipts for orchestration MCP tools. Mirrors
+    -- DatabaseManager.createTables — see src/main/orchestration/idempotency.ts.
+    CREATE TABLE IF NOT EXISTS orchestration_receipts (
+      scope TEXT NOT NULL,
+      client_request_id TEXT NOT NULL,
+      result TEXT,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (scope, client_request_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_orchestration_receipts_created ON orchestration_receipts(created_at);
+
+    -- One row per agent run, closed with an honest end_reason. Mirrors
+    -- DatabaseManager.createTables — see src/main/orchestration/run-finalization.ts.
+    CREATE TABLE IF NOT EXISTS task_runs (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      ended_at INTEGER,
+      end_reason TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(task_id, started_at);
+    CREATE INDEX IF NOT EXISTS idx_task_runs_session ON task_runs(session_id);
+
+    -- Persisted automation retry counters, replacing in-memory Maps that
+    -- reset on restart. Mirrors DatabaseManager.createTables.
+    CREATE TABLE IF NOT EXISTS automation_retry_counts (
+      task_id TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (task_id, kind)
+    );
   `)
 
   const manager = new DatabaseManager()

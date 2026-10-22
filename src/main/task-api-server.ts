@@ -17,6 +17,7 @@ import { randomUUID } from 'crypto'
 import { CronExpressionParser } from 'cron-parser'
 import type { DatabaseManager } from './database'
 import { TASK_MCP_PATH, handleTaskMcpRequest } from './task-mcp-endpoint'
+import { withIdempotency, pruneExpiredOrchestrationReceiptsOnce } from './orchestration/idempotency'
 import { TaskStatus } from '../shared/constants'
 import { desktopBrandName } from './brand'
 import { ArtifactType } from '../shared/artifacts'
@@ -74,6 +75,7 @@ type TaskApiAgentController = Pick<
   | 'findSessionByTaskId'
   | 'getSessionStatus'
   | 'getActiveSessionsForTask'
+  | 'getTaskWakeupQueue'
 >
 
 let agentController: TaskApiAgentController | null = null
@@ -525,6 +527,16 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (params.status === 'completed') return { error: `Create the task in ${desktopBrandName()} before completing it.` }
       if (!params.title) return { error: 'Title is required' }
 
+      pruneExpiredOrchestrationReceiptsOnce(db)
+      // The route name is part of the scope — without it, a client_request_id
+      // that happens to repeat across different tools (e.g. an agent reusing
+      // a short counter like "req-1") would return one tool's cached result
+      // for another. No parent task to scope a retry to at the root — every
+      // root-level create_task call shares one bucket (see idempotency.ts's
+      // documented gap: no caller identity exists at this layer for an
+      // unscoped/Mastermind call).
+      const idempotencyScope = params.parent_task_id ? `create_task:task:${String(params.parent_task_id)}` : 'create_task:global'
+      return withIdempotency(db, idempotencyScope, params.client_request_id as string | undefined, () => {
       const id = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
       const now = new Date().toISOString()
 
@@ -595,6 +607,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (params.auto_start_agent === true) triggerTaskAutomation()
 
       return { success: true, task: parsed }
+      })
     }
 
     case '/get_task': {
@@ -604,6 +617,15 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
     }
 
     case '/update_task': {
+      // An explicit edit that could plausibly fix whatever caused an
+      // earlier auto-start/auto-complete failure (reassigning an agent,
+      // changing status) resets both retry budgets — otherwise a days-old
+      // exhausted count keeps silently blocking automation even after the
+      // actual cause is gone.
+      if (params.task_id && (params.agent_id !== undefined || params.status !== undefined)) {
+        db.clearAutomationRetryCount(params.task_id as string, 'start')
+        db.clearAutomationRetryCount(params.task_id as string, 'complete')
+      }
       if (params.status && params.status !== 'in_progress') {
         try { db.updateTask(params.task_id as string, { status: params.status as never }) }
         catch (error) { return { error: error instanceof Error ? error.message : 'Task status refused' } }
@@ -1198,10 +1220,14 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         }
       }
 
-      // The message is attributed to the user, because that is who spoke it.
-      // A transcript that credited the agent would misreport who asked.
-      const result = await agentController.sendByTaskId(taskId, String(params.text))
-      return { success: true, task_id: taskId, session_id: result.sessionId ?? result.newSessionId ?? null }
+      pruneExpiredOrchestrationReceiptsOnce(db)
+      const sendController = agentController
+      return withIdempotency(db, `send_message:task:${taskId}`, params.client_request_id as string | undefined, async () => {
+        // The message is attributed to the user, because that is who spoke it.
+        // A transcript that credited the agent would misreport who asked.
+        const result = await sendController.sendByTaskId(taskId, String(params.text))
+        return { success: true, task_id: taskId, session_id: result.sessionId ?? result.newSessionId ?? null }
+      })
     }
 
     case '/respond_to_checkpoint': {
@@ -1244,17 +1270,37 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (!params.task_id) return { error: 'task_id is required' }
       if (!agentController) return { error: 'Agent controller not available' }
 
-      const result = await agentController.startTask(String(params.task_id), {
-        preferSubtasks: params.prefer_subtasks !== false,
-        allowTriage: params.allow_triage !== false
-      })
+      // An explicit start request (a human via the renderer/IPC, or an
+      // agent via MCP) is a fresh attempt, not another tick of the
+      // scheduler's own auto-retry loop — give it a full retry budget
+      // instead of letting a run exhausted days ago silently block it.
+      db.clearAutomationRetryCount(String(params.task_id), 'start')
 
-      const startedTask = result.startedTaskId ? db.getTask(result.startedTaskId) : null
-      return {
-        success: result.action !== 'no_action',
-        ...result,
-        task: startedTask
-      }
+      pruneExpiredOrchestrationReceiptsOnce(db)
+      const startController = agentController
+      return withIdempotency(
+        db,
+        `start_task:task:${String(params.task_id)}`,
+        params.client_request_id as string | undefined,
+        async () => {
+          const result = await startController.startTask(String(params.task_id), {
+            preferSubtasks: params.prefer_subtasks !== false,
+            allowTriage: params.allow_triage !== false
+          })
+
+          const startedTask = result.startedTaskId ? db.getTask(result.startedTaskId) : null
+          return {
+            success: result.action !== 'no_action',
+            ...result,
+            task: startedTask
+          }
+        },
+        // A "no_action" (nothing to start — no agent, already running, etc.)
+        // is not a success to remember: caching it would make a retry AFTER
+        // fixing the actual cause (assigning an agent) keep replaying the
+        // stale no-op for the rest of the TTL instead of trying again.
+        (res) => res.success
+      )
     }
 
     case '/create_subtask': {
@@ -1265,6 +1311,8 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const parentTask = rawDb.prepare('SELECT id, repos, priority, auto_complete_without_review FROM tasks WHERE id = ?').get(params.parent_task_id) as Record<string, unknown> | undefined
       if (!parentTask) return { error: 'Parent task not found' }
 
+      pruneExpiredOrchestrationReceiptsOnce(db)
+      return withIdempotency(db, `create_subtask:task:${String(params.parent_task_id)}`, params.client_request_id as string | undefined, () => {
       const subtaskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
       const now = new Date().toISOString()
 
@@ -1322,6 +1370,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       triggerTaskAutomation()
 
       return { success: true, task: parsedSubtask }
+      })
     }
 
     case '/wait_for_subtasks': {
@@ -1350,6 +1399,31 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         return targetIds ? subtasks.filter((task) => targetIds.has(String(task.id))) : subtasks
       }
 
+      // This route is MCP-tool-only (never called from the renderer, IPC, or
+      // mobile) — so returning a child's terminal state here unambiguously
+      // means the calling coordinator just observed it directly. Consume any
+      // pending wake-up for that exact child so it isn't ALSO delivered as a
+      // redundant message later, re-running a coordinator that already acted
+      // on the result it just read.
+      const markObserved = (subtasks: Record<string, unknown>[]): void => {
+        if (!agentController) return
+        for (const subtask of subtasks) {
+          if (terminalStatuses.includes(String(subtask.status))) {
+            // Pass the child's status/updated_at too: if the real wake-up
+            // row hasn't been enqueued yet (narrow race between the
+            // status change and notifyParentOfSubtaskCompletion), this lets
+            // markObserved lay down a tombstone under the same deterministic
+            // delivery_id instead of only consuming a row that may not exist yet.
+            agentController.getTaskWakeupQueue().markObserved(
+              String(params.parent_task_id),
+              String(subtask.id),
+              String(subtask.status),
+              String(subtask.updated_at)
+            )
+          }
+        }
+      }
+
       const startedAt = Date.now()
       while (Date.now() - startedAt < timeoutMs) {
         const subtasks = readSubtasks()
@@ -1361,6 +1435,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
             : matches.length === subtasks.length
 
           if (done) {
+            markObserved(subtasks)
             return {
               success: true,
               timed_out: false,
@@ -1374,12 +1449,14 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
         await new Promise((resolve) => setTimeout(resolve, pollMs))
       }
 
+      const finalSubtasks = readSubtasks()
+      markObserved(finalSubtasks)
       return {
         success: false,
         timed_out: true,
         return_when: returnWhen,
         terminal_statuses: terminalStatuses,
-        subtasks: readSubtasks()
+        subtasks: finalSubtasks
       }
     }
 

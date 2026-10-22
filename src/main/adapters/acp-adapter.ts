@@ -1806,7 +1806,11 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       const errorId = `error-${Date.now()}`
       if (!seenPartIds.has(errorId)) {
         seenPartIds.add(errorId)
-        parts.push({ id: errorId, type: MessagePartType.TEXT, text: `Error: ${actualEvent.message}${actualEvent.data ? ` - ${actualEvent.data}` : ''}`, role: 'assistant' })
+        // A real error, not a final answer — mark it as such rather than
+        // plain text. Plain text made this indistinguishable (by type/role)
+        // from a genuine completion, so a turn that ended on one of these
+        // was misclassified as a finished run instead of an error.
+        parts.push({ id: errorId, type: MessagePartType.ERROR, text: `Error: ${actualEvent.message}${actualEvent.data ? ` - ${actualEvent.data}` : ''}`, role: 'assistant' })
       }
       return parts
     }

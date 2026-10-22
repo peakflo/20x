@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { join } from 'path'
+import Database from 'better-sqlite3'
 import { AgentManager } from './agent-manager'
 import { SessionStatus, TaskStatus } from '../shared/constants'
 import { MessagePartType, MessageRole, SessionStatusType } from './adapters/coding-agent-adapter'
@@ -168,6 +169,17 @@ function createMockDb(agentConfig: Record<string, unknown> = {}) {
     getEarliestAgentRunIntervalStart: vi.fn(() => null),
     getTasksShippedCount: vi.fn(() => 0),
     getLatestTranscriptActivityAfter: vi.fn(() => null),
+    // task_runs (honest run-end classification) — not under test here,
+    // stubbed so doSendAdapterMessage/transitionToIdle's unconditional calls
+    // don't throw. See orchestration/run-finalization.ts and its own tests
+    // for the actual classification behavior.
+    openTaskRun: vi.fn((input: { taskId: string; sessionId: string; startedAtMs: number }) => ({
+      id: 'run-1', taskId: input.taskId, sessionId: input.sessionId, startedAt: input.startedAtMs, endedAt: null, endReason: null
+    })),
+    getOpenTaskRunForSession: vi.fn(() => undefined),
+    closeTaskRun: vi.fn(() => null),
+    getLatestTaskRun: vi.fn(() => undefined),
+    getOpenTaskRuns: vi.fn(() => []),
   } as unknown as ConstructorParameters<typeof AgentManager>[0]
 }
 
@@ -1730,6 +1742,13 @@ describe('AgentManager transitionToIdle — completing without review', () => {
       // A parent is never completed while a child is unfinished, so the
       // completion path always asks for subtasks.
       getSubtasks: vi.fn(() => [] as unknown[]),
+      openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: 'task-1', sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
+      closeTaskRun: vi.fn((sessionId: string, endedAt: number, endReason: string) => ({ id: 'run-1', taskId: 'task-1', sessionId, startedAt: 0, endedAt, endReason })),
+      upsertTranscriptParts: vi.fn(),
+      // getTaskWakeupQueue() (called from transitionToIdle to deliver any
+      // wake-ups pending for THIS task, now that it's idle) needs a real
+      // sqlite handle to create TaskWakeupStore's table against.
+      db: new Database(':memory:'),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
   }
 
@@ -1747,6 +1766,11 @@ describe('AgentManager transitionToIdle — completing without review', () => {
       seenMessageIds: new Set<string>(),
       seenPartIds: new Set<string>(),
       partContentLengths: new Map<string, string>(),
+      // This fixture simulates a genuinely finished turn (the agent's last
+      // visible action was a final text answer), not a turn cut short —
+      // classifyIdleEnd reads these to tell the two apart.
+      lastPartRole: 'assistant',
+      lastPartType: 'text',
     }
     ;(mgr as any).sessions.set('session-1', session)
     return { mgr, session }
@@ -1765,6 +1789,69 @@ describe('AgentManager transitionToIdle — completing without review', () => {
     const executeAction=vi.fn();mgr.setSyncManager({executeAction} as never)
     expect(await mgr.completeTaskWithoutReview('task-1')).toBe(false)
     expect(mockDb.updateTask).not.toHaveBeenCalled();expect(executeAction).not.toHaveBeenCalled()
+  })
+
+  it('a turn ending on a question is awaiting_input — status untouched, no completion wake-up to the parent', async () => {
+    const mockDb = makeDb({ parent_task_id: 'parent-1' })
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    const notifySpy = vi.spyOn(mgr, 'notifyParentOfSubtaskCompletion').mockResolvedValue(undefined)
+    const session = {
+      id: 'session-1',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      // The turn ended with a pending question, not a final text answer.
+      lastPartRole: 'assistant',
+      lastPartType: 'question',
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    // Never flipped to ready_for_review or model_error — left exactly as it was.
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ModelError })
+    // #650's own child_question wake-up owns notifying the parent — a
+    // generic "finished" wake-up here would double-notify.
+    expect(notifySpy).not.toHaveBeenCalled()
+    expect(mockDb.closeTaskRun).toHaveBeenCalledWith('session-1', expect.any(Number), 'awaiting_input')
+  })
+
+  it('persists the end-reason note to the transcript (not just a live, loseable renderer push)', async () => {
+    const mockDb = makeDb()
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    const session = {
+      id: 'session-1',
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      // No final text, no question, no tool call — stopped_early.
+      lastPartRole: undefined as string | undefined,
+      lastPartType: undefined as string | undefined,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(mockDb.upsertTranscriptParts).toHaveBeenCalledWith('task-1', [
+      expect.objectContaining({
+        role: 'system',
+        partType: 'text',
+        content: expect.stringContaining('Stopped before finishing')
+      })
+    ])
   })
 })
 
@@ -1795,6 +1882,12 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
       // A parent is never completed while a child is unfinished, so the
       // completion path always asks for subtasks.
       getSubtasks: vi.fn(() => [] as unknown[]),
+      openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: 'task-1', sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
+      closeTaskRun: vi.fn(() => null),
+      // getTaskWakeupQueue() (called from transitionToIdle to deliver any
+      // wake-ups pending for THIS task, now that it's idle) needs a real
+      // sqlite handle to create TaskWakeupStore's table against.
+      db: new Database(':memory:'),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
   }
 
@@ -1889,6 +1982,45 @@ describe('AgentManager transitionToIdle — enterprise task completion after fee
     expect(adapter.getAllMessages).toHaveBeenCalledOnce()
     expect(replayCall).toBeDefined()
     expect(sessionWithAdapter.seenPartIds.has('final-part')).toBe(true)
+  })
+
+  it('classifies from the REPLAYED final text, not a stale tool-call tracked by the live poll just before idle (race)', async () => {
+    // Regression: the final assistant text can arrive in the same tick the
+    // adapter reports idle, racing the live polling loop. Before this fix,
+    // replayMissedTranscriptPartsBeforeIdle never updated
+    // session.lastPartRole/lastPartType, so the run was classified from
+    // whatever the live loop saw just before replay ran — here, a tool call
+    // — misreporting a genuinely finished run as stopped_early/model_error.
+    const mockDb = createEnterpriseTaskDb({
+      status: TaskStatus.AgentWorking,
+      output_fields: [],
+      source_id: null
+    })
+    const { mgr, session } = setupManager(mockDb)
+    const adapter = {
+      getAllMessages: vi.fn(async () => ([
+        {
+          id: 'msg-1',
+          role: MessageRole.ASSISTANT,
+          parts: [
+            { id: 'final-part', type: MessagePartType.TEXT, text: 'Fixed and pushed the commit.', content: 'Fixed and pushed the commit.' }
+          ]
+        }
+      ]))
+    }
+    const sessionWithAdapter = {
+      ...session,
+      adapter: adapter as any,
+      // Stale tracking from the live poll's last tick, just before idle.
+      lastPartRole: 'assistant',
+      lastPartType: 'tool_call'
+    }
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+
+    await (mgr as any).transitionToIdle('session-1', sessionWithAdapter)
+
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ModelError })
   })
 
   it('does NOT re-emit a message already persisted under a different part id (codex id-scheme mismatch)', async () => {
@@ -2145,6 +2277,8 @@ describe('AgentManager session ID re-keying redirect', () => {
       getSecretsByIds: vi.fn(() => []),
       getSecretsWithValues: vi.fn(() => []),
       getSetting: vi.fn(() => null),
+      openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: 'task-1', sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
+      closeTaskRun: vi.fn(() => null),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 
     const mgr = new AgentManager(mockDb)
@@ -3122,6 +3256,51 @@ describe('AgentManager startAdapterPolling — IDLE grace period for follow-up m
     expect(transitionSession.assistantTextKeys.has(finalText)).toBe(true)
   })
 
+  it('an OpenCode-shaped batch ending in step-finish tracks the real final text, not the trailing marker, for run-end classification', async () => {
+    // Regression: OpenCode emits a step-finish part after every assistant
+    // answer. Before this fix, the live polling loop tracked the LITERAL
+    // last part in the batch as "how this turn ended" — so every OpenCode
+    // completion looked identical to a turn that stopped with nothing to
+    // show, and was wrongly classified stopped_early (-> model_error)
+    // instead of completed (-> ready_for_review).
+    const mgr = buildManager()
+    const adapter = buildAdapter()
+    adapter.pollMessages.mockResolvedValueOnce([
+      { id: 'p1', role: 'assistant', content: '', type: 'step-start' },
+      { id: 'p2', role: 'assistant', content: 'Fixed the flaky test and pushed the commit.', type: 'text' },
+      { id: 'p3', role: 'assistant', content: '', type: 'step-finish' }
+    ])
+    adapter.getStatus.mockResolvedValueOnce({ type: SessionStatusType.BUSY })
+
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'working',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      adapter,
+      lastAssistantText: '',
+      lastPartRole: undefined as string | undefined,
+      lastPartType: undefined as string | undefined
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    ;(mgr as any).startAdapterPolling(
+      'session-1',
+      adapter,
+      { agentId: 'agent-1', taskId: 'task-1', workspaceDir: '/tmp/ws' }
+    )
+    const entry = (mgr as any).pollingEntries.get('session-1')
+    entry.createdAt = Date.now()
+
+    await (mgr as any).pollSingleSession(entry)
+
+    expect(session.lastPartRole).toBe('assistant')
+    expect(session.lastPartType).toBe('text')
+  })
+
   it('pollSingleSession transitions to idle after grace period expires without work (new session stuck)', async () => {
     const mgr = buildManager()
     const adapter = buildAdapter()
@@ -3802,8 +3981,13 @@ describe('AgentManager event-driven parent wake-up', () => {
   function buildManager(tasks: Record<string, Record<string, unknown>>, subtasks: Record<string, unknown>[]) {
     const mockDb = createMockDb({})
     Object.assign(mockDb as any, {
-      getTask: vi.fn((id: string) => tasks[id]),
+      // notifyParentOfSubtaskCompletion looks up both the parent AND the
+      // subtask that just transitioned (for the wake-up's reason/payload) —
+      // fall back to the subtasks list so a subtask id resolves too.
+      getTask: vi.fn((id: string) => tasks[id] ?? subtasks.find((s) => s.id === id)),
       getSubtasks: vi.fn(() => subtasks),
+      // TaskWakeupStore needs a real sqlite handle to create its table against.
+      db: new Database(':memory:'),
     })
     const mgr = new AgentManager(mockDb)
     vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
@@ -3819,13 +4003,17 @@ describe('AgentManager event-driven parent wake-up', () => {
       { id: 'sub-2', title: 'Child B', status: TaskStatus.Completed },
     ])
 
+    // notifyParentOfSubtaskCompletion enqueues a durable wake-up row for the
+    // specific child that just transitioned, and delivers immediately since
+    // the parent is idle. (Child B's own transition would enqueue its own row
+    // the same way — combining several pending rows into one message is
+    // covered in orchestration/task-wakeups.test.ts.)
     await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-1')
 
     expect(wakeSpy).toHaveBeenCalledOnce()
     const [taskId, message] = wakeSpy.mock.calls[0]
     expect(taskId).toBe('parent-1')
     expect(message).toContain('Child A')
-    expect(message).toContain('Child B')
     expect(message).toContain('terminal state')
   })
 
@@ -3852,7 +4040,9 @@ describe('AgentManager event-driven parent wake-up', () => {
     const [taskId, message] = wakeSpy.mock.calls[0]
     expect(taskId).toBe('parent-1')
     expect(message).toContain('Child A')
-    expect(message).toContain('Child B')
+    // Child B (not_started) never produced a wake-up of its own, so it has no
+    // "result" to report — unlike the old implementation, the message lists
+    // only children with an actual outcome, not every sibling's current state.
     expect(message).toContain('agent_working')
   })
 
@@ -5103,6 +5293,8 @@ describe('AgentManager serverOverloaded retry on the initial turn', () => {
       getSetting: vi.fn(() => null),
       setSetting: vi.fn(),
       deleteSetting: vi.fn(),
+      openTaskRun: vi.fn(() => ({ id: 'run-1', taskId: 'task-1', sessionId: 'session-1', startedAt: 0, endedAt: null, endReason: null })),
+      closeTaskRun: vi.fn(() => null),
     } as unknown as ConstructorParameters<typeof AgentManager>[0]
 
     const manager = new AgentManager(mockDb)

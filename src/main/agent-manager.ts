@@ -71,7 +71,9 @@ import {
   type ContinuationPlan
 } from './context-handoff'
 import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
-import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../shared/system-authority'
+import { isSystemGeneratedMessage } from '../shared/system-authority'
+import { TaskWakeupQueue, TaskWakeupStore, computeWakeupDeliveryId, reasonForChildStatus, type WakeupReason } from './orchestration/task-wakeups'
+import { classifyIdleEnd, statusForEndReason, describeEndReason, lastMeaningfulPart } from './orchestration/run-finalization'
 import { sendMobilePush } from './mobile-push'
 import { AgentPushEvents, type QuestionPart } from './agent-push-events'
 import { formatRetryDelay, isOverloadError, MAX_OVERLOAD_RETRY_ATTEMPTS, OverloadRetryTracker } from './overload-retry'
@@ -199,6 +201,15 @@ interface AgentSession {
    *  serverOverloaded retry can nudge the session with the exact same prompt. */
   lastPromptText?: string
   lastPromptAttachments?: MessageAttachmentRef[]
+  /**
+   * Role/type of the very last transcript part seen since the current turn
+   * started (reset to undefined on every send — see doSendAdapterMessage).
+   * Used by run-finalization's classifyIdleEnd to tell a genuine completion
+   * (ends on a final assistant text message) apart from one that merely went
+   * idle (no message at all, or the last part is a tool call).
+   */
+  lastPartRole?: string
+  lastPartType?: string
 }
 
 /** The harness instance an agent runs under, as the manager sees it. */
@@ -459,9 +470,12 @@ export class AgentManager extends EventEmitter {
   private static readonly IDLE_REAP_SWEEP_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
   private reaperTimer: ReturnType<typeof setInterval> | null = null
 
-  /** Parents currently being woken after subtask completion (dedupe guard so
-   *  several subtasks finishing at once produce a single wake-up). */
-  private wakingParents: Set<string> = new Set()
+  /** Durable, deduplicated parent wake-up queue (see `task-wakeups.ts`). Lazily
+   *  constructed so it shares this manager's `db` without needing it at
+   *  field-initializer time. Replaces the old in-memory `wakingParents` dedupe
+   *  set — dedup now lives in the `task_wakeups` table's `delivery_id` UNIQUE
+   *  constraint, so it survives a restart and never silently drops a wake-up. */
+  private taskWakeupQueueInstance: TaskWakeupQueue | undefined
 
   /** Sessions currently being re-registered for polling after late adapter data
    *  (dedupe guard so a burst of buffered messages produces a single wake-up). */
@@ -3253,6 +3267,20 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
               }))
           }
         }
+        // Track the last MEANINGFUL part seen this turn (run-finalization's
+        // classifyIdleEnd reads this at idle time to tell a genuine
+        // completion apart from one that merely went idle after a tool call
+        // or with nothing at all). Skip ephemeral/meta parts (OpenCode's
+        // trailing step-finish after every real answer, Claude's
+        // task_progress/system-status, ...) — the literal last part in a
+        // batch is often noise, not the actual end of the turn. If this
+        // whole batch was ephemeral, leave whatever an earlier batch tracked
+        // alone instead of clobbering it with noise.
+        const meaningful = lastMeaningfulPart(batchMessages)
+        if (meaningful) {
+          currentSession.lastPartRole = meaningful.role
+          currentSession.lastPartType = meaningful.partType
+        }
         if (assistantTexts.length > 0) {
           // Replace (not append) and cap at 50 KB to prevent unbounded string growth
           const joined = assistantTexts.join('\n')
@@ -3316,12 +3344,14 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         }
 
         if (status.usageLimit) {
+          this.db.closeTaskRun(sessionId, Date.now(), 'limit')
           this.recordUsageLimitStop(config.taskId, config.agentId, sessionId, status.usageLimit.resetAt, status.message)
         } else {
           // A continuation that failed for another reason shows as failed, not resumed.
           this.limitRecovery?.markFailedIfRecent(config.taskId, status.message)
           // Terminal model/provider error (not a usage limit, which keeps its
           // own status/recovery flow) — surface it on the task.
+          this.db.closeTaskRun(sessionId, Date.now(), 'error')
           this.markTaskModelError(config.taskId)
         }
 
@@ -3693,7 +3723,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     adapter: CodingAgentAdapter,
     agentId: string,
     taskId: string,
-    adapterSessionId: string
+    adapterSessionId: string,
+    opts: { silent?: boolean } = {}
   ): Promise<string> {
     this.assertLocalHelpAllowed(taskId)
     // Helper: yield event loop between bursts of sync DB/FS calls
@@ -3851,13 +3882,19 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
           userMessage = errorMessage.replace('INCOMPATIBLE_SESSION_ID: ', '')
         }
 
-        // Notify renderer to show dialog asking user to start fresh
-        console.log('[AgentManager] Emitting agent:incompatible-session event')
-        this.sendToRenderer('agent:incompatible-session', {
-          taskId,
-          agentId,
-          error: userMessage
-        })
+        // Notify renderer to show dialog asking user to start fresh — unless
+        // this is a silent repair attempt (e.g. restart-repair.ts probing
+        // whether a saved session can still be resumed): an alarming dialog
+        // has no one to answer it yet, and the caller already has its own
+        // fallback (a fresh session with the context handed off).
+        if (!opts.silent) {
+          console.log('[AgentManager] Emitting agent:incompatible-session event')
+          this.sendToRenderer('agent:incompatible-session', {
+            taskId,
+            agentId,
+            error: userMessage
+          })
+        }
 
         // Throw error to stop the resume flow
         throw new Error('SESSION_INCOMPATIBLE')
@@ -4007,6 +4044,19 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
   }
 
   /**
+   * Public wrapper around `updateTaskFromLocalAgent` for external callers
+   * (restart-repair.ts) that need to write a local status update through the
+   * normal path — the server-managed guard AND a renderer `task:updated`
+   * notification — instead of calling `DatabaseManager.updateTask` directly,
+   * which silently bypasses both.
+   */
+  applyLocalTaskUpdate(taskId: string, updates: Parameters<DatabaseManager['updateTask']>[1]): TaskRecord | undefined {
+    const updated = this.updateTaskFromLocalAgent(taskId, updates)
+    this.sendToRenderer('task:updated', { taskId, updates: updated ?? this.db.getTask(taskId) })
+    return updated
+  }
+
+  /**
    * Surfaces a terminal model/provider error on the task — set when polling
    * observes a session error that is NOT a transient/retryable one the
    * adapter already recovers from (see `isOverloadError`/overload retry) and
@@ -4031,7 +4081,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
    * ready_for_review/completed wake-up path — so a coordinator doesn't sit
    * waiting forever on a subtask that stopped for good without "completing".
    */
-  private markTaskModelError(taskId: string): void {
+  /**
+   * Public so restart-repair.ts (and similar external callers) can flag a
+   * task "needs attention" through the normal path — the server-managed
+   * guard, the renderer notification, and the parent wake-up below — instead
+   * of poking the DB status column directly.
+   */
+  markTaskModelError(taskId: string): void {
     const task = this.db.getTask(taskId)
     if (!task || isTaskClosed(task.status) || task.status === TaskStatus.ModelError) return
     this.updateTaskFromLocalAgent(taskId, { status: TaskStatus.ModelError })
@@ -4271,100 +4327,101 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
    * Used by HeartbeatScheduler to extract the heartbeat result.
    */
   /**
+   * Durable, deduplicated wake-up queue for parent coordinators. Lazily
+   * constructed on first use (shares this manager's `db`). See
+   * `orchestration/task-wakeups.ts` for the delivery semantics: a wake-up is
+   * enqueued exactly once per child→parent transition (deterministic
+   * `delivery_id`), and is never dropped — a busy parent or a failed send
+   * leaves the row pending for the next idle transition / sweep / restart.
+   */
+  getTaskWakeupQueue(): TaskWakeupQueue {
+    if (!this.taskWakeupQueueInstance) {
+      this.taskWakeupQueueInstance = new TaskWakeupQueue({
+        store: new TaskWakeupStore(this.db.db),
+        getDeliveryContext: (parentTaskId) => {
+          const parentTask = this.db.getTask(parentTaskId)
+          const live = this.findSessionByTaskId(parentTaskId)
+          const subtasks = this.db.getSubtasks(parentTaskId)
+          return {
+            exists: !!parentTask,
+            completed: parentTask?.status === TaskStatus.Completed,
+            sessionBusy: !!live && live.session.status !== 'idle',
+            subtasks: subtasks.map((s) => ({ id: s.id, title: s.title, status: s.status }))
+          }
+        },
+        send: async (parentTaskId, message) => {
+          await this.sendByTaskId(parentTaskId, message)
+        },
+        // Past the retry cap (or the parent is gone/completed), leave a
+        // visible note instead of silently dropping the result forever.
+        onGivenUp: (parentTaskId, wakeups) => {
+          const summary = wakeups.map((w) => `- "${w.payload.childTitle}" (id: ${w.childTaskId}) → ${w.payload.childStatus}`).join('\n')
+          try {
+            this.db.upsertTranscriptParts(parentTaskId, [{
+              id: `wakeup-given-up-${parentTaskId}-${Date.now()}`,
+              role: 'system',
+              partType: 'text',
+              content: `${wakeups.length} subtask wake-up(s) could not be delivered and were given up:\n${summary}\nCheck these subtasks' current state directly.`,
+              receivedAt: Date.now()
+            }])
+            this.sendToRenderer('task:updated', { taskId: parentTaskId, updates: this.db.getTask(parentTaskId) })
+          } catch (err) {
+            console.error(`[AgentManager] Failed to record given-up wake-up note for ${parentTaskId}:`, err)
+          }
+        }
+      })
+    }
+    return this.taskWakeupQueueInstance
+  }
+
+  /** Starts the wake-up delivery sweep (delivers every pending row from before a restart). */
+  startWakeupDelivery(): void {
+    this.getTaskWakeupQueue().start()
+  }
+
+  /**
    * Event-driven coordinator wake-up.
    *
-   * Called when a subtask reaches a terminal state (ready_for_review or
-   * completed). If the parent coordinator's session is idle — or its runtime
-   * has already been released — it is resumed with a summary prompt so it can
-   * review outputs and continue orchestration.
+   * Called when a subtask reaches a terminal state (ready_for_review,
+   * completed, or model_error). Enqueues a durable `task_wakeups` row for the
+   * parent — deduplicated on (parent, child, the child's status-entry
+   * timestamp, reason), so the exact same transition is never enqueued twice,
+   * even across a restart — then attempts immediate delivery.
    *
    * This inverts the old model where a parent had to stay resident (and be
    * polled) while blocking on subtask progress: the parent may go idle at any
-   * time, and exactly one session is touched when there is new work to do.
-   *
-   * Guards:
-   * - If the parent session is live and NOT idle (e.g. blocked inside a
-   *   wait_for_subtasks call), nothing is injected — it will observe the
-   *   subtask state itself.
-   * - The wake-up fires once no subtask is still in agent_working (all
-   *   terminal, or a mix where the last working child just finished), so a
-   *   coordinator that went idle while creating children is resumed the moment
-   *   the pipeline drains — it can start the next child or consolidate. A
-   *   parent with several children still gets a single wake-up instead of one
-   *   per child.
-   * - A dedupe set prevents double-wakes when several children finish at once.
+   * time, and exactly one message is sent when there is new work to do,
+   * combining every pending child result for that parent. If the parent
+   * can't take it right now (a live, non-idle session, or still waiting on a
+   * sibling in `agent_working`/`triaging`), the row stays pending and is
+   * delivered on the parent's next idle transition, the periodic sweep, or
+   * startup — never dropped.
    */
   async notifyParentOfSubtaskCompletion(parentTaskId: string, subtaskId: string): Promise<void> {
     const parentTask = this.db.getTask(parentTaskId)
     if (!parentTask) return
-    if (parentTask.status === TaskStatus.Completed) return
 
-    const live = this.findSessionByTaskId(parentTaskId)
-    if (live && live.session.status !== 'idle') {
-      console.log(
-        `[AgentManager] Subtask ${subtaskId} terminal, but parent ${parentTaskId} session is ${live.session.status} — no wake-up needed`
-      )
-      return
-    }
+    const subtask = this.db.getTask(subtaskId)
+    if (!subtask) return
 
-    const subtasks = this.db.getSubtasks(parentTaskId)
-    if (subtasks.length === 0) return
-
-    // Wake the parent once no subtask is still actively being worked on —
-    // not only when every child is terminal. A coordinator that created
-    // children and then went idle must be told the pipeline drained so it can
-    // start the next not_started child, spawn follow-ups, or consolidate,
-    // instead of being left suspended while work sits in not_started.
-    const stillWorking = subtasks.some(
-      (s) => s.status === TaskStatus.AgentWorking || s.status === TaskStatus.Triaging
-    )
-    if (stillWorking) {
-      console.log(
-        `[AgentManager] Subtask ${subtaskId} terminal, but parent ${parentTaskId} still has a subtask being worked on — deferring wake-up`
-      )
-      return
-    }
-
-    if (this.wakingParents.has(parentTaskId)) return
-    this.wakingParents.add(parentTaskId)
-    try {
-      const summary = subtasks
-        .map((s) => `- "${s.title}" (id: ${s.id}) → ${s.status}`)
-        .join('\n')
-      // A subtask stuck in model_error will never move itself to
-      // ready_for_review/completed — it needs the coordinator's attention,
-      // not more waiting — so it counts as terminal here too.
-      const allTerminal = subtasks.every(
-        (s) => s.status === TaskStatus.ReadyForReview || s.status === TaskStatus.Completed || s.status === TaskStatus.ModelError
-      )
-      const instructions = allTerminal
-        ? `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +
-          `then continue coordination: consolidate results, fill in the parent task's output fields, ` +
-          `and complete the task — or create follow-up subtasks if more work is needed.`
-        : `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review the ready subtask's outputs, ` +
-          `then continue coordination: start the next not_started subtask, create follow-up subtasks if more work ` +
-          `is needed, or consolidate results and complete the task.`
-      const header = allTerminal
-        ? 'All subtasks of this task have reached a terminal state.'
-        : 'No subtask of this task is in agent_working anymore — the last one reached ready_for_review.'
-      // Subtask titles are agent-authored text. Fencing them and stating the authority
-      // boundary keeps a wake-up from reading as a human go-ahead for privileged work.
-      const message = buildSystemMessage(
-        {
-          origin: SystemMessageOrigin.Coordinator,
-          taskId: parentTaskId,
-          deliveryId: computeDeliveryId(parentTaskId, `${header}\n${summary}`),
-          generatedAt: new Date().toISOString()
-        },
-        header,
-        summary,
-        instructions
-      )
-      console.log(`[AgentManager] Waking parent coordinator ${parentTaskId}: no subtask in agent_working (${subtasks.length} subtask(s))`)
-      await this.sendByTaskId(parentTaskId, message)
-    } finally {
-      this.wakingParents.delete(parentTaskId)
-    }
+    // Single source of truth with markObserved's tombstone computation
+    // (task-api-server.ts's /wait_for_subtasks) — both MUST agree on the
+    // same reason for the same status, or their delivery_ids would never
+    // match and the race-narrowing tombstone would never collide on purpose.
+    const reason: WakeupReason = reasonForChildStatus(subtask.status)
+    // Falls back to created_at, then "now", so a row missing updated_at
+    // (shouldn't happen on a real task, but a defensive guard is cheap) still
+    // produces a valid, merely less-precisely-deduplicated delivery id
+    // instead of throwing.
+    const statusEnteredAt = subtask.updated_at ?? subtask.created_at ?? new Date().toISOString()
+    const deliveryId = computeWakeupDeliveryId(parentTaskId, subtaskId, statusEnteredAt, reason)
+    await this.getTaskWakeupQueue().enqueueAndTryDeliver({
+      parentTaskId,
+      childTaskId: subtaskId,
+      reason,
+      deliveryId,
+      payload: { childTitle: subtask.title, childStatus: subtask.status }
+    })
   }
 
   /** Tasks whose projection backfill is in flight (dedupe guard). */
@@ -4590,9 +4647,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
    * Reconnects to an existing session by its persisted session ID.
    * Replays all messages to the renderer and resumes polling.
    */
-  async resumeSession(agentId: string, taskId: string, sessionId: string): Promise<string> {
+  async resumeSession(agentId: string, taskId: string, sessionId: string, opts: { silent?: boolean } = {}): Promise<string> {
     this.assertLocalHelpAllowed(taskId)
-    console.log('[AgentManager] resumeSession called:', { agentId, taskId, sessionId })
+    console.log('[AgentManager] resumeSession called:', { agentId, taskId, sessionId, silent: !!opts.silent })
     const agent = this.db.getAgent(agentId)
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`)
@@ -4603,7 +4660,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       throw new Error(`No adapter available for agent ${agentId}`)
     }
 
-    return this.resumeAdapterSession(adapter, agentId, taskId, sessionId)
+    return this.resumeAdapterSession(adapter, agentId, taskId, sessionId, opts)
   }
 
   /**
@@ -4700,6 +4757,17 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
           taskId: session.taskId,
           messages: batchMessages
         })
+        // The final assistant text can arrive in the SAME tick the adapter
+        // reports idle, racing the live polling loop's own tracking (above) —
+        // without this, classifyIdleEnd reads whatever stale tool-call part
+        // the live loop saw just before replay ran, not the real final
+        // answer this replay just caught. Classify from what was actually
+        // replayed, not from before it.
+        const meaningful = lastMeaningfulPart(batchMessages)
+        if (meaningful) {
+          session.lastPartRole = meaningful.role
+          session.lastPartType = meaningful.partType
+        }
       }
       return batchMessages.length
     } catch (err) {
@@ -4895,22 +4963,70 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     // Desktop agent work is help. Only the server can accept completion.
 
-    // Update task status to ready_for_review (only if task exists)
-    if (task) {
-      console.log(`[AgentManager] Updating task ${session.taskId} status to ReadyForReview`)
-      this.updateTaskFromLocalAgent(session.taskId, { status: TaskStatus.ReadyForReview })
-      await yieldEventLoop()
+    // Classify how this run actually ended — a genuine completion (the last
+    // part was a final assistant text message) reaches ready_for_review; a
+    // turn ending on a question/permission request is "awaiting_input" (not
+    // reviewable, not a failure — left exactly where it is); anything else
+    // (e.g. idle right after a tool call) is "stopped_early" and needs
+    // attention instead of looking identical to a finished run. See
+    // run-finalization.ts.
+    const endReason = classifyIdleEnd({ lastPartRole: session.lastPartRole, lastPartType: session.lastPartType })
+    const closedRun = this.db.closeTaskRun(sessionId, Date.now(), endReason)
 
-      // Auto-enable heartbeat if agent wrote a heartbeat.md file
-      this.autoEnableHeartbeat(session)
-      await yieldEventLoop()
+    // Update task status (only if task exists)
+    if (task) {
+      const nextStatus = statusForEndReason(endReason)
+      console.log(`[AgentManager] Task ${session.taskId} end reason: ${endReason}${nextStatus ? ` -> status ${nextStatus}` : ' (status unchanged)'}`)
+      if (nextStatus !== null) {
+        this.updateTaskFromLocalAgent(session.taskId, { status: nextStatus })
+        await yieldEventLoop()
+      }
+
+      if (endReason === 'completed') {
+        // Auto-enable heartbeat if agent wrote a heartbeat.md file
+        this.autoEnableHeartbeat(session)
+        await yieldEventLoop()
+      } else if (endReason !== 'awaiting_input') {
+        // Not a genuine completion, and not just waiting for an answer —
+        // surface why in the transcript instead of leaving it looking
+        // identical to a finished run. Persisted (not just pushed live),
+        // keyed by the closed run's own id so it survives a reload/restart
+        // and is never duplicated on replay.
+        const endReasonNote = describeEndReason(endReason)
+        const endReasonPartId = closedRun ? `run-end-${closedRun.id}` : `run-end-${sessionId}-${Date.now()}`
+        try {
+          this.db.upsertTranscriptParts(session.taskId, [{
+            id: endReasonPartId,
+            role: 'system',
+            content: endReasonNote,
+            partType: 'text',
+            receivedAt: Date.now()
+          }])
+        } catch (err) {
+          console.error(`[AgentManager] Failed to persist end-reason note for ${session.taskId}:`, err)
+        }
+        this.sendToRenderer('agent:output', {
+          sessionId,
+          taskId: session.taskId,
+          type: 'message',
+          data: {
+            id: endReasonPartId,
+            role: 'system',
+            partType: 'text',
+            content: endReasonNote
+          }
+        })
+      }
+      // awaiting_input gets no transcript note here — the question itself
+      // is already the newest part, and the renderer's own pending-question
+      // indicator (scanning the transcript, not task.status) already shows it.
 
       // Get updated task with output fields and notify renderer
       const updatedTask = this.db.getTask(session.taskId)
       this.sendToRenderer('task:updated', {
         taskId: session.taskId,
         updates: {
-          status: TaskStatus.ReadyForReview,
+          status: updatedTask?.status,
           output_fields: updatedTask?.output_fields,
           heartbeat_enabled: updatedTask?.heartbeat_enabled,
           heartbeat_interval_minutes: updatedTask?.heartbeat_interval_minutes,
@@ -4919,15 +5035,26 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       })
 
       // Event-driven coordinator wake-up: if this was a subtask, tell the
-      // parent's session that a child reached a terminal state. The parent
-      // does not need to stay resident polling for child status — it can go
-      // idle (or even have its runtime released) and is resumed exactly when
-      // there is something to act on.
-      if (task.parent_task_id) {
+      // parent's session that a child reached a terminal state — completed
+      // or needs attention. The parent does not need to stay resident
+      // polling for child status — it can go idle (or even have its runtime
+      // released) and is resumed exactly when there is something to act on.
+      // Skipped for awaiting_input: this is not a terminal state, and the
+      // delegation wake-up (child_question) owns notifying the parent that
+      // a child is waiting on an answer — raising a second, generic
+      // "finished" wake-up here would double-notify.
+      if (task.parent_task_id && endReason !== 'awaiting_input') {
         this.notifyParentOfSubtaskCompletion(task.parent_task_id, session.taskId).catch((err) => {
-          console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${session.taskId} completed:`, err)
+          console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${session.taskId} ended (${endReason}):`, err)
         })
       }
+
+      // This task may itself be a PARENT with wake-ups that arrived while it
+      // was busy — deliver them now that it's idle, instead of waiting up to
+      // SWEEP_INTERVAL_MS for the periodic sweep to notice.
+      this.getTaskWakeupQueue().tryDeliver(session.taskId).catch((err) => {
+        console.error(`[AgentManager] Failed to deliver pending wake-ups to ${session.taskId} on idle:`, err)
+      })
     }
 
     this.sendToRenderer('agent:status', {
@@ -4942,7 +5069,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         agentName: agent?.name,
         durationMinutes: Math.round(durationMinutes * 10) / 10,
         messageCount: session.seenMessageIds.size || undefined,
-        success: true
+        success: endReason === 'completed'
       })
     }
   }
@@ -5048,6 +5175,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // then. Close here instead, while `session` is still known. No-op if
     // nothing is open (session was already idle, or excluded).
     this.closeAgentRunInterval(sessionId, Date.now(), 'stopped')
+    // Record-keeping only — resetTaskStatus (below) already decides what
+    // happens to the task's status; this just gives task_runs an honest
+    // reason instead of leaving the run open forever.
+    this.db.closeTaskRun(sessionId, Date.now(), resetTaskStatus ? 'user_stop' : 'interrupted')
 
     // Stop polling for this session
     this.stopAdapterPolling(sessionId)
@@ -5359,6 +5490,19 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // the session with the exact same prompt (see retryOverloadedSession).
     session.lastPromptText = message
     session.lastPromptAttachments = attachments
+    // Fresh turn: forget what the last part of the PREVIOUS turn was, so a
+    // turn that produces nothing at all (idle with no new output) classifies
+    // as stopped_early instead of inheriting an earlier turn's "completed".
+    session.lastPartRole = undefined
+    session.lastPartType = undefined
+    // task_runs: a "run" is one send → one end (idle/error/limit/stop), not
+    // the whole session's lifetime — openTaskRun is idempotent per session,
+    // so a session already mid-turn (status 'working') leaves its run as-is.
+    // Pseudo-task sessions (mastermind, heartbeat) have no DB row to report
+    // status on and are excluded the same way enterpriseStateSync is below.
+    if (!session.isTriageSession && session.taskId !== 'mastermind-session' && !session.taskId.startsWith('heartbeat-')) {
+      this.db.openTaskRun({ taskId: session.taskId, sessionId, startedAtMs: Date.now() })
+    }
 
     if (session.status === 'error') {
       // Check if this is an incompatible session error (non-recoverable)
@@ -5386,7 +5530,18 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     session.status = 'working'
     session.lastActivityAt = Date.now()
     const currentTask = this.db.getTask(session.taskId)
-    if (currentTask?.status !== TaskStatus.AgentLearning) {
+    // A coordinator wake-up or a heartbeat finding landing on a task that is
+    // parked in ready_for_review used to force it to agent_working the
+    // instant the message was sent, then right back to ready_for_review the
+    // moment the agent went idle again — a visible flicker with no real work
+    // behind it. Defer the status change to the turn's own end: it lands on
+    // ready_for_review again (completed), a needs-attention state
+    // (stopped_early/error), or stays put, instead of flipping on send alone.
+    // A human-authored message always starts the flip immediately, same as
+    // before — only a machine-authored one into a review-parked task waits.
+    const isAutomatedMessageIntoReview =
+      currentTask?.status === TaskStatus.ReadyForReview && isSystemGeneratedMessage(message)
+    if (currentTask?.status !== TaskStatus.AgentLearning && !isAutomatedMessageIntoReview) {
       this.updateTaskFromLocalAgent(session.taskId, { status: TaskStatus.AgentWorking })
     }
     this.sendToRenderer('agent:status', {
