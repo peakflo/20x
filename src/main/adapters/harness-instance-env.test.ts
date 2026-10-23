@@ -41,8 +41,8 @@ describe('harness instance environment', () => {
     delete process.env.CLAUDE_CONFIG_DIR
     try {
       const adapter = new ClaudeCodeAdapter()
-      expect((adapter as any).buildClaudeEnvironment().CLAUDE_CONFIG_DIR).toBeUndefined()
-      expect((adapter as any).buildClaudeEnvironment(undefined).CLAUDE_CONFIG_DIR).toBeUndefined()
+      expect((adapter as any).buildClaudeEnvironment({}).CLAUDE_CONFIG_DIR).toBeUndefined()
+      expect((adapter as any).buildClaudeEnvironment({ harnessHome: undefined }).CLAUDE_CONFIG_DIR).toBeUndefined()
     } finally {
       if (saved !== undefined) process.env.CLAUDE_CONFIG_DIR = saved
     }
@@ -52,7 +52,7 @@ describe('harness instance environment', () => {
     const saved = process.env.CLAUDE_CONFIG_DIR
     process.env.CLAUDE_CONFIG_DIR = '/inherited/claude'
     try {
-      expect((new ClaudeCodeAdapter() as any).buildClaudeEnvironment().CLAUDE_CONFIG_DIR).toBe('/inherited/claude')
+      expect((new ClaudeCodeAdapter() as any).buildClaudeEnvironment({}).CLAUDE_CONFIG_DIR).toBe('/inherited/claude')
     } finally {
       if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR
       else process.env.CLAUDE_CONFIG_DIR = saved
@@ -63,9 +63,9 @@ describe('harness instance environment', () => {
     const first = new ClaudeCodeAdapter({ harnessHome: '/accounts/claude-first' })
     const second = new ClaudeCodeAdapter({ harnessHome: '/accounts/claude-second' })
 
-    expect((first as any).buildClaudeEnvironment().CLAUDE_CONFIG_DIR).toBe('/accounts/claude-first')
-    expect((second as any).buildClaudeEnvironment().CLAUDE_CONFIG_DIR).toBe('/accounts/claude-second')
-    expect((second as any).buildClaudeEnvironment('/accounts/claude-third').CLAUDE_CONFIG_DIR).toBe('/accounts/claude-third')
+    expect((first as any).buildClaudeEnvironment({}).CLAUDE_CONFIG_DIR).toBe('/accounts/claude-first')
+    expect((second as any).buildClaudeEnvironment({}).CLAUDE_CONFIG_DIR).toBe('/accounts/claude-second')
+    expect((second as any).buildClaudeEnvironment({ harnessHome: '/accounts/claude-third' }).CLAUDE_CONFIG_DIR).toBe('/accounts/claude-third')
   })
 
   it('reads Claude session history from the instance config directory', async () => {

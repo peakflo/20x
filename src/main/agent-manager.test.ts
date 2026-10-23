@@ -7,6 +7,7 @@ import { MessagePartType, MessageRole, SessionStatusType } from './adapters/codi
 import { unregisterSecretSession } from './secret-broker'
 import { sendMobilePush } from './mobile-push'
 import { MAX_OVERLOAD_RETRY_ATTEMPTS, OVERLOAD_RETRY_BASE_DELAY_MS } from './overload-retry'
+import { SecretScrubber } from './secret-scrubber'
 
 describe('startTask startup failure', () => {
   it('restores triage task status when the CLI cannot start', async () => {
@@ -86,7 +87,22 @@ vi.mock('./secret-broker', () => ({
   registerSecretSession: vi.fn(),
   unregisterSecretSession: vi.fn(),
   getSecretBrokerPort: vi.fn(),
-  writeSecretShellWrapper: vi.fn(),
+  writeSecretLoaderScript: vi.fn(() => '/fake/secret-loader.sh'),
+  writeSecretTokenFile: vi.fn((token: string) => `/fake/secret-tokens/${token}.token`),
+  deleteSecretTokenFile: vi.fn(),
+}))
+vi.mock('./mcp-auth-proxy', () => ({
+  registerMcpProxyTarget: vi.fn(),
+  getMcpAuthProxyPort: vi.fn(),
+  unregisterMcpProxyTarget: vi.fn(),
+  unregisterMcpProxyTargetByKey: vi.fn(),
+}))
+vi.mock('./mcp-env-wrapper', () => ({
+  writeLocalMcpEnvWrapper: vi.fn((serverId: string, command: string, args: string[]) => ({
+    command: '/fake/mcp-env-loader.sh',
+    args: [`/fake/mcp-env/${serverId}.env.sh`, command, ...args]
+  })),
+  cleanupLocalMcpEnvFile: vi.fn(),
 }))
 
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
@@ -95,6 +111,8 @@ import { AcpAgentAdapter } from './adapters/acp-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import { getTaskApiPort } from './task-api-server'
+import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
+import { writeLocalMcpEnvWrapper } from './mcp-env-wrapper'
 
 const mockedMkdirAsync = vi.mocked(mkdirAsync)
 const mockedWriteFileAsync = vi.mocked(writeFileAsync)
@@ -1416,6 +1434,22 @@ describe('AgentManager MCP server routing', () => {
     vi.clearAllMocks()
   })
 
+  // vi.clearAllMocks() (above) clears call history but NOT implementations
+  // set via mockReturnValue/mockResolvedValue — reset those explicitly so a
+  // proxy/wrapper mock configured by one test can't leak into an unrelated
+  // later test (these three are shared module-level mocks, not scoped here).
+  afterEach(() => {
+    // These two have no meaningful default (just "proxy not running") — full
+    // reset is safe and correct.
+    vi.mocked(getMcpAuthProxyPort).mockReset()
+    vi.mocked(registerMcpProxyTarget).mockReset()
+    // writeLocalMcpEnvWrapper's mock DOES have a meaningful default
+    // implementation (set once in the vi.mock factory above) — only clear
+    // call history, a full reset would wipe that default for the rest of
+    // this file's tests.
+    vi.mocked(writeLocalMcpEnvWrapper).mockClear()
+  })
+
   function makeTaskManagementDb(): ConstructorParameters<typeof AgentManager>[0] {
     return {
       getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Agent', config: { mcp_servers: ['task-management-id'] } })),
@@ -1692,6 +1726,464 @@ describe('AgentManager MCP server routing', () => {
       url: 'https://stage-api.peakflo.ai/api/mcp/dev/mcp',
       headers: { Authorization: 'Bearer pfwf_tenant_a_key' },
     })
+  })
+
+  it('routes an OAuth-authenticated remote MCP server through the auth proxy — no Bearer token in the config handed to the SDK', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    vi.mocked(registerMcpProxyTarget).mockReturnValue('http://127.0.0.1:5555/abc123')
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['oauth-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'oauth-server',
+        name: 'My OAuth MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {},
+        oauth_metadata: { resource_url: 'https://example.com' },
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    manager.setOAuthManager({
+      getValidMcpServerToken: vi.fn(async () => 'real-oauth-secret-token'),
+    } as any)
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    // The config object that gets handed to each harness's SDK (and, for at
+    // least one harness, serialized onto its spawned process's argv) must
+    // never contain the real token — only the proxy's loopback URL.
+    expect(mcpServers['My OAuth MCP']).toMatchObject({ type: 'http', url: 'http://127.0.0.1:5555/abc123' })
+    expect(JSON.stringify(mcpServers)).not.toContain('real-oauth-secret-token')
+    expect(registerMcpProxyTarget).toHaveBeenCalledWith('oauth-server', 'https://example.com/mcp', 'My OAuth MCP', expect.any(Function), {})
+  })
+
+  // Regression test: two DIFFERENT MCP server config rows (two accounts
+  // registered against the same shared endpoint) must register under their
+  // own row id, never under the shared URL — the proxy itself would
+  // otherwise collapse them into one shared token (see mcp-auth-proxy.test.ts
+  // for the proxy-side half of this fix).
+  it('registers two MCP server rows sharing a target URL under their own row ids, not the shared URL', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    vi.mocked(registerMcpProxyTarget).mockImplementation((key: string) => `http://127.0.0.1:5555/${key}`)
+
+    const sharedUrl = 'https://example.com/shared-mcp'
+    const serversById: Record<string, any> = {
+      'server-row-A': { id: 'server-row-A', name: 'Account A MCP', type: 'remote', url: sharedUrl, headers: {}, oauth_metadata: { resource_url: sharedUrl }, source: 'user' },
+      'server-row-B': { id: 'server-row-B', name: 'Account B MCP', type: 'remote', url: sharedUrl, headers: {}, oauth_metadata: { resource_url: sharedUrl }, source: 'user' }
+    }
+    const mockDb = {
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'OPS', config: { mcp_servers: ['server-row-A', 'server-row-B'] } })),
+      getMcpServer: vi.fn((id: string) => serversById[id]),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    manager.setOAuthManager({ getValidMcpServerToken: vi.fn(async (id: string) => `token-for-${id}`) } as any)
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['Account A MCP'].url).toBe('http://127.0.0.1:5555/server-row-A')
+    expect(mcpServers['Account B MCP'].url).toBe('http://127.0.0.1:5555/server-row-B')
+    expect(mcpServers['Account A MCP'].url).not.toBe(mcpServers['Account B MCP'].url)
+    expect(registerMcpProxyTarget).toHaveBeenCalledWith('server-row-A', sharedUrl, 'Account A MCP', expect.any(Function), {})
+    expect(registerMcpProxyTarget).toHaveBeenCalledWith('server-row-B', sharedUrl, 'Account B MCP', expect.any(Function), {})
+  })
+
+  it('falls back to a static Authorization header for OAuth MCP servers when the proxy is not running', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(null)
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['oauth-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'oauth-server',
+        name: 'My OAuth MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {},
+        oauth_metadata: { resource_url: 'https://example.com' },
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    manager.setOAuthManager({
+      getValidMcpServerToken: vi.fn(async () => 'fallback-token'),
+    } as any)
+
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+    expect(mcpServers['My OAuth MCP']).toMatchObject({
+      type: 'http',
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer fallback-token' },
+    })
+  })
+
+  // Regression test for the leak this closes: a plain remote MCP server with
+  // no oauth_metadata and no enterprise auto-management still carries a real
+  // static header (a user-typed Authorization/X-API-Key) — that must be kept
+  // off the config object (and therefore off argv for harnesses that
+  // serialize it there), not just the dynamically-refreshed OAuth/enterprise
+  // tokens.
+  it('routes a plain remote MCP server with a user-typed static header through the auth proxy — no secret in the config', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    vi.mocked(registerMcpProxyTarget).mockReturnValue('http://127.0.0.1:5555/static-header-id')
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['plain-header-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'plain-header-server',
+        name: 'Plain Header MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer plain-static-secret', 'X-Tenant': 'acme' },
+        oauth_metadata: {},
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['Plain Header MCP']).toEqual({ type: 'http', url: 'http://127.0.0.1:5555/static-header-id' })
+    expect(JSON.stringify(mcpServers)).not.toContain('plain-static-secret')
+    expect(registerMcpProxyTarget).toHaveBeenCalledWith(
+      'plain-header-server',
+      'https://example.com/mcp',
+      'Plain Header MCP',
+      undefined,
+      { Authorization: 'Bearer plain-static-secret', 'X-Tenant': 'acme' }
+    )
+  })
+
+  it('hands a static remote header value to the scrubber it is given, even though the value never appears in the built config', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    vi.mocked(registerMcpProxyTarget).mockReturnValue('http://127.0.0.1:5555/static-header-id')
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['plain-header-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'plain-header-server',
+        name: 'Plain Header MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: { 'X-Api-Key': 'remote-static-header-value' },
+        oauth_metadata: {},
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const scrubber = new SecretScrubber()
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubber)
+
+    expect(JSON.stringify(mcpServers)).not.toContain('remote-static-header-value')
+    expect(scrubber.scrub('leaked: remote-static-header-value')).toBe('leaked: «secret»')
+  })
+
+  // Major finding, re-review: addEntries(Object.values(finalHeaders)) used to
+  // register the WHOLE header value ("Bearer xyz"), so the bare token never
+  // matched, and registered every header indiscriminately, including
+  // completely non-secret ones (Content-Type, Anthropic-Version) — which
+  // then got redacted everywhere those common strings showed up.
+  it('registers the BARE token (Bearer/Basic prefix stripped) from a static Authorization header, and skips non-credential headers entirely', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    vi.mocked(registerMcpProxyTarget).mockReturnValue('http://127.0.0.1:5555/mixed-headers-id')
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['mixed-header-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'mixed-header-server',
+        name: 'Mixed Header MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {
+          Authorization: 'Bearer bare-bearer-token-value',
+          'X-Api-Key': 'plain-api-key-value',
+          'Content-Type': 'application/json',
+          'Anthropic-Version': '2022-06-28'
+        },
+        oauth_metadata: {},
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const scrubber = new SecretScrubber()
+    await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubber)
+
+    // The BARE token matches, not just the "Bearer <token>" string.
+    expect(scrubber.scrub('token is bare-bearer-token-value')).toBe('token is «secret»')
+    expect(scrubber.scrub('Authorization: Bearer bare-bearer-token-value')).toBe('Authorization: Bearer «secret»')
+    // A non-Authorization credential-shaped header is covered too.
+    expect(scrubber.scrub('key=plain-api-key-value')).toBe('key=«secret»')
+    // Non-credential header values are NOT registered — these common
+    // strings must still pass through completely untouched everywhere else
+    // in every other transcript.
+    expect(scrubber.scrub('Content-Type: application/json')).toBe('Content-Type: application/json')
+    expect(scrubber.scrub('Anthropic-Version: 2022-06-28')).toBe('Anthropic-Version: 2022-06-28')
+  })
+
+  it('fans a refreshed OAuth token out to EVERY live session sharing the same MCP server row, not just the last one registered', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    let capturedGetToken: (() => Promise<string | null | undefined>) | undefined
+    vi.mocked(registerMcpProxyTarget).mockImplementation((_key, _url, _label, getToken) => {
+      // Simulates the proxy's own dedup-by-key behavior: only the MOST
+      // RECENTLY registered caller's getToken survives as the one that
+      // actually gets invoked on a forwarded request.
+      capturedGetToken = getToken as (() => Promise<string | null | undefined>) | undefined
+      return 'http://127.0.0.1:5555/shared-oauth-id'
+    })
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['shared-oauth-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'shared-oauth-server',
+        name: 'Shared OAuth MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {},
+        oauth_metadata: { resource_url: 'https://example.com' },
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    ;(manager as any).oauthManager = { getValidMcpServerToken: vi.fn(async () => 'shared-token-v1') }
+
+    // Two different sessions (two different tasks/agents, say) both resolve
+    // the SAME MCP server row — each with its OWN scrubber.
+    const scrubberA = new SecretScrubber()
+    const scrubberB = new SecretScrubber()
+    await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubberA)
+    await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubberB)
+
+    // Only ONE getToken survives registration (the proxy's own dedup), but
+    // calling it must still reach BOTH sessions' scrubbers.
+    await capturedGetToken!()
+    expect(scrubberA.scrub('leaked: shared-token-v1')).toBe('leaked: «secret»')
+    expect(scrubberB.scrub('leaked: shared-token-v1')).toBe('leaked: «secret»')
+
+    // A later refresh reaches both too.
+    ;(manager as any).oauthManager.getValidMcpServerToken = vi.fn(async () => 'shared-token-v2')
+    await capturedGetToken!()
+    expect(scrubberA.scrub('leaked: shared-token-v2')).toBe('leaked: «secret»')
+    expect(scrubberB.scrub('leaked: shared-token-v2')).toBe('leaked: «secret»')
+  })
+
+  it("hands a dynamic OAuth token to the scrubber the moment the proxy's getToken wrapper actually fetches it — including a later refresh", async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+    let capturedGetToken: (() => Promise<string | null | undefined>) | undefined
+    vi.mocked(registerMcpProxyTarget).mockImplementation((_key, _url, _label, getToken) => {
+      capturedGetToken = getToken as (() => Promise<string | null | undefined>) | undefined
+      return 'http://127.0.0.1:5555/oauth-id'
+    })
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['oauth-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'oauth-server',
+        name: 'My OAuth MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {},
+        oauth_metadata: { resource_url: 'https://example.com' },
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    ;(manager as any).oauthManager = { getValidMcpServerToken: vi.fn(async () => 'oauth-token-v1') }
+    const scrubber = new SecretScrubber()
+    await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubber)
+
+    // Not registered yet — buildMcpServersForAdapter only wraps the token
+    // provider, it doesn't call it when the proxy is actually handling the
+    // request (that happens on the proxy's own request path).
+    expect(scrubber.scrub('leaked: oauth-token-v1')).toBe('leaked: oauth-token-v1')
+
+    // Simulates the proxy calling the wrapped getToken() on an actual
+    // forwarded request.
+    await capturedGetToken!()
+    expect(scrubber.scrub('leaked: oauth-token-v1')).toBe('leaked: «secret»')
+
+    // A later refresh (token rotated mid-session) is picked up too, not just
+    // whatever value happened to exist when the session started.
+    ;(manager as any).oauthManager.getValidMcpServerToken = vi.fn(async () => 'oauth-token-v2-refreshed')
+    await capturedGetToken!()
+    expect(scrubber.scrub('leaked: oauth-token-v2-refreshed')).toBe('leaked: «secret»')
+  })
+
+  it('falls back to inlining a plain static header when the proxy is not running', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(null)
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['plain-header-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'plain-header-server',
+        name: 'Plain Header MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: { Authorization: 'Bearer plain-static-secret' },
+        oauth_metadata: {},
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['Plain Header MCP']).toMatchObject({
+      type: 'http',
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer plain-static-secret' },
+    })
+    expect(registerMcpProxyTarget).not.toHaveBeenCalled()
+  })
+
+  it('does not route a plain remote MCP server with no headers at all through the proxy', async () => {
+    vi.mocked(getMcpAuthProxyPort).mockReturnValue(5555)
+
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['no-header-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'no-header-server',
+        name: 'No Header MCP',
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        headers: {},
+        oauth_metadata: {},
+        source: 'user',
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(mcpServers['No Header MCP']).toMatchObject({ type: 'http', url: 'https://example.com/mcp' })
+    expect(getMcpAuthProxyPort).not.toHaveBeenCalled()
+    expect(registerMcpProxyTarget).not.toHaveBeenCalled()
+  })
+
+  it('wraps a local (stdio) MCP server with secret env instead of putting values in the config/argv', async () => {
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['local-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'local-server',
+        name: 'My Local MCP',
+        type: 'local',
+        command: 'node',
+        args: ['server.js'],
+        environment: { API_KEY: 'super-secret-local-value' },
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+
+    expect(JSON.stringify(mcpServers)).not.toContain('super-secret-local-value')
+    expect(mcpServers['My Local MCP']).not.toHaveProperty('env')
+    expect(writeLocalMcpEnvWrapper).toHaveBeenCalledWith('local-server', 'node', ['server.js'], { API_KEY: 'super-secret-local-value' })
+    expect(mcpServers['My Local MCP']).toMatchObject({
+      type: 'stdio',
+      command: '/fake/mcp-env-loader.sh',
+      args: ['/fake/mcp-env/local-server.env.sh', 'node', 'server.js']
+    })
+  })
+
+  // Major finding 7: once a value is routed through the wrapper/proxy, it no
+  // longer appears anywhere in `config.mcpServers` — so a session's
+  // SecretScrubber (built by reading that config) would never learn it
+  // exists unless buildMcpServersForAdapter hands it over directly. This
+  // exercises the REAL path (buildMcpServersForAdapter's own scrubber
+  // parameter), not a scrubber fed a hand-built config/entry list.
+  it('hands a local MCP server env value to the scrubber it is given, even though the value never appears in the built config', async () => {
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['local-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'local-server',
+        name: 'My Local MCP',
+        type: 'local',
+        command: 'node',
+        args: ['server.js'],
+        environment: { LOCAL_MCP_SECRET: 'local-mcp-secret-value' },
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const scrubber = new SecretScrubber()
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1', undefined, scrubber)
+
+    expect(JSON.stringify(mcpServers)).not.toContain('local-mcp-secret-value')
+    expect(scrubber.scrub('leaked: local-mcp-secret-value')).toBe('leaked: «$LOCAL_MCP_SECRET»')
+  })
+
+  it('does not wrap a local MCP server with no configured env', async () => {
+    const mockDb = {
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'OPS',
+        config: { mcp_servers: ['local-server'] },
+      })),
+      getMcpServer: vi.fn(() => ({
+        id: 'local-server',
+        name: 'My Local MCP',
+        type: 'local',
+        command: 'node',
+        args: ['server.js'],
+        environment: {},
+      })),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const manager = new AgentManager(mockDb)
+    const mcpServers = await (manager as any).buildMcpServersForAdapter('agent-1')
+    expect(writeLocalMcpEnvWrapper).not.toHaveBeenCalled()
+    expect(mcpServers['My Local MCP']).toMatchObject({ type: 'stdio', command: 'node', args: ['server.js'] })
   })
 })
 
@@ -2351,6 +2843,309 @@ describe('AgentManager session ID re-keying redirect', () => {
     // Redirect should be cleaned up
     expect((mgr as any).sessionIdRedirects.has('temp-id')).toBe(false)
     expect((mgr as any).sessions.has('real-id')).toBe(false)
+  })
+
+  // Minor finding, re-review: nothing cleaned up MCP auth-proxy registrations
+  // or local-MCP env files when a session ended — both lived indefinitely.
+  it('stopSession unregisters the proxy target for a remote MCP server and deletes the env file for a local one', async () => {
+    const remoteServer = { id: 'remote-server-1', type: 'remote', name: 'Remote MCP' }
+    const localServer = { id: 'local-server-1', type: 'local', name: 'Local MCP' }
+    const mockDb = {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test', agent_id: 'agent-1' })),
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'Agent',
+        config: { mcp_servers: ['remote-server-1', 'local-server-1'] }
+      })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn((id: string) => (id === 'remote-server-1' ? remoteServer : id === 'local-server-1' ? localServer : null)),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+    ;(mgr as any).sessions.set('session-1', {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      // Round 4, Minor: the cleanup loop now iterates the session's OWN
+      // captured registration, not a fresh agent-config re-read — see
+      // AgentSession.mcpServerIds's docstring.
+      mcpServerIds: new Set(['remote-server-1', 'local-server-1'])
+    })
+
+    const { unregisterMcpProxyTargetByKey } = await import('./mcp-auth-proxy')
+    const { cleanupLocalMcpEnvFile } = await import('./mcp-env-wrapper')
+
+    await mgr.stopSession('session-1')
+
+    expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
+    expect(cleanupLocalMcpEnvFile).toHaveBeenCalledWith('local-server-1')
+  })
+
+  // Major finding, re-review (round 3): stopSession used to tear down a
+  // shared MCP server row's proxy registration / env file the moment ANY
+  // ONE session using it stopped, even while another live session (a
+  // concurrent task on the same agent, or a different agent pointed at the
+  // same row) still depended on it — breaking that other session's MCP
+  // access for the rest of its life (it never rebuilds mcpServers for an
+  // already-running process).
+  it('stopSession does NOT tear down a shared MCP row while another live session still uses it, but does once that is the last one', async () => {
+    const remoteServer = { id: 'remote-server-1', type: 'remote', name: 'Remote MCP' }
+    const localServer = { id: 'local-server-1', type: 'local', name: 'Local MCP' }
+    const mockDb = {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test', agent_id: 'agent-1' })),
+      getAgent: vi.fn(() => ({
+        id: 'agent-1',
+        name: 'Agent',
+        config: { mcp_servers: ['remote-server-1', 'local-server-1'] }
+      })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn((id: string) => (id === 'remote-server-1' ? remoteServer : id === 'local-server-1' ? localServer : null)),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null)
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+
+    const scrubberA = new SecretScrubber()
+    const scrubberB = new SecretScrubber()
+    // Two concurrent sessions — same agent, same shared MCP row — each with
+    // its own scrubber instance registered against that row (mirrors what
+    // buildMcpServersForAdapter does for every session that resolves it).
+    ;(mgr as any).sessions.set('session-1', {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      scrubber: scrubberA,
+      // Round 4, Minor: isMcpServerRowStillInUse now checks each session's
+      // own captured registration, not a fresh agent-config re-read.
+      mcpServerIds: new Set(['remote-server-1', 'local-server-1'])
+    })
+    ;(mgr as any).sessions.set('session-2', {
+      agentId: 'agent-1',
+      taskId: 'task-2',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      scrubber: scrubberB,
+      mcpServerIds: new Set(['remote-server-1', 'local-server-1'])
+    })
+    ;(mgr as any).mcpServerScrubbersByKey.set('remote-server-1', new Set([scrubberA, scrubberB]))
+
+    const { unregisterMcpProxyTargetByKey } = await import('./mcp-auth-proxy')
+    const { cleanupLocalMcpEnvFile } = await import('./mcp-env-wrapper')
+    // This describe block has no local beforeEach(vi.clearAllMocks()) —
+    // clear these two explicitly so an earlier test's call history in this
+    // same block can't make the "not torn down yet" assertions below pass
+    // for the wrong reason.
+    vi.mocked(unregisterMcpProxyTargetByKey).mockClear()
+    vi.mocked(cleanupLocalMcpEnvFile).mockClear()
+
+    await mgr.stopSession('session-1')
+
+    // session-2 is still live and still references this row — must NOT be
+    // torn down out from under it.
+    expect(unregisterMcpProxyTargetByKey).not.toHaveBeenCalled()
+    expect(cleanupLocalMcpEnvFile).not.toHaveBeenCalled()
+    // But session-1's own scrubber is removed from the row's registry —
+    // that's always safe, regardless of who else still uses the row.
+    expect((mgr as any).mcpServerScrubbersByKey.get('remote-server-1').has(scrubberA)).toBe(false)
+    expect((mgr as any).mcpServerScrubbersByKey.get('remote-server-1').has(scrubberB)).toBe(true)
+
+    await mgr.stopSession('session-2')
+
+    // Now the last live user of this row is gone — safe to tear down.
+    expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
+    expect(cleanupLocalMcpEnvFile).toHaveBeenCalledWith('local-server-1')
+  })
+
+  // Minor finding, re-review (round 4): stopSession's cleanup and
+  // isMcpServerRowStillInUse used to re-read the agent's CURRENT db config
+  // instead of using the session's own actual registration — if that
+  // config was edited mid-session, a session's real MCP dependency could
+  // disagree with what a fresh config read says.
+  it("stopSession cleans up the stopping session's OWN captured MCP rows, even if the agent's config was edited to drop that server mid-session", async () => {
+    const remoteServer = { id: 'remote-server-1', type: 'remote', name: 'Remote MCP' }
+    const mockDb = {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test', agent_id: 'agent-1' })),
+      // The agent's CURRENT config no longer references remote-server-1 —
+      // simulates an edit made after session-1 started and registered it.
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Agent', config: { mcp_servers: [] } })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn((id: string) => (id === 'remote-server-1' ? remoteServer : null)),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null)
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+    ;(mgr as any).sessions.set('session-1', {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      // What session-1 actually registered back when it started/last ran —
+      // a fresh `getAgent` read (above) would no longer show this at all.
+      mcpServerIds: new Set(['remote-server-1'])
+    })
+
+    const { unregisterMcpProxyTargetByKey } = await import('./mcp-auth-proxy')
+    vi.mocked(unregisterMcpProxyTargetByKey).mockClear()
+
+    await mgr.stopSession('session-1')
+
+    // Cleaned up based on what this session actually had registered, not
+    // the (now server-less) current agent config.
+    expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
+  })
+
+  // Minor finding, re-review (round 5): the round-4 fix REPLACED
+  // session.mcpServerIds on every buildSessionConfig refresh (sendMessage,
+  // abort, question responses, ...) with exactly what the agent's CURRENT
+  // config resolves to — so a row dropped from config mid-session was
+  // forgotten by the very next refresh, well before the session actually
+  // stopped, not just by a fresh read at stop time (the round-4 test above
+  // only exercised the stop-time read, never an intermediate refresh).
+  // Every refresh must only ADD rows now, never replace/shrink the set —
+  // this test calls buildSessionConfig itself, between the config edit and
+  // the stop, to prove the row survives that intermediate refresh too.
+  it('buildSessionConfig called between a config edit and stopSession does NOT forget a row the session still owns', async () => {
+    const remoteServer = { id: 'remote-server-1', type: 'remote', name: 'Remote MCP' }
+    const mockDb = {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test', agent_id: 'agent-1' })),
+      // The agent's config has ALREADY been edited to drop remote-server-1
+      // by the time buildSessionConfig (and later stopSession) run.
+      getAgent: vi.fn(() => ({ id: 'agent-1', name: 'Agent', config: { mcp_servers: [] } })),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn((id: string) => (id === 'remote-server-1' ? remoteServer : null)),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null)
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+    const session = {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      // What the session actually registered back when it started —
+      // the (already-edited) agent config above no longer shows this.
+      mcpServerIds: new Set(['remote-server-1'])
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    // A refresh in between the config edit and the stop — e.g. a
+    // sendMessage/abort/question-response flow calling buildSessionConfig
+    // for reasons unrelated to MCP servers at all.
+    await (mgr as any).buildSessionConfig('agent-1', 'task-1', '/tmp/ws')
+
+    // The refresh must not have thrown the row away, even though the
+    // agent's CURRENT config no longer resolves it.
+    expect(session.mcpServerIds.has('remote-server-1')).toBe(true)
+
+    const { unregisterMcpProxyTargetByKey } = await import('./mcp-auth-proxy')
+    vi.mocked(unregisterMcpProxyTargetByKey).mockClear()
+
+    await mgr.stopSession('session-1')
+
+    // Still cleaned up correctly at stop time.
+    expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
+  })
+
+  // Minor finding, re-review (round 4), the other direction: an OTHER
+  // live session's agent config edited to ADD a server it hasn't actually
+  // registered yet must not make isMcpServerRowStillInUse think that row
+  // is still needed — a fresh config read would have said so wrongly.
+  it("does NOT treat a row as still in use by another session whose agent config was edited to add it, but which hasn't actually registered it", async () => {
+    const remoteServer = { id: 'remote-server-1', type: 'remote', name: 'Remote MCP' }
+    const mockDb = {
+      getTask: vi.fn(() => ({ id: 'task-1', title: 'Test', agent_id: 'agent-1' })),
+      // agent-2's CURRENT config now lists remote-server-1 too (edited
+      // after session-2 started), but session-2 itself never actually
+      // resolved/registered it.
+      getAgent: vi.fn((id: string) =>
+        id === 'agent-1'
+          ? { id: 'agent-1', name: 'Agent 1', config: { mcp_servers: ['remote-server-1'] } }
+          : { id: 'agent-2', name: 'Agent 2', config: { mcp_servers: ['remote-server-1'] } }
+      ),
+      getWorkspaceDir: vi.fn(() => '/tmp/ws'),
+      updateTask: vi.fn(),
+      getMcpServer: vi.fn((id: string) => (id === 'remote-server-1' ? remoteServer : null)),
+      getSecretsByIds: vi.fn(() => []),
+      getSecretsWithValues: vi.fn(() => []),
+      getSetting: vi.fn(() => null)
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'stopAdapterPolling').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'getAdapter').mockReturnValue(null)
+    ;(mgr as any).sessions.set('session-1', {
+      agentId: 'agent-1',
+      taskId: 'task-1',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      mcpServerIds: new Set(['remote-server-1'])
+    })
+    ;(mgr as any).sessions.set('session-2', {
+      agentId: 'agent-2',
+      taskId: 'task-2',
+      status: 'idle',
+      createdAt: new Date(),
+      seenMessageIds: new Set<string>(),
+      seenPartIds: new Set<string>(),
+      partContentLengths: new Map<string, string>(),
+      // Config now says agent-2 uses remote-server-1, but this session's
+      // own actual registration (captured, not re-derived) says otherwise.
+      mcpServerIds: new Set<string>()
+    })
+
+    const { unregisterMcpProxyTargetByKey } = await import('./mcp-auth-proxy')
+    vi.mocked(unregisterMcpProxyTargetByKey).mockClear()
+
+    await mgr.stopSession('session-1')
+
+    // session-2's stale config entry must not keep this row alive.
+    expect(unregisterMcpProxyTargetByKey).toHaveBeenCalledWith('remote-server-1')
   })
 
   it('cleanupHeartbeatSession fully tears down heartbeat sessions without resetting task status', async () => {
@@ -5281,5 +6076,143 @@ describe('AgentManager getUsageParallelismSummary — live-only (never backfille
     const mgr = new AgentManager(db)
     const result = mgr.getUsageParallelismSummary({ days: 30 }, NOW)
     expect(result.countingFromMs).toBeNull()
+  })
+})
+
+describe('AgentManager sendToRenderer — secret scrubbing choke point', () => {
+  const SECRET_VALUE = 'sk-super-secret-leak-value-123'
+
+  function setupScrubbingManager() {
+    const db = createMockDb() as any
+    db.upsertTranscriptParts = vi.fn(() => ({ maxRev: 1, changedPartIds: ['part-1'] }))
+    const mgr = new AgentManager(db) as any
+    const scrubber = new SecretScrubber([{ name: 'MY_SECRET', value: SECRET_VALUE }])
+    mgr.sessions.set('session-1', { agentId: 'agent-1', taskId: 'task-1', scrubber })
+    const sent: Array<{ channel: string; data: unknown }> = []
+    mgr.mainWindow = { isDestroyed: () => false, webContents: { send: (channel: string, data: unknown) => sent.push({ channel, data }) } }
+    const broadcast: Array<{ channel: string; data: unknown }> = []
+    mgr.externalListeners.push((channel: string, data: unknown) => broadcast.push({ channel, data }))
+    return { mgr, db, sent, broadcast }
+  }
+
+  it('scrubs tool.input/tool.output/content before persisting, rendering, and broadcasting', () => {
+    const { mgr, db, sent, broadcast } = setupScrubbingManager()
+
+    mgr.sendToRenderer('agent:output', {
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      data: {
+        id: 'part-1',
+        role: 'assistant',
+        partType: 'tool',
+        content: `ran: echo ${SECRET_VALUE}`,
+        tool: {
+          name: 'Bash',
+          input: { command: `curl -H "Authorization: Bearer ${SECRET_VALUE}" https://example.com` },
+          output: `the value is ${SECRET_VALUE}`
+        }
+      }
+    })
+
+    // Desktop renderer never sees the value.
+    expect(JSON.stringify(sent[0].data)).not.toContain(SECRET_VALUE)
+    expect(JSON.stringify(sent[0].data)).toContain('«$MY_SECRET»')
+
+    // Mobile broadcast never sees the value either.
+    expect(JSON.stringify(broadcast[0].data)).not.toContain(SECRET_VALUE)
+
+    // Nor does what gets persisted to transcript_parts.
+    const persistedParts = db.upsertTranscriptParts.mock.calls[0][1] as Array<{ content?: string; tool?: unknown }>
+    expect(JSON.stringify(persistedParts)).not.toContain(SECRET_VALUE)
+    expect(persistedParts[0].content).toBe(`ran: echo «$MY_SECRET»`)
+  })
+
+  it('passes output through unchanged when the session has no secrets', () => {
+    const db = createMockDb()
+    const mgr = new AgentManager(db) as any
+    const noopScrubber = new SecretScrubber([])
+    mgr.sessions.set('session-1', { agentId: 'agent-1', taskId: 'task-1', scrubber: noopScrubber })
+    const sent: Array<{ channel: string; data: unknown }> = []
+    mgr.mainWindow = { isDestroyed: () => false, webContents: { send: (channel: string, data: unknown) => sent.push({ channel, data }) } }
+
+    mgr.sendToRenderer('agent:output', {
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      data: { id: 'part-1', role: 'assistant', partType: 'text', content: 'ordinary output, nothing secret' }
+    })
+
+    expect((sent[0].data as { data: { content: string } }).data.content).toBe('ordinary output, nothing secret')
+  })
+
+  it('falls back to a taskId scan when sessionId is missing from the payload', () => {
+    const { mgr, sent } = setupScrubbingManager()
+
+    mgr.sendToRenderer('agent:output', {
+      // no sessionId — only taskId
+      taskId: 'task-1',
+      data: { id: 'part-1', role: 'assistant', partType: 'text', content: `leaked: ${SECRET_VALUE}` }
+    })
+
+    expect(JSON.stringify(sent[0].data)).not.toContain(SECRET_VALUE)
+  })
+})
+
+// P1 finding, re-review: allow_secrets_in_env used to default to TRUE
+// ("!== false"). For a harness with no command-scoped exec hook (Codex,
+// ACP, Pi, Cursor), that means EVERY agent configured with secrets handed
+// them to that harness's entire process environment — every tool, every
+// subprocess — unless the user had explicitly opted OUT. Re-reviewed and
+// changed to default OFF: an agent must now explicitly opt IN.
+describe('populateSecretDelivery — allow_secrets_in_env defaults to OFF', () => {
+  function makeManagerForProvider() {
+    const mockDb = {
+      getSecretsByIds: vi.fn(() => [{ id: 'secret-1', name: 'My Secret', env_var_name: 'MY_SECRET' }]),
+      getSecretsWithValues: vi.fn(() => [{ id: 'secret-1', env_var_name: 'MY_SECRET', value: 'leaked-secret-value-123456' }]),
+    } as unknown as ConstructorParameters<typeof AgentManager>[0]
+    return new AgentManager(mockDb)
+  }
+
+  it('withholds secretEnvVars by default for a harness with no command-scoped delivery (e.g. Codex)', () => {
+    const mgr = makeManagerForProvider()
+    const agent = { id: 'agent-1', name: 'Agent', config: { coding_agent: 'codex', secret_ids: ['secret-1'] } }
+    const config: Record<string, unknown> = { systemPrompt: '' }
+
+    ;(mgr as any).populateSecretDelivery(config, agent, undefined)
+
+    expect(config.secretEnvVars).toBeUndefined()
+    expect(config.allowSecretsInEnv).toBe(false)
+    expect(config.systemPrompt).toContain('withheld')
+  })
+
+  it('passes secretEnvVars through once the agent explicitly opts in (allow_secrets_in_env: true)', () => {
+    const mgr = makeManagerForProvider()
+    const agent = { id: 'agent-1', name: 'Agent', config: { coding_agent: 'codex', secret_ids: ['secret-1'], allow_secrets_in_env: true } }
+    const config: Record<string, unknown> = { systemPrompt: '' }
+
+    ;(mgr as any).populateSecretDelivery(config, agent, undefined)
+
+    expect(config.secretEnvVars).toEqual({ MY_SECRET: 'leaked-secret-value-123456' })
+    expect(config.allowSecretsInEnv).toBe(true)
+  })
+
+  it('still withholds when allow_secrets_in_env is explicitly false (unchanged — not a behavior regression for users who already set it)', () => {
+    const mgr = makeManagerForProvider()
+    const agent = { id: 'agent-1', name: 'Agent', config: { coding_agent: 'codex', secret_ids: ['secret-1'], allow_secrets_in_env: false } }
+    const config: Record<string, unknown> = { systemPrompt: '' }
+
+    ;(mgr as any).populateSecretDelivery(config, agent, undefined)
+
+    expect(config.secretEnvVars).toBeUndefined()
+  })
+
+  it('ignores allow_secrets_in_env entirely for a broker+loader harness (Claude Code) — never gets secretEnvVars either way', () => {
+    const mgr = makeManagerForProvider()
+    const agent = { id: 'agent-1', name: 'Agent', config: { coding_agent: 'claude-code', secret_ids: ['secret-1'] } }
+    const config: Record<string, unknown> = { systemPrompt: '' }
+
+    ;(mgr as any).populateSecretDelivery(config, agent, undefined)
+
+    expect(config.secretEnvVars).toBeUndefined()
+    expect(config.allowSecretsInEnv).toBeUndefined()
   })
 })

@@ -33,6 +33,7 @@ import {
   normalizeCodexThreadTokenUsage
 } from '../usage/usage-normalize'
 import { mergeUsageLimits } from '../../shared/usage'
+import { buildHarnessBaseEnv, applyShellCredentialsOptIn } from './harness-env'
 
 const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-6-astra'
 const MAX_IPC_TOOL_INPUT_CHARS = 20_000
@@ -870,7 +871,18 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     usesApiKey: boolean
     summary: string
   } {
-    const env: NodeJS.ProcessEnv = { ...process.env }
+    // Start from the app's own env with every known provider-credential var
+    // stripped (ANTHROPIC_API_KEY, OPENAI_API_KEY, CODEX_API_KEY, ...) — a
+    // Codex session gets back only its own key, and only when it actually
+    // authenticates with one. Everything else (PATH, locale, proxy, etc.)
+    // passes through unchanged.
+    const env: NodeJS.ProcessEnv = buildHarnessBaseEnv()
+
+    // Per-agent "pass shell credentials" opt-in (off by default) — the
+    // escape hatch for an agent that drives `gh`/`aws` CLIs via ambient
+    // shell credentials. Applied before secretEnvVars below so an agent's
+    // own explicit secret still wins on a name collision.
+    applyShellCredentialsOptIn(env as Record<string, string>, config.allowShellCredentials, config.getLiveScrubber?.())
 
     for (const [key, value] of Object.entries(config.secretEnvVars || {})) {
       env[key] = value
@@ -883,7 +895,7 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
       : !!explicitApiKey
 
     if (useApiKey) {
-      const key = explicitApiKey || env.OPENAI_API_KEY || env.CODEX_API_KEY
+      const key = explicitApiKey || process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY
       if (key) {
         env.OPENAI_API_KEY = key
         env.CODEX_API_KEY = key
@@ -898,6 +910,10 @@ export class CodexAppServerAdapter implements CodingAgentAdapter {
     }
 
     if (!useApiKey) {
+      // Subscription auth never gets an API key, full stop — not even one
+      // confusingly named OPENAI_API_KEY/CODEX_API_KEY in this agent's own
+      // `secretEnvVars` (a user-configured secret happening to share that
+      // name must not silently switch this session into API-key auth).
       delete env.OPENAI_API_KEY
       delete env.CODEX_API_KEY
       // The instance's home holds its login. Without one, the inherited CODEX_HOME or ~/.codex applies.

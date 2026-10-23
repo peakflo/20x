@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Plus, Edit3, Trash2, KeyRound } from 'lucide-react'
+import { Plus, Edit3, Trash2, KeyRound, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { SettingsSection } from '../SettingsSection'
 import { SecretFormDialog } from '../forms/SecretFormDialog'
 import { useSecretStore } from '@/stores/secret-store'
+import { cleanErrorMessage } from '@/lib/utils'
 import type { Secret, CreateSecretDTO, UpdateSecretDTO } from '@/types'
 
 interface SecretDialogState {
@@ -12,23 +13,30 @@ interface SecretDialogState {
 }
 
 export function SecretsSettings() {
-  const { secrets, fetchSecrets, createSecret, updateSecret, deleteSecret } = useSecretStore()
+  const { secrets, error, encryptionAvailable, fetchSecrets, createSecret, updateSecret, deleteSecret } = useSecretStore()
   const [dialog, setDialog] = useState<SecretDialogState>({ open: false })
 
   useEffect(() => {
     fetchSecrets()
   }, [])
 
-  const handleCreate = async (data: CreateSecretDTO | UpdateSecretDTO) => {
-    await createSecret(data as CreateSecretDTO)
-    setDialog({ open: false })
+  // Re-review (P2): the dialog used to close unconditionally after a submit
+  // attempt (SecretFormDialog's own handleSubmit used to call onClose()
+  // right after firing the submit, without waiting for or checking the
+  // result), so a failure (most commonly: safeStorage unavailable) silently
+  // discarded whatever the user had just typed — they'd see an error banner
+  // appear behind an already-closed dialog, with no obvious link between
+  // the two. SecretFormDialog now awaits this return value and only closes
+  // itself when it's true.
+  const handleCreate = async (data: CreateSecretDTO | UpdateSecretDTO): Promise<boolean> => {
+    const created = await createSecret(data as CreateSecretDTO)
+    return created !== null
   }
 
-  const handleUpdate = async (data: CreateSecretDTO | UpdateSecretDTO) => {
-    if (dialog.secret) {
-      await updateSecret(dialog.secret.id, data as UpdateSecretDTO)
-      setDialog({ open: false })
-    }
+  const handleUpdate = async (data: CreateSecretDTO | UpdateSecretDTO): Promise<boolean> => {
+    if (!dialog.secret) return false
+    const updated = await updateSecret(dialog.secret.id, data as UpdateSecretDTO)
+    return updated !== null
   }
 
   const handleDelete = async (id: string) => {
@@ -43,6 +51,21 @@ export function SecretsSettings() {
         title="Secrets"
         description="Manage encrypted secrets that can be injected into agent environments"
       >
+        {encryptionAvailable === false && (
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+            <p>
+              Your OS keychain/keyring is unavailable, so 20x cannot encrypt secrets at rest right now.
+              New secrets can&apos;t be saved until it&apos;s available again.
+              {' '}On Linux this usually means installing or unlocking a keyring (gnome-keyring, kwallet, or kwallet6).
+            </p>
+          </div>
+        )}
+        {error && (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {cleanErrorMessage(error)}
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
             {secrets.length} secret{secrets.length !== 1 ? 's' : ''} configured

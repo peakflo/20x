@@ -26,8 +26,11 @@ import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { buildTaskMcpUrl } from './task-mcp-endpoint'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
 import { randomUUID } from 'crypto'
-import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretShellWrapper } from './secret-broker'
-import { registerMcpProxyTarget, getMcpAuthProxyPort } from './mcp-auth-proxy'
+import { registerSecretSession, unregisterSecretSession, getSecretBrokerPort, writeSecretLoaderScript, writeSecretTokenFile, deleteSecretTokenFile } from './secret-broker'
+import { registerMcpProxyTarget, getMcpAuthProxyPort, unregisterMcpProxyTargetByKey } from './mcp-auth-proxy'
+import { writeLocalMcpEnvWrapper, cleanupLocalMcpEnvFile } from './mcp-env-wrapper'
+import { SecretScrubber, NOOP_SCRUBBER, type SecretEntry } from './secret-scrubber'
+import { buildSecretEntriesFromSessionConfig, buildSecretEntriesForAgent } from './secret-entries'
 import { analytics } from './analytics-service'
 import { UsageTracker, type UsageLimitsProbeTarget } from './usage/usage-tracker'
 import { RateTableService } from './usage/usage-pricing-service'
@@ -199,6 +202,43 @@ interface AgentSession {
    *  serverOverloaded retry can nudge the session with the exact same prompt. */
   lastPromptText?: string
   lastPromptAttachments?: MessageAttachmentRef[]
+  /**
+   * Redacts every secret value this session's agent process could have seen
+   * or produced — its configured secrets, OAuth/MCP tokens, and provider API
+   * keys present in this app's own env (see secret-entries.ts). Built when
+   * the session starts/resumes and extended on every follow-up turn (secrets
+   * can be added to an agent mid-session). Applied at the sendToRenderer
+   * choke point before output is persisted, rendered, or broadcast anywhere.
+   */
+  scrubber?: SecretScrubber
+  /**
+   * MCP server row ids this session has EVER actually registered with the
+   * MCP auth-proxy / env-wrapper, across every call to
+   * `buildMcpServersForAdapter` for it (session start, resume, or any later
+   * buildSessionConfig call). Re-review (round 4, Minor): `stopSession`'s
+   * cleanup and `isMcpServerRowStillInUse` used to re-read the agent's
+   * CURRENT db config instead — if that config was edited mid-session (a
+   * server added or removed from the agent after this session started),
+   * either could disagree with what this session's own live process
+   * actually has wired up. This set is this session's own ground truth,
+   * independent of later config edits.
+   *
+   * Re-review (round 5, Minor): the first version of this fix REPLACED
+   * this set on every refresh with exactly what config resolves to right
+   * now — so a row dropped from config mid-session was immediately
+   * forgotten by the very next refresh, well before the session actually
+   * stopped: its proxy registration / local env file (plaintext secrets)
+   * then lingered until the whole app restarted, since nothing else
+   * referenced it either. Every refresh now only ADDS rows, never removes
+   * any — monotonically growing for the life of the session, so a row is
+   * only ever actually released by `stopSession`'s cleanup, never silently
+   * dropped by an earlier refresh. This also protects a harness that
+   * freezes its own MCP wiring at startup and never calls this again (ACP,
+   * Codex): some OTHER session sharing a row with it can no longer, via a
+   * shrinking refresh, make `isMcpServerRowStillInUse` wrongly conclude
+   * nobody needs that row and tear it down out from under the frozen one.
+   */
+  mcpServerIds?: Set<string>
 }
 
 /** The harness instance an agent runs under, as the manager sees it. */
@@ -250,6 +290,40 @@ function hasUserSuppliedAuthHeader(headers?: Record<string, string>): boolean {
     if (key.toLowerCase() === 'authorization' && headers[key]) return true
   }
   return false
+}
+
+// Header NAMES that look credential-shaped. Deliberately checked against the
+// NAME, not whether the value happens to look secret-ish — a remote MCP
+// server's `headers` map routinely carries plenty of non-secret headers too
+// (Content-Type, Anthropic-Version, Accept, ...), and registering every
+// header value with the scrubber indiscriminately would redact common,
+// completely non-secret strings like "application/json" everywhere in every
+// transcript from that point on.
+const CREDENTIAL_HEADER_NAME_RE = /(^authorization$|^proxy-authorization$|^cookie$|^set-cookie$|api[-_]?key|token|secret|auth)/i
+
+/**
+ * Extracts the bare credential value from a header, for registering with a
+ * SecretScrubber — stripping a `Bearer `/`Basic ` scheme prefix first, since
+ * the scrubber needs to match the BARE token as it's likely to appear in a
+ * command's raw output (e.g. `echo $TOKEN`), not the literal "Bearer <token>"
+ * string. Returns undefined for a header whose NAME doesn't look
+ * credential-shaped at all (see CREDENTIAL_HEADER_NAME_RE above).
+ */
+function extractCredentialHeaderValue(headerName: string, rawValue: string): string | undefined {
+  if (!rawValue || !CREDENTIAL_HEADER_NAME_RE.test(headerName)) return undefined
+  const schemeMatch = /^(?:Bearer|Basic)\s+(.+)$/i.exec(rawValue.trim())
+  return schemeMatch ? schemeMatch[1] : rawValue
+}
+
+/** Every header value worth registering with a SecretScrubber, as plain SecretEntry values (no var name — the scrubber falls back to the generic `«secret»` placeholder for these). */
+function credentialHeaderEntries(headers: Record<string, string> | undefined): SecretEntry[] {
+  if (!headers) return []
+  const entries: SecretEntry[] = []
+  for (const [name, value] of Object.entries(headers)) {
+    const credential = extractCredentialHeaderValue(name, value)
+    if (credential) entries.push({ value: credential })
+  }
+  return entries
 }
 
 function isCodexAppServerAdapter(adapter: CodingAgentAdapter): boolean {
@@ -373,6 +447,29 @@ function hasWorkfloMcpDevServer(entries: DocumentedMcpServer[]): boolean {
 
 export class AgentManager extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map()
+  /**
+   * MCP server row id → every live session's scrubber currently using that
+   * row. `registerMcpProxyTarget` dedups registrations by this same key, so
+   * when two sessions (two different tasks/agents, or the same agent
+   * running concurrently) share one remote MCP server row, the proxy keeps
+   * only ONE `getToken` callback for it — the most recently registered
+   * caller's. Without this registry, a token refreshed through that one
+   * surviving callback would only reach whichever session's scrubber that
+   * callback happened to close over, silently stopping protection for every
+   * OTHER session still using the same server. Entries are added here every
+   * time `buildMcpServersForAdapter` resolves this server for a session.
+   * Re-review (round 3): entries used to never be removed, which both leaked
+   * memory (every session that ever touched a row left its scrubber behind
+   * forever) and — worse — meant `stopSession` believed it was safe to tear
+   * down a row's proxy registration / env-wrapper file even while another
+   * live session still depended on them, since nothing here recorded that
+   * dependency. `stopSession` now removes exactly the stopped session's own
+   * scrubber from every row it used (always safe — that scrubber instance
+   * belongs to no one else), and only tears down the row's proxy
+   * registration / env file once a live-session scan confirms no OTHER
+   * session still references that row (see `isMcpServerRowStillInUse`).
+   */
+  private mcpServerScrubbersByKey: Map<string, Set<SecretScrubber>> = new Map()
   /** Maps old (temp) session IDs to their re-keyed (real) IDs so that
    *  stale IDs from the renderer still resolve after pollSingleSession re-keys. */
   private sessionIdRedirects: Map<string, string> = new Map()
@@ -1518,11 +1615,93 @@ export class AgentManager extends EventEmitter {
     return tracker.refreshLimits(targets, options)
   }
 
+  /** Records that `scrubber` is a live user of the MCP server row `registrationKey`, so a later token refresh reaches it too (see `mcpServerScrubbersByKey` above). */
+  private registerMcpServerScrubber(registrationKey: string, scrubber: SecretScrubber | undefined): void {
+    if (!scrubber) return
+    let set = this.mcpServerScrubbersByKey.get(registrationKey)
+    if (!set) {
+      set = new Set()
+      this.mcpServerScrubbersByKey.set(registrationKey, set)
+    }
+    set.add(scrubber)
+  }
+
+  /** Feeds `entries` to every live session's scrubber currently using the MCP server row `registrationKey` — not just whichever session's call happens to own the proxy's one surviving `getToken` callback for it. */
+  private notifyMcpServerScrubbers(registrationKey: string, entries: SecretEntry[]): void {
+    const set = this.mcpServerScrubbersByKey.get(registrationKey)
+    if (!set || entries.length === 0) return
+    for (const scrubber of set) scrubber.addEntries(entries)
+  }
+
+  /**
+   * True when some OTHER live session (any agent, not just this session's
+   * own) still actually has MCP server row `serverId` registered — i.e.
+   * `serverId` is in that session's own `mcpServerIds` (see that field's
+   * docstring), as of the last time `buildMcpServersForAdapter` ran for it.
+   * Re-review (round 3, Major): `stopSession` used to tear down a row's
+   * shared proxy registration / env-wrapper file the moment ANY one session
+   * using it stopped — but a remote/local MCP server row can be shared by
+   * several concurrently running sessions (the same agent running two
+   * tasks, or two different agents pointed at the same row), and none of
+   * those other sessions rebuild `mcpServers` for their already-running
+   * `claude` process — so they kept the now-dead proxy URL / env file path
+   * and silently lost that MCP server.
+   *
+   * Re-review (round 4, Minor): the original version of this fix re-read
+   * each OTHER session's agent's CURRENT db config instead of its actual
+   * captured registration — which could disagree with reality if that
+   * agent's config was edited mid-session (a server added or removed after
+   * that session started): a server just removed from config would vanish
+   * from this check even though that session's live process still has it
+   * wired up (this method would then wrongly say "not in use," and the
+   * stopping session's cleanup would tear it down anyway), and the reverse
+   * for a server just added. Checking each session's own `mcpServerIds`
+   * instead is checked against that session's actual last-known
+   * registration, not a config snapshot that can be edited out from under
+   * it — it can't drift the same way, because it isn't re-derived from
+   * current config at all.
+   */
+  private isMcpServerRowStillInUse(serverId: string, excludingSessionId: string): boolean {
+    for (const [otherSessionId, otherSession] of this.sessions) {
+      if (otherSessionId === excludingSessionId) continue
+      if (otherSession.mcpServerIds?.has(serverId)) return true
+    }
+    return false
+  }
+
   /**
    * Builds MCP servers config for adapters (Claude Code, etc.)
    * Converts from database format to adapter format
    */
-  private async buildMcpServersForAdapter(agentId: string, opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string }): Promise<Record<string, McpServerConfig>> {
+  /**
+   * `scrubber`, when provided, is fed every secret value this function
+   * resolves as it builds the MCP config — local stdio env, static remote
+   * headers, and (via a wrapped `getToken`) every OAuth/enterprise token as
+   * it's actually fetched, including later refreshes.
+   *
+   * Why this is needed at all: before the auth-proxy/env-wrapper
+   * indirection (fix 4), these values lived directly in `config.mcpServers`,
+   * so `buildSecretEntriesFromSessionConfig(config)` could read them
+   * straight off that object to build the session scrubber. Now that a
+   * routed server's config entry carries only a loopback URL or a wrapper
+   * file path, that read finds nothing — the scrubber would never learn
+   * these values exist unless this function hands them over directly at the
+   * point it resolves them.
+   *
+   * `resolvedServerIds`, when provided, has every 'local'/'remote' DB
+   * server row id this call actually resolves added to it — the caller
+   * stores this on its `AgentSession.mcpServerIds` as that session's own
+   * ground truth for "which rows do I actually depend on right now" (see
+   * that field's docstring, and `isMcpServerRowStillInUse`). Deliberately
+   * NOT populated for the synthetic task-management server — it isn't a DB
+   * row and has no proxy/env-file cleanup concern.
+   */
+  private async buildMcpServersForAdapter(
+    agentId: string,
+    opts?: { ensureTaskManagement?: boolean; taskScope?: { taskId: string; parentTaskId: string }; artifactTaskId?: string },
+    scrubber?: SecretScrubber,
+    resolvedServerIds?: Set<string>
+  ): Promise<Record<string, McpServerConfig>> {
     const agent = this.db.getAgent(agentId)
     const mcpEntries = agent?.config?.mcp_servers || []
     const result: Record<string, McpServerConfig> = {}
@@ -1545,45 +1724,110 @@ export class AgentManager extends EventEmitter {
         const taskManagement = this.buildTaskManagementMcpConfig(opts)
         if (taskManagement) result[mcpServer.name] = taskManagement
       } else if (mcpServer.type === 'local') {
-        result[mcpRuntimeName(mcpServer)] = {
-          type: 'stdio',
-          command: mcpServer.command,
-          args: mcpServer.args,
-          env: { ...mcpServer.environment }
-        }
-      } else if (mcpServer.type === 'remote') {
-        // Inject OAuth Bearer token if the server has one
-        let finalHeaders = { ...mcpServer.headers }
-        if (this.oauthManager && mcpServer.oauth_metadata && 'resource_url' in mcpServer.oauth_metadata) {
-          const token = await this.oauthManager.getValidMcpServerToken(mcpServer.id)
-          if (token) {
-            finalHeaders = { ...finalHeaders, Authorization: `Bearer ${token}` }
+        resolvedServerIds?.add(mcpServer.id)
+        // Local (stdio) MCP server. `mcpServer.environment` can carry secret
+        // values (API keys the MCP server itself needs) — never put those in
+        // the config object directly: at least one harness (Claude Code)
+        // serializes the whole mcpServers config onto its spawned CLI's argv
+        // (`--mcp-config <json>`), which `ps -ef`/`ps eww` can read. Write them
+        // to a 0600 env file outside the workspace instead, and wrap the real
+        // command in a tiny loader that sources it — argv then carries only a
+        // path, never a value.
+        const envEntries = Object.entries(mcpServer.environment || {})
+        if (envEntries.length > 0 && mcpServer.command) {
+          const wrapped = writeLocalMcpEnvWrapper(mcpServer.id, mcpServer.command, mcpServer.args || [], Object.fromEntries(envEntries))
+          result[mcpRuntimeName(mcpServer)] = { type: 'stdio', command: wrapped.command, args: wrapped.args }
+          // These values no longer appear anywhere in `result` (just a path
+          // to the wrapper's env file) — hand them to the scrubber directly.
+          scrubber?.addEntries(envEntries.map(([name, value]) => ({ name, value })))
+        } else {
+          result[mcpRuntimeName(mcpServer)] = {
+            type: 'stdio',
+            command: mcpServer.command,
+            args: mcpServer.args
           }
         }
-
-        // Inject enterprise JWT for Workflo MCP Dev Server — route through auth proxy
+      } else if (mcpServer.type === 'remote') {
+        resolvedServerIds?.add(mcpServer.id)
+        // Every header-bearing remote MCP server — whether its auth is a
+        // refreshable OAuth/enterprise token or a plain header the user
+        // typed into the server form (Authorization, X-API-Key, …) — is
+        // routed through the local auth proxy so the value itself never
+        // lands in the mcpServers config object (see fix 4: that config is
+        // serialized onto argv for at least one harness, readable by any
+        // local `ps -ef`/`ps eww`). Only falls back to inlining the header
+        // when the proxy isn't running (residual leak, documented, not
+        // reachable in normal operation since the proxy starts unconditionally
+        // at app startup).
         let finalUrl = mcpServer.url
-        if (
-          this.enterpriseAuth &&
+        let finalHeaders = { ...mcpServer.headers }
+        let rawGetToken: (() => Promise<string | null | undefined>) | undefined
+
+        const oauthManager = this.oauthManager
+        const enterpriseAuth = this.enterpriseAuth
+        if (oauthManager && mcpServer.oauth_metadata && 'resource_url' in mcpServer.oauth_metadata) {
+          const serverId = mcpServer.id
+          rawGetToken = () => oauthManager.getValidMcpServerToken(serverId)
+          // The proxy injects a fresh bearer token per request — never pass a
+          // stale static one through too.
+          delete finalHeaders['Authorization']
+        } else if (
+          enterpriseAuth &&
           isEnterpriseMcpDevServer({ source: mcpServer.source, url: mcpServer.url, headers: finalHeaders })
         ) {
-          finalUrl = resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())
-          const proxyPort = getMcpAuthProxyPort()
-          const proxyUrl = proxyPort ? registerMcpProxyTarget(finalUrl, mcpServer.name) : null
-          if (proxyUrl) {
-            finalUrl = proxyUrl
-            // Don't send static Authorization — proxy injects fresh JWT per request
-            delete finalHeaders['Authorization']
-            console.log(`[AgentManager] MCP Dev Server routed through auth proxy: ${proxyUrl} -> ${resolveEnterpriseMcpDevUrl(mcpServer.url, this.enterpriseAuth.getApiUrl())}`)
-          } else {
-            // Fallback: static JWT (proxy not running)
-            try {
-              const jwt = await this.enterpriseAuth.getJwt()
-              finalHeaders = { ...finalHeaders, Authorization: `Bearer ${jwt}` }
-              console.log('[AgentManager] MCP Dev Server using static JWT (proxy not available)')
-            } catch (err) {
-              console.warn('[AgentManager] Failed to inject enterprise JWT for MCP Dev Server:', err)
+          finalUrl = resolveEnterpriseMcpDevUrl(mcpServer.url, enterpriseAuth.getApiUrl())
+          rawGetToken = () => enterpriseAuth.getJwt()
+          delete finalHeaders['Authorization']
+        }
+
+        // These values no longer appear anywhere in `result` (the proxy
+        // injects them server-side; the config carries only a loopback URL)
+        // — hand the credential-looking static ones to the scrubber now
+        // (bare token, `Bearer `/`Basic ` prefix stripped — not the whole
+        // header, and not non-credential headers like Content-Type or
+        // Anthropic-Version, which `credentialHeaderEntries` filters out by
+        // header NAME), and wrap the dynamic one so every future fetch
+        // (including a refresh mid-session) is registered too, not just
+        // whatever value happened to exist here.
+        scrubber?.addEntries(credentialHeaderEntries(finalHeaders))
+        this.registerMcpServerScrubber(mcpServer.id, scrubber)
+        const getToken = rawGetToken
+          ? async () => {
+              const token = await rawGetToken!()
+              // Registered with EVERY session currently using this server
+              // row, not just this call's own `scrubber` — `getToken` is
+              // handed to `registerMcpProxyTarget`, which dedups by this
+              // same row id and keeps only the most-recently-registered
+              // caller's callback. Without this, a refresh would silently
+              // stop reaching every other concurrent session's scrubber.
+              if (token) this.notifyMcpServerScrubbers(mcpServer.id, [{ value: token }])
+              return token
             }
+          : undefined
+
+        // Nothing to protect (no refreshable token, no static headers at
+        // all) — skip the proxy hop entirely rather than pointlessly routing
+        // a plain unauthenticated remote server's traffic through loopback.
+        const needsProxy = !!getToken || Object.keys(finalHeaders).length > 0
+        const proxyPort = needsProxy ? getMcpAuthProxyPort() : null
+        const proxyUrl = proxyPort
+          ? registerMcpProxyTarget(mcpServer.id, finalUrl, mcpServer.name, getToken, finalHeaders)
+          : null
+
+        if (proxyUrl) {
+          // Headers (static or dynamic) are injected by the proxy itself —
+          // the config handed to the harness carries only the loopback URL.
+          result[mcpRuntimeName(mcpServer)] = { type: 'http', url: proxyUrl }
+          continue
+        }
+
+        // Proxy not running — fall back to inlining whatever we have.
+        if (getToken) {
+          try {
+            const token = await getToken()
+            if (token) finalHeaders = { ...finalHeaders, Authorization: `Bearer ${token}` }
+          } catch (err) {
+            console.warn('[AgentManager] Failed to obtain fallback auth token for MCP server (proxy unavailable):', err)
           }
         }
 
@@ -1688,7 +1932,44 @@ export class AgentManager extends EventEmitter {
     const isTriageSession = this.isTriageSessionTask(taskId, task)
     const isSubtask = !!task?.parent_task_id
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
+    // Looked up before building MCP servers (not just after, as before) so
+    // its scrubber can be handed in — a local MCP env value or remote header
+    // resolved while building the config needs to reach this live session's
+    // scrubber at the moment it's known, not just via the config-level
+    // addEntries call below (which can't see values that never end up in
+    // `config.mcpServers` once they're routed through the proxy/wrapper).
+    const session = this.findSessionByTask(agentId, taskId)
+    // Re-review (round 5, Minor): this used to REPLACE `session.mcpServerIds`
+    // on every call (sendMessage, abort, question responses, ...) with
+    // exactly what the agent's CURRENT config resolves to right now. If a
+    // row was dropped from config mid-session, the very next refresh threw
+    // it away from the session's own set — forgetting that the session
+    // ever used it, so its proxy registration / local env file (holding
+    // plaintext secrets) linger until the whole app restarts (nothing left
+    // to clean it up: this session no longer reports it, and no OTHER
+    // session's `isMcpServerRowStillInUse` check would either). For a
+    // harness that keeps its OWN MCP wiring fixed at startup and never
+    // calls this again (ACP, Codex), that's doubly risky: refreshing some
+    // OTHER session that merely shares a row with one of those frozen
+    // sessions could, via the same replace-then-shrink bug, make
+    // `isMcpServerRowStillInUse` wrongly conclude nobody needs that row
+    // anymore and tear it down out from under the frozen session, which
+    // never gets a chance to re-register it. Every row this call resolves
+    // is now ADDED to the session's existing set instead of replacing it —
+    // monotonically growing for the life of the session — so a row is only
+    // ever released by `stopSession`'s cleanup (see `ownedMcpServerIds`
+    // below), never silently forgotten by an earlier refresh.
+    const resolvedServerIds = new Set<string>()
+    const mcpServers = await this.buildMcpServersForAdapter(
+      agentId,
+      { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined },
+      session?.scrubber,
+      resolvedServerIds
+    )
+    if (session) {
+      session.mcpServerIds ??= new Set<string>()
+      for (const id of resolvedServerIds) session.mcpServerIds.add(id)
+    }
 
     // systemPrompt is intentionally task-agnostic and identical every time this
     // is called for a given agent — it must stay byte-for-byte frozen for the
@@ -1712,40 +1993,29 @@ export class AgentManager extends EventEmitter {
       permissionMode: agent.config?.permission_mode,
       sandboxMode: agent.config?.sandbox_mode,
       apiKeys: agent.config?.api_keys,
-      tillDone: this.shouldEnableTillDone(taskId, task)
+      tillDone: this.shouldEnableTillDone(taskId, task),
+      allowShellCredentials: agent.config?.pass_shell_credentials,
+      // `session` is this live AgentSession (looked up above, before
+      // buildMcpServersForAdapter). A closure over `session`, read fresh on
+      // every call, not a snapshot of `session.scrubber` taken right now —
+      // `AgentSession.scrubber` is extended in place by `addEntries()` for
+      // the rest of the session's life (an MCP token obtained later, a
+      // secret added mid-session), and the whole point of this getter is
+      // that a harness whose hooks are built once per process reads the
+      // CURRENT object, not whatever it looked like at process-start time.
+      getLiveScrubber: session ? () => session.scrubber : undefined
     }
 
-    // Attach secret broker info if agent session has an active secret token
-    const session = this.findSessionByTask(agentId, taskId)
-    if (session?.secretSessionToken) {
-      const brokerPort = getSecretBrokerPort()
-      if (brokerPort) {
-        config.secretBrokerPort = brokerPort
-        config.secretSessionToken = session.secretSessionToken
-        config.secretShellPath = writeSecretShellWrapper()
-      }
-    }
+    // Attach secret delivery info if agent session has an active secret
+    // token. `session` was already looked up above (before
+    // buildMcpServersForAdapter) so its scrubber could be handed in there —
+    // reused here rather than looking it up a second time.
+    this.populateSecretDelivery(config, agent, session?.secretSessionToken)
 
-    // Populate secret env vars and system prompt awareness
-    const secretIds = agent.config?.secret_ids
-    // secretIds checked for agent config
-    if (secretIds && secretIds.length > 0) {
-      const secretRecords = this.db.getSecretsByIds(secretIds)
-      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
-
-      // Attach decrypted values for injection (hooks or direct env)
-      if (secretsWithValues.length > 0) {
-        config.secretEnvVars = {}
-        for (const s of secretsWithValues) {
-          config.secretEnvVars[s.env_var_name] = s.value
-        }
-      }
-
-      // Append secret awareness to system prompt so the agent knows what's available
-      if (secretRecords.length > 0) {
-        config.systemPrompt = (config.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
-      }
-    }
+    // Extend the live session's scrubber with anything new this rebuild
+    // picked up (a secret added mid-session, a freshly rotated MCP token).
+    // addEntries is additive/dedup-safe — never drops an entry already known.
+    session?.scrubber?.addEntries(buildSecretEntriesFromSessionConfig(config))
 
     return config
   }
@@ -1918,6 +2188,84 @@ export class AgentManager extends EventEmitter {
     return prompt
   }
 
+  /** Harnesses whose adapter routes secrets through the broker+loader at exec time, scoped to one command — never placed in the agent's own process env. */
+  private static readonly BROKER_LOADER_PROVIDERS = new Set<string>([CodingAgentType.CLAUDE_CODE, CodingAgentType.OPENCODE])
+
+  /**
+   * Attaches secret delivery info to `config` for one agent/session, and the
+   * matching "Available Secrets" (or withheld-secrets) system-prompt note.
+   *
+   * - Claude Code / OpenCode: broker+loader only. secretBrokerPort/
+   *   secretSessionToken/secretLoaderPath are set so the adapter's hook/plugin
+   *   can fetch values at exec time, scoped to that one command's own shell
+   *   process. config.secretEnvVars is never populated for these — there is
+   *   no command-scoped delivery left that would need it.
+   * - Everything else (Codex, ACP, Pi, Cursor): no command-scoped exec hook
+   *   exists, so this is the documented fallback — full-process-env
+   *   injection via secretEnvVars, gated by the agent's own
+   *   `allow_secrets_in_env`. **Off by default** — re-reviewed and changed
+   *   from the original "defaults to true" behavior: a harness with no
+   *   command-scoped delivery hands a configured secret to every tool and
+   *   every subprocess it spawns, with nothing to scrub what any of them do
+   *   with it, so an agent that has never explicitly opted in should not
+   *   silently get that exposure. Set to true on the agent to receive its
+   *   secrets anyway.
+   */
+  private populateSecretDelivery(config: SessionConfig, agent: AgentRecord, secretToken: string | undefined): void {
+    const provider = getAgentProvider(agent)
+    const usesBrokerLoader = AgentManager.BROKER_LOADER_PROVIDERS.has(provider)
+
+    if (usesBrokerLoader && secretToken) {
+      const brokerPort = getSecretBrokerPort()
+      if (brokerPort) {
+        config.secretBrokerPort = brokerPort
+        config.secretSessionToken = secretToken
+        config.secretLoaderPath = writeSecretLoaderScript()
+        // The loader invocation embeds THIS path, never secretToken itself
+        // — see coding-agent-adapter.ts's SessionConfig docstrings.
+        config.secretTokenFilePath = writeSecretTokenFile(secretToken)
+      }
+    }
+
+    const secretIds = agent.config?.secret_ids
+    if (!secretIds || secretIds.length === 0) return
+    const secretRecords = this.db.getSecretsByIds(secretIds)
+    if (secretRecords.length === 0) return
+
+    if (usesBrokerLoader) {
+      // Never injected into any process env — carried only so this
+      // session's SecretScrubber knows these values (see secret-entries.ts).
+      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
+      if (secretsWithValues.length > 0) {
+        config.secretsForScrubbing = {}
+        for (const s of secretsWithValues) config.secretsForScrubbing[s.env_var_name] = s.value
+      }
+      config.systemPrompt = (config.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
+      return
+    }
+
+    // Off by default (re-reviewed: was `!== false`, i.e. on by default) —
+    // see the docstring above for why.
+    const allowed = agent.config?.allow_secrets_in_env === true
+    config.allowSecretsInEnv = allowed
+    if (!allowed) {
+      console.warn(`[AgentManager] Secrets withheld for agent ${agent.id}: ${provider} has no command-scoped delivery and allow_secrets_in_env is not explicitly true`)
+      config.systemPrompt = (config.systemPrompt || '') +
+        '\n\n## Secrets configured, but withheld\n\n' +
+        `This agent has secrets configured, but ${provider} has no way to scope them to a single command — they would sit in this session's entire process environment. ` +
+        'They are withheld for this session. Set allow_secrets_in_env to true on this agent to receive them anyway.\n'
+      return
+    }
+
+    const secretsWithValues = this.db.getSecretsWithValues(secretIds)
+    if (secretsWithValues.length > 0) {
+      config.secretEnvVars = {}
+      for (const s of secretsWithValues) config.secretEnvVars[s.env_var_name] = s.value
+    }
+    config.systemPrompt = (config.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords) +
+      `\n**Note:** ${provider} has no way to scope these to a single command — they are present in this session's entire process environment (every tool and subprocess it spawns, not just bash).\n`
+  }
+
   /**
    * Sets up a secret broker session for an agent, registering its secrets.
    * Returns the token, or undefined if no secrets are configured.
@@ -1947,6 +2295,42 @@ export class AgentManager extends EventEmitter {
       }
     }
     return undefined
+  }
+
+  /** `SecretScrubber` built from a single agent's own secrets (see secret-entries.ts). */
+  private buildScrubberForAgent(agentId: string): SecretScrubber {
+    const entries = buildSecretEntriesForAgent(this.db, agentId)
+    return entries.length > 0 ? new SecretScrubber(entries) : NOOP_SCRUBBER
+  }
+
+  /** `SecretScrubber` covering every secret any of the given agents can use — e.g. both sides of a context handoff. */
+  private buildScrubberForAgents(agentIds: Array<string | null | undefined>): SecretScrubber {
+    const entries = agentIds.flatMap((id) => buildSecretEntriesForAgent(this.db, id))
+    return entries.length > 0 ? new SecretScrubber(entries) : NOOP_SCRUBBER
+  }
+
+  /**
+   * Resolves the SecretScrubber for a sendToRenderer `agent:output`/
+   * `agent:output-batch` payload. Looks up by `sessionId` first (the common
+   * case — this.sessions is keyed by adapter session id), then falls back to
+   * a `taskId` scan (covers the moment right around a session re-key, where
+   * the payload's sessionId may be mid-transition). Returns the no-op
+   * scrubber — never throws, never blocks output — when neither resolves;
+   * callers treat an empty scrubber as "nothing to redact".
+   */
+  private scrubberForOutput(data: unknown): SecretScrubber {
+    const d = data as { sessionId?: string; taskId?: string } | null
+    if (!d || typeof d !== 'object') return NOOP_SCRUBBER
+    if (d.sessionId) {
+      const session = this.sessions.get(d.sessionId)
+      if (session?.scrubber) return session.scrubber
+    }
+    if (d.taskId) {
+      for (const session of this.sessions.values()) {
+        if (session.taskId === d.taskId && session.scrubber) return session.scrubber
+      }
+    }
+    return NOOP_SCRUBBER
   }
 
   /**
@@ -2361,7 +2745,15 @@ export class AgentManager extends EventEmitter {
     // per-agent MCP configuration.
     const isMastermind = taskId === 'mastermind-session'
     const ensureTaskManagement = isMastermind || isTriageSession || isSubtask || !!task
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined })
+    // Created now (before the session object exists) and reused as-is for
+    // `newSession.scrubber` below, instead of building a second scrubber
+    // from scratch afterward — so a local MCP env value or remote header
+    // resolved while building `mcpServers` (never present in the config
+    // object itself once routed through the proxy/wrapper) still reaches
+    // this session's scrubber.
+    const scrubber = new SecretScrubber()
+    const resolvedServerIds = new Set<string>()
+    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement, taskScope, artifactTaskId: task ? taskId : undefined }, scrubber, resolvedServerIds)
 
     // Write SKILL.md files and the session documentation (async to avoid
     // blocking the event loop). This runs AFTER the MCP map is built so the
@@ -2385,35 +2777,13 @@ export class AgentManager extends EventEmitter {
       permissionMode: agent.config?.permission_mode,
       sandboxMode: agent.config?.sandbox_mode,
       apiKeys: agent.config?.api_keys,
-      tillDone: this.shouldEnableTillDone(taskId, task)
+      tillDone: this.shouldEnableTillDone(taskId, task),
+      allowShellCredentials: agent.config?.pass_shell_credentials
     }
 
-    // Setup secret broker session if agent has secrets
+    // Setup secret delivery if agent has secrets
     const secretToken = this.setupSecretSession(agentId)
-    if (secretToken) {
-      const brokerPort = getSecretBrokerPort()
-      if (brokerPort) {
-        sessionConfig.secretBrokerPort = brokerPort
-        sessionConfig.secretSessionToken = secretToken
-        sessionConfig.secretShellPath = writeSecretShellWrapper()
-      }
-    }
-
-    // Populate secret env vars + system prompt awareness
-    const secretIds = agent.config?.secret_ids
-    if (secretIds && secretIds.length > 0) {
-      const secretRecords = this.db.getSecretsByIds(secretIds)
-      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
-      if (secretsWithValues.length > 0) {
-        sessionConfig.secretEnvVars = {}
-        for (const s of secretsWithValues) {
-          sessionConfig.secretEnvVars[s.env_var_name] = s.value
-        }
-      }
-      if (secretRecords.length > 0) {
-        sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
-      }
-    }
+    this.populateSecretDelivery(sessionConfig, agent, secretToken)
     await yieldEL()
 
     // Refresh the AI gateway virtual key before building the provider config
@@ -2488,8 +2858,14 @@ export class AgentManager extends EventEmitter {
       adapter,
       isTriageSession,
       secretSessionToken: secretToken,
-      taskContextMode
+      taskContextMode,
+      // Reuses the SAME scrubber instance buildMcpServersForAdapter was
+      // handed above (already carrying any MCP secret values it resolved),
+      // extended with everything else the full session config carries.
+      scrubber,
+      mcpServerIds: resolvedServerIds
     }
+    scrubber.addEntries(buildSecretEntriesFromSessionConfig(sessionConfig))
     this.sessions.set(adapterSessionId, newSession)
 
     // Store session ID in database
@@ -3256,9 +3632,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         if (assistantTexts.length > 0) {
           // Replace (not append) and cap at 50 KB to prevent unbounded string growth
           const joined = assistantTexts.join('\n')
-          currentSession.lastAssistantText = joined.length > 50_000
-            ? joined.slice(-50_000)
-            : joined
+          const capped = joined.length > 50_000 ? joined.slice(-50_000) : joined
+          currentSession.lastAssistantText = currentSession.scrubber?.scrub(capped) ?? capped
         }
       }
 
@@ -3734,7 +4109,16 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const taskScope = isSubtask && task?.parent_task_id ? { taskId, parentTaskId: task.parent_task_id } : undefined
     await yieldEL()
 
-    const mcpServers = await this.buildMcpServersForAdapter(agentId, { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined })
+    // Created now and reused as-is for the new session's scrubber below —
+    // see the matching comment in startAdapterSession.
+    const scrubber = new SecretScrubber()
+    const resolvedServerIds = new Set<string>()
+    const mcpServers = await this.buildMcpServersForAdapter(
+      agentId,
+      { ensureTaskManagement: isMastermind || isTriageSession || isSubtask || !!task, taskScope, artifactTaskId: task ? taskId : undefined },
+      scrubber,
+      resolvedServerIds
+    )
 
     // Rewrite the memory file before the harness reads it. A resumed session
     // otherwise keeps the catalog written at start, and that file is reloaded
@@ -3761,35 +4145,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       permissionMode: agent.config?.permission_mode,
       sandboxMode: agent.config?.sandbox_mode,
       apiKeys: agent.config?.api_keys,
-      tillDone: this.shouldEnableTillDone(taskId, task)
+      tillDone: this.shouldEnableTillDone(taskId, task),
+      allowShellCredentials: agent.config?.pass_shell_credentials
     }
 
-    // Setup secret broker session if agent has secrets
+    // Setup secret delivery if agent has secrets
     const secretToken = this.setupSecretSession(agentId)
-    if (secretToken) {
-      const brokerPort = getSecretBrokerPort()
-      if (brokerPort) {
-        sessionConfig.secretBrokerPort = brokerPort
-        sessionConfig.secretSessionToken = secretToken
-        sessionConfig.secretShellPath = writeSecretShellWrapper()
-      }
-    }
-
-    // Populate secret env vars + system prompt awareness
-    const secretIds = agent.config?.secret_ids
-    if (secretIds && secretIds.length > 0) {
-      const secretRecords = this.db.getSecretsByIds(secretIds)
-      const secretsWithValues = this.db.getSecretsWithValues(secretIds)
-      if (secretsWithValues.length > 0) {
-        sessionConfig.secretEnvVars = {}
-        for (const s of secretsWithValues) {
-          sessionConfig.secretEnvVars[s.env_var_name] = s.value
-        }
-      }
-      if (secretRecords.length > 0) {
-        sessionConfig.systemPrompt = (sessionConfig.systemPrompt || '') + this.buildSecretsSystemPrompt(secretRecords)
-      }
-    }
+    this.populateSecretDelivery(sessionConfig, agent, secretToken)
     await yieldEL()
 
     // Initialize adapter
@@ -3939,6 +4301,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     // Store session in sessions map — idle until user sends a message
     this.schedulePowerSaveBlockerUpdate()
+    // Reuses the SAME scrubber instance buildMcpServersForAdapter was handed
+    // above, extended with everything else the full session config carries.
+    scrubber.addEntries(buildSecretEntriesFromSessionConfig(sessionConfig))
     this.sessions.set(adapterSessionId, {
       id: adapterSessionId,
       agentId,
@@ -3957,7 +4322,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       pollingStarted: false,
       secretSessionToken: secretToken,
       taskContextMode: resumeTaskContextMode,
-      nativeResumeAwaitingAck: !!pendingMarker
+      nativeResumeAwaitingAck: !!pendingMarker,
+      scrubber,
+      mcpServerIds: resolvedServerIds
     })
 
     // Persist the resumed session binding and tell the renderer BEFORE any
@@ -4437,6 +4804,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     try {
       const workspaceDir = this.db.getWorkspaceDir(taskId)
       const messages = await adapter.getPersistedMessages(sessionId, { agentId, taskId, workspaceDir })
+      // No live in-memory session to read a scrubber off of — this reads the
+      // CLI's own persisted session history, which was never scrubbed before.
+      const scrubber = this.buildScrubberForAgent(agentId)
 
       // The projection is empty here (guarded above), so this is a pure seed —
       // no dedup against existing parts is needed. Upsert-by-part-id keeps it
@@ -4454,9 +4824,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
           parts.push({
             id: part.id,
             role,
-            content,
+            content: scrubber.isEmpty ? content : (scrubber.scrub(content) ?? content),
             partType,
-            tool: part.tool,
+            tool: scrubber.isEmpty ? part.tool : scrubber.scrubDeep(part.tool),
             payload: part.taskProgress ? { taskProgress: part.taskProgress } : undefined,
             receivedAt: part.receivedAt
           })
@@ -4789,6 +5159,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       // Release it through the adapter first: otherwise the agent CLI process and
       // its task-management MCP child stay alive with no handle left to stop them.
       await this.releaseAdapterSession(sessionId, 'triage_completed')
+      if (session.secretSessionToken) {
+        unregisterSecretSession(session.secretSessionToken)
+        deleteSecretTokenFile(session.secretSessionToken)
+      }
       this.sessions.delete(sessionId)
       this.schedulePowerSaveBlockerUpdate()
       console.log(`[SessionTracker] DESTROYED session=${sessionId} task=${session.taskId} reason=triage_completed`)
@@ -5054,6 +5428,14 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // Cancel any pending serverOverloaded retry — the session is going away.
     this.overloadRetryTracker.reset(sessionId)
 
+    // Captured BEFORE the buildSessionConfig call below (which refreshes
+    // `session.mcpServerIds` as a side effect, for the destroySession
+    // config it builds) — this is the MCP cleanup block's actual source of
+    // truth: the rows this session last registered while genuinely running,
+    // not whatever a config re-read happens to say by the time it's
+    // stopping (round 4, Minor — see AgentSession.mcpServerIds's docstring).
+    const ownedMcpServerIds = session.mcpServerIds ?? new Set<string>()
+
     // Destroy via adapter
     const adapter = this.getAdapter(session.agentId)
     if (adapter) {
@@ -5068,7 +5450,28 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // Clean up secret broker session
     if (session.secretSessionToken) {
       unregisterSecretSession(session.secretSessionToken)
+      deleteSecretTokenFile(session.secretSessionToken)
       console.log(`[AgentManager] Unregistered secret session for ${sessionId}`)
+    }
+
+    // Clean up MCP auth-proxy registrations and local-server env files for
+    // every MCP server row THIS SESSION actually registered (ownedMcpServerIds,
+    // captured above — not a fresh agent-config re-read, which could have
+    // drifted from what this session's own live process has wired up if the
+    // agent's config was edited mid-session; round 4, Minor) — but ONLY once
+    // no other live session still depends on that row (re-review, round 3,
+    // Major: see isMcpServerRowStillInUse's docstring). This session's own
+    // scrubber is always removed from the row's scrubber registry
+    // regardless — that removal is per-session-instance, not per-row, so
+    // it's safe even while other sessions keep using the row.
+    for (const serverId of ownedMcpServerIds) {
+      const mcpServer = this.db.getMcpServer(serverId)
+      if (!mcpServer) continue
+      if (session.scrubber) this.mcpServerScrubbersByKey.get(mcpServer.id)?.delete(session.scrubber)
+      if (this.isMcpServerRowStillInUse(mcpServer.id, sessionId)) continue
+      if (mcpServer.type === 'remote') unregisterMcpProxyTargetByKey(mcpServer.id)
+      else if (mcpServer.type === 'local') cleanupLocalMcpEnvFile(mcpServer.id)
+      this.mcpServerScrubbersByKey.delete(mcpServer.id)
     }
 
     // Eagerly clear dedup structures to free memory immediately (don't wait for GC)
@@ -6276,6 +6679,7 @@ Important:
       }
 
       // Map parsed values to fields — match by name first, then by id
+      const scrubber = session.scrubber
       const updatedFields = task.output_fields.map((field) => {
         const updated = { ...field }
 
@@ -6290,6 +6694,12 @@ Important:
         // For file fields: use written file paths from tool calls
         if (field.type === 'file' && !updated.value && writtenFiles.length > 0) {
           updated.value = field.multiple ? writtenFiles : writtenFiles[0]
+        }
+
+        // The agent writes this value itself — scrub before it's ever saved
+        // (and later synced to an external source, or shown in the UI).
+        if (scrubber && !scrubber.isEmpty && updated.value !== undefined) {
+          updated.value = scrubber.scrubDeep(updated.value)
         }
 
         return updated
@@ -6516,6 +6926,10 @@ Important:
     // too, so the agent CLI process and its MCP stdio children stop instead of
     // running on untracked until the app quits.
     await this.releaseAdapterSession(sessionId, 'learn_from_session')
+    if (session.secretSessionToken) {
+      unregisterSecretSession(session.secretSessionToken)
+      deleteSecretTokenFile(session.secretSessionToken)
+    }
     this.sessions.delete(sessionId)
     this.schedulePowerSaveBlockerUpdate()
     console.log(`[AgentManager] Learning complete for session ${sessionId}:`, result)
@@ -6849,7 +7263,11 @@ Important:
         : 'a previous agent',
       tokenBudget,
       // The task's own request, not the previous agent's startup prompt.
-      request: { title: task.title, description: task.description }
+      request: { title: task.title, description: task.description },
+      // The transcript came from the previous agent's run; the new agent's
+      // own secrets could also show up if the handoff carries its own
+      // earlier turns on a re-handoff — scrub for both sides.
+      scrubber: this.buildScrubberForAgents([marker.fromAgentId, agentId])
     })
     if (!built) {
       this.db.deleteSetting(key)
@@ -7010,6 +7428,19 @@ Important:
             updates: { ...event.updates, review_entered_at: current.review_entered_at, review_seen_at: current.review_seen_at }
           }
         }
+      }
+    }
+    // Secret scrubbing choke point: every agent-output event is redacted
+    // HERE, before persistence, before the desktop renderer, and before the
+    // mobile broadcast — so a secret value can never reach transcript_parts,
+    // the UI, or a paired phone no matter which of those three sinks sees it
+    // first. Deep-scrubs the whole payload (content, tool.input/output/error,
+    // question/plan parts, attachment metadata) since it's cheap on a miss
+    // and no field here is exempt by contract.
+    if (channel === 'agent:output' || channel === 'agent:output-batch') {
+      const scrubber = this.scrubberForOutput(data)
+      if (scrubber && !scrubber.isEmpty) {
+        data = scrubber.scrubDeep(data)
       }
     }
     // Durable transcript projection: persist every transcript part BEFORE any

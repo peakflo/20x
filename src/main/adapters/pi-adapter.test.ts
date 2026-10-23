@@ -28,6 +28,18 @@ import {
 } from './pi-adapter'
 import { MessagePartType } from './coding-agent-adapter'
 
+/**
+ * Minor finding, re-review: the previous version of this helper called the
+ * adapter's own private `processEnv` to compute an "expected" env, then
+ * compared the ACTUAL spawned env (which itself came from calling that same
+ * `processEnv`) against it — comparing a pure function's output to itself.
+ * That assertion could never fail no matter what `processEnv` actually
+ * computed, since both sides were equally wrong together. Real coverage
+ * needs ground truth that does NOT come from calling the function under
+ * test a second time — see the two tests below, which seed an ambient
+ * credential independently and assert on the REAL spawned env directly.
+ */
+
 function fakeProcess() {
   const process = new EventEmitter() as EventEmitter & Record<string, any>
   process.pid = 12345
@@ -82,48 +94,58 @@ describe('PiAdapter', () => {
   })
 
   it('uses the native Pi session file and applies model selection through RPC', async () => {
-    const child = fakeProcess()
-    spawnMock.mockReturnValue(child)
-    const adapter = new PiAdapter({ getSetting: vi.fn(() => null) } as any)
-    vi.spyOn(adapter as any, 'findPiExecutable').mockResolvedValue('/usr/local/bin/pi')
-    vi.spyOn(adapter as any, 'installPeakfloGateway').mockReturnValue(null)
-    vi.spyOn(adapter as any, 'buildMcpConfig').mockReturnValue(undefined)
-    vi.spyOn(adapter as any, 'installPermissionExtension').mockReturnValue('/tmp/20x-permissions.ts')
-    vi.spyOn(adapter as any, 'attachProcess').mockImplementation(() => undefined)
-    const command = vi.spyOn(adapter as any, 'command')
-      .mockResolvedValueOnce({
-        type: 'response',
-        command: 'get_state',
-        success: true,
-        data: { sessionFile: '/sessions/native-session.jsonl' },
-      })
-      .mockResolvedValueOnce({ type: 'response', command: 'set_model', success: true })
+    // Independent ground truth, not derived from calling processEnv again:
+    // an ambient provider key must NOT reach the spawned Pi process.
+    const prevKey = process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-should-not-leak-into-pi-123456'
+    try {
+      const child = fakeProcess()
+      spawnMock.mockReturnValue(child)
+      const adapter = new PiAdapter({ getSetting: vi.fn(() => null) } as any)
+      vi.spyOn(adapter as any, 'findPiExecutable').mockResolvedValue('/usr/local/bin/pi')
+      vi.spyOn(adapter as any, 'installPeakfloGateway').mockReturnValue(null)
+      vi.spyOn(adapter as any, 'buildMcpConfig').mockReturnValue(undefined)
+      vi.spyOn(adapter as any, 'installPermissionExtension').mockReturnValue('/tmp/20x-permissions.ts')
+      vi.spyOn(adapter as any, 'attachProcess').mockImplementation(() => undefined)
+      const command = vi.spyOn(adapter as any, 'command')
+        .mockResolvedValueOnce({
+          type: 'response',
+          command: 'get_state',
+          success: true,
+          data: { sessionFile: '/sessions/native-session.jsonl' },
+        })
+        .mockResolvedValueOnce({ type: 'response', command: 'set_model', success: true })
 
-    const id = await adapter.createSession({
-      agentId: 'agent-1',
-      taskId: 'task-1',
-      workspaceDir: '/workspace',
-      model: 'peakflo/model-one',
-      permissionMode: 'ask',
-    })
+      const sessionConfig = {
+        agentId: 'agent-1',
+        taskId: 'task-1',
+        workspaceDir: '/workspace',
+        model: 'peakflo/model-one',
+        permissionMode: 'ask' as const,
+      }
+      const id = await adapter.createSession(sessionConfig)
 
-    expect(id).toBe('/sessions/native-session.jsonl')
-    expect(spawnMock.mock.calls[0][0]).toBe(nodeWorkerRuntime().execPath)
-    const args = spawnMock.mock.calls[0][1] as string[]
-    expect(args[0]).toBe('/usr/local/bin/pi')
-    expect(args).toContain('--mode')
-    expect(args).toContain('--extension')
-    expect(args).not.toContain('--session-dir')
-    expect(args).not.toContain('--provider')
-    expect(args).not.toContain('--model')
-    expect(spawnMock.mock.calls[0][2]).toMatchObject({
-      env: nodeWorkerRuntime().env,
-      shell: false,
-    })
-    expect(command).toHaveBeenLastCalledWith(
-      expect.anything(),
-      { type: 'set_model', provider: 'peakflo', modelId: 'model-one' },
-    )
+      expect(id).toBe('/sessions/native-session.jsonl')
+      expect(spawnMock.mock.calls[0][0]).toBe(nodeWorkerRuntime().execPath)
+      const args = spawnMock.mock.calls[0][1] as string[]
+      expect(args[0]).toBe('/usr/local/bin/pi')
+      expect(args).toContain('--mode')
+      expect(args).toContain('--extension')
+      expect(args).not.toContain('--session-dir')
+      expect(args).not.toContain('--provider')
+      expect(args).not.toContain('--model')
+      const spawnOpts = spawnMock.mock.calls[0][2]
+      expect(spawnOpts.shell).toBe(false)
+      expect(spawnOpts.env.ANTHROPIC_API_KEY).toBeUndefined()
+      expect(spawnOpts.env.TWENTYX_PI_PERMISSION_MODE).toBe('ask')
+      expect(command).toHaveBeenLastCalledWith(
+        expect.anything(),
+        { type: 'set_model', provider: 'peakflo', modelId: 'model-one' },
+      )
+    } finally {
+      if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = prevKey
+    }
   })
 
   it('discovers the effective Pi model catalog through RPC', async () => {
@@ -168,10 +190,11 @@ describe('PiAdapter', () => {
       '--no-session',
       '--approve',
     ])
-    expect(spawnMock.mock.calls[0][2]).toMatchObject({
-      env: nodeWorkerRuntime().env,
-      shell: false,
-    })
+    const spawnOpts = spawnMock.mock.calls[0][2]
+    expect(spawnOpts.shell).toBe(false)
+    // Matches the internal `config` getProviders itself builds (agentId/
+    // taskId: 'pi-discovery', permissionMode: 'allow') — see pi-adapter.ts.
+    expect(spawnOpts.env.TWENTYX_PI_PERMISSION_MODE).toBe('allow')
   })
 
   it('waits for agent_settled instead of agent_end', () => {
@@ -619,5 +642,34 @@ describe('sanitizePiContextMessages', () => {
       { role: 'assistant', content: [validCall] },
       messages[1],
     ])
+  })
+})
+
+// Major finding, re-review (M8): the generic per-agent "pass shell
+// credentials" opt-in must apply to Pi too, even though Pi itself never
+// reads any of these vars directly (it only uses the AI gateway key or its
+// own subscription login) — an advanced setup running a third-party
+// provider through Pi outside 20x's own modes can still rely on ambient
+// inheritance.
+describe('PiAdapter processEnv — shell-credentials opt-in', () => {
+  it('does not pass ambient GH_TOKEN through by default, but does once the agent opts in, registering it with the live scrubber', () => {
+    const prev = process.env.GH_TOKEN
+    process.env.GH_TOKEN = 'gh-token-value-123456'
+    try {
+      const adapter = new PiAdapter({ getSetting: vi.fn(() => null) } as any)
+      const withoutOptIn = (adapter as any).processEnv({ agentId: 'a1', taskId: 't1', workspaceDir: '/tmp' }, null)
+      expect(withoutOptIn.GH_TOKEN).toBeUndefined()
+
+      const addEntries = vi.fn()
+      const withOptIn = (adapter as any).processEnv(
+        { agentId: 'a1', taskId: 't1', workspaceDir: '/tmp', allowShellCredentials: true, getLiveScrubber: () => ({ addEntries }) },
+        null
+      )
+      expect(withOptIn.GH_TOKEN).toBe('gh-token-value-123456')
+      expect(addEntries).toHaveBeenCalledWith([{ name: 'GH_TOKEN', value: 'gh-token-value-123456' }])
+    } finally {
+      if (prev === undefined) delete process.env.GH_TOKEN
+      else process.env.GH_TOKEN = prev
+    }
   })
 })

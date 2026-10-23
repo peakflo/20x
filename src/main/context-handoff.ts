@@ -21,6 +21,7 @@
  * prompt.
  */
 import type { TranscriptPartRecord } from './database'
+import type { SecretScrubber } from './secret-scrubber'
 
 /** Estimated-token budget for the carried history. */
 export const CONTEXT_HANDOFF_DEFAULT_TOKEN_BUDGET = 16_000
@@ -233,23 +234,40 @@ function isTextTurn(part: HandoffSourcePart): boolean {
   return (part.role === 'user' || part.role === 'assistant') && (!part.partType || part.partType === 'text')
 }
 
-/** Keeps the parts that can be handed over and gives each one a label and a text. */
-function toCandidate(part: HandoffSourcePart, index: number): Candidate | null {
+/**
+ * Keeps the parts that can be handed over and gives each one a label and a
+ * text. `scrubber`, when given, redacts known secret values before the text
+ * is capped/escaped — a handoff carries raw transcript content into a brand
+ * new agent's prompt, so this is a second scrubbing pass independent of
+ * whatever already happened (or didn't, for pre-fix history) at the
+ * sendToRenderer choke point.
+ */
+function toCandidate(part: HandoffSourcePart, index: number, scrubber?: SecretScrubber): Candidate | null {
   if (isTextTurn(part)) {
     const content = (part.content ?? '').trim()
     if (!content) return null
-    return { index, seq: part.seq, kind: 'turn', label: part.role, text: capTurn(content, part.seq) }
+    const scrubbed = scrubber ? (scrubber.scrub(content) ?? content) : content
+    return { index, seq: part.seq, kind: 'turn', label: part.role, text: capTurn(scrubbed, part.seq) }
   }
 
   if (part.partType === 'tool') {
     const toolName = (part.tool as { name?: unknown } | undefined)?.name
-    const text = toolOutputText(part)
+    const text = toolOutputText(scrubber ? scrubPart(part, scrubber) : part)
     if (!text) return null
     const label = typeof toolName === 'string' && toolName ? `tool ${toolName}` : 'tool'
     return { index, seq: part.seq, kind: 'tool', label, text }
   }
 
   return null
+}
+
+/** Scrubs a tool part's `content`/`tool.output`/`tool.error` before `toolOutputFull` reads them. */
+function scrubPart(part: HandoffSourcePart, scrubber: SecretScrubber): HandoffSourcePart {
+  return {
+    ...part,
+    content: part.content ? (scrubber.scrub(part.content) ?? part.content) : part.content,
+    tool: part.tool ? scrubber.scrubDeep(part.tool) : part.tool
+  }
 }
 
 /** Shortens a message that is too long to carry in full. The pointer lets the agent read the rest. */
@@ -292,6 +310,12 @@ export interface ContextHandoffOptions {
    * transcript (the previous agent's startup prompt) is replaced by it.
    */
   request?: ContextHandoffRequest
+  /**
+   * Redacts known secret values out of every carried turn/tool-result before
+   * it's written into the new agent's prompt. Omit only when the caller has
+   * already scrubbed `parts` itself.
+   */
+  scrubber?: SecretScrubber
 }
 
 export interface ContextHandoffResult {
@@ -326,7 +350,8 @@ export function buildContextHandoff(
   if (options.request) {
     const req = options.request
     const description = (req.description ?? '').trim()
-    const text = description ? `${req.title.trim()}\n\n${description}` : req.title.trim()
+    const rawText = description ? `${req.title.trim()}\n\n${description}` : req.title.trim()
+    const text = options.scrubber ? (options.scrubber.scrub(rawText) ?? rawText) : rawText
     // Without a startup prompt in the transcript, the request still comes first.
     const at = startupIndex >= 0 ? startupIndex : -1
     const seq = startupIndex >= 0 ? parts[startupIndex].seq : 0
@@ -334,7 +359,7 @@ export function buildContextHandoff(
   }
   parts.forEach((part, index) => {
     if (index === startupIndex) return
-    const candidate = toCandidate(part, index)
+    const candidate = toCandidate(part, index, options.scrubber)
     if (candidate) candidates.push(candidate)
   })
 

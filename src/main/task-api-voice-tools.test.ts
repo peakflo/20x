@@ -88,6 +88,15 @@ function makeDb() {
     getTasks: vi.fn(() => TASKS),
     getTask: vi.fn((id: string) => TASKS.find((t) => t.id === id)),
     getTranscriptParts: vi.fn(() => PARTS),
+    // get_messages scrubs output through buildSecretEntriesForAgent, which
+    // looks the task's agent up — no agent configured in these fixtures.
+    getAgent: vi.fn(() => undefined),
+    // get_messages also scrubs through buildAllKnownSecretEntries (every
+    // stored secret + every agent's api_keys, not just this task's current
+    // agent) — no secrets/agents configured in these fixtures.
+    getAgents: vi.fn(() => []),
+    getSecrets: vi.fn(() => []),
+    getSecretsWithValues: vi.fn(() => []),
   } as never
 }
 

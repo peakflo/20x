@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { cn, formatDate, formatRelativeDate, isOverdue, isDueSoon } from './utils'
+import { cn, formatDate, formatRelativeDate, isOverdue, isDueSoon, cleanErrorMessage } from './utils'
 
 describe('cn()', () => {
   it('merges class names', () => {
@@ -127,5 +127,27 @@ describe('isDueSoon()', () => {
 
   it('returns false for 2+ days in the future', () => {
     expect(isDueSoon('2024-06-17')).toBe(false)
+  })
+})
+
+describe('cleanErrorMessage()', () => {
+  it('strips a single leading "Error: " prefix', () => {
+    expect(cleanErrorMessage('Error: keychain locked')).toBe('keychain locked')
+  })
+
+  it("strips Electron's full IPC wrapper, including the nested Error: prefix", () => {
+    expect(
+      cleanErrorMessage("Error: Error invoking remote method 'secrets:create': Error: keychain locked")
+    ).toBe('keychain locked')
+  })
+
+  it('leaves a message with no prefix unchanged', () => {
+    expect(cleanErrorMessage('keychain locked')).toBe('keychain locked')
+  })
+
+  it('handles a bare IPC wrapper with no further prefix', () => {
+    expect(cleanErrorMessage("Error invoking remote method 'secrets:create': keychain locked")).toBe(
+      'keychain locked'
+    )
   })
 })
