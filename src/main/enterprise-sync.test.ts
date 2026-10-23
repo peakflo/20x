@@ -130,6 +130,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
         content: '# Test',
         confidence: 0.8,
         uses: 5,
+        // uses(5) - uses_at_last_sync(0): what this machine has not reported yet
+        usesDelta: 5,
         lastUsed: '2026-03-10T00:00:00Z',
         updatedAt: '2026-03-10T00:00:00Z',
         tags: ['test']
@@ -979,6 +981,99 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
           enterprise_skill_id: 'cloud-1'
         })
       )
+    })
+  })
+
+  // ── Usage delta ──────────────────────────────────────────────────────
+
+  describe('usage reporting', () => {
+    it('reports only the usage accrued since the last sync', async () => {
+      mockDb.getSkills.mockReturnValue([
+        makeLocalSkill({ uses: 12, uses_at_last_sync: 8, enterprise_skill_id: 'server-1' })
+      ])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 1,
+        skills: [makeServerSkill({ id: 'server-1' })]
+      })
+
+      await syncManager.syncAll('user-1')
+
+      const payload = mockApiClient.batchSyncSkills.mock.calls[0][0]
+      // 12 - 8. Sending the absolute 12 would let the server's max() discard
+      // whatever another machine contributed.
+      expect(payload[0].usesDelta).toBe(4)
+    })
+
+    it('sends no delta when nothing was used since the last sync', async () => {
+      mockDb.getSkills.mockReturnValue([
+        makeLocalSkill({ uses: 8, uses_at_last_sync: 8, enterprise_skill_id: 'server-1' })
+      ])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 1,
+        skills: [makeServerSkill({ id: 'server-1' })]
+      })
+
+      await syncManager.syncAll('user-1')
+
+      const payload = mockApiClient.batchSyncSkills.mock.calls[0][0]
+      expect(payload[0].usesDelta).toBeUndefined()
+    })
+
+    it('never reports a negative delta if the local counter went backwards', async () => {
+      mockDb.getSkills.mockReturnValue([
+        makeLocalSkill({ uses: 2, uses_at_last_sync: 9, enterprise_skill_id: 'server-1' })
+      ])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 1,
+        skills: [makeServerSkill({ id: 'server-1' })]
+      })
+
+      await syncManager.syncAll('user-1')
+
+      const payload = mockApiClient.batchSyncSkills.mock.calls[0][0]
+      expect(payload[0].usesDelta).toBeUndefined()
+    })
+
+    it('advances the usage baseline once the server accepts the push', async () => {
+      mockDb.getSkills.mockReturnValue([
+        makeLocalSkill({ uses: 12, uses_at_last_sync: 8, enterprise_skill_id: 'server-1' })
+      ])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 1,
+        conflicts: [],
+        skills: [makeServerSkill({ id: 'server-1' })]
+      })
+
+      await syncManager.syncAll('user-1')
+
+      expect(mockDb.updateSkill).toHaveBeenCalledWith('local-1', {
+        enterprise_skill_id: 'server-1',
+        uses_at_last_sync: 12
+      })
+    })
+
+    it('holds the baseline when the server refused the item', async () => {
+      mockDb.getSkills.mockReturnValue([
+        makeLocalSkill({ uses: 12, uses_at_last_sync: 8, enterprise_skill_id: 'server-1' })
+      ])
+      mockApiClient.batchSyncSkills.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        skipped: 1,
+        conflicts: [{ id: 'server-1', name: 'Test Skill', reason: 'stale' }],
+        skills: [makeServerSkill({ id: 'server-1' })]
+      })
+
+      await syncManager.syncAll('user-1')
+
+      // Advancing here would discard the 4 uses the server never added.
+      expect(mockDb.updateSkill).toHaveBeenCalledWith('local-1', {
+        enterprise_skill_id: 'server-1'
+      })
     })
   })
 })
