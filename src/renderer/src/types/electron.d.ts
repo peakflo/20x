@@ -2,6 +2,7 @@ import type { BrowserRecordingManifest } from '@shared/browser-recording'
 import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '@shared/browser-session-import'
 import type { UiCommandAck, UiCommandEnvelope } from '@shared/ui-commands'
 import type { TaskRunDuration } from '@shared/task-run-duration'
+import type { DataCategory, DataExportResult, DataImportPreview, DataImportResult } from '@shared/data-transfer'
 import type {
   WorkfloTask,
   CreateTaskDTO,
@@ -357,6 +358,12 @@ interface ElectronAPI {
     getAll: () => Promise<Record<string, string>>
   }
   pushTest: () => Promise<{ success: boolean; sent: number }>
+  dataTransfer: {
+    exportData: (categories: DataCategory[]) => Promise<DataExportResult>
+    pickImport: () => Promise<DataImportPreview | null>
+    cancelImport: () => Promise<void>
+    importData: (categories: DataCategory[]) => Promise<DataImportResult>
+  }
   env: {
     get: (key: string) => Promise<string | null>
   }

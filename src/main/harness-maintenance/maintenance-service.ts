@@ -316,7 +316,23 @@ export interface SpawnLike {
   }
 }
 
-const defaultSpawn: SpawnLike = (cmd, args) => spawn(cmd, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+/**
+ * On Windows npm, npx and most CLI shims are `.cmd` scripts, which CreateProcess
+ * cannot start without a shell: `spawn('npm')` fails with ENOENT. Run those
+ * through cmd.exe, quoting each argument since a shell re-parses the line.
+ */
+export function windowsSpawnPlan(cmd: string, args: string[], platform: NodeJS.Platform = process.platform): { cmd: string; args: string[]; shell: boolean } {
+  if (platform !== 'win32') return { cmd, args, shell: false }
+  const needsShell = /^(npm|npx|pnpm|yarn)$/i.test(cmd) || /\.(cmd|bat)$/i.test(cmd)
+  if (!needsShell) return { cmd, args, shell: false }
+  const quote = (value: string): string => (/[\s&|<>^()%!"]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value)
+  return { cmd: quote(cmd), args: args.map(quote), shell: true }
+}
+
+const defaultSpawn: SpawnLike = (cmd, args) => {
+  const plan = windowsSpawnPlan(cmd, args)
+  return spawn(plan.cmd, plan.args, { shell: plan.shell, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+}
 
 export interface UpdateDeps {
   spawnImpl?: SpawnLike
@@ -411,7 +427,11 @@ export async function runHarnessUpdate(
       const run: HarnessUpdateRunState = {
         harness,
         status: 'failed',
-        message: spawnResult.timedOut ? 'Update timed out.' : `Update command exited with code ${spawnResult.code}.`,
+        message: spawnResult.timedOut
+          ? 'Update timed out.'
+          : spawnResult.error
+            ? `Update command could not start: ${spawnResult.error}`
+            : `Update command exited with code ${spawnResult.code}.`,
         output: spawnResult.output,
         startedAt,
         finishedAt: new Date().toISOString()
@@ -443,7 +463,7 @@ function npmPackageFor(harness: HarnessKey, version: string | null): string | nu
   return resolveNpmPackageName(harness, version)
 }
 
-function spawnUpdate(cmd: string, args: string[], onProgress: (chunk: string) => void, spawnImpl: SpawnLike): Promise<{ success: boolean; code: number | null; timedOut: boolean; output: string }> {
+function spawnUpdate(cmd: string, args: string[], onProgress: (chunk: string) => void, spawnImpl: SpawnLike): Promise<{ success: boolean; code: number | null; timedOut: boolean; output: string; error?: string }> {
   return new Promise((resolve) => {
     const child = spawnImpl(cmd, args)
     let output = ''
@@ -463,7 +483,7 @@ function spawnUpdate(cmd: string, args: string[], onProgress: (chunk: string) =>
 
     child.on('error', (err) => {
       clearTimeout(timer)
-      resolve({ success: false, code: null, timedOut: false, output: `${output}\n${err.message}` })
+      resolve({ success: false, code: null, timedOut: false, output: `${output}\n${err.message}`, error: err.message })
     })
 
     child.on('close', (code) => {

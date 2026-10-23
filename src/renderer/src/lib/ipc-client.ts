@@ -18,6 +18,7 @@ import type {
   HarnessUpdateAllResult,
   HarnessUpdateResult
 } from '@shared/harness-maintenance'
+import type { DataCategory, DataExportResult, DataImportPreview, DataImportResult } from '@shared/data-transfer'
 import type {
   MicrophonePermission,
   VoiceActionOutcome,
@@ -492,6 +493,20 @@ export const settingsApi = {
 }
 
 export const pushTest = (): Promise<{ success: boolean; sent: number }> => window.electronAPI.pushTest()
+export const dataTransferApi = {
+  exportData: (categories: DataCategory[]): Promise<DataExportResult> => {
+    return window.electronAPI.dataTransfer.exportData(categories)
+  },
+  pickImport: (): Promise<DataImportPreview | null> => {
+    return window.electronAPI.dataTransfer.pickImport()
+  },
+  cancelImport: (): Promise<void> => {
+    return window.electronAPI.dataTransfer.cancelImport()
+  },
+  importData: (categories: DataCategory[]): Promise<DataImportResult> => {
+    return window.electronAPI.dataTransfer.importData(categories)
+  }
+}
 
 export const updaterApi = {
   check: (): Promise<{ success: boolean; version?: string; error?: string }> => {

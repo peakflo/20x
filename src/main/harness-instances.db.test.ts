@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeAgent, makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
+import { isWindows } from '../../test/helpers/can-symlink'
 
 let db: DatabaseManager
 let raw: ReturnType<typeof createTestDb>['rawDb']
@@ -66,7 +67,7 @@ describe('harness instance store', () => {
 })
 
 describe('account_home migration', () => {
-  it('moves a non-empty account_home into an instance and points the agent at it', () => {
+  it.skipIf(isWindows)('moves a non-empty account_home into an instance and points the agent at it', () => {
     const agent = db.createAgent(makeAgent({ name: 'Coder', config: legacyConfig({ coding_agent: 'codex', account_home: '/Users/me/.codex-work' }) }))!
 
     runAccountHomeMigration()

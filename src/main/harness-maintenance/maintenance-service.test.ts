@@ -25,6 +25,7 @@ import {
   resetNpmCacheForTests,
   runHarnessUpdate,
   runUpdateAll,
+  windowsSpawnPlan,
   type SpawnLike
 } from './maintenance-service'
 import type { FetchLike } from './npm-registry'
@@ -376,5 +377,20 @@ describe('runUpdateAll', () => {
     expect(result.skipped).toContain('opencode')
     expect(result.skipped).toContain('cursor') // not installed at all
     expect(result.results.map((r) => r.harness)).toContain('codex')
+  })
+})
+
+describe('windowsSpawnPlan', () => {
+  it('runs npm through a shell on Windows, quoting arguments with spaces', () => {
+    expect(windowsSpawnPlan('npm', ['install', '-g', '--prefix', 'C:\Users\A B\npm', 'pkg@latest'], 'win32')).toEqual({
+      cmd: 'npm',
+      args: ['install', '-g', '--prefix', '"C:\Users\A B\npm"', 'pkg@latest'],
+      shell: true
+    })
+  })
+
+  it('leaves native executables and other platforms alone', () => {
+    expect(windowsSpawnPlan('claude.exe', ['update'], 'win32').shell).toBe(false)
+    expect(windowsSpawnPlan('npm', ['x'], 'darwin')).toEqual({ cmd: 'npm', args: ['x'], shell: false })
   })
 })

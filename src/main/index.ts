@@ -21,6 +21,7 @@ import { NotionPlugin } from './plugins/notion-plugin'
 import { YouTrackPlugin } from './plugins/youtrack-plugin'
 import { registerIpcHandlers } from './ipc-handlers'
 import { onBrandSpacesChanged, setSelectedCompanyBrand } from './brand'
+import { registerDataTransferHandlers } from './data-transfer-handlers'
 import { panelBrowserBroker } from './panel-browser-broker'
 import { getAgentBrowserSession } from './agent-browser-session'
 import { VoiceSessionManager } from './voice/voice-session-manager'
@@ -1261,6 +1262,7 @@ app.whenReady().then(async () => {
   }
 
   registerIpcHandlers(db, agentManager, githubManager, worktreeManager, syncManager, pluginRegistry, mcpToolCaller, oauthManager, recurrenceScheduler, enterpriseAuth ?? undefined, claudePluginManager, heartbeatScheduler, enterpriseHeartbeatInstance ?? undefined, enterpriseStateSyncInstance ?? undefined, gitlabManager ?? undefined, workspaceCleanupScheduler ?? undefined, voiceSessionManager ?? undefined, taskAutomationScheduler ?? undefined)
+  registerDataTransferHandlers(db)
 
   // ── Media permission handler (design §5.9) ────────────────────────────────
   // Grant the microphone only to the 20x renderer, and only while voice is on.

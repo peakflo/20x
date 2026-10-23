@@ -61,6 +61,7 @@ import { writeArtifactFileToClipboard } from './artifact-clipboard'
 import { writeClipboardAttachment, removeStagedClipboardFile } from './clipboard-attachments'
 import { ArtifactClipboardMode, type ArtifactCopyFileResult } from '../shared/artifacts'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
+import { createCwdTracker, shellIntegrationArgs } from './terminal-shell-integration'
 import { resolveTerminalCwd } from './terminal-cwd'
 import { getAcpInstallManager, getAcpRegistryClient } from './acp-registry/runtime'
 import { searchAgents, filterInstallableOnThisPlatform } from './acp-registry/registry-client'
@@ -2121,6 +2122,8 @@ export function registerIpcHandlers(
     pid: number
     /** Circular buffer of recent terminal output lines */
     outputBuffer: string[]
+    /** The directory the shell last reported, for shells that report it (Windows). */
+    reportedCwd?: () => string | null
   }
 
   const terminals = new Map<string, TerminalHandle>()
@@ -2143,7 +2146,8 @@ export function registerIpcHandlers(
     const pty = require('node-pty')
     const initialCwd = cwd || process.env.HOME || process.cwd()
 
-    const ptyProcess = pty.spawn(shellPath, [], {
+    const cwdTracker = createCwdTracker()
+    const ptyProcess = pty.spawn(shellPath, shellIntegrationArgs(shellPath), {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
@@ -2165,6 +2169,7 @@ export function registerIpcHandlers(
     }
 
     ptyProcess.onData((data: string) => {
+      cwdTracker.push(data)
       appendToBuffer(data)
       if (!sender.isDestroyed()) {
         sender.send('terminal:data', { id, data })
@@ -2198,6 +2203,7 @@ export function registerIpcHandlers(
       },
       pid: ptyProcess.pid,
       outputBuffer,
+      reportedCwd: cwdTracker.current,
     }
   }
 
@@ -2434,6 +2440,8 @@ else:
     if (expectedPid !== undefined && term.pid !== expectedPid) return { cwd: null }
 
     try {
+      const reported = term.reportedCwd?.()
+      if (reported) return { cwd: reported }
       // Async child processes: the old execSync chain (pgrep ×N + lsof)
       // blocked the Electron main process for every open terminal poll.
       return { cwd: await resolveTerminalCwd(term.pid) }

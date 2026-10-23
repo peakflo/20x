@@ -29,6 +29,7 @@ import {
 
 const brandFlagCache = createBrandFlagCache(() => ipcRenderer.sendSync('app:brandSpacesEnabled'))
 ipcRenderer.on('app:brandSpacesChanged', (_event, enabled: boolean) => brandFlagCache.update(enabled))
+import type { DataCategory, DataExportResult, DataImportPreview, DataImportResult } from '../shared/data-transfer'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   db: {
@@ -327,6 +328,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getAll: (): Promise<Record<string, string>> => ipcRenderer.invoke('settings:getAll')
   },
   pushTest: (): Promise<{ success: boolean; sent: number }> => ipcRenderer.invoke('mobile:pushTest'),
+  dataTransfer: {
+    exportData: (categories: DataCategory[]): Promise<DataExportResult> =>
+      ipcRenderer.invoke('data:export', categories),
+    pickImport: (): Promise<DataImportPreview | null> => ipcRenderer.invoke('data:pickImport'),
+    cancelImport: (): Promise<void> => ipcRenderer.invoke('data:cancelImport'),
+    importData: (categories: DataCategory[]): Promise<DataImportResult> =>
+      ipcRenderer.invoke('data:import', categories)
+  },
   env: {
     get: (key: string): Promise<string | null> => ipcRenderer.invoke('env:get', key)
   },

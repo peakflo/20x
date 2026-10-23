@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/Input'
 import { Label } from '@/components/ui/Label'
 import { Select } from '@/components/ui/Select'
 import { SettingsSection } from '../SettingsSection'
+import { DataTransferSettings } from './DataTransferSettings'
 import { useSettingsStore } from '@/stores/settings-store'
 import { settingsApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
@@ -248,6 +249,8 @@ export function AdvancedSettings() {
           </div>
         </div>
       </SettingsSection>
+
+      <DataTransferSettings />
     </div>
   )
 }
