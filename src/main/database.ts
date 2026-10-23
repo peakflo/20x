@@ -1200,8 +1200,19 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  * 8 → 9: tasks.complete_at_source
  * 9 → 10: harness_instances table; agent config account_home → harness_instance_id
  * 10 → 11: tasks.review_entered_at + tasks.review_seen_at (review seen/unseen)
+ * 11 → 12: no-op re-run of the 10→11 step. Installs that reached
+ *   `__schema_version = 11` via a build whose runMigrations() didn't yet
+ *   contain the review_entered_at/review_seen_at ALTERs (e.g. an internal
+ *   build that claimed version 11 for an unrelated change) were left
+ *   permanently stuck: the version gate only re-runs migrations when the
+ *   stored version is LOWER than this constant, so once it reads 11 it never
+ *   retries, and createTask()'s INSERT (which always lists review_entered_at)
+ *   fails with "table tasks has no column named review_entered_at" forever.
+ *   The per-column `if (!columnNames.has(...))` checks in
+ *   migrateReviewSeenColumns() are idempotent, so bumping this is safe for
+ *   everyone else — it's a no-op where the columns already exist.
  */
-const SCHEMA_VERSION = 11
+const SCHEMA_VERSION = 12
 
 export class DatabaseManager {
   public db!: Database.Database

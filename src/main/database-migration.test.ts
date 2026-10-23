@@ -131,6 +131,44 @@ describe('DatabaseManager migrations on an existing install', () => {
     second.close?.()
   })
 
+  /**
+   * Regression for a real stuck install: `__schema_version` already read 11
+   * (the old `SCHEMA_VERSION`) but `tasks.review_entered_at` /
+   * `review_seen_at` didn't exist — most likely because some other build
+   * claimed version 11 for an unrelated change before this release's
+   * migration ever ran. The version gate alone can never recover from this
+   * (11 < 11 is false forever), so createTask()'s INSERT, which always lists
+   * `review_entered_at`, failed with "table tasks has no column named
+   * review_entered_at" on every attempt to create a task. Bumping
+   * `SCHEMA_VERSION` past the stuck value is what unsticks it — the
+   * per-column checks in `migrateReviewSeenColumns()` just re-add what's
+   * actually missing.
+   */
+  it('recovers a database stuck at schema version 11 without the review seen columns', () => {
+    const first = new DatabaseManager()
+    first.initialize()
+    first.close?.()
+
+    // Simulate the stuck state: version already at the old SCHEMA_VERSION,
+    // but the columns it was supposed to have added were never applied.
+    const raw = openRaw()
+    raw.exec('ALTER TABLE tasks DROP COLUMN review_entered_at')
+    raw.exec('ALTER TABLE tasks DROP COLUMN review_seen_at')
+    raw.prepare("UPDATE settings SET value = ? WHERE key = '__schema_version'").run('11')
+    expect(taskColumns(raw)).not.toContain('review_entered_at')
+    raw.close()
+
+    const second = new DatabaseManager()
+    second.initialize()
+    expect(() => second.createTask({ title: 'Should not throw' })).not.toThrow()
+    second.close?.()
+
+    const after = openRaw()
+    expect(taskColumns(after)).toContain('review_entered_at')
+    expect(taskColumns(after)).toContain('review_seen_at')
+    after.close()
+  })
+
   it('migrates existing push subscriptions and removes duplicate endpoints', () => {
     const first = new DatabaseManager()
     first.initialize()
