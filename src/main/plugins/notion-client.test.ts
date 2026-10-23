@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { NotionClient, type NotionBlock, type NotionFileObject } from './notion-client'
+import { NotionClient, INCREMENTAL_SYNC_OVERLAP_MS, type NotionBlock, type NotionFileObject } from './notion-client'
 
 // ── Helpers ──────────────────────────────────────────────────
 
@@ -179,6 +179,38 @@ describe('NotionClient', () => {
       expect(fetchMock.mock.calls[1][0]).toBe(
         'https://api.notion.com/v1/data_sources/data-source-1/query'
       )
+    })
+
+    it('re-queries an overlap window before last_synced_at', async () => {
+      // Notion rounds last_edited_time down to the minute and indexes with a
+      // lag, so a page edited at 03:25 must still match a cutoff of 03:25:53.
+      const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
+        results: [],
+        has_more: false,
+        next_cursor: null
+      }))
+      vi.stubGlobal('fetch', fetchMock)
+
+      await client.queryAllPages('data-source-1', undefined, '2026-10-23T03:25:53.000Z')
+
+      expect(INCREMENTAL_SYNC_OVERLAP_MS).toBe(5 * 60 * 1000)
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).filter).toEqual({
+        timestamp: 'last_edited_time',
+        last_edited_time: { on_or_after: '2026-10-23T03:20:53.000Z' }
+      })
+    })
+
+    it('does not filter by edit time on a full sync', async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
+        results: [],
+        has_more: false,
+        next_cursor: null
+      }))
+      vi.stubGlobal('fetch', fetchMock)
+
+      await client.queryAllPages('data-source-1', undefined, null)
+
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).filter).toBeUndefined()
     })
 
   })

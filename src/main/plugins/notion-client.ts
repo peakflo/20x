@@ -100,6 +100,14 @@ const NOTION_API = 'https://api.notion.com'
 const NOTION_VERSION = '2026-03-11'
 const RATE_LIMIT_DELAY = 350 // ms between paginated requests
 
+/**
+ * Notion rounds `last_edited_time` down to the minute and its query index lags
+ * edits by a few seconds, so an exact `on_or_after lastSyncedAt` filter misses
+ * pages edited just before the previous sync. Re-query this much earlier;
+ * re-processing a page is an idempotent upsert by external_id.
+ */
+export const INCREMENTAL_SYNC_OVERLAP_MS = 5 * 60 * 1000
+
 export class NotionClient {
   private token: string
 
@@ -248,10 +256,13 @@ export class NotionClient {
         andClauses.push(filter)
       }
     }
-    if (lastSyncedAt) {
+    const lastSyncedMs = lastSyncedAt ? Date.parse(lastSyncedAt) : NaN
+    if (!Number.isNaN(lastSyncedMs)) {
       andClauses.push({
         timestamp: 'last_edited_time',
-        last_edited_time: { on_or_after: lastSyncedAt }
+        last_edited_time: {
+          on_or_after: new Date(lastSyncedMs - INCREMENTAL_SYNC_OVERLAP_MS).toISOString()
+        }
       })
     }
 

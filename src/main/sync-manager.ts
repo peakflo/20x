@@ -141,6 +141,9 @@ export class SyncManager {
       }
     }
 
+    // Captured before the plugin queries the source: anything edited while the
+    // sync runs must still be newer than the stored incremental-sync cutoff.
+    const syncStartedAt = new Date().toISOString()
     try {
       const pluginResult: PluginSyncResult = await plugin.importTasks(sourceId, config, ctx)
       result.imported = pluginResult.imported
@@ -148,9 +151,14 @@ export class SyncManager {
       result.errors = pluginResult.errors
       console.log('[sync] Result:', { imported: result.imported, updated: result.updated, errors: result.errors })
 
-      // Update last_synced_at timestamp for incremental sync
-      this.db.updateTaskSourceLastSynced(sourceId)
-      console.log('[sync] Updated last_synced_at for source:', sourceId)
+      // Advance the incremental-sync cutoff only after a clean import so failed
+      // items are fetched again next time.
+      if (result.errors.length === 0) {
+        this.db.updateTaskSourceLastSynced(sourceId, syncStartedAt)
+        console.log('[sync] Updated last_synced_at for source:', sourceId)
+      } else {
+        console.warn('[sync] Import had errors; keeping previous last_synced_at for source:', sourceId)
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Import failed'
       result.errors.push(msg)

@@ -654,6 +654,17 @@ describe('TaskSource CRUD', () => {
     expect(updated!.last_synced_at).toBeTruthy()
   })
 
+  it('updateTaskSourceLastSynced stores an explicit sync start time', () => {
+    const source = db.createTaskSource({
+      mcp_server_id: mcpServerId,
+      name: 'Source',
+      plugin_id: 'notion'
+    })!
+
+    db.updateTaskSourceLastSynced(source.id, '2026-10-23T03:25:53.000Z')
+    expect(db.getTaskSource(source.id)!.last_synced_at).toBe('2026-10-23T03:25:53.000Z')
+  })
+
   it('deletes a task source', () => {
     const source = db.createTaskSource({
       mcp_server_id: mcpServerId,

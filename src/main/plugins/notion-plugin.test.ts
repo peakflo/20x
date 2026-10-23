@@ -225,7 +225,7 @@ describe('NotionPlugin', () => {
       expect(result.updated).toBe(0)
     })
 
-    it('skips pages with empty titles', async () => {
+    it('imports pages with empty titles as "Untitled"', async () => {
       mockClientInstance.queryAllPages.mockResolvedValue([
         makePage({
           properties: {
@@ -238,7 +238,10 @@ describe('NotionPlugin', () => {
       const ctx = makeContext()
       const result = await plugin.importTasks('src-1', defaultConfig, ctx)
 
-      expect(result.imported).toBe(0)
+      expect(result.imported).toBe(1)
+      expect(ctx.db.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Untitled', external_id: 'page-1' })
+      )
     })
 
     it('downloads files from Files-type properties', async () => {
@@ -411,11 +414,33 @@ describe('NotionPlugin', () => {
       )
     })
 
-    it('updates last synced timestamp', async () => {
+    it('passes the stored last_synced_at to the incremental query', async () => {
       const ctx = makeContext()
+      ;(ctx.db.getTaskSource as ReturnType<typeof vi.fn>).mockReturnValue({
+        name: 'Notion', last_synced_at: '2026-10-23T03:25:53.000Z'
+      })
       await plugin.importTasks('src-1', defaultConfig, ctx)
 
-      expect(ctx.db.updateTaskSourceLastSynced).toHaveBeenCalledWith('src-1')
+      expect(mockClientInstance.queryAllPages.mock.calls[0][2]).toBe('2026-10-23T03:25:53.000Z')
+    })
+
+    it('leaves last_synced_at to SyncManager (no end-of-sync advance)', async () => {
+      mockClientInstance.getDataSource.mockRejectedValue(new Error('Unauthorized'))
+      const ctx = makeContext()
+      const result = await plugin.importTasks('src-1', defaultConfig, ctx)
+
+      expect(result.errors[0]).toContain('Import failed')
+      expect(ctx.db.updateTaskSourceLastSynced).not.toHaveBeenCalled()
+    })
+
+    it('reports a page whose task could not be created', async () => {
+      mockClientInstance.queryAllPages.mockResolvedValue([makePage()])
+      const ctx = makeContext()
+      ;(ctx.db.createTask as ReturnType<typeof vi.fn>).mockReturnValue(undefined)
+
+      const result = await plugin.importTasks('src-1', defaultConfig, ctx)
+
+      expect(result.errors).toEqual(['Page page-1: failed to create task'])
     })
 
     it('handles download errors without failing the import', async () => {

@@ -473,7 +473,8 @@ export class NotionPlugin implements TaskSourcePlugin {
 
         try {
           const mapped = this.mapPage(page, propMap, config)
-          if (!mapped.title) continue
+          // Keep untitled pages instead of silently dropping them.
+          if (!mapped.title.trim()) mapped.title = 'Untitled'
 
           // Fetch page blocks for both content rendering and file extraction
           let blocks: import('./notion-client').NotionBlock[] = []
@@ -529,6 +530,7 @@ export class NotionPlugin implements TaskSourcePlugin {
             })
             if (!created) {
               console.error('[notion] Failed to create task for page:', page.id)
+              result.errors.push(`Page ${page.id}: failed to create task`)
               continue
             }
             taskId = created.id
@@ -569,7 +571,8 @@ export class NotionPlugin implements TaskSourcePlugin {
       result.errors.push(`Import failed: ${msg}`)
     }
 
-    ctx.db.updateTaskSourceLastSynced(sourceId)
+    // last_synced_at is advanced by SyncManager (using the sync start time and
+    // only when there were no errors), so failed pages are retried next sync.
     return result
   }
 

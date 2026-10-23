@@ -12,7 +12,8 @@ function makeMockDb(): DatabaseManager {
     getMcpServer: vi.fn(),
     getTask: vi.fn(),
     getSetting: vi.fn(),
-    updateTask: vi.fn()
+    updateTask: vi.fn(),
+    updateTaskSourceLastSynced: vi.fn()
   } as unknown as DatabaseManager
 }
 
@@ -121,6 +122,59 @@ describe('SyncManager', () => {
 
       const result = await syncManager.importTasks('src-1')
       expect(result.errors).toContain('Network error')
+    })
+
+    it('stores the sync start time (not end time) as last_synced_at', async () => {
+      let pluginRanAt = ''
+      const plugin = makeMockPlugin({
+        importTasks: vi.fn().mockImplementation(async () => {
+          await new Promise(resolve => setTimeout(resolve, 5))
+          pluginRanAt = new Date().toISOString()
+          return { imported: 1, updated: 0, errors: [] }
+        })
+      })
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'src-1', plugin_id: 'test', mcp_server_id: 'srv-1', config: {}
+      })
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
+
+      const before = new Date().toISOString()
+      await syncManager.importTasks('src-1')
+
+      expect(db.updateTaskSourceLastSynced).toHaveBeenCalledOnce()
+      const [id, at] = vi.mocked(db.updateTaskSourceLastSynced).mock.calls[0]
+      expect(id).toBe('src-1')
+      expect(at! >= before).toBe(true)
+      expect(at! < pluginRanAt).toBe(true)
+    })
+
+    it('does not advance last_synced_at when the import reports errors', async () => {
+      const plugin = makeMockPlugin({
+        importTasks: vi.fn().mockResolvedValue({ imported: 3, updated: 0, errors: ['Page p-1: boom'] })
+      })
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'src-1', plugin_id: 'test', mcp_server_id: 'srv-1', config: {}
+      })
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
+
+      const result = await syncManager.importTasks('src-1')
+
+      expect(result.errors).toEqual(['Page p-1: boom'])
+      expect(db.updateTaskSourceLastSynced).not.toHaveBeenCalled()
+    })
+
+    it('does not advance last_synced_at when the import throws', async () => {
+      const plugin = makeMockPlugin({
+        importTasks: vi.fn().mockRejectedValue(new Error('Network error'))
+      })
+      ;(db.getTaskSource as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 'src-1', plugin_id: 'test', mcp_server_id: 'srv-1', config: {}
+      })
+      ;(registry.get as unknown as ReturnType<typeof vi.fn>).mockReturnValue(plugin)
+
+      await syncManager.importTasks('src-1')
+
+      expect(db.updateTaskSourceLastSynced).not.toHaveBeenCalled()
     })
   })
 

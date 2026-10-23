@@ -3921,9 +3921,13 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return this.getTaskSource(id)
   }
 
-  updateTaskSourceLastSynced(id: string): void {
+  /**
+   * Record the incremental-sync cutoff. Pass the time the sync *started* so
+   * items edited while the sync ran are picked up by the next sync.
+   */
+  updateTaskSourceLastSynced(id: string, at: string = new Date().toISOString()): void {
     this.db.prepare('UPDATE task_sources SET last_synced_at = ?, updated_at = ? WHERE id = ?')
-      .run(new Date().toISOString(), new Date().toISOString(), id)
+      .run(at, new Date().toISOString(), id)
   }
 
   deleteTaskSource(id: string): boolean {
