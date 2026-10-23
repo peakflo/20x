@@ -10,6 +10,11 @@ describe('parseAiUsage', () => {
   it('computes from spend / maxBudget and clamps', () => {
     expect(parseAiUsage({ currentSubscription: { status: 'active', spend: 15, maxBudget: 10 } })?.percent).toBe(100)
   })
+  it('does not report a billing period end as a usage reset', () => {
+    expect(parseAiUsage({ currentSubscription: {
+      status: 'active', spend: 10, maxBudget: 10, currentPeriodEnd: '2026-10-27'
+    } })?.resetAt).toBeNull()
+  })
   it('returns null without subscription', () => {
     expect(parseAiUsage({ currentSubscription: null, plans: [] })).toBeNull()
     expect(parseAiUsage({ hasSubscription: false })).toBeNull()
@@ -66,6 +71,17 @@ describe('fetchAiUsage', () => {
   it('uses /usage result when active', async () => {
     const req = async (): Promise<unknown> => ({ active: true, usage: { usedUsd: 1, limitUsd: 2, percentUsed: 50, resetAt: null } })
     expect((await fetchAiUsage(req))?.percent).toBe(50)
+  })
+  it('uses the usage reset even when the plan billing period ends later', async () => {
+    const paths: string[] = []
+    const req = async (_m: string, path: string): Promise<unknown> => {
+      paths.push(path)
+      return path.endsWith('/usage')
+        ? { active: true, usage: { usedUsd: 20, limitUsd: 20, percentUsed: 100, resetAt: '2026-10-01T00:00:00.000Z' } }
+        : { currentSubscription: { status: 'active', spend: 20, maxBudget: 20, currentPeriodEnd: '2026-10-27' } }
+    }
+    expect((await fetchAiUsage(req))?.resetAt).toBe('2026-10-01T00:00:00.000Z')
+    expect(paths).toEqual(['/api/20x/ai-gateway/usage'])
   })
   it('returns null on errors', async () => {
     expect(await fetchAiUsage(async () => { throw new Error('x') })).toBeNull()
