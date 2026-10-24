@@ -3825,8 +3825,24 @@ describe('AgentManager event-driven parent wake-up', () => {
     const [taskId, message] = wakeSpy.mock.calls[0]
     expect(taskId).toBe('parent-1')
     expect(message).toContain('Child A')
-    expect(message).toContain('Child B')
+    expect(message).not.toContain('Child B')
     expect(message).toContain('terminal state')
+  })
+
+  it('wakes the parent without listing completed subtasks when every child is completed', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.Completed },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.Completed },
+    ])
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-2')
+
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    const [, message] = wakeSpy.mock.calls[0]
+    expect(message).toContain('No subtasks remain open.')
+    expect(message).not.toContain('Child A')
+    expect(message).not.toContain('Child B')
+    expect(message).toContain('complete the task')
   })
 
   it('does not wake the parent while some subtasks are still active', async () => {
