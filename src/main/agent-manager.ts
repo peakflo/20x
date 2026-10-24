@@ -4328,9 +4328,11 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     if (this.wakingParents.has(parentTaskId)) return
     this.wakingParents.add(parentTaskId)
     try {
-      const summary = subtasks
+      // Do not ask the coordinator to review completed subtasks again.
+      const pendingSubtasks = subtasks.filter((s) => s.status !== TaskStatus.Completed)
+      const summary = pendingSubtasks
         .map((s) => `- "${s.title}" (id: ${s.id}) → ${s.status}`)
-        .join('\n')
+        .join('\n') || 'No subtasks remain open.'
       // A subtask stuck in model_error will never move itself to
       // ready_for_review/completed — it needs the coordinator's attention,
       // not more waiting — so it counts as terminal here too.
@@ -4338,8 +4340,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         (s) => s.status === TaskStatus.ReadyForReview || s.status === TaskStatus.Completed || s.status === TaskStatus.ModelError
       )
       const instructions = allTerminal
-        ? `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +
-          `then continue coordination: consolidate results, fill in the parent task's output fields, ` +
+        ? `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to ` +
+          `${pendingSubtasks.length > 0 ? 'review the listed subtasks and ' : ''}consolidate results, fill in the parent task's output fields, ` +
           `and complete the task — or create follow-up subtasks if more work is needed.`
         : `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review the ready subtask's outputs, ` +
           `then continue coordination: start the next not_started subtask, create follow-up subtasks if more work ` +
