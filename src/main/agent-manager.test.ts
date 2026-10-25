@@ -107,6 +107,7 @@ function makeSkillRecord(overrides: Partial<{
   id: string; name: string; description: string; content: string;
   confidence: number; uses: number; last_used: string; tags: string[];
   version: number; is_deleted: boolean; created_at: string; updated_at: string;
+  enterprise_scope: 'tenant' | 'system'; enterprise_auto_attach: boolean;
 }> = {}) {
   return {
     id: 'skill-1',
@@ -326,6 +327,25 @@ describe('AgentManager skill file paths', () => {
   })
 
   describe('writeSkillFiles', () => {
+    it('attaches the approved system skill even with no selected skill ids', async () => {
+      const systemSkill = makeSkillRecord({
+        id: 'system-skill', name: 'self-improving-workflows',
+        enterprise_scope: 'system', enterprise_auto_attach: true,
+        content: 'Approved workflow instructions'
+      })
+      const mockDb = {
+        ...createMockDb({ coding_agent: 'codex' }),
+        getTask: vi.fn(() => ({ id: 'task-1', repos: [], skill_ids: null })),
+        getSkills: vi.fn(() => [systemSkill]),
+        getSkillsByIds: vi.fn(() => [])
+      } as unknown as ConstructorParameters<typeof AgentManager>[0]
+      manager = new AgentManager(mockDb)
+      await (manager as any).writeSkillFiles('task-1', 'agent-1', '/tmp/test-workspace')
+      const file = mockedWriteFileAsync.mock.calls.find(
+        (call) => asPosix(String(call[0])).endsWith('/self-improving-workflows/SKILL.md')
+      )
+      expect(file?.[1]).toContain('Approved workflow instructions')
+    })
     it('merges task and agent skill selections, removes duplicates, and excludes unselected skills', async () => {
       const taskSkill = makeSkillRecord({ id: 'task-skill', name: 'task-skill' })
       const sharedSkill = makeSkillRecord({ id: 'shared-skill', name: 'shared-skill' })
@@ -360,7 +380,7 @@ describe('AgentManager skill file paths', () => {
         'shared-skill',
         'agent-skill',
       ])
-      expect((mockDb as any).getSkills).not.toHaveBeenCalled()
+      expect((mockDb as any).getSkills).toHaveBeenCalledTimes(1)
 
       const agentsMd = writes.find(c => asPosix(String(c[0])) === '/tmp/test-workspace/AGENTS.md')?.[1] as string
       const claudeMd = writes.find(c => asPosix(String(c[0])) === '/tmp/test-workspace/CLAUDE.md')?.[1] as string
@@ -392,7 +412,7 @@ describe('AgentManager skill file paths', () => {
 
       const writes = mockedWriteFileAsync.mock.calls
       expect(writes.some(c => asPosix(String(c[0])).endsWith('/SKILL.md'))).toBe(false)
-      expect((mockDb as any).getSkills).not.toHaveBeenCalled()
+      expect((mockDb as any).getSkills).toHaveBeenCalledTimes(1)
       expect((mockDb as any).getSkillsByIds).not.toHaveBeenCalled()
 
       const agentsMd = writes.find(c => asPosix(String(c[0])) === '/tmp/test-workspace/AGENTS.md')?.[1] as string

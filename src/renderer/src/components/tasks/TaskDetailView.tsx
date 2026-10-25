@@ -23,6 +23,10 @@ import { useUIStore } from '@/stores/ui-store'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 import { isTaskClosed } from '@shared/constants'
 import { formatTaskRunDuration, useTaskRunDurations } from '@/hooks/use-task-run-durations'
+import { repeatedTasks } from '@/lib/flow-candidates'
+import { TaskFlowDetails } from './TaskFlowDetails'
+import { taskApi } from '@/lib/ipc-client'
+import { useTaskStore } from '@/stores/task-store'
 
 function ordinal(n: number): string {
   if (n >= 11 && n <= 13) return `${n}th`
@@ -404,6 +408,22 @@ interface TaskDetailViewProps {
 }
 
 function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttachments, onUpdateOutputFields, onCompleteTask, onAssignAgent, onUpdateRepos, onAddRepos, onUpdateSkillIds, onAddSkills, onStartAgent, canStartAgent, onResumeAgent, canResumeAgent, onRestartAgent, canRestartAgent, onSnooze, onUnsnooze, onReassign, onTriage, canTriage, onEditAgent, onUpdateDescription, onUpdateAutoFlags, subtasks, parentTask, onNavigateToTask, onOpenSubtaskInWindow, onAddSubtask, onReorderSubtasks, displayMode = 'full', underFloatingHeader = false, showOutputFields = true, showPrimaryActions = true }: TaskDetailViewProps) {
+  const [repeatCount, setRepeatCount] = React.useState(0)
+  useEffect(() => {
+    if (!task.agent_id) { setRepeatCount(0); return }
+    void taskApi.getAll().then((all) => setRepeatCount(repeatedTasks(task, all).length))
+  }, [task.id, task.status, task.agent_id])
+  const proposeFlowCandidate = async () => {
+    if (repeatCount < 3) return
+    const proposal = await taskApi.create({
+      title: `Propose a flow for ${task.title}`,
+      description: `This task pattern has at least ${repeatCount} completed uses. Review prior results and propose an inactive learned flow with the Workflo flow_propose tool. Run the workflow guard and dry run. Do not activate or promote a flow.`,
+      parent_task_id: task.id,
+      auto_start_agent: false
+    })
+    if (task.agent_id) await taskApi.update(proposal.id, { agent_id: task.agent_id })
+    await useTaskStore.getState().fetchTasks()
+  }
   // Per-field selectors — a selector-less useSkillStore() re-renders this
   // large view on every skill-store mutation.
   const skills = useSkillStore((s) => s.skills)
@@ -732,6 +752,7 @@ function TaskDetailViewComponent({ task, agents, onEdit, onDelete, onUpdateAttac
                 <Badge variant="blue" className="w-fit">Created from recurring template</Badge>
               </>
             )}
+            <TaskFlowDetails task={task} repeatCount={repeatCount} onProposeFlow={() => void proposeFlowCandidate()} />
             {task.status === TaskStatus.Completed && task.feedback_rating && (
               <>
                 <span className="text-muted-foreground flex items-center gap-2"><Star className="h-3.5 w-3.5" /> Feedback</span>

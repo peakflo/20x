@@ -27,7 +27,7 @@ import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useShallow } from 'zustand/react/shallow'
 import { useProgressToastStore } from '@/stores/progress-toast-store'
-import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
+import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi, enterpriseApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
 import { memo, useEffect, useLayoutEffect, useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { TaskStatus } from '@/types'
@@ -709,6 +709,17 @@ function TaskWorkspaceComponent({
       return
     }
     console.log('[TaskWorkspace] Task status set to AgentLearning, verified:', updatedTask?.status)
+
+    const ratedUse = task.server_flow_uses?.at(-1)
+    if (task.server_managed && task.external_id && ratedUse?.executionId) {
+      try {
+        await enterpriseApi.rateFlowUse(task.external_id, ratedUse.id, rating)
+      } catch (error) {
+        const toastId = `flow-rating-${task.id}`
+        showProgressToast(toastId, 'Flow rating not saved')
+        failProgressToast(toastId, error instanceof Error ? error.message : String(error))
+      }
+    }
 
     // Build feedback prompt
     const commentPart = comment ? ` Comment: "${comment}".` : ''

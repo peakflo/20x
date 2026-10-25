@@ -17,6 +17,8 @@ function makeLocalSkill(overrides: Partial<SkillRecord> = {}): SkillRecord {
     last_used: '2026-03-10T00:00:00Z',
     tags: ['test'],
     enterprise_skill_id: null,
+    enterprise_scope: 'tenant',
+    enterprise_auto_attach: false,
     uses_at_last_sync: 0,
     created_at: '2026-03-01T00:00:00Z',
     updated_at: '2026-03-10T00:00:00Z',
@@ -110,6 +112,43 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
   // ── Batch sync skills to server ──────────────────────────────────────
 
   describe('batchSyncSkills', () => {
+    it('pulls the approved automatic system skill without uploading it', async () => {
+      const system = makeServerSkill({
+        id: 'system-skill', name: 'self-improving-workflows',
+        content: 'Approved instructions', scope: 'system', autoAttach: true
+      })
+      mockDb.getSkills.mockReturnValue([])
+      mockApiClient.listSkills.mockResolvedValue([system])
+      await syncManager.syncAll('user-1')
+      expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
+      expect(mockDb.createSkill).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'self-improving-workflows',
+        content: 'Approved instructions',
+        enterprise_scope: 'system',
+        enterprise_auto_attach: true
+      }))
+    })
+
+    it('keeps the server version of a system skill authoritative', async () => {
+      const local = makeLocalSkill({
+        id: 'local-system', name: 'self-improving-workflows',
+        enterprise_skill_id: 'system-skill', enterprise_scope: 'system',
+        enterprise_auto_attach: true, content: 'Local edit',
+        updated_at: '2026-10-25T00:00:00Z'
+      })
+      mockDb.getSkills.mockReturnValue([local])
+      mockDb.getSkillByEnterpriseId.mockReturnValue(local)
+      mockApiClient.listSkills.mockResolvedValue([makeServerSkill({
+        id: 'system-skill', name: 'self-improving-workflows',
+        scope: 'system', autoAttach: true, content: 'Published server text',
+        updatedAt: '2026-10-01T00:00:00Z'
+      })])
+      await syncManager.syncAll('user-1')
+      expect(mockApiClient.batchSyncSkills).not.toHaveBeenCalled()
+      expect(mockDb.updateSkill).toHaveBeenCalledWith('local-system', expect.objectContaining({
+        content: 'Published server text'
+      }))
+    })
     it('sends all local skills in a single batch-sync API call', async () => {
       const localSkill = makeLocalSkill({ enterprise_skill_id: null })
       mockDb.getSkills.mockReturnValue([localSkill])
@@ -284,8 +323,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
       const result = await syncManager.syncAll('user-1')
 
-      // listSkills should NOT be called — batch-sync response is used for pull
-      expect(mockApiClient.listSkills).not.toHaveBeenCalled()
+      // The catalog also contains visible system skills.
+      expect(mockApiClient.listSkills).toHaveBeenCalledTimes(1)
 
       // Remote skill should be pulled locally
       expect(mockDb.createSkill).toHaveBeenCalledWith(
@@ -496,9 +535,9 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
       await syncManager.syncAll('user-1')
 
-      expect(mockDb.updateSkill).toHaveBeenCalledWith('local-by-name', {
+      expect(mockDb.updateSkill).toHaveBeenCalledWith('local-by-name', expect.objectContaining({
         enterprise_skill_id: 'server-x'
-      })
+      }))
     })
 
     it('links existing skill by exact name (no prefix)', async () => {
@@ -519,9 +558,9 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
 
       await syncManager.syncAll('user-1')
 
-      expect(mockDb.updateSkill).toHaveBeenCalledWith('local-exact', {
+      expect(mockDb.updateSkill).toHaveBeenCalledWith('local-exact', expect.objectContaining({
         enterprise_skill_id: 'server-y'
-      })
+      }))
     })
   })
 
@@ -867,8 +906,8 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       expect(mockApiClient.createSkill).not.toHaveBeenCalled()
       expect(mockApiClient.updateSkill).not.toHaveBeenCalled()
 
-      // No separate listSkills call for pull phase
-      expect(mockApiClient.listSkills).not.toHaveBeenCalled()
+      // The catalog call supplies visible system skills.
+      expect(mockApiClient.listSkills).toHaveBeenCalledTimes(1)
     })
 
     it('falls back to listSkills for pull when all uploads fail', async () => {

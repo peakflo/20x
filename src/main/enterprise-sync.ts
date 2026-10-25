@@ -396,6 +396,9 @@ export class EnterpriseSyncManager {
     for (const skill of localSkills) {
       // Skip built-in system skills
       if (this.isBuiltInSkill(skill)) continue
+      // Server-owned skills are read-only here. Workspace edits enter the
+      // local review queue; batch sync must never publish them directly.
+      if (skill.enterprise_scope === 'system') continue
 
       // A [Workflo]-prefixed skill came from the server. It is still pushed
       // back when it is linked, so that a local edit to an enterprise skill
@@ -498,14 +501,17 @@ export class EnterpriseSyncManager {
       }
     }
 
-    // If we have no server skills yet (either no local skills to push, or batch
-    // sync failed), fall back to listSkills so the pull phase still works.
-    if (allServerSkills.length === 0) {
+    // Batch sync returns tenant skills only. The list endpoint includes visible
+    // system skills and their approved published content.
+    {
       console.log(
-        `[EnterpriseSyncManager] No server skills from batch sync (batchFailed=${batchFailed}, localCount=${skillsToSync.length}), falling back to listSkills`
+        `[EnterpriseSyncManager] Fetching server skill catalog (batchFailed=${batchFailed}, localCount=${skillsToSync.length})`
       )
       try {
-        allServerSkills = await this.apiClient.listSkills() ?? []
+        const catalog = await this.apiClient.listSkills() ?? []
+        const byId = new Map(allServerSkills.map((skill) => [skill.id, skill]))
+        for (const skill of catalog) byId.set(skill.id, skill)
+        allServerSkills = [...byId.values()]
         console.log(
           `[EnterpriseSyncManager] listSkills fallback returned ${allServerSkills.length} skills`
         )
@@ -693,16 +699,20 @@ export class EnterpriseSyncManager {
             linkedSkill.confidence !== skill.confidence ||
             JSON.stringify(linkedSkill.tags) !== JSON.stringify(skill.tags)
 
-          if (contentChanged) {
+          if (contentChanged || linkedSkill.enterprise_scope !== (skill.scope ?? 'tenant') ||
+              linkedSkill.enterprise_auto_attach !== !!skill.autoAttach) {
             const remoteUpdated = new Date(skill.updatedAt).getTime()
             const localUpdated = new Date(linkedSkill.updated_at).getTime()
 
-            if (remoteUpdated > localUpdated) {
+            if (skill.scope === 'system' || remoteUpdated > localUpdated) {
               this.db.updateSkill(linkedSkill.id, {
+                name: skill.scope === 'system' ? skill.name : linkedSkill.name,
                 description: skill.description,
                 content: skill.content,
                 confidence: skill.confidence,
-                tags: skill.tags
+                tags: skill.tags,
+                enterprise_scope: skill.scope ?? 'tenant',
+                enterprise_auto_attach: !!skill.autoAttach
               })
               result.skills.updated++
             }
@@ -711,19 +721,23 @@ export class EnterpriseSyncManager {
         }
 
         // Check by [Workflo] prefixed name (backward compatibility)
-        const enterpriseName = `${WORKFLO_SKILL_PREFIX}${skill.name}`
+        const enterpriseName = skill.scope === 'system'
+          ? skill.name
+          : `${WORKFLO_SKILL_PREFIX}${skill.name}`
         const existingByName = this.db.getSkillByName(enterpriseName)
 
         if (existingByName) {
           // Link it and update if server is newer
           this.db.updateSkill(existingByName.id, {
-            enterprise_skill_id: skill.id
+            enterprise_skill_id: skill.id,
+            enterprise_scope: skill.scope ?? 'tenant',
+            enterprise_auto_attach: !!skill.autoAttach
           })
 
           const remoteUpdated = new Date(skill.updatedAt).getTime()
           const localUpdated = new Date(existingByName.updated_at).getTime()
 
-          if (remoteUpdated > localUpdated) {
+          if (skill.scope === 'system' || remoteUpdated > localUpdated) {
             this.db.updateSkill(existingByName.id, {
               description: skill.description,
               content: skill.content,
@@ -740,13 +754,15 @@ export class EnterpriseSyncManager {
         if (existingByExactName) {
           // Link it and update if server is newer
           this.db.updateSkill(existingByExactName.id, {
-            enterprise_skill_id: skill.id
+            enterprise_skill_id: skill.id,
+            enterprise_scope: skill.scope ?? 'tenant',
+            enterprise_auto_attach: !!skill.autoAttach
           })
 
           const remoteUpdated = new Date(skill.updatedAt).getTime()
           const localUpdated = new Date(existingByExactName.updated_at).getTime()
 
-          if (remoteUpdated > localUpdated) {
+          if (skill.scope === 'system' || remoteUpdated > localUpdated) {
             this.db.updateSkill(existingByExactName.id, {
               description: skill.description,
               content: skill.content,
@@ -765,7 +781,9 @@ export class EnterpriseSyncManager {
           content: skill.content,
           confidence: skill.confidence,
           tags: skill.tags,
-          enterprise_skill_id: skill.id
+          enterprise_skill_id: skill.id,
+          enterprise_scope: skill.scope ?? 'tenant',
+          enterprise_auto_attach: !!skill.autoAttach
         })
         result.skills.created++
       } catch (err) {

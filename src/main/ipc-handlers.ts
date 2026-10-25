@@ -1011,16 +1011,34 @@ export function registerIpcHandlers(
   ipcMain.handle('skills:get', (_, id: string) => {
     return db.getSkill(id)
   })
+  ipcMain.handle('skills:getDraft', (_, name: string) => db.getSkillEditDraft(name))
+  ipcMain.handle('skills:getDrafts', () => db.getSkillEditDrafts())
+  ipcMain.handle('skills:reviewDraft', (_, name: string, decision: 'approve' | 'reject') =>
+    db.reviewSkillEdit(name, decision))
 
   ipcMain.handle('skills:create', (_, data: CreateSkillData) => {
     return db.createSkill(data)
   })
 
   ipcMain.handle('skills:update', (_, id: string, data: UpdateSkillData) => {
-    return db.updateSkill(id, data)
+    const skill = db.getSkill(id)
+    if (!skill) return undefined
+    if (skill.enterprise_scope === 'system') throw new Error('System skills are read only')
+    db.stageSkillEdit({
+      name: data.name ?? skill.name,
+      description: data.description ?? skill.description,
+      content: data.content ?? skill.content,
+      confidence: data.confidence ?? skill.confidence,
+      uses: data.uses ?? skill.uses,
+      last_used: data.last_used ?? skill.last_used,
+      tags: data.tags ?? skill.tags,
+      enterprise_skill_id: skill.enterprise_skill_id
+    }, id)
+    return skill
   })
 
   ipcMain.handle('skills:delete', (_, id: string) => {
+    if (db.getSkill(id)?.enterprise_scope === 'system') throw new Error('System skills are read only')
     return db.deleteSkill(id)
   })
 
@@ -1851,6 +1869,11 @@ export function registerIpcHandlers(
   ipcMain.handle('enterprise:apiRequest', async (_, method: string, path: string, body?: unknown) => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     return await enterpriseAuth.apiRequest(method, path, body)
+  })
+  ipcMain.handle('enterprise:rateFlowUse', async (_, taskId: string, flowUseId: string, rating: number) => {
+    if (!enterpriseAuth) throw new Error('Enterprise auth not available')
+    const { WorkfloApiClient } = await import('./workflo-api-client')
+    return new WorkfloApiClient(enterpriseAuth).rateFlowUse(taskId, flowUseId, rating)
   })
 
   ipcMain.handle('enterprise:getApiUrl', () => {

@@ -18,30 +18,49 @@ import {
 import { useSkillStore } from '@/stores/skill-store'
 import { formatRelativeDate } from '@/lib/utils'
 import type { Skill } from '@/types'
+import type { SkillEditDraft } from '@/types'
+import { skillApi } from '@/lib/ipc-client'
+import { SkillDraftReview } from './SkillDraftReview'
 
 const NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/
 
 export function SkillWorkspace() {
-  const { skills, selectedSkillId, updateSkill, deleteSkill, selectSkill } = useSkillStore()
+  const { skills, selectedSkillId, updateSkill, deleteSkill, selectSkill, fetchSkills } = useSkillStore()
   const skill = skills.find((s) => s.id === selectedSkillId)
+  const [drafts, setDrafts] = useState<SkillEditDraft[]>([])
+  useEffect(() => {
+    void skillApi.getDrafts().then(setDrafts).catch(() => setDrafts([]))
+  }, [selectedSkillId])
+
+  const reviewDraft = async (name: string, decision: 'approve' | 'reject') => {
+    await skillApi.reviewDraft(name, decision)
+    setDrafts(await skillApi.getDrafts())
+    await fetchSkills()
+  }
+
+  const draftList = <SkillDraftReview drafts={drafts} onReview={(name, decision) => void reviewDraft(name, decision)} />
 
   if (!skill) {
     return (
-      <div className="flex items-center justify-center h-full text-muted-foreground">
+      <div className="flex flex-col h-full overflow-y-auto">
+        {draftList}
+        <div className="flex items-center justify-center flex-1 text-muted-foreground">
         <div className="text-center space-y-2">
           <BookOpen className="h-10 w-10 mx-auto opacity-40" />
           <p className="text-sm">Select a skill to view or edit</p>
+        </div>
         </div>
       </div>
     )
   }
 
-  return <SkillEditor key={skill.id} skill={skill} onUpdate={updateSkill} onDelete={deleteSkill} onDeselect={() => selectSkill(null)} />
+  return <div className="flex flex-col h-full">{draftList}<SkillEditor key={skill.id} skill={skill} onUpdate={updateSkill} onSaved={() => void skillApi.getDrafts().then(setDrafts)} onDelete={deleteSkill} onDeselect={() => selectSkill(null)} /></div>
 }
 
-function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
+function SkillEditor({ skill, onUpdate, onSaved, onDelete, onDeselect }: {
   skill: Skill
   onUpdate: (id: string, data: { name?: string; description?: string; content?: string; confidence?: number; tags?: string[] }) => Promise<Skill | null>
+  onSaved: () => void
   onDelete: (id: string) => Promise<boolean>
   onDeselect: () => void
 }) {
@@ -69,6 +88,7 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
                   content !== skill.content
 
   const handleSave = async () => {
+    if (skill.enterprise_scope === 'system') return
     if (!NAME_PATTERN.test(name)) {
       setNameError('Must be lowercase with hyphens (e.g. my-skill)')
       return
@@ -91,6 +111,7 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
 
     if (Object.keys(data).length > 0) {
       await onUpdate(skill.id, data)
+      onSaved()
     }
   }
 
@@ -105,10 +126,12 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
       <div className="flex items-center justify-between glass-bar border-b px-6 py-4 shrink-0">
         <div className="flex items-center gap-2.5">
           <Badge variant="teal">v{skill.version}</Badge>
+          {skill.enterprise_scope === 'system' && <Badge>System skill · read only</Badge>}
+          {skill.enterprise_auto_attach && <Badge variant="blue">Attached to agents</Badge>}
           <span className="text-xs text-muted-foreground">{formatRelativeDate(skill.updated_at)}</span>
         </div>
         <div className="flex items-center gap-1">
-          <Button variant="ghost" size="icon" onClick={() => setShowDelete(true)}>
+          <Button variant="ghost" size="icon" onClick={() => setShowDelete(true)} disabled={skill.enterprise_scope === 'system'}>
             <Trash2 className="h-3.5 w-3.5 text-destructive" />
           </Button>
         </div>
@@ -132,6 +155,7 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
             <Label htmlFor="skill-name">Name</Label>
             <Input
               id="skill-name"
+              disabled={skill.enterprise_scope === 'system'}
               value={name}
               onChange={(e) => {
                 setName(e.target.value.toLowerCase().replace(/\s+/g, '-'))
@@ -146,6 +170,7 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
             <Label htmlFor="skill-description">Description</Label>
             <Textarea
               id="skill-description"
+              disabled={skill.enterprise_scope === 'system'}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Brief description of when this skill should be used..."
@@ -159,6 +184,7 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
             <Label htmlFor="skill-confidence">Confidence (0.0 - 1.0)</Label>
             <Input
               id="skill-confidence"
+              disabled={skill.enterprise_scope === 'system'}
               type="number"
               min="0"
               max="1"
@@ -178,6 +204,7 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
             <Label htmlFor="skill-tags">Tags (comma-separated)</Label>
             <Input
               id="skill-tags"
+              disabled={skill.enterprise_scope === 'system'}
               value={tagsInput}
               onChange={(e) => setTagsInput(e.target.value)}
               placeholder="api, database, authentication"
@@ -189,6 +216,7 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
             <Label htmlFor="skill-content">Content (Markdown)</Label>
             <Textarea
               id="skill-content"
+              disabled={skill.enterprise_scope === 'system'}
               value={content}
               onChange={(e) => setContent(e.target.value)}
               placeholder="Skill instructions in markdown..."
@@ -198,7 +226,7 @@ function SkillEditor({ skill, onUpdate, onDelete, onDeselect }: {
           </div>
 
           <div className="flex justify-end">
-            <Button onClick={handleSave} disabled={!isDirty || !name.trim() || !description.trim() || !content.trim()}>
+            <Button onClick={handleSave} disabled={skill.enterprise_scope === 'system' || !isDirty || !name.trim() || !description.trim() || !content.trim()}>
               Save
             </Button>
           </div>

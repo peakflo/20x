@@ -28,6 +28,16 @@ export interface WorkfloTask {
   spaceId?: string | null
   spaceName?: string | null
   metadata?: { triage?: { reason?: string | null } } | null
+  flowUses?: Array<{
+    id: string
+    executionId: string | null
+    versionId: string
+    version: number
+    status: string | null
+    runStatus: string | null
+    outcome: string | null
+    judgeDecisions: Array<{ questionId: string; verdict: string; score: number | null; judgeVersion: string }>
+  }>
   deletedAt?: string | null
   version?: number
   agentId?: string | null
@@ -142,6 +152,9 @@ export interface WorkfloSkill {
   uses?: number
   lastUsed?: string | null
   tags: string[]
+  scope?: 'tenant' | 'system'
+  autoAttach?: boolean
+  status?: string
   createdAt: string
   updatedAt: string
 }
@@ -251,6 +264,11 @@ export class WorkfloApiClient {
     }
   ): Promise<void> {
     await this.auth.apiRequest('PATCH', `/api/tasks/${taskId}`, data, TASK_WRITE_HEADERS)
+  }
+
+  async rateFlowUse(taskId: string, flowUseId: string, rating: number): Promise<void> {
+    await this.auth.apiRequest('POST', `/api/tasks/${taskId}/flow-ratings`,
+      { flowUseId, rating }, TASK_WRITE_HEADERS)
   }
 
   /**

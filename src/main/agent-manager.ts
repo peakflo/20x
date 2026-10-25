@@ -1981,7 +1981,11 @@ export class AgentManager extends EventEmitter {
         ...(task?.skill_ids ?? []),
         ...(agentConfig?.skill_ids ?? []),
       ])]
-      const skills = skillIds.length > 0 ? this.db.getSkillsByIds(skillIds) : []
+      const selected = skillIds.length > 0 ? this.db.getSkillsByIds(skillIds) : []
+      const automatic = this.db.getSkills().filter(
+        (skill) => skill.enterprise_scope === 'system' && skill.enterprise_auto_attach
+      )
+      const skills = [...new Map([...selected, ...automatic].map((skill) => [skill.id, skill])).values()]
 
       // Write individual SKILL.md files using async I/O so the event loop
       // can process IPC/rendering between writes (avoids startup UI freeze).
@@ -6456,20 +6460,25 @@ Important:
         const tagsChanged = parsed.tags !== undefined && JSON.stringify(existing.tags) !== JSON.stringify(parsed.tags)
 
         if (contentChanged || descChanged || confidenceChanged || usesChanged || lastUsedChanged || tagsChanged) {
-          this.db.updateSkill(existing.id, {
+          if (existing.enterprise_scope === 'system') {
+            result.unchanged.push(parsed.name)
+            continue
+          }
+          this.db.stageSkillEdit({
+            name: parsed.name,
             description: parsed.description,
             content: parsed.content,
-            ...(parsed.confidence !== undefined && { confidence: parsed.confidence }),
-            ...(parsed.uses !== undefined && { uses: parsed.uses }),
-            ...(parsed.last_used !== undefined && { last_used: parsed.last_used }),
-            ...(parsed.tags !== undefined && { tags: parsed.tags })
-          })
+            confidence: parsed.confidence ?? existing.confidence,
+            uses: parsed.uses ?? existing.uses,
+            last_used: parsed.last_used ?? existing.last_used,
+            tags: parsed.tags ?? existing.tags
+          }, existing.id)
           result.updated.push(parsed.name)
         } else {
           result.unchanged.push(parsed.name)
         }
       } else {
-        this.db.createSkill({
+        this.db.stageSkillEdit({
           name: parsed.name,
           description: parsed.description,
           content: parsed.content,

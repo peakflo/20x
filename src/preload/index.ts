@@ -388,6 +388,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   skills: {
     getAll: (): Promise<unknown[]> => ipcRenderer.invoke('skills:getAll'),
     get: (id: string): Promise<unknown> => ipcRenderer.invoke('skills:get', id),
+    getDraft: (name: string): Promise<unknown> => ipcRenderer.invoke('skills:getDraft', name),
+    getDrafts: (): Promise<unknown> => ipcRenderer.invoke('skills:getDrafts'),
+    reviewDraft: (name: string, decision: 'approve' | 'reject'): Promise<unknown> =>
+      ipcRenderer.invoke('skills:reviewDraft', name, decision),
     create: (data: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('skills:create', data),
     update: (id: string, data: Record<string, unknown>): Promise<unknown> =>
@@ -581,6 +585,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('enterprise:syncResources'),
     apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> =>
       ipcRenderer.invoke('enterprise:apiRequest', method, path, body),
+    rateFlowUse: (taskId: string, flowUseId: string, rating: number): Promise<void> =>
+      ipcRenderer.invoke('enterprise:rateFlowUse', taskId, flowUseId, rating),
     getApiUrl: (): Promise<string> =>
       ipcRenderer.invoke('enterprise:getApiUrl'),
     getJwt: (): Promise<string> =>

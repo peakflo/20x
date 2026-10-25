@@ -639,6 +639,9 @@ export const taskSourceApi = {
 }
 
 export const skillApi = {
+  getDrafts: (): Promise<import('@/types').SkillEditDraft[]> => window.electronAPI.skills.getDrafts(),
+  reviewDraft: (name: string, decision: 'approve' | 'reject'): Promise<Skill | null> =>
+    window.electronAPI.skills.reviewDraft(name, decision),
   getAll: (): Promise<Skill[]> => {
     return window.electronAPI.skills.getAll()
   },
@@ -846,6 +849,8 @@ export const enterpriseApi = {
   apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> => {
     return window.electronAPI.enterprise.apiRequest(method, path, body)
   },
+  rateFlowUse: (taskId: string, flowUseId: string, rating: number): Promise<void> =>
+    window.electronAPI.enterprise.rateFlowUse(taskId, flowUseId, rating),
 
   getApiUrl: (): Promise<string> => {
     return window.electronAPI.enterprise.getApiUrl()
