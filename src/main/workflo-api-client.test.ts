@@ -18,3 +18,28 @@ describe('WorkfloApiClient task writes', () => {
     expect(apiRequest).toHaveBeenCalledWith('POST', '/api/tasks/', data, TASK_WRITE_HEADERS)
   })
 })
+
+describe('WorkfloApiClient skill catalog', () => {
+  it('asks for system skills and accepts a wrapped catalog', async () => {
+    const systemSkill = {
+      id: 'system-skill',
+      name: 'self-improving-workflows',
+      scope: 'system',
+      autoAttach: true
+    }
+    const apiRequest = vi.fn().mockResolvedValue({ skills: [systemSkill] })
+    const client = new WorkfloApiClient({ apiRequest } as unknown as EnterpriseAuth)
+
+    await expect(client.listSkills()).resolves.toEqual([systemSkill])
+    expect(apiRequest).toHaveBeenCalledWith('GET', '/api/skills?includeSystem=true')
+  })
+
+  it('accepts a tenant-only array from an older server', async () => {
+    const tenantSkill = { id: 'tenant-skill', name: 'Tenant skill' }
+    const apiRequest = vi.fn().mockResolvedValue([tenantSkill])
+    const client = new WorkfloApiClient({ apiRequest } as unknown as EnterpriseAuth)
+
+    await expect(client.listSkills()).resolves.toEqual([tenantSkill])
+    expect(apiRequest).toHaveBeenCalledWith('GET', '/api/skills?includeSystem=true')
+  })
+})

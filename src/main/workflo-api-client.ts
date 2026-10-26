@@ -311,13 +311,11 @@ export class WorkfloApiClient {
 
   // ── Skills ────────────────────────────────────────────────────────────
 
-  /**
-   * List all skills
-   */
+  /** List tenant skills and the system skills visible to this user. */
   async listSkills(): Promise<WorkfloSkill[]> {
     const result = await this.auth.apiRequest(
       'GET',
-      '/api/skills'
+      '/api/skills?includeSystem=true'
     )
     // Handle both { skills: [...] } (new) and bare array (legacy) response formats
     if (Array.isArray(result)) return result as WorkfloSkill[]

@@ -129,6 +129,37 @@ describe('EnterpriseSyncManager — Skills 2-Way Sync (Batch)', () => {
       }))
     })
 
+    it('accepts an older tenant-only catalog without a system skill', async () => {
+      const tenant = makeServerSkill({ id: 'tenant-skill', name: 'Tenant skill' })
+      mockApiClient.listSkills.mockResolvedValue([tenant])
+
+      const result = await syncManager.syncAll('user-1')
+
+      expect(result.errors).toEqual([])
+      expect(mockDb.createSkill).toHaveBeenCalledWith(expect.objectContaining({
+        name: '[Workflo] Tenant skill',
+        enterprise_scope: 'tenant',
+        enterprise_auto_attach: false
+      }))
+      expect(mockDb.createSkill).not.toHaveBeenCalledWith(expect.objectContaining({
+        name: 'self-improving-workflows'
+      }))
+    })
+
+    it('does not upload a system skill when it uploads a tenant skill', async () => {
+      mockDb.getSkills.mockReturnValue([
+        makeLocalSkill({ id: 'system-skill', name: 'self-improving-workflows', enterprise_scope: 'system' }),
+        makeLocalSkill({ id: 'tenant-skill', name: 'Tenant skill' })
+      ])
+
+      await syncManager.syncAll('user-1')
+
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledTimes(1)
+      expect(mockApiClient.batchSyncSkills).toHaveBeenCalledWith([
+        expect.objectContaining({ name: 'Tenant skill' })
+      ])
+    })
+
     it('keeps the server version of a system skill authoritative', async () => {
       const local = makeLocalSkill({
         id: 'local-system', name: 'self-improving-workflows',
