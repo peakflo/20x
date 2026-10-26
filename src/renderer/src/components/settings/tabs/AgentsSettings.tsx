@@ -24,7 +24,13 @@ interface AgentDialogState {
 }
 
 export function AgentsSettings() {
-  const { agents, fetchAgents, createAgent, updateAgent, deleteAgent } = useAgentStore()
+  // Per-field selectors: a whole-store subscription re-rendered this tab on
+  // every streamed agent delta.
+  const agents = useAgentStore((s) => s.agents)
+  const fetchAgents = useAgentStore((s) => s.fetchAgents)
+  const createAgent = useAgentStore((s) => s.createAgent)
+  const updateAgent = useAgentStore((s) => s.updateAgent)
+  const deleteAgent = useAgentStore((s) => s.deleteAgent)
   const [connections, setConnections] = useState<Map<string, ConnectionInfo>>(new Map())
   const [agentDialog, setAgentDialog] = useState<AgentDialogState>({ open: false })
   const acpInstances = useAcpInstanceStore((s) => s.instances)

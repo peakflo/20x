@@ -410,6 +410,15 @@ export interface RecurrencePatternObject {
 /** A cron expression string OR a legacy JSON object */
 export type RecurrencePatternRecord = RecurrencePatternObject | string
 
+/** Settings and task-source reads used to decorate a task with Workflo server ownership. */
+interface ServerOwnershipLookup {
+  getSetting: (key: string) => string | undefined
+  isLinked: (task: TaskRecord) => boolean
+}
+
+/** Sync-marker settings prefixes, few rows in practice; bulk-read for task-list loads. */
+const PRELOADED_OWNERSHIP_PREFIXES = ['workflo-upload:', 'workflo-update:', 'workflo-completion:'] as const
+
 /** Input shape for persisting a transcript part (mirrors agent:output payloads). */
 export interface TranscriptPartInput {
   id: string
@@ -1613,6 +1622,10 @@ export class DatabaseManager {
       -- currently-open interval for that session) and by open-ness on crash
       -- recovery (startup sweep for ended_at_ms IS NULL rows).
       CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_session_open ON agent_run_intervals(session_id, ended_at_ms);
+      -- Per-task run time (getTaskRunDurations), polled every 5 s for every task
+      -- in the sidebar. Covering, so the sum never touches the table; without it
+      -- each poll scanned every interval ever recorded.
+      CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_task ON agent_run_intervals(task_id, started_at_ms, ended_at_ms);
 
       -- One row per span the main window was focused/visible — the "my
       -- multiplier" denominator is the user's own screen time in the app, not
@@ -2578,15 +2591,59 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       'SELECT * FROM tasks ORDER BY created_at DESC'
     ).all() as TaskRow[]
 
-    return rows.map(row => this.withServerOwnership(deserializeTask(row)))
+    return this.decorateTaskRows(rows)
   }
 
-  private withServerOwnership(task: TaskRecord): TaskRecord {
-    if (this.getSetting(`workflo-upload:${task.id}`)) return { ...task, server_pending_edits: JSON.parse(this.getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_sync_pending: true, server_sync_error: this.getSetting(`workflo-upload:${task.id}:error`) }
-    if (!isWorkfloLinkedTask(this, task)) return task
-    const snapshot = this.getSetting(`workflo-task:${task.id}`)
+  private withServerOwnership(task: TaskRecord, lookup: ServerOwnershipLookup = this.singleTaskOwnershipLookup()): TaskRecord {
+    const getSetting = lookup.getSetting
+    if (getSetting(`workflo-upload:${task.id}`)) return { ...task, server_pending_edits: JSON.parse(getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_sync_pending: true, server_sync_error: getSetting(`workflo-upload:${task.id}:error`) }
+    if (!lookup.isLinked(task)) return task
+    const snapshot = getSetting(`workflo-task:${task.id}`)
     const remote = snapshot ? JSON.parse(snapshot) as import('./workflo-api-client').WorkfloTask : undefined
-    return { ...task, server_pending_edits: JSON.parse(this.getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_cron: remote?.cron ?? null, server_execution_mode: remote?.executionMode ?? 'human', server_space_name: remote?.spaceName ?? null, server_triage_reason: remote?.metadata?.triage?.reason ?? null, server_sync_pending: !!this.getSetting(`workflo-update:${task.id}`) || !!this.getSetting(`workflo-completion:${task.id}`), server_sync_error: this.getSetting(`workflo-update:${task.id}:error`) ?? this.getSetting(`workflo-completion:${task.id}:error`) }
+    return { ...task, server_pending_edits: JSON.parse(getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_cron: remote?.cron ?? null, server_execution_mode: remote?.executionMode ?? 'human', server_space_name: remote?.spaceName ?? null, server_triage_reason: remote?.metadata?.triage?.reason ?? null, server_sync_pending: !!getSetting(`workflo-update:${task.id}`) || !!getSetting(`workflo-completion:${task.id}`), server_sync_error: getSetting(`workflo-update:${task.id}:error`) ?? getSetting(`workflo-completion:${task.id}:error`) }
+  }
+
+  private singleTaskOwnershipLookup(): ServerOwnershipLookup {
+    return {
+      getSetting: (key) => this.getSetting(key),
+      isLinked: (task) => isWorkfloLinkedTask(this, task)
+    }
+  }
+
+  /**
+   * Lookups for decorating MANY task rows (task-list loads). Per row,
+   * withServerOwnership needs up to 7 settings reads plus a task-source read;
+   * doing those one prepare+query at a time made getOpenTasks() cost hundreds of
+   * ms on the main thread for 2k tasks. Here the sync-marker settings (few rows)
+   * and the task-source plugin ids are read once; the larger per-task snapshot
+   * (`workflo-task:`) is read only for linked tasks, through one prepared
+   * statement. Results are identical to the single-task lookup.
+   */
+  private batchOwnershipLookup(): ServerOwnershipLookup {
+    const preloaded = new Map<string, string>()
+    const range = this.db.prepare('SELECT key, value FROM settings WHERE key >= ? AND key < ?')
+    for (const prefix of PRELOADED_OWNERSHIP_PREFIXES) {
+      // Every key starting with `prefix` sorts in [prefix, prefix with its last char + 1).
+      const upper = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1)
+      for (const row of range.all(prefix, upper) as { key: string; value: string }[]) preloaded.set(row.key, row.value)
+    }
+    const settingStmt = this.db.prepare('SELECT value FROM settings WHERE key = ?')
+    const pluginBySource = new Map<string, string>()
+    for (const row of this.db.prepare('SELECT id, plugin_id FROM task_sources').all() as { id: string; plugin_id: string | null }[]) {
+      pluginBySource.set(row.id, row.plugin_id || 'peakflo')
+    }
+    return {
+      getSetting: (key) => PRELOADED_OWNERSHIP_PREFIXES.some((prefix) => key.startsWith(prefix))
+        ? preloaded.get(key)
+        : (settingStmt.get(key) as { value: string } | undefined)?.value,
+      isLinked: (task) => !!task.external_id && !!task.source_id && pluginBySource.get(task.source_id) === 'peakflo'
+    }
+  }
+
+  private decorateTaskRows(rows: TaskRow[]): TaskRecord[] {
+    if (rows.length === 0) return []
+    const lookup = this.batchOwnershipLookup()
+    return rows.map(row => this.withServerOwnership(deserializeTask(row), lookup))
   }
 
   getTask(id: string): TaskRecord | undefined {
@@ -2619,7 +2676,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       ORDER BY t.created_at DESC
     `).all(...closedStatuses, ...closedStatuses, ...closedStatuses) as TaskRow[]
 
-    return rows.map(row => this.withServerOwnership(deserializeTask(row)))
+    return this.decorateTaskRows(rows)
   }
 
   /**
@@ -2660,7 +2717,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     ).all(...ids) as TaskRow[]
 
     return {
-      tasks: [...parents, ...children].map(row => this.withServerOwnership(deserializeTask(row))),
+      tasks: this.decorateTaskRows([...parents, ...children]),
       total
     }
   }

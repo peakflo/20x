@@ -239,6 +239,10 @@ export function AppLayout() {
     await updateTask(taskId, data as UpdateTaskDTO)
   }, [updateTask])
   const handleNavigateToTask = useCallback((taskId: string) => selectTask(taskId), [selectTask])
+  // Stable so the memoized TaskWorkspace does not re-render the whole selected
+  // task view whenever any other task changes (AppLayout re-renders on every
+  // task:updated through useTasks).
+  const handleBackFromTask = useCallback(() => selectTask(null), [selectTask])
 
   const handleEditDashboardPreviewTask = useCallback(() => {
     if (dashboardPreviewTaskId) openEditModal(dashboardPreviewTaskId)
@@ -261,6 +265,9 @@ export function AppLayout() {
   const handleCompleteDashboardPreviewTask = useCallback(async (completeAtSource?: boolean) => {
     if (dashboardPreviewTaskId) await completeTask(dashboardPreviewTaskId, { completeAtSource })
   }, [completeTask, dashboardPreviewTaskId])
+  const handleOpenDashboardPreviewFullView = useCallback(() => {
+    if (dashboardPreviewTaskId) handleGoToFullView(dashboardPreviewTaskId)
+  }, [dashboardPreviewTaskId, handleGoToFullView])
 
   // On the canvas the selected task panel is the active task; everywhere else
   // the dashboard preview and the tasks-view selection take precedence.
@@ -930,7 +937,7 @@ export function AppLayout() {
               onAssignAgent={handleAssignAgent}
               onUpdateTask={handleUpdateTask}
               onNavigateToTask={handleNavigateToTask}
-              onBack={() => selectTask(null)}
+              onBack={handleBackFromTask}
             />
           ) : null}
           </div>
@@ -1080,7 +1087,7 @@ export function AppLayout() {
                 onUpdateTask={handleUpdateTask}
                 onNavigateToTask={handleNavigateFromDashboardPreview}
                 onBack={closeDashboardPreview}
-                onOpenFullView={() => dashboardPreviewTaskId && handleGoToFullView(dashboardPreviewTaskId)}
+                onOpenFullView={handleOpenDashboardPreviewFullView}
               />
             )}
           </div>
