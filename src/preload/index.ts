@@ -196,10 +196,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:learnFromSession', sessionId, message),
     getRawTranscript: (taskId: string): Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>> =>
       ipcRenderer.invoke('agentSession:getRawTranscript', taskId),
-    getTranscriptSnapshot: (taskId: string, sinceSeq?: number): Promise<Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number; rev: number }>> =>
-      ipcRenderer.invoke('agentSession:getTranscriptSnapshot', taskId, sinceSeq),
-    getTranscriptDelta: (taskId: string, sinceRev: number): Promise<{ parts: Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number; rev: number }>; maxRev: number }> =>
-      ipcRenderer.invoke('agentSession:getTranscriptDelta', taskId, sinceRev)
+    getTranscriptSync: (taskId: string, sinceRev?: number): Promise<unknown> =>
+      ipcRenderer.invoke('agentSession:getTranscriptSync', taskId, sinceRev)
   },
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> =>

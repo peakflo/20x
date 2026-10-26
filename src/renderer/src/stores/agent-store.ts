@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
 import { agentApi, agentSessionApi, onAgentStatus, onAgentApproval, onTranscriptChanged } from '@/lib/ipc-client'
 import type { AgentStatusEvent, AgentApprovalRequest, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
+import { TranscriptStreamReceiver } from '@shared/transcript-stream'
 import { captureAnalyticsEvent } from '@/lib/analytics'
 import { useArtifactStore } from './artifact-store'
 
@@ -87,8 +88,10 @@ export interface TaskSession {
 // The main process owns the durable transcript (`transcript_parts`) and is the
 // authoritative source. The renderer keeps a per-task cache keyed by stable
 // part id and renders a *derived* sorted list. There is exactly one write path
-// into a task's messages: applyParts(), fed by (a) a full snapshot on bind and
-// (b) idempotent `transcript:changed` deltas. Because parts are keyed by id and
+// into a task's messages: applyParts(), fed by (a) a resync (full snapshot on
+// bind, catch-up since rev after a gap) and (b) `transcript:changed` deltas,
+// applied in seq order by the shared TranscriptStreamReceiver (appended text or
+// whole parts; see @shared/transcript-stream). Because parts are keyed by id and
 // sorted by (createdAt, seq), reordering, duplication, and collapse are
 // structurally impossible — no dedup sets, no accumulation, no clear/replay.
 
@@ -115,8 +118,11 @@ const recentProjections = new Map<string, ProjectionCache>()
 // memory while at least one view is actually mounted. The durable DB projection
 // is re-hydrated when a view comes back.
 const projectionBindings = new Map<string, number>()
-const bindingTasks = new Set<string>()
 const outputAnalyticsByTask = new Map<string, { messageCount: number; toolNames: Set<string> }>()
+// Tasks whose snapshot was requested without a mounted view (hydrateTranscript).
+const unboundHydrates = new Set<string>()
+// Seq/epoch tracking for `transcript:changed`; created with the store below.
+let transcriptReceiver: TranscriptStreamReceiver<TranscriptPartRecord> | null = null
 
 function getProjection(taskId: string): ProjectionCache {
   let p = projections.get(taskId)
@@ -127,6 +133,7 @@ function getProjection(taskId: string): ProjectionCache {
 function resetProjection(taskId: string): void {
   projections.delete(taskId)
   recentProjections.delete(taskId)
+  transcriptReceiver?.forget(taskId)
 }
 
 /** Keep a released task's projection as a recent entry (evicting the oldest). */
@@ -148,8 +155,9 @@ export function __clearProjectionsForTest(): void {
   projections.clear()
   recentProjections.clear()
   projectionBindings.clear()
-  bindingTasks.clear()
+  unboundHydrates.clear()
   outputAnalyticsByTask.clear()
+  transcriptReceiver?.forgetAll()
 }
 
 // Memoize the part → message projection per part record. Unchanged parts keep
@@ -314,11 +322,12 @@ export const useAgentStore = create<AgentState>((set, get) => {
     if (changed || !get().sessions.has(taskId)) commitMessages(taskId)
   }
 
-  const accumulateOutputAnalytics = (taskId: string, parts: TranscriptPartRecord[]): void => {
-    if (parts.length === 0) return
+  const accumulateOutputAnalytics = (taskId: string, changedCount: number, wholeParts: TranscriptPartRecord[]): void => {
+    if (changedCount === 0) return
     const aggregate = outputAnalyticsByTask.get(taskId) || { messageCount: 0, toolNames: new Set<string>() }
-    aggregate.messageCount += parts.length
-    for (const part of parts) {
+    aggregate.messageCount += changedCount
+    // Appends never change a part's tool, so whole parts carry every tool name.
+    for (const part of wholeParts) {
       const toolName = (part.tool as { name?: string } | undefined)?.name
       if (toolName) aggregate.toolNames.add(toolName)
     }
@@ -338,59 +347,77 @@ export const useAgentStore = create<AgentState>((set, get) => {
     })
   }
 
-  const hydrateTranscript = async (taskId: string, requireBinding = false): Promise<void> => {
-    if (!taskId || bindingTasks.has(taskId)) return
-    if (requireBinding && !projectionBindings.has(taskId)) return
-    if (typeof window.electronAPI?.agentSession?.getTranscriptSnapshot !== 'function') return
-    bindingTasks.add(taskId)
-    try {
-      const snapshot = await agentSessionApi.getTranscriptSnapshot(taskId)
+  // Applies `transcript:changed` in seq order; pulls a resync on first bind,
+  // a gap, a new sender epoch or a diverged append (see @shared/transcript-stream).
+  const receiver = new TranscriptStreamReceiver<TranscriptPartRecord>({
+    // Background agents keep writing to the durable projection, but an
+    // unmounted task has no renderer consumer. Ignoring its deltas avoids
+    // rebuilding every off-screen transcript in memory; bindTranscript() catches
+    // up (or loads the snapshot) when the task becomes visible again.
+    isTracked: (taskId) => projections.has(taskId),
+    getPart: (taskId, partId) => projections.get(taskId)?.parts.get(partId),
+    getRev: (taskId) => projections.get(taskId)?.rev ?? 0,
+    commit: (taskId, parts, maxRev) => {
+      if (parts.length > 0) applyParts(taskId, parts, maxRev)
+      else { const cache = projections.get(taskId); if (cache) cache.rev = Math.max(cache.rev, maxRev) }
+    },
+    replace: (taskId, snapshot, maxRev) => {
       // The panel may have gone off-screen while the snapshot IPC was in
       // flight. Do not repopulate the cache after its final consumer left.
-      if (requireBinding && !projectionBindings.has(taskId)) return
-      if (snapshot.length === 0) return
-      const maxRev = snapshot.reduce((m, p) => Math.max(m, p.rev || 0), 0)
+      if (!projectionBindings.has(taskId) && !projections.has(taskId) && !unboundHydrates.has(taskId)) return false
+      if (snapshot.length === 0) {
+        // Keep following a mounted (or already known) empty task so its first
+        // messages show up; never create a phantom session for it.
+        if (!projections.has(taskId) && !projectionBindings.has(taskId)) return false
+        const cache = getProjection(taskId)
+        if (cache.parts.size > 0) projections.set(taskId, { parts: new Map(), rev: maxRev })
+        else cache.rev = maxRev
+        if (get().sessions.has(taskId)) commitMessages(taskId)
+        return true
+      }
       // Snapshot is the authoritative full state — replace the cache.
       projections.set(taskId, { parts: new Map(snapshot.map((p) => [p.partId, p])), rev: maxRev })
       useArtifactStore.getState().projectTranscriptParts(taskId, snapshot)
       commitMessages(taskId)
-    } catch (err) {
-      console.error(`[agent-store] hydrateTranscript failed for task ${taskId}:`, err)
+      return true
+    },
+    fetchSync: (taskId, sinceRev) => agentSessionApi.getTranscriptSync(taskId, sinceRev)
+  })
+  transcriptReceiver = receiver
+
+  const canSync = (): boolean => typeof window.electronAPI?.agentSession?.getTranscriptSync === 'function'
+
+  const hydrateTranscript = async (taskId: string, requireBinding = false): Promise<void> => {
+    if (!taskId || !canSync()) return
+    if (requireBinding && !projectionBindings.has(taskId)) return
+    if (!requireBinding) unboundHydrates.add(taskId)
+    try {
+      await receiver.resync(taskId, { full: true })
     } finally {
-      bindingTasks.delete(taskId)
+      unboundHydrates.delete(taskId)
     }
   }
 
-  // Reconcile a task against the durable projection by fetching everything
-  // changed since our cursor. Used as a safety net at idle to catch any delta
-  // the renderer may have missed (dropped IPC event).
+  // Catch a task up on everything changed since our rev cursor (switching back
+  // to a recent task, and a safety net at idle). Without a stream position the
+  // receiver loads the whole snapshot instead.
   const reconcileDelta = async (taskId: string): Promise<void> => {
-    if (typeof window.electronAPI?.agentSession?.getTranscriptDelta !== 'function') return
-    if (!projections.has(taskId)) return
-    try {
-      const sinceRev = getProjection(taskId).rev
-      const { parts, maxRev } = await agentSessionApi.getTranscriptDelta(taskId, sinceRev)
-      if (parts.length > 0) applyParts(taskId, parts, maxRev)
-      else if (maxRev > sinceRev) getProjection(taskId).rev = maxRev
-    } catch (err) {
-      console.error(`[agent-store] reconcileDelta failed for task ${taskId}:`, err)
-    }
+    if (!canSync() || !projections.has(taskId)) return
+    await receiver.resync(taskId, { full: false })
   }
 
   // ── IPC event subscriptions ──
 
-  // Transcript content: the ONLY writer of messages. Idempotent delta apply.
+  // Transcript content: the ONLY writer of messages.
   onTranscriptChanged((event: TranscriptChangedEvent) => {
-    if (!event?.taskId) return
-    useArtifactStore.getState().projectTranscriptParts(event.taskId, event.parts || [])
-    // Background agents continue writing to the durable projection, but an
-    // unmounted task has no renderer consumer. Ignoring its payload here avoids
-    // rebuilding every off-screen transcript in memory; bindTranscript() loads
-    // the authoritative snapshot when the task becomes visible again.
-    if (projections.has(event.taskId)) {
-      applyParts(event.taskId, event.parts || [], event.maxRev)
-    }
-    accumulateOutputAnalytics(event.taskId, event.parts || [])
+    if (!event?.taskId || !Array.isArray(event.ops)) return
+    const wholeParts: TranscriptPartRecord[] = []
+    for (const op of event.ops) if (op.op === 'put') wholeParts.push(op.part)
+    // Artifacts come from tool parts, which always travel whole; projecting them
+    // again for a stale or re-delivered event is idempotent.
+    if (wholeParts.length > 0) useArtifactStore.getState().projectTranscriptParts(event.taskId, wholeParts)
+    receiver.handle(event)
+    accumulateOutputAnalytics(event.taskId, event.ops.length, wholeParts)
   })
 
   // Session state only (status / pendingApproval / sessionId) — never messages.

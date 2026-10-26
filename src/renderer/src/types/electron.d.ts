@@ -2,6 +2,7 @@ import type { BrowserRecordingManifest } from '@shared/browser-recording'
 import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '@shared/browser-session-import'
 import type { UiCommandAck, UiCommandEnvelope } from '@shared/ui-commands'
 import type { TaskRunDuration } from '@shared/task-run-duration'
+import type { TranscriptDeltaEvent, TranscriptSyncResult } from '@shared/transcript-stream'
 import type {
   WorkfloTask,
   CreateTaskDTO,
@@ -139,12 +140,11 @@ export interface TranscriptPartRecord {
   rev: number
 }
 
-/** Payload of the transcript:changed delta push. */
-export interface TranscriptChangedEvent {
-  taskId: string
-  parts: TranscriptPartRecord[]
-  maxRev: number
-}
+/** Payload of the transcript:changed delta push (see shared/transcript-stream). */
+export type TranscriptChangedEvent = TranscriptDeltaEvent<TranscriptPartRecord>
+
+/** Resync answer for the transcript:changed stream. */
+export type TranscriptSync = TranscriptSyncResult<TranscriptPartRecord>
 
 export interface SkillSyncResult {
   created: string[]
@@ -313,8 +313,7 @@ interface ElectronAPI {
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
     learnFromSession: (sessionId: string, message: string) => Promise<SkillSyncResult>
     getRawTranscript: (taskId: string) => Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>>
-    getTranscriptSnapshot: (taskId: string, sinceSeq?: number) => Promise<TranscriptPartRecord[]>
-    getTranscriptDelta: (taskId: string, sinceRev: number) => Promise<{ parts: TranscriptPartRecord[]; maxRev: number }>
+    getTranscriptSync: (taskId: string, sinceRev?: number) => Promise<TranscriptSync>
   }
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string) => Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null>

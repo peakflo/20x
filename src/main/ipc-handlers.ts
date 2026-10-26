@@ -787,15 +787,12 @@ export function registerIpcHandlers(
     return { saved: true, filePath }
   })
 
-  // Durable transcript snapshot: the renderer hydrates transcript state from
-  // the main-process projection instead of depending on catching live events.
-  ipcMain.handle('agentSession:getTranscriptSnapshot', (_, taskId: string, sinceSeq?: number) => {
-    return agentManager.getTranscriptSnapshot(taskId, sinceSeq)
-  })
-
-  // Event-sourced projection: delta since a rev cursor (parts changed since then).
-  ipcMain.handle('agentSession:getTranscriptDelta', (_, taskId: string, sinceRev: number) => {
-    return agentManager.getTranscriptDelta(taskId, sinceRev)
+  // Durable transcript: the renderer hydrates from the main-process projection
+  // and then follows `transcript:changed` deltas. This is its resync: the whole
+  // transcript (or the parts changed since `sinceRev`) plus the stream
+  // position the answer is consistent with.
+  ipcMain.handle('agentSession:getTranscriptSync', (_, taskId: string, sinceRev?: number) => {
+    return agentManager.getTranscriptSync(taskId, typeof sinceRev === 'number' ? sinceRev : undefined)
   })
 
   // Agent Config handlers
