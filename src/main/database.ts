@@ -1,5 +1,6 @@
 import { isWorkfloLinkedTask } from './workflo-task-sync'
 import Database from 'better-sqlite3'
+import { instrumentMainDatabase } from './perf/main-thread-perf'
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, rmSync } from 'fs'
@@ -1252,7 +1253,8 @@ export class DatabaseManager {
     const userDataPath = app.getPath('userData')
     const dbPath = join(userDataPath, 'pf-desktop.db')
 
-    this.db = new Database(dbPath)
+    // No-op unless TWENTYX_PERF=1 (opt-in main-thread DB timing).
+    this.db = instrumentMainDatabase(new Database(dbPath))
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('foreign_keys = ON')
     this.db.pragma('busy_timeout = 5000') // Retry on SQLITE_BUSY for up to 5s
