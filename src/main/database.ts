@@ -14,6 +14,15 @@ import { contextHandoffSettingKey, parseContextHandoffMarker, type ContextHandof
 import { harnessTypeOf, type HarnessInstance, type HarnessType } from '../shared/harness-instances'
 import { normalizeHomePath } from './harness-instances'
 import type { TaskRunDuration } from '../shared/task-run-duration'
+import {
+  clampImportance,
+  containsLikelySecret,
+  isValidMemoryKind,
+  MEMORY_CONTENT_MAX_CHARS,
+  normalizeMemoryScope,
+  type MastermindMemoryRecord,
+  type MemoryKind
+} from '../shared/mastermind-memory'
 
 export interface AgentRow {
   id: string
@@ -67,6 +76,13 @@ export interface AgentConfigRecord {
     anthropic?: string
     cursor?: string
   }
+  /**
+   * Lets this agent's sessions use the mastermind memory tools
+   * (remember/recall/forget/list_memories) even when it isn't the Mastermind
+   * session itself. Off by default — memory is Mastermind-only until the
+   * user explicitly extends trust to an agent.
+   */
+  memory_trusted?: boolean
 }
 
 /** A stored harness instance. The implicit defaults ("Claude Code", "Codex") are not rows. */
@@ -930,6 +946,78 @@ export interface UpdateSecretData {
   value?: string
 }
 
+// ── Mastermind memory types ──────────────────────────────────
+
+export interface MastermindMemoryRow {
+  id: string
+  scope: string
+  kind: string
+  content: string
+  source: string
+  importance: number
+  created_at: string
+  updated_at: string
+  last_used_at: string | null
+  expires_at: string | null
+  pinned: number
+}
+
+export interface CreateMemoryData {
+  content: string
+  kind: MemoryKind
+  scope?: string
+  source?: string
+  importance?: number
+  pinned?: boolean
+  expires_at?: string | null
+}
+
+export interface UpdateMemoryData {
+  content?: string
+  kind?: MemoryKind
+  scope?: string
+  source?: string
+  importance?: number
+  pinned?: boolean
+  expires_at?: string | null
+}
+
+export interface ListMemoriesFilter {
+  scope?: string
+  kind?: MemoryKind
+  limit?: number
+}
+
+function deserializeMemory(row: MastermindMemoryRow): MastermindMemoryRecord {
+  return {
+    id: row.id,
+    scope: row.scope,
+    kind: isValidMemoryKind(row.kind) ? row.kind : 'fact',
+    content: row.content,
+    source: row.source,
+    importance: row.importance,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    last_used_at: row.last_used_at,
+    expires_at: row.expires_at,
+    pinned: row.pinned === 1
+  }
+}
+
+/**
+ * Whether a string contains any CJK (Chinese/Japanese/Korean) text — CJK
+ * Unified Ideographs (+ Extension A, + Compatibility), Hiragana, Katakana,
+ * and Hangul syllables. Used by `searchMemories`'s LIKE fallback, below.
+ */
+function containsCjkCharacters(text: string): boolean {
+  return /[\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\u3040-\u30FF\uAC00-\uD7A3]/u.test(text)
+}
+
+/** Escapes `%`, `_` and the escape character itself for a `LIKE ... ESCAPE '\'` pattern. */
+function escapeLikePattern(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+}
+
 // ── Marketplace Source types ─────────────────────────────────
 
 export interface MarketplaceSourceRow {
@@ -1267,6 +1355,7 @@ export class DatabaseManager {
     this.seedDefaultAgent()
     this.migrateAgentPermissionDefaults()
     this.initializeTasksFts()
+    this.initializeMemoriesFts()
     this.initializeTaskManagementMcpServer()
     this.initializeOrchestratorSkill()
   }
@@ -1634,6 +1723,28 @@ export class DatabaseManager {
       );
       CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_started ON app_focus_intervals(started_at_ms);
       CREATE INDEX IF NOT EXISTS idx_app_focus_intervals_ended ON app_focus_intervals(ended_at_ms);
+
+      -- Mastermind's durable memory: stable preferences, decisions, facts,
+      -- goals, people and procedures that survive a restart. Local-only:
+      -- this table is never read by enterprise-state-sync.ts or any other
+      -- sync path, so it never leaves this machine. The scope column is
+      -- 'global', 'project:<id>' or 'repo:<owner/name>' (see src/shared/mastermind-memory.ts).
+      CREATE TABLE IF NOT EXISTS mastermind_memories (
+        id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL DEFAULT 'global',
+        kind TEXT NOT NULL,
+        content TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'user-stated',
+        importance INTEGER NOT NULL DEFAULT 3,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_used_at TEXT,
+        expires_at TEXT,
+        pinned INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_mastermind_memories_scope ON mastermind_memories(scope);
+      CREATE INDEX IF NOT EXISTS idx_mastermind_memories_kind ON mastermind_memories(kind);
+      CREATE INDEX IF NOT EXISTS idx_mastermind_memories_pinned ON mastermind_memories(pinned);
     `)
   }
 
@@ -2252,6 +2363,43 @@ export class DatabaseManager {
       CREATE TRIGGER tasks_fts_delete AFTER DELETE ON tasks BEGIN
         INSERT INTO tasks_fts(tasks_fts, rowid, title, description, labels, type)
           VALUES ('delete', old.rowid, old.title, old.description, old.labels, old.type);
+      END;
+    `)
+  }
+
+  /**
+   * Creates (or rebuilds) the FTS5 full-text search index used by `recall` /
+   * `find_similar_memory`. Same content-sync + rebuild-on-every-startup
+   * approach as `initializeTasksFts` — see its comment for why.
+   */
+  private initializeMemoriesFts(): void {
+    this.db.exec(`
+      DROP TRIGGER IF EXISTS mastermind_memories_fts_insert;
+      DROP TRIGGER IF EXISTS mastermind_memories_fts_update;
+      DROP TRIGGER IF EXISTS mastermind_memories_fts_delete;
+      DROP TABLE   IF EXISTS mastermind_memories_fts;
+
+      CREATE VIRTUAL TABLE mastermind_memories_fts USING fts5(
+        content,
+        content='mastermind_memories',
+        content_rowid='rowid',
+        tokenize='porter unicode61 remove_diacritics 2'
+      );
+
+      INSERT INTO mastermind_memories_fts(rowid, content)
+        SELECT rowid, content FROM mastermind_memories;
+
+      CREATE TRIGGER mastermind_memories_fts_insert AFTER INSERT ON mastermind_memories BEGIN
+        INSERT INTO mastermind_memories_fts(rowid, content) VALUES (new.rowid, new.content);
+      END;
+
+      CREATE TRIGGER mastermind_memories_fts_update AFTER UPDATE OF content ON mastermind_memories BEGIN
+        INSERT INTO mastermind_memories_fts(mastermind_memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
+        INSERT INTO mastermind_memories_fts(rowid, content) VALUES (new.rowid, new.content);
+      END;
+
+      CREATE TRIGGER mastermind_memories_fts_delete AFTER DELETE ON mastermind_memories BEGIN
+        INSERT INTO mastermind_memories_fts(mastermind_memories_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
       END;
     `)
   }
@@ -4163,6 +4311,259 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   deleteSecret(id: string): boolean {
     const result = this.db.prepare('DELETE FROM secrets WHERE id = ?').run(id)
     return result.changes > 0
+  }
+
+  // ── Mastermind memory CRUD ────────────────────────────────────
+  //
+  // Durable memory for the Mastermind session (and any agent the user marks
+  // trusted) — see src/shared/mastermind-memory.ts for the scope/kind
+  // vocabulary and the PR #526 alignment note. All reads exclude expired
+  // rows (`expires_at` in the past) except getMemory/exportMemories, which
+  // return the raw row so Settings can still show/export an expired item.
+
+  getMemory(id: string): MastermindMemoryRecord | undefined {
+    const row = this.db.prepare('SELECT * FROM mastermind_memories WHERE id = ?').get(id) as MastermindMemoryRow | undefined
+    return row ? deserializeMemory(row) : undefined
+  }
+
+  /** Non-expired memories for `scope`/`kind`, newest-updated first. Omit filters for "everything". */
+  listMemories(filter: ListMemoriesFilter = {}): MastermindMemoryRecord[] {
+    const clauses: string[] = ["(expires_at IS NULL OR expires_at > ?)"]
+    const values: unknown[] = [new Date().toISOString()]
+    if (filter.scope) { clauses.push('scope = ?'); values.push(filter.scope) }
+    if (filter.kind) { clauses.push('kind = ?'); values.push(filter.kind) }
+    const limit = Math.min(Math.max(1, filter.limit ?? 200), 1000)
+    const rows = this.db.prepare(
+      `SELECT * FROM mastermind_memories WHERE ${clauses.join(' AND ')} ORDER BY pinned DESC, importance DESC, updated_at DESC LIMIT ?`
+    ).all(...values, limit) as MastermindMemoryRow[]
+    return rows.map(deserializeMemory)
+  }
+
+  /** Non-expired memories visible to one or more scopes, for the auto-injection block. */
+  listMemoriesForScopes(scopes: string[]): MastermindMemoryRecord[] {
+    if (scopes.length === 0) return []
+    const placeholders = scopes.map(() => '?').join(', ')
+    const rows = this.db.prepare(
+      `SELECT * FROM mastermind_memories WHERE scope IN (${placeholders}) AND (expires_at IS NULL OR expires_at > ?) ORDER BY pinned DESC, importance DESC, updated_at DESC`
+    ).all(...scopes, new Date().toISOString()) as MastermindMemoryRow[]
+    return rows.map(deserializeMemory)
+  }
+
+  /** Non-expired memories in the same scope+kind, for `remember`'s dedupe check. */
+  listMemoriesForDedupe(scope: string, kind: MemoryKind): MastermindMemoryRecord[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM mastermind_memories WHERE scope = ? AND kind = ? AND (expires_at IS NULL OR expires_at > ?)'
+    ).all(scope, kind, new Date().toISOString()) as MastermindMemoryRow[]
+    return rows.map(deserializeMemory)
+  }
+
+  /**
+   * Full-text search over memory content, ranked by bm25. `scope`/`kind`
+   * narrow the search. Tokenising uses `\p{L}\p{N}` (Unicode letters/digits,
+   * not just ASCII) so Cyrillic, CJK and other non-Latin queries produce
+   * real search terms instead of stripping to nothing.
+   *
+   * `allowFallbackToList` (default true): when the query has no usable
+   * terms (empty, or punctuation-only even after Unicode-aware stripping)
+   * or the FTS query itself fails, fall back to `listMemories` — the
+   * caller gets the most relevant recent/pinned items instead of nothing.
+   * `recall` wants this (a loose, best-effort search). `forget` must pass
+   * `false`: the caller requires an exact content match before deleting
+   * anything, and falling back to "whatever is most recent" for a query
+   * that matched nothing would delete the wrong memory — see callers.
+   */
+  searchMemories(
+    query: string,
+    filter: ListMemoriesFilter = {},
+    opts: { allowFallbackToList?: boolean } = {}
+  ): MastermindMemoryRecord[] {
+    const allowFallback = opts.allowFallbackToList !== false
+    const words = query
+      .split(/\s+/)
+      .map((word) => word.replace(/[^\p{L}\p{N}_]/gu, ''))
+      .filter(Boolean)
+    if (words.length === 0) return allowFallback ? this.listMemories(filter) : []
+
+    const matchExpr = words.map((word) => `"${word}"`).join(' OR ')
+    const clauses: string[] = ['(m.expires_at IS NULL OR m.expires_at > ?)']
+    // Kept separate from matchExpr (below) so the same base conditions
+    // (expiry/scope/kind) can be reused by the CJK LIKE fallback, which has
+    // no MATCH parameter of its own.
+    const baseValues: unknown[] = [new Date().toISOString()]
+    if (filter.scope) { clauses.push('m.scope = ?'); baseValues.push(filter.scope) }
+    if (filter.kind) { clauses.push('m.kind = ?'); baseValues.push(filter.kind) }
+    const limit = Math.min(Math.max(1, filter.limit ?? 20), 200)
+
+    try {
+      const rows = this.db.prepare(
+        `SELECT m.* FROM mastermind_memories_fts
+         JOIN mastermind_memories m ON mastermind_memories_fts.rowid = m.rowid
+         WHERE mastermind_memories_fts MATCH ? AND ${clauses.join(' AND ')}
+         ORDER BY bm25(mastermind_memories_fts) LIMIT ?`
+      ).all(matchExpr, ...baseValues, limit) as MastermindMemoryRow[]
+      if (rows.length > 0) return rows.map(deserializeMemory)
+
+      // unicode61 has no CJK word segmentation: a whole contiguous run of CJK
+      // characters is ONE token, so a genuine substring of a longer run (e.g.
+      // "发布分支" inside "发布分支总是 main...") never matches via MATCH even
+      // though a user would expect it to. LIKE is the only way to support a
+      // real CJK substring search against this tokenizer. Restricted to words
+      // that actually contain CJK text, so it never loosens matching for
+      // ordinary Latin/Cyrillic queries — those get real word-token matching
+      // above, and a bare substring scan there would be far too permissive
+      // (and, for `forget`, unsafe — see allowFallbackToList's doc).
+      const cjkWords = words.filter(containsCjkCharacters)
+      if (cjkWords.length === 0) return []
+
+      const likeClauses = cjkWords.map(() => `m.content LIKE ? ESCAPE '\\'`)
+      const likeValues = cjkWords.map((word) => `%${escapeLikePattern(word)}%`)
+      const likeRows = this.db.prepare(
+        `SELECT m.* FROM mastermind_memories m
+         WHERE (${likeClauses.join(' OR ')}) AND ${clauses.join(' AND ')}
+         ORDER BY m.updated_at DESC LIMIT ?`
+      ).all(...likeValues, ...baseValues, limit) as MastermindMemoryRow[]
+      return likeRows.map(deserializeMemory)
+    } catch (err) {
+      // Malformed FTS5 syntax from the raw query text (already stripped of
+      // punctuation above, so this should be rare) — fall back per allowFallback.
+      console.warn('[Database] Memory FTS search failed:', err)
+      return allowFallback ? this.listMemories(filter) : []
+    }
+  }
+
+  createMemory(data: CreateMemoryData): MastermindMemoryRecord {
+    const id = createId()
+    const now = new Date().toISOString()
+    const content = data.content.trim().slice(0, MEMORY_CONTENT_MAX_CHARS)
+    this.db.prepare(`
+      INSERT INTO mastermind_memories (id, scope, kind, content, source, importance, created_at, updated_at, last_used_at, expires_at, pinned)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+    `).run(
+      id,
+      normalizeMemoryScope(data.scope),
+      data.kind,
+      content,
+      data.source ?? 'user-stated',
+      clampImportance(data.importance),
+      now,
+      now,
+      data.expires_at ?? null,
+      data.pinned ? 1 : 0
+    )
+    return this.getMemory(id)!
+  }
+
+  updateMemory(id: string, data: UpdateMemoryData): MastermindMemoryRecord | undefined {
+    const existing = this.getMemory(id)
+    if (!existing) return undefined
+
+    const setClauses: string[] = []
+    const values: unknown[] = []
+
+    if (data.content !== undefined) { setClauses.push('content = ?'); values.push(data.content.trim().slice(0, MEMORY_CONTENT_MAX_CHARS)) }
+    if (data.kind !== undefined) { setClauses.push('kind = ?'); values.push(data.kind) }
+    if (data.scope !== undefined) { setClauses.push('scope = ?'); values.push(normalizeMemoryScope(data.scope)) }
+    if (data.source !== undefined) { setClauses.push('source = ?'); values.push(data.source) }
+    if (data.importance !== undefined) { setClauses.push('importance = ?'); values.push(clampImportance(data.importance)) }
+    if (data.pinned !== undefined) { setClauses.push('pinned = ?'); values.push(data.pinned ? 1 : 0) }
+    if (data.expires_at !== undefined) { setClauses.push('expires_at = ?'); values.push(data.expires_at) }
+
+    if (setClauses.length === 0) return existing
+
+    setClauses.push('updated_at = ?')
+    values.push(new Date().toISOString())
+    values.push(id)
+
+    this.db.prepare(`UPDATE mastermind_memories SET ${setClauses.join(', ')} WHERE id = ?`).run(...values)
+    return this.getMemory(id)
+  }
+
+  deleteMemory(id: string): boolean {
+    const result = this.db.prepare('DELETE FROM mastermind_memories WHERE id = ?').run(id)
+    return result.changes > 0
+  }
+
+  /** Deletes every memory, optionally scoped. Returns the number removed. */
+  clearAllMemories(scope?: string): number {
+    const result = scope
+      ? this.db.prepare('DELETE FROM mastermind_memories WHERE scope = ?').run(scope)
+      : this.db.prepare('DELETE FROM mastermind_memories').run()
+    return result.changes
+  }
+
+  /** Marks memories as used just now — called when they are surfaced by `recall` or auto-injected. */
+  touchMemoriesUsed(ids: string[]): void {
+    if (ids.length === 0) return
+    const now = new Date().toISOString()
+    const placeholders = ids.map(() => '?').join(', ')
+    this.db.prepare(`UPDATE mastermind_memories SET last_used_at = ? WHERE id IN (${placeholders})`).run(now, ...ids)
+  }
+
+  /** Every memory, including expired ones, for JSON export. */
+  exportMemories(): MastermindMemoryRecord[] {
+    const rows = this.db.prepare('SELECT * FROM mastermind_memories ORDER BY created_at ASC').all() as MastermindMemoryRow[]
+    return rows.map(deserializeMemory)
+  }
+
+  /** Hard cap on how many records a single import processes — a pathological or corrupted file can't wedge the app. */
+  static readonly MAX_IMPORT_RECORDS = 5000
+
+  /**
+   * Imports memories from a JSON export. Never overwrites an existing row:
+   * an id already present is counted as a duplicate and left untouched (so
+   * importing the same export twice is a safe no-op the second time,
+   * without silently clobbering anything a user edited locally in between).
+   * Every record is independently validated — malformed shape, invalid
+   * kind, and anything that looks like a credential are all skipped, never
+   * thrown on. By default an imported memory never arrives pre-pinned or
+   * carrying its original `source` — those came from someone else's
+   * Settings/agent and should not look locally authoritative until a human
+   * here confirms them; pass `keepPinned`/`keepSource` to preserve them
+   * instead (e.g. a user re-importing their own prior export).
+   */
+  importMemories(
+    records: unknown[],
+    options: { keepPinned?: boolean; keepSource?: boolean } = {}
+  ): { imported: number; skipped: number; duplicates: number } {
+    let imported = 0
+    let skipped = 0
+    let duplicates = 0
+    const now = new Date().toISOString()
+    const limited = records.slice(0, DatabaseManager.MAX_IMPORT_RECORDS)
+    skipped += Math.max(0, records.length - limited.length)
+
+    const stmt = this.db.prepare(`
+      INSERT INTO mastermind_memories (id, scope, kind, content, source, importance, created_at, updated_at, last_used_at, expires_at, pinned)
+      VALUES (@id, @scope, @kind, @content, @source, @importance, @created_at, @updated_at, @last_used_at, @expires_at, @pinned)
+    `)
+    const exists = this.db.prepare('SELECT 1 FROM mastermind_memories WHERE id = ?')
+
+    for (const raw of limited) {
+      if (!raw || typeof raw !== 'object') { skipped++; continue }
+      const r = raw as Record<string, unknown>
+      const content = typeof r.content === 'string' ? r.content.trim().slice(0, MEMORY_CONTENT_MAX_CHARS) : ''
+      if (!content || !isValidMemoryKind(r.kind)) { skipped++; continue }
+      if (containsLikelySecret(content).found) { skipped++; continue }
+
+      const id = typeof r.id === 'string' && r.id ? r.id : createId()
+      if (exists.get(id)) { duplicates++; continue }
+
+      stmt.run({
+        id,
+        scope: normalizeMemoryScope(r.scope),
+        kind: r.kind,
+        content,
+        source: options.keepSource && typeof r.source === 'string' && r.source ? r.source : 'imported',
+        importance: clampImportance(r.importance),
+        created_at: typeof r.created_at === 'string' ? r.created_at : now,
+        updated_at: typeof r.updated_at === 'string' ? r.updated_at : now,
+        last_used_at: typeof r.last_used_at === 'string' ? r.last_used_at : null,
+        expires_at: typeof r.expires_at === 'string' ? r.expires_at : null,
+        pinned: options.keepPinned && r.pinned ? 1 : 0
+      })
+      imported++
+    }
+    return { imported, skipped, duplicates }
   }
 
   // ── Settings CRUD ──────────────────────────────────────────

@@ -7,6 +7,7 @@ export enum SettingsTab {
   HARNESSES = 'harnesses',
   TOOLS_MCP = 'tools-mcp',
   SECRETS = 'secrets',
+  MEMORY = 'memory',
   VOICE = 'voice',
   INTEGRATIONS = 'integrations',
   CONNECTORS = 'connectors',
@@ -23,6 +24,7 @@ export const SETTINGS_TABS: { value: SettingsTab; label: string; icon: string }[
   { value: SettingsTab.HARNESSES, label: 'Harnesses', icon: 'Terminal' },
   { value: SettingsTab.TOOLS_MCP, label: 'Tools & MCP', icon: 'Server' },
   { value: SettingsTab.SECRETS, label: 'Secrets', icon: 'KeyRound' },
+  { value: SettingsTab.MEMORY, label: 'Memory', icon: 'BrainCircuit' },
   { value: SettingsTab.VOICE, label: 'Voice', icon: 'Mic' },
   { value: SettingsTab.INTEGRATIONS, label: 'Integrations', icon: 'Workflow' },
   { value: SettingsTab.CONNECTORS, label: 'Connectors', icon: 'Cable' },
@@ -221,6 +223,8 @@ export interface AgentConfig {
   mcp_servers?: Array<string | AgentMcpServerEntry>
   skill_ids?: string[]
   secret_ids?: string[]
+  /** Lets this agent use the mastermind memory tools even when it isn't the Mastermind session. Off by default. */
+  memory_trusted?: boolean
   max_parallel_sessions?: number  // Default: 1, range: 1-10
   api_keys?: {
     openai?: string  // For Codex
@@ -567,6 +571,55 @@ export interface UpdateSecretDTO {
   description?: string
   env_var_name?: string
   value?: string  // Only set if user wants to change the value
+}
+
+// ── Mastermind memory types ──────────────────────────────────
+// Kept in sync with src/shared/mastermind-memory.ts (main-process source of truth).
+
+export type MemoryKind = 'preference' | 'decision' | 'fact' | 'goal' | 'person' | 'procedure'
+
+export const MEMORY_KIND_OPTIONS: MemoryKind[] = ['preference', 'decision', 'fact', 'goal', 'person', 'procedure']
+
+export const MEMORY_SCOPE_GLOBAL = 'global'
+
+export interface MastermindMemory {
+  id: string
+  scope: string
+  kind: MemoryKind
+  content: string
+  source: string
+  importance: number
+  created_at: string
+  updated_at: string
+  last_used_at: string | null
+  expires_at: string | null
+  pinned: boolean
+}
+
+export interface CreateMemoryDTO {
+  content: string
+  kind: MemoryKind
+  scope?: string
+  source?: string
+  importance?: number
+  pinned?: boolean
+  expires_at?: string | null
+}
+
+export interface UpdateMemoryDTO {
+  content?: string
+  kind?: MemoryKind
+  scope?: string
+  source?: string
+  importance?: number
+  pinned?: boolean
+  expires_at?: string | null
+}
+
+export interface ListMemoriesFilterDTO {
+  scope?: string
+  kind?: MemoryKind
+  limit?: number
 }
 
 // ── Plugin types ─────────────────────────────────────────────

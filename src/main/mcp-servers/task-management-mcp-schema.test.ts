@@ -354,3 +354,81 @@ describe('window-driving tools are hard to misuse', () => {
     expect(result.isError).toBe(true)
   })
 })
+
+describe('mastermind memory tools — gated by scope.memoryToken', () => {
+  const MEMORY_TOOL_NAMES = ['remember', 'recall', 'forget', 'list_memories']
+
+  it('are absent for an ordinary full-access (non-Mastermind) session', () => {
+    const names = listToolsForScope(FULL_ACCESS_SCOPE).map((t) => t.name)
+    for (const name of MEMORY_TOOL_NAMES) expect(names).not.toContain(name)
+  })
+
+  it('are absent for an ordinary scoped subtask session', () => {
+    const names = listToolsForScope(SCOPED).map((t) => t.name)
+    for (const name of MEMORY_TOOL_NAMES) expect(names).not.toContain(name)
+  })
+
+  it('are present for a full-access session with a memory token (the Mastermind session)', () => {
+    const names = listToolsForScope({ ...FULL_ACCESS_SCOPE, memoryToken: 'tok-1' }).map((t) => t.name)
+    for (const name of MEMORY_TOOL_NAMES) expect(names).toContain(name)
+  })
+
+  it('are present for a scoped subtask session with a memory token (an explicitly trusted agent)', () => {
+    const names = listToolsForScope({ ...SCOPED, memoryToken: 'tok-1' }).map((t) => t.name)
+    for (const name of MEMORY_TOOL_NAMES) expect(names).toContain(name)
+  })
+
+  it('a call is rejected as unknown when the scope has no memory token — the tool list is the real boundary (server-side auth is the actual one, see task-api-server.ts)', async () => {
+    const result = await callToolForScope('remember', { content: 'x', kind: 'fact' }, FULL_ACCESS_SCOPE, async () => ({ memory: {} }))
+    expect(result.isError).toBe(true)
+    expect(result.content[0]).toMatchObject({ text: expect.stringContaining('Unknown tool') })
+  })
+
+  it('injects the scope\'s memory token into a memory-trusted subtask session\'s remember call, transparently', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = async (route: string, params: Record<string, unknown>) => {
+      calls.push([route, params])
+      return { memory: { id: 'mem-1' } }
+    }
+    const result = await callToolForScope(
+      'remember',
+      { content: 'The staging DB needs a manual migration step', kind: 'procedure' },
+      { ...SCOPED, memoryToken: 'tok-trusted-agent' },
+      invoke
+    )
+    expect(result.isError).toBeUndefined()
+    expect(calls).toEqual([
+      ['/remember', { content: 'The staging DB needs a manual migration step', kind: 'procedure', __memoryToken: 'tok-trusted-agent' }]
+    ])
+  })
+
+  it('overwrites a model-supplied __memoryToken with the scope\'s real one, never trusting the argument', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = async (route: string, params: Record<string, unknown>) => {
+      calls.push([route, params])
+      return { memory: { id: 'mem-1' } }
+    }
+    await callToolForScope(
+      'remember',
+      { content: 'x', kind: 'fact', __memoryToken: 'forged-token' },
+      { ...SCOPED, memoryToken: 'tok-real' },
+      invoke
+    )
+    expect(calls[0][1].__memoryToken).toBe('tok-real')
+  })
+
+  it('injects no token at all for a session with no memory access, even though the call is already blocked by the tool list', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = []
+    const invoke = async (route: string, params: Record<string, unknown>) => {
+      calls.push([route, params])
+      return { memory: { id: 'mem-1' } }
+    }
+    // Memory tools aren't even advertised here, so a real client can't reach
+    // this — but handleScopedCall's default pass-through is exercised
+    // directly to prove there is no code path that leaks a token scope
+    // never had. (The 'Unknown tool' guard above is what a real client hits.)
+    const mastermindScope: TaskMcpScope = { parentTaskId: null, taskId: 'mastermind-session', artifactTaskId: null, memoryToken: null }
+    await callToolForScope('open_task', { task_id: 't1' }, mastermindScope, invoke)
+    expect(calls[0][1].__memoryToken).toBeUndefined()
+  })
+})
