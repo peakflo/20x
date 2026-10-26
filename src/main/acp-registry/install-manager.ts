@@ -215,9 +215,19 @@ function validateArchiveEntries(entries: ArchiveEntry[]): void {
   }
 }
 
+/**
+ * Windows ships no `unzip`, but System32's bsdtar reads zips. Pinned by path
+ * because a GNU tar earlier on PATH (Git for Windows' usr/bin) cannot.
+ */
+function windowsBsdtar(): string {
+  return join(process.env.SystemRoot || 'C:\Windows', 'System32', 'tar.exe')
+}
+
 async function defaultListArchiveEntries(archivePath: string): Promise<ArchiveEntry[]> {
   if (archivePath.endsWith('.zip')) {
-    const { stdout } = await execFileAsync('unzip', ['-Z1', archivePath])
+    const { stdout } = process.platform === 'win32'
+      ? await execFileAsync(windowsBsdtar(), ['-tf', archivePath])
+      : await execFileAsync('unzip', ['-Z1', archivePath])
     return stdout
       .split('\n')
       .map((l) => l.trim())
@@ -238,7 +248,8 @@ async function defaultListArchiveEntries(archivePath: string): Promise<ArchiveEn
 
 async function defaultExtractArchive(archivePath: string, destDir: string): Promise<void> {
   if (archivePath.endsWith('.zip')) {
-    await execFileAsync('unzip', ['-q', archivePath, '-d', destDir])
+    if (process.platform === 'win32') await execFileAsync(windowsBsdtar(), ['-xf', archivePath, '-C', destDir])
+    else await execFileAsync('unzip', ['-q', archivePath, '-d', destDir])
     return
   }
   await execFileAsync('tar', ['-xzf', archivePath, '-C', destDir])

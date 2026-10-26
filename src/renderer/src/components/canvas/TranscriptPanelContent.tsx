@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
+import { AgentTranscriptPanel, type ComposerAttachment } from '@/components/agents/AgentTranscriptPanel'
 import { useAgentSession } from '@/hooks/use-agent-session'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useTaskStore } from '@/stores/task-store'
+import { attachmentApi } from '@/lib/ipc-client'
 import { Bot } from 'lucide-react'
 
 interface TranscriptPanelContentProps {
@@ -60,7 +61,7 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
   }, [resume, start, task?.agent_id, task?.session_id, taskId])
 
   const handleSend = useCallback(
-    async (message: string) => {
+    async (message: string, options?: { attachments?: ComposerAttachment[] }) => {
       // Read messages from the store at call time instead of closing over the
       // render-time array: depending on `messages` gives this callback a new
       // identity on every streamed delta, which defeats React.memo on every
@@ -97,10 +98,27 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
         return
       }
 
-      await sendMessage(message)
+      await sendMessage(message, options)
     },
     [taskId, approve, ensureChatSession, sendMessage]
   )
+
+  const updateTask = useTaskStore((s) => s.updateTask)
+  const handleAddAttachmentPaths = useCallback(async (filePaths: string[]) => {
+    if (filePaths.length === 0) return []
+    const saved = await Promise.all(filePaths.map((fp) => attachmentApi.save(taskId, fp)))
+    // Read the task at call time so two quick drops do not overwrite each other.
+    const current = useTaskStore.getState().tasks.find((t) => t.id === taskId)?.attachments ?? []
+    const seen = new Set(current.map((a) => a.id))
+    const merged = [...current, ...saved.filter((a) => !seen.has(a.id))]
+    await updateTask(taskId, { attachments: merged })
+    return saved
+  }, [taskId, updateTask])
+
+  const handlePickAttachments = useCallback(async () => {
+    const filePaths = await attachmentApi.pick()
+    return filePaths.length ? handleAddAttachmentPaths(filePaths) : []
+  }, [handleAddAttachmentPaths])
 
   if (!session || (status === SessionStatus.IDLE && messages.length === 0)) {
     return (
@@ -124,6 +142,8 @@ export function TranscriptPanelContent({ taskId }: TranscriptPanelContentProps) 
       onStop={handleStop}
       onRestart={handleRestart}
       onSend={handleSend}
+      onPickAttachments={handlePickAttachments}
+      onAddAttachmentPaths={handleAddAttachmentPaths}
       className="h-full select-text"
       sessionId={session?.sessionId ?? undefined}
       taskId={taskId}

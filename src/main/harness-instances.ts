@@ -21,7 +21,7 @@
  * Every function takes its platform, environment and link function as
  * arguments, so tests run on any host.
  */
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmdirSync, symlinkSync } from 'fs'
+import { copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmdirSync, symlinkSync } from 'fs'
 import { homedir } from 'os'
 import { dirname, isAbsolute, join, parse, resolve, sep } from 'path'
 import type { HarnessType } from '../shared/harness-instances'
@@ -91,6 +91,8 @@ export interface LinkSharedHistoryOptions {
   platform?: NodeJS.Platform
   /** Creates a link. Defaults to `fs.symlinkSync`. Injected by tests. */
   link?: LinkFn
+  /** Creates a hard link, the Windows fallback for a file when symlinks are not allowed. Defaults to `fs.linkSync`. */
+  hardLink?: (target: string, path: string) => void
 }
 
 /** Expands a leading `~` and resolves relative paths. Returns undefined for blank input. */
@@ -197,6 +199,11 @@ export function instanceHomeError(
   return null
 }
 
+function isSymlinkPrivilegeError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return code === 'EPERM' || code === 'EACCES'
+}
+
 const defaultLink: LinkFn = (target, path, type) => {
   symlinkSync(target, path, type)
 }
@@ -215,6 +222,7 @@ export function linkSharedHistory(options: LinkSharedHistoryOptions): SharedHist
 
   const platform = options.platform ?? process.platform
   const link = options.link ?? defaultLink
+  const hardLink = options.hardLink ?? linkSync
   const dirType = directoryLinkType(platform)
   let shareable = true
 
@@ -277,7 +285,18 @@ export function linkSharedHistory(options: LinkSharedHistoryOptions): SharedHist
     try {
       link(target, path, 'file')
       links.push({ name, status: 'linked' })
-    } catch {
+    } catch (error) {
+      // Windows refuses file symlinks without Developer Mode or elevation. A
+      // hard link needs neither and shares the same content. Never for a
+      // SQLite database: SQLite derives the -wal/-shm names from the path it
+      // was opened by, so two names for one database would corrupt it.
+      if (platform === 'win32' && isSymlinkPrivilegeError(error) && !CODEX_ROOT_DATABASE.test(name)) {
+        try {
+          hardLink(target, path)
+          links.push({ name, status: 'linked' })
+          return
+        } catch { /* fall through to failed */ }
+      }
       // Files are settings, not history: a missing link does not stop sharing.
       links.push({ name, status: 'failed' })
     }

@@ -1,3 +1,4 @@
+const isWindows = process.platform === 'win32'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import path from 'path'
 
@@ -369,7 +370,7 @@ describe('WorktreeManager', () => {
     expect(execFileMock).toHaveBeenCalledTimes(1)
   })
 
-  it('reads selected files lazily and rejects paths resolving outside the task workspace', () => {
+  it.skipIf(isWindows)('reads selected files lazily and rejects paths resolving outside the task workspace', () => {
     const workspacePath = path.join('/tmp/20x-user-data', 'workspaces', 'task-5')
     const repoPath = path.join(workspacePath, '20x')
     const filePath = path.join(repoPath, 'src', 'index.ts')

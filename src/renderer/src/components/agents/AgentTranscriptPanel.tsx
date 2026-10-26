@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, ListTodo, FileText, ArrowDown, ArrowUp, Paperclip, Search, X, Image as ImageIcon, GitPullRequest, MonitorPlay } from 'lucide-react'
+import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, ListTodo, FileText, ArrowDown, ArrowUp, Paperclip, Pencil, Search, X, Image as ImageIcon, GitPullRequest, MonitorPlay } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
@@ -685,7 +685,7 @@ function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFAC
   )
 }
 
-function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswerQuestion?: boolean; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
+function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact, onEdit }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswerQuestion?: boolean; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void; onEdit?: (content: string) => void }) {
   if (message.partType === 'question' && message.tool?.questions) {
     return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} searchQuery={searchQuery} />
   }
@@ -718,7 +718,7 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
   const scadArtifact = !isSystem && !isError && onOpenArtifact ? findChatScadArtifact(message, artifacts) : undefined
 
   return (
-    <div className={`flex gap-2 ${isUser ? 'justify-end' : 'justify-start'} ${!isUser ? 'w-full' : ''}`}>
+    <div className={`flex gap-2 ${isUser ? 'group/user-msg justify-end' : 'justify-start'} ${!isUser ? 'w-full' : ''}`}>
       <div
         className={`overflow-hidden min-w-0 ${
           isError
@@ -745,6 +745,17 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
           {/* Only a plain agent answer can be read aloud. An error and a system
               line are not answers, and a user message is the user's own words. */}
           {!isUser && !isSystem && !isError && <SpeakMessageButton text={message.content} />}
+          {isUser && onEdit && (
+            <button
+              type="button"
+              onClick={() => onEdit(message.content)}
+              className="text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/user-msg:opacity-100"
+              title="Edit and resend"
+              aria-label="Edit and resend message"
+            >
+              <Pencil className="h-3 w-3" />
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -752,6 +763,8 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
 }
 
 const MemoizedMessageBubble = React.memo(MessageBubble)
+
+const EDITED_MESSAGE_PREFIX = '(Edited version of my previous message — please use this instead.)\n\n'
 
 // Activity groups are the majority of rows while an agent runs. Their
 // `messages` array is rebuilt (new identity) whenever the transcript changes,
@@ -875,6 +888,9 @@ export function AgentTranscriptPanel({
   const [activeSearchResult, setActiveSearchResult] = useState(0)
   const [pendingAttachments, setPendingAttachments] = useState<ComposerAttachment[]>([])
   const [isDragOverComposer, setIsDragOverComposer] = useState(false)
+  // A sent message being rewritten. Backends cannot rewind a session, so the
+  // edited text goes out as a follow-up that says it replaces the original.
+  const [isEditingSent, setIsEditingSent] = useState(false)
   const [debugCopyToast, setDebugCopyToast] = useState(false)
   useEffect(() => {
     if (searchRequest === 0) return
@@ -1204,9 +1220,12 @@ export function AgentTranscriptPanel({
       // straight afterwards, so the conversation loop is unaffected.
       void voiceApi.answerNotExpected(taskId)
       const attachmentsAtSend = pendingAttachments
-      const sent = onSend(value, attachmentsAtSend.length > 0 ? { attachments: attachmentsAtSend } : undefined)
+      const wasEditing = isEditingSent
+      const outgoing = wasEditing ? `${EDITED_MESSAGE_PREFIX}${value}` : value
+      const sent = onSend(outgoing, attachmentsAtSend.length > 0 ? { attachments: attachmentsAtSend } : undefined)
       inputRef.current!.value = ''
       setInputHasValue(false)
+      setIsEditingSent(false)
       // Reset textarea height back to single row
       inputRef.current!.style.height = 'auto'
       setPendingAttachments([])
@@ -1218,6 +1237,7 @@ export function AgentTranscriptPanel({
         if (inputRef.current && !inputRef.current.value) {
           inputRef.current.value = value
           setInputHasValue(true)
+          setIsEditingSent(wasEditing)
         }
         setPendingAttachments(attachmentsAtSend)
         const detail = error instanceof Error && error.message ? error.message.trim() : String(error ?? '').trim()
@@ -1234,6 +1254,17 @@ export function AgentTranscriptPanel({
   // The registration calls through this ref, so a conversation always uses the
   // send function of the current render, never one captured earlier.
   sendRef.current = handleSend
+
+  const handleEditMessage = useCallback((content: string) => {
+    const input = inputRef.current
+    if (!input) return
+    input.value = content
+    setInputHasValue(!!content.trim())
+    setIsEditingSent(true)
+    input.focus()
+    input.style.height = 'auto'
+    input.style.height = `${input.scrollHeight}px`
+  }, [])
 
   const handleAddAttachments = async () => {
     if (!onPickAttachments) return
@@ -1258,8 +1289,11 @@ export function AgentTranscriptPanel({
   }
 
   const handleComposerDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    if (!onAddAttachmentPaths || !Array.from(e.dataTransfer.types).includes('Files')) return
+    if (!Array.from(e.dataTransfer.types).includes('Files')) return
+    // Always claim a file drag so Electron never navigates the window to the
+    // dropped file, even in panels that cannot attach it.
     e.preventDefault()
+    if (!onAddAttachmentPaths) return
     e.stopPropagation()
     e.dataTransfer.dropEffect = 'copy'
     setIsDragOverComposer(true)
@@ -1274,8 +1308,8 @@ export function AgentTranscriptPanel({
   }
 
   const handleComposerDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+    if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault()
     if (!onAddAttachmentPaths) return
-    e.preventDefault()
     e.stopPropagation()
     setIsDragOverComposer(false)
 
@@ -1287,7 +1321,20 @@ export function AgentTranscriptPanel({
   }
 
   return (
-    <div ref={panelRef} tabIndex={-1} className={cn('native-backdrop-page flex flex-col min-h-0 bg-background border-l border-border relative', className)}>
+    <div
+      ref={panelRef}
+      tabIndex={-1}
+      className={cn('native-backdrop-page flex flex-col min-h-0 bg-background border-l border-border relative', className)}
+      onDragOver={handleComposerDragOver}
+      onDragEnter={handleComposerDragOver}
+      onDragLeave={handleComposerDragLeave}
+      onDrop={handleComposerDrop}
+    >
+      {isDragOverComposer && (
+        <div className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-xl border border-dashed border-primary/50 bg-background/80">
+          <span className="text-sm font-medium text-primary">Drop files to attach them to this message</span>
+        </div>
+      )}
       {/* Debug copy toast — only visible briefly after copy */}
       {debugCopyToast && (
         <div className="absolute top-12 left-1/2 -translate-x-1/2 z-50 bg-card border border-border rounded-md px-3 py-1.5 text-xs text-foreground shadow-lg animate-in fade-in duration-150">
@@ -1493,6 +1540,7 @@ export function AgentTranscriptPanel({
                               searchQuery={normalizedSearchQuery}
                               artifacts={taskArtifacts}
                               onOpenArtifact={handleOpenArtifact}
+                              onEdit={onSend ? handleEditMessage : undefined}
                             />
                           )}
                         </div>
@@ -1534,15 +1582,25 @@ export function AgentTranscriptPanel({
           <div
             data-testid="transcript-composer"
             data-voice-composer={composerKey}
-            className={`pointer-events-auto relative px-4 py-4 space-y-2.5 transition-colors ${isDragOverComposer ? 'bg-primary/5' : ''}`}
-            onDragOver={handleComposerDragOver}
-            onDragEnter={handleComposerDragOver}
-            onDragLeave={handleComposerDragLeave}
-            onDrop={handleComposerDrop}
+            className="pointer-events-auto relative px-4 py-4 space-y-2.5"
           >
-            {isDragOverComposer && (
-              <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-xl border border-dashed border-primary/40 bg-background/90">
-                <span className="text-xs font-medium text-primary">Drop files to attach them to this message</span>
+            {isEditingSent && (
+              <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                <span className="flex items-center gap-1"><Pencil className="h-3 w-3" /> Editing a sent message — the agent gets the new version as a follow-up</span>
+                <button
+                  type="button"
+                  className="hover:text-foreground"
+                  onClick={() => {
+                    setIsEditingSent(false)
+                    if (inputRef.current) {
+                      inputRef.current.value = ''
+                      inputRef.current.style.height = 'auto'
+                    }
+                    setInputHasValue(false)
+                  }}
+                >
+                  Cancel
+                </button>
               </div>
             )}
             {pendingAttachments.length > 0 && (

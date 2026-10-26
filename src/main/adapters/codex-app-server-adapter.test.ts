@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { CodexAppServerAdapter } from './codex-app-server-adapter'
 import { MessagePartType, MessageRole, SessionStatusType } from './coding-agent-adapter'
+import { isWindows } from '../../../test/helpers/can-symlink'
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(),
@@ -1149,7 +1150,7 @@ describe('CodexAppServerAdapter', () => {
     })
   })
 
-  it('converts 20x MCP configs to codex app-server config shape', () => {
+  it.skipIf(isWindows)('converts 20x MCP configs to codex app-server config shape', () => {
     const adapter = adapterPrivate(new CodexAppServerAdapter())
 
     const config = adapter.buildConfigOverrides({

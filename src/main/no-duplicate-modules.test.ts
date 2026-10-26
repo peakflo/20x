@@ -71,5 +71,6 @@ describe('no duplicate module implementations', () => {
       'These .js specifiers have no .js file behind them. Drop the extension so ' +
       'the import cannot switch targets when a .js file appears.'
     ).toEqual([])
-  })
+  // Reads every tracked source file; slow on Windows under a full parallel run.
+  }, 30_000)
 })
