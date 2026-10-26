@@ -858,7 +858,9 @@ export function InfiniteCanvas() {
       panStartRef.current = { x: e.clientX, y: e.clientY }
       queuePan(dx, dy)
     },
-    [isPanning, queuePan]
+    // connectingFromId must be a dependency: without it the handler keeps the
+    // value from before connect mode started and the pending line never draws.
+    [connectingFromId, isPanning, queuePan]
   )
 
   const handleMouseUp = useCallback(() => {

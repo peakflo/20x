@@ -11,6 +11,7 @@ const {
   addPanelMock,
   addEdgeMock,
   bringToFrontMock,
+  openArtifactPanelMock,
   executeActionMock,
   canvasState,
   taskList,
@@ -21,6 +22,7 @@ const {
   addPanelMock: vi.fn(() => 'panel-new'),
   addEdgeMock: vi.fn(),
   bringToFrontMock: vi.fn(),
+  openArtifactPanelMock: vi.fn(() => 'panel-artifact'),
   executeActionMock: vi.fn(async () => ({ success: true })),
   canvasState: {
     panels: [
@@ -57,10 +59,12 @@ vi.mock('@/components/tasks/TaskWorkspace', () => ({
   TaskWorkspace: ({
     onNavigateToTask,
     onOpenSubtaskInWindow,
+    onOpenArtifactInWindow,
     onCompleteTask,
   }: {
     onNavigateToTask?: (taskId: string) => void
     onOpenSubtaskInWindow?: (taskId: string) => void
+    onOpenArtifactInWindow?: (artifact: { id: string; taskId: string; title: string }) => void
     onCompleteTask?: () => void
   }) => (
     <>
@@ -69,6 +73,9 @@ vi.mock('@/components/tasks/TaskWorkspace', () => ({
       </button>
       <button type="button" onClick={() => onOpenSubtaskInWindow?.('child-1')}>
         Open child in window
+      </button>
+      <button type="button" onClick={() => onOpenArtifactInWindow?.({ id: 'task-1:report', taskId: 'task-1', title: 'Report' })}>
+        Open artifact in window
       </button>
       <button type="button" onClick={() => onCompleteTask?.()}>
         Complete task
@@ -90,6 +97,7 @@ vi.mock('@/stores/canvas-store', () => {
     useCanvasStore,
     DEFAULT_PANEL_WIDTH: 1020,
     DEFAULT_PANEL_HEIGHT: 780,
+    openArtifactPanel: openArtifactPanelMock,
   }
 })
 
@@ -221,5 +229,14 @@ describe('TaskPanelContent', () => {
     expect(updateTaskMock).toHaveBeenCalledWith('task-1', {complete_at_source: true})
     // The dialog closes after the source confirms completion.
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('opens a task artifact as its own canvas panel linked to this panel', () => {
+    render(<TaskPanelContent panelId="panel-1" taskId="task-1" panelLayout="both" />)
+
+    fireEvent.click(screen.getByText('Open artifact in window'))
+
+    expect(openArtifactPanelMock).toHaveBeenCalledWith('panel-1', { id: 'task-1:report', taskId: 'task-1', title: 'Report' })
+    expect(updatePanelMock).not.toHaveBeenCalled()
   })
 })
