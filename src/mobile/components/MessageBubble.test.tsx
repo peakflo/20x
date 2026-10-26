@@ -268,7 +268,7 @@ describe('MessageActivityGroup inline HTML renders', () => {
       />
     )
 
-    expect(screen.getByText('Q3 revenue')).toBeTruthy()
+    expect(screen.getByTestId('inline-html-render').textContent).not.toContain('Q3 revenue')
     await waitFor(() => expect(screen.getByTitle('Q3 revenue').getAttribute('srcdoc')).toContain('<p>chart</p>'))
 
     // Sits at message level — not nested inside the indented tool-call
@@ -276,7 +276,7 @@ describe('MessageActivityGroup inline HTML renders', () => {
     expect(screen.getByTitle('Q3 revenue').closest('.border-l.pl-2')).toBeNull()
   })
 
-  it('navigates via onOpenArtifact (not the desktop artifact-tab store) when Expand is clicked', async () => {
+  it('shows the page without inline toolbar actions', async () => {
     const artifact: Artifact = {
       id: 'task-1:workpiece:artifact_chart_abc12345',
       taskId: 'task-1',
@@ -287,19 +287,16 @@ describe('MessageActivityGroup inline HTML renders', () => {
       updatedAt: 1,
       reloadTrigger: 0
     }
-    const onOpenArtifact = vi.fn()
-
     render(
       <MessageActivityGroup
         messages={[makeToolMessage({ artifact_id: 'artifact_chart_abc12345', path: artifact.path, title: 'Q3 revenue' })]}
         artifacts={[artifact]}
-        onOpenArtifact={onOpenArtifact}
+        onOpenArtifact={vi.fn()}
       />
     )
 
     await waitFor(() => expect(screen.getByTitle('Q3 revenue').getAttribute('srcdoc')).toContain('<p>chart</p>'))
-    fireEvent.click(screen.getByLabelText('Expand'))
-    expect(onOpenArtifact).toHaveBeenCalledWith(artifact)
+    expect(screen.getByTestId('inline-html-render').querySelector('button')).toBeNull()
   })
 
   it('does not render an InlineHtmlRender for a non-inline HTML artifact', () => {
