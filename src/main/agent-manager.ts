@@ -7104,7 +7104,13 @@ Important:
       }
     }
 
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+    // The window renders the durable projection only (`transcript:changed`,
+    // emitted by persistTranscriptEvent above). Nothing in the renderer listens
+    // to raw `agent:output*`, and each batch re-sends the full text of every
+    // growing part, so sending it here only cost structured-clone work on both
+    // sides (about 2 MB per 20 KB streamed answer).
+    const rendererConsumes = channel !== 'agent:output' && channel !== 'agent:output-batch'
+    if (rendererConsumes && this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send(channel, data)
     }
     // Also notify external listeners (mobile API WebSocket)

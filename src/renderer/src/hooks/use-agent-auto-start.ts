@@ -29,16 +29,17 @@ export function useAgentAutoStart({ tasks, agents, showToast }: UseAgentAutoStar
   // Read sessions non-reactively to avoid re-rendering the entire AppLayout on every agent message.
   // Effects that need current session state call getSessionsSnapshot() at execution time.
   const getSessionsSnapshot = useCallback(() => useAgentStore.getState().sessions, [])
-  const {
-    isEnabled,
-    incrementRunningCount,
-    decrementRunningCount,
-    getRunningCount,
-    addToQueue,
-    removeFromQueue,
-    getNextQueuedTask,
-    clearQueues
-  } = useAgentSchedulerStore()
+  // Per-field selectors: the actions are stable and read state through get(),
+  // so only `isEnabled` needs to be reactive. A whole-store subscription
+  // re-rendered AppLayout on every running-count/queue change.
+  const isEnabled = useAgentSchedulerStore((s) => s.isEnabled)
+  const incrementRunningCount = useAgentSchedulerStore((s) => s.incrementRunningCount)
+  const decrementRunningCount = useAgentSchedulerStore((s) => s.decrementRunningCount)
+  const getRunningCount = useAgentSchedulerStore((s) => s.getRunningCount)
+  const addToQueue = useAgentSchedulerStore((s) => s.addToQueue)
+  const removeFromQueue = useAgentSchedulerStore((s) => s.removeFromQueue)
+  const getNextQueuedTask = useAgentSchedulerStore((s) => s.getNextQueuedTask)
+  const clearQueues = useAgentSchedulerStore((s) => s.clearQueues)
 
   // ── Refs for stable callback references ──────────────────────────
   // Store tasks/agents/showToast in refs so callbacks and IPC listeners
