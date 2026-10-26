@@ -353,6 +353,11 @@ interface MessageAttachmentRef {
   mime_type: string
 }
 
+/** True for a bare file name: no directory parts, not `.` or `..`. */
+function isPlainFileName(name: unknown): name is string {
+  return typeof name === 'string' && name.length > 0 && name !== '.' && name !== '..' && !/[\\/]/.test(name)
+}
+
 /**
  * One MCP server as the session documentation describes it.
  * `injected` is the config the session really received, when it is known.
@@ -1797,6 +1802,36 @@ export class AgentManager extends EventEmitter {
       }
     }
     return refs
+  }
+
+  /**
+   * Copies the files attached to one message into the workspace.
+   *
+   * `syncAttachmentsToWorkspace` only knows the attachments recorded on the
+   * task row. Sessions without a task row (Mastermind) still store message
+   * attachments under the session's attachments dir, so copy those by id here.
+   * The id and filename come from the renderer: anything that is not a plain
+   * file name is skipped, so a ref can never reach outside either directory.
+   */
+  private syncMessageAttachmentsToWorkspace(
+    taskId: string,
+    workspaceDir: string,
+    attachments: MessageAttachmentRef[] | undefined
+  ): void {
+    if (!attachments?.length) return
+    const attachDir = this.db.getAttachmentsDir(taskId)
+    const destDir = join(workspaceDir, 'attachments')
+    for (const att of attachments) {
+      if (!isPlainFileName(att.id) || !isPlainFileName(att.filename)) continue
+      const srcPath = join(attachDir, `${att.id}-${att.filename}`)
+      if (!existsSync(srcPath)) continue
+      try {
+        if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+        copyFileSync(srcPath, join(destDir, att.filename))
+      } catch (error) {
+        console.warn(`[AgentManager] Could not copy message attachment ${att.filename}:`, error)
+      }
+    }
   }
 
   private getMemoryFileName(agentId: string): string {
@@ -5382,6 +5417,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // the agent can reference them immediately.
     if (session.workspaceDir) {
       this.syncAttachmentsToWorkspace(session.taskId, session.workspaceDir)
+      this.syncMessageAttachmentsToWorkspace(session.taskId, session.workspaceDir, attachments)
     }
 
     // Update status to working (but preserve AgentLearning if set)
