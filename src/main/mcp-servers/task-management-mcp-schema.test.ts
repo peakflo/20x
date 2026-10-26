@@ -354,3 +354,26 @@ describe('window-driving tools are hard to misuse', () => {
     expect(result.isError).toBe(true)
   })
 })
+
+describe('canvas artifact tools', () => {
+  const names = ['canvas_artifact_list', 'canvas_artifact_read']
+
+  it('are advertised to full-access and subtask sessions', () => {
+    for (const scope of [FULL_ACCESS_SCOPE, SCOPED]) {
+      const advertised = listToolsForScope(scope).map((t) => t.name)
+      for (const name of names) expect(advertised).toContain(name)
+    }
+    expect(Object.keys(propertiesOf(SCOPED, 'canvas_artifact_read'))).toEqual(expect.arrayContaining(['panel_id', 'file']))
+  })
+
+  it('pins the calling task, whatever task the agent names', async () => {
+    const calls: Array<{ route: string; params: Record<string, unknown> }> = []
+    const invoke = async (route: string, params: Record<string, unknown>) => { calls.push({ route, params }); return { ok: true } }
+    await callToolForScope('canvas_artifact_read', { task_id: 'someone-else', panel_id: 'p1' }, SCOPED, invoke)
+    await callToolForScope('canvas_artifact_list', { task_id: 'someone-else' }, { parentTaskId: null, taskId: 'main-task', artifactTaskId: 'main-task' }, invoke)
+    expect(calls).toEqual([
+      { route: '/canvas_artifact_read', params: { task_id: 'task-own', panel_id: 'p1' } },
+      { route: '/canvas_artifact_list', params: { task_id: 'main-task' } }
+    ])
+  })
+})

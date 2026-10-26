@@ -58,6 +58,7 @@ import { listTaskArtifactEntries, readTaskArtifact, resolveTaskArtifactFilePath,
 import { renderTaskScadArtifact } from './scad-preview'
 import { readScadAttachment, renderScadAttachment, saveScadAttachment } from './scad-attachments'
 import { writeArtifactFileToClipboard } from './artifact-clipboard'
+import { canvasArtifactBroker, type ArtifactPanelRegistration } from './canvas-artifact-broker'
 import { writeClipboardAttachment, removeStagedClipboardFile } from './clipboard-attachments'
 import { ArtifactClipboardMode, type ArtifactCopyFileResult } from '../shared/artifacts'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
@@ -2478,6 +2479,18 @@ else:
   ipcMain.handle('browser:unregisterBrokerPanel', (_event, panelId: string) => {
     if (typeof panelId !== 'string') return { success: false }
     panelBrowserBroker.unregisterPanel(panelId)
+    return { success: true }
+  })
+
+  // Canvas artifact panels register here with the task ids edge-connected to
+  // them, so those tasks' agents can read the artifact via canvas_artifact_*.
+  ipcMain.handle('canvasArtifact:registerPanel', (_event, payload: ArtifactPanelRegistration) => {
+    return { success: canvasArtifactBroker.register(payload) }
+  })
+
+  ipcMain.handle('canvasArtifact:unregisterPanel', (_event, panelId: string) => {
+    if (typeof panelId !== 'string') return { success: false }
+    canvasArtifactBroker.unregister(panelId)
     return { success: true }
   })
 

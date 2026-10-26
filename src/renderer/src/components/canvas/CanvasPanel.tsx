@@ -3,6 +3,7 @@ import {
   useCanvasStore,
   calculateSnap,
   detectProximityEdge,
+  edgeTypeForPanelTypes,
   DEFAULT_PANEL_WIDTH,
   DEFAULT_PANEL_HEIGHT,
   type CanvasPanelData,
@@ -17,6 +18,7 @@ import { TranscriptPanelContent } from './TranscriptPanelContent'
 import { AppPanelContent } from './AppPanelContent'
 import { WebPagePanelContent } from './WebPagePanelContent'
 import { BrowserPanelContent } from './BrowserPanelContent'
+import { ArtifactPanelContent } from './ArtifactPanelContent'
 import { getCanvasTaskStatusStyle, shouldPulseCanvasTaskStatusTransition } from './canvas-status-style'
 
 /**
@@ -199,9 +201,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
           const allPanels = useCanvasStore.getState().panels
           const fromP = allPanels.find((p) => p.id === prox.fromId)
           const toP = allPanels.find((p) => p.id === prox.toId)
-          const isBrowser = fromP?.type === 'browser' || toP?.type === 'browser'
-          const isTerminal = fromP?.type === 'terminal' || toP?.type === 'terminal'
-          addEdge(prox.fromId, prox.toId, isBrowser ? 'browser' : isTerminal ? 'terminal' : undefined)
+          addEdge(prox.fromId, prox.toId, edgeTypeForPanelTypes(fromP?.type, toP?.type))
         }
         useCanvasStore.getState().setProximityEdge(null)
       }
@@ -320,10 +320,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
       if (connectingFrom && connectingFrom !== panel.id) {
         // Complete the edge
         const fromPanel = useCanvasStore.getState().panels.find((p) => p.id === connectingFrom)
-        const isBrowserEdge = panel.type === 'browser' || fromPanel?.type === 'browser'
-        const isTerminalEdge = panel.type === 'terminal' || fromPanel?.type === 'terminal'
-        const edgeType = isBrowserEdge ? 'browser' : isTerminalEdge ? 'terminal' : undefined
-        addEdge(connectingFrom, panel.id, edgeType)
+        addEdge(connectingFrom, panel.id, edgeTypeForPanelTypes(panel.type, fromPanel?.type))
         setConnectingFromId(null)
         return
       }
@@ -475,6 +472,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
       webpage: { label: 'Web', color: 'bg-cyan-500/20 text-cyan-400', border: 'border-cyan-500/40', outline: 'outline-cyan-500/40', bg: 'bg-[var(--canvas-panel)]' },
       terminal: { label: 'Terminal', color: 'bg-violet-500/20 text-violet-300', border: 'border-violet-500/45', outline: 'outline-violet-500/45', bg: 'bg-[var(--canvas-panel)]' },
       browser: { label: 'Browser', color: 'bg-orange-500/20 text-orange-300', border: 'border-orange-500/40', outline: 'outline-orange-500/40', bg: 'bg-[var(--canvas-panel)]' },
+      artifact: { label: 'Artifact', color: 'bg-fuchsia-500/20 text-fuchsia-300', border: 'border-fuchsia-500/40', outline: 'outline-fuchsia-500/40', bg: 'bg-[var(--canvas-panel)]' },
     }
 
     if (panel.type === 'task') {
@@ -618,7 +616,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
       {!isCollapsed && (
         <div
           data-canvas-content-mounted={suspendHeavyContent ? 'false' : 'true'}
-          className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || panel.type === 'terminal' || panel.type === 'browser' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}
+          className={`flex-1 overflow-hidden min-h-0 ${panel.type === 'task' || panel.type === 'transcript' || panel.type === 'webpage' || panel.type === 'terminal' || panel.type === 'browser' || panel.type === 'artifact' || (panel.type === 'app' && panel.refId) ? '' : 'p-3 overflow-auto'}`}
           style={frozen ? FROZEN_CONTENT_STYLE : undefined}
         >
           {!suspendHeavyContent && (
@@ -626,6 +624,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
               type={panel.type}
               id={panel.id}
               refId={panel.refId}
+              artifactTaskId={panel.artifactTaskId}
               url={panel.url}
               title={panel.title}
               taskLayout={taskLayout}
@@ -715,6 +714,7 @@ interface PanelContentProps {
   type: string
   id: string
   refId?: string
+  artifactTaskId?: string
   url?: string
   title: string
   taskLayout?: TaskWorkspaceLayout
@@ -729,7 +729,7 @@ interface PanelContentProps {
 // is split out of the startup bundle.
 const TerminalPanelContent = lazy(() => import('./TerminalPanelContent').then((m) => ({ default: m.TerminalPanelContent })))
 
-const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, title, taskLayout, browserSessionId, streamPort, paused }: PanelContentProps) {
+const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, artifactTaskId, url, title, taskLayout, browserSessionId, streamPort, paused }: PanelContentProps) {
   if (type === 'task' && refId) {
     return <TaskPanelContent panelId={id} taskId={refId} panelLayout={taskLayout} />
   }
@@ -748,6 +748,9 @@ const MemoizedPanelContent = memo(function PanelContent({ type, id, refId, url, 
         <TerminalPanelContent terminalId={id} cwd={url} />
       </Suspense>
     )
+  }
+  if (type === 'artifact' && refId && artifactTaskId) {
+    return <ArtifactPanelContent panelId={id} artifactId={refId} taskId={artifactTaskId} />
   }
   if (type === 'browser') {
     return <BrowserPanelContent panelId={id} url={url} sessionName={browserSessionId} streamPort={streamPort} paused={paused} />
