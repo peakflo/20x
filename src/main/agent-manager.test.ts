@@ -1752,19 +1752,131 @@ describe('AgentManager transitionToIdle — completing without review', () => {
     return { mgr, session }
   }
 
-  it.each([true,false])('desktop work requires server review with auto-complete=%s', async auto => {
-    const mockDb=makeDb({auto_complete_without_review:auto});const {mgr,session}=setup(mockDb)
-    const executeAction=vi.fn();mgr.setSyncManager({executeAction} as never)
-    await (mgr as any).transitionToIdle('session-1',session)
-    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1',{status:TaskStatus.Completed})
-    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1',{status:TaskStatus.ReadyForReview})
+  it('completes a source-less task on idle without entering review', async () => {
+    const mockDb = makeDb()
+    const { mgr, session } = setup(mockDb)
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect((mgr as any).autoEnableHeartbeat).toHaveBeenCalledWith(session)
+    expect((mgr as any).sendToRenderer).toHaveBeenCalledWith('agent:status', expect.objectContaining({ status: 'idle' }))
+  })
+
+  it('leaves a source-less task in review when the flag is off', async () => {
+    const mockDb = makeDb({ auto_complete_without_review: false })
+    const { mgr, session } = setup(mockDb)
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+  })
+
+  it('leaves a source-linked task in review without a source action', async () => {
+    const mockDb = makeDb({ source_id: 'source-1' })
+    const { mgr, session } = setup(mockDb)
+    const executeAction = vi.fn()
+    mgr.setSyncManager({ executeAction } as never)
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
     expect(executeAction).not.toHaveBeenCalled()
   })
-  it('cannot complete from a desktop agent without a server credential', async()=>{
-    const mockDb=makeDb();const {mgr}=setup(mockDb)
-    const executeAction=vi.fn();mgr.setSyncManager({executeAction} as never)
-    expect(await mgr.completeTaskWithoutReview('task-1')).toBe(false)
-    expect(mockDb.updateTask).not.toHaveBeenCalled();expect(executeAction).not.toHaveBeenCalled()
+
+  it('keeps server snapshot status under server control on idle', async () => {
+    const mockDb = makeDb()
+    vi.mocked(mockDb.getSetting).mockReturnValue('{"id":"server-task"}')
+    const { mgr, session } = setup(mockDb)
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(mockDb.updateTask).not.toHaveBeenCalled()
+  })
+
+  it('leaves an assigned unfinished child and its parent in review', async () => {
+    const mockDb = makeDb()
+    vi.mocked(mockDb.getSubtasks).mockReturnValue([{
+      status: TaskStatus.NotStarted, agent_id: 'agent-1'
+    }] as ReturnType<typeof mockDb.getSubtasks>)
+    const { mgr, session } = setup(mockDb)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+  })
+
+  describe('completeTaskWithoutReview without a session', () => {
+    it('completes a source-less task in review', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview })
+      const mgr = new AgentManager(mockDb)
+      const send = vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(true)
+      expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+      expect(send).toHaveBeenCalledWith('task:updated', {
+        taskId: 'task-1', updates: { status: TaskStatus.Completed }
+      })
+    })
+
+    it('refuses a source-linked task without a write', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview, source_id: 'source-1' })
+      const mgr = new AgentManager(mockDb)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(false)
+      expect(mockDb.updateTask).not.toHaveBeenCalled()
+    })
+
+    it('refuses a task with a server snapshot without a write', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview })
+      vi.mocked(mockDb.getSetting).mockReturnValue('{"id":"server-task"}')
+      const mgr = new AgentManager(mockDb)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(false)
+      expect(mockDb.updateTask).not.toHaveBeenCalled()
+    })
+
+    it('does nothing when the task is missing', async () => {
+      const mockDb = makeDb()
+      vi.mocked(mockDb.getTask).mockReturnValue(undefined)
+      const mgr = new AgentManager(mockDb)
+
+      await expect(mgr.completeTaskWithoutReview('task-gone')).resolves.toBe(false)
+      expect(mockDb.updateTask).not.toHaveBeenCalled()
+    })
+
+    it('completes a parent with an unassigned child that cannot start', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview })
+      vi.mocked(mockDb.getSubtasks).mockReturnValue([{
+        status: TaskStatus.NotStarted, agent_id: null
+      }] as ReturnType<typeof mockDb.getSubtasks>)
+      const mgr = new AgentManager(mockDb)
+      vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(true)
+      expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    })
+
+    it('wakes a parent after completing its source-less child', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview, parent_task_id: 'parent-1' })
+      const mgr = new AgentManager(mockDb)
+      vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+      const notify = vi.spyOn(mgr, 'notifyParentOfSubtaskCompletion').mockResolvedValue(undefined)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(true)
+      expect(notify).toHaveBeenCalledWith('parent-1', 'task-1')
+    })
+
+    it('refuses a parent while an assigned child can still run', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview })
+      vi.mocked(mockDb.getSubtasks).mockReturnValue([{
+        status: TaskStatus.NotStarted, agent_id: 'agent-1'
+      }] as ReturnType<typeof mockDb.getSubtasks>)
+      const mgr = new AgentManager(mockDb)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(false)
+      expect(mockDb.updateTask).not.toHaveBeenCalled()
+    })
   })
 })
 
