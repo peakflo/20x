@@ -21,6 +21,9 @@ import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-
 import { pickWindowsWhichMatch, resolveWindowsClaudeShim } from './claude-executable'
 import { realHomeFor } from '../harness-instances'
 import { homedir } from 'os'
+import { open, writeFile, type FileHandle } from 'fs/promises'
+import { StringDecoder } from 'string_decoder'
+import { join } from 'path'
 import type { ProviderUsageLimits } from '../../shared/usage'
 import { supportsUltrafast } from '../../shared/ultrafast'
 import {
@@ -46,6 +49,22 @@ let resolvedClaudeExecutablePath: string | null = null
 
 /** Maximum number of messages to keep in the buffer per session */
 const MAX_MESSAGE_BUFFER_SIZE = 500
+
+/** Session files are read, decoded and parsed this many bytes at a time. */
+const SESSION_FILE_CHUNK_BYTES = 1024 * 1024
+/** Longest stretch of building the history before yielding to the event loop. */
+const SESSION_FILE_SLICE_MS = 8
+
+/** One parsed line of a Claude Code session JSONL (untyped CLI format). */
+type SessionEntry = ReturnType<typeof JSON.parse>
+
+interface ParsedSessionFile {
+  /** The raw lines, so a cleaned file keeps every kept line byte for byte. */
+  lines: string[]
+  entries: SessionEntry[]
+}
+
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 
 /** Minimum interval between opportunistic plan-limit reads on a live session. */
 const PLAN_LIMITS_REFRESH_INTERVAL_MS = 5 * 60 * 1000
@@ -449,41 +468,129 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
   }
 
 
+  /** `<harness home>/projects/<encoded workspace>/<session id>.jsonl` */
+  private sessionFilePath(sessionId: string, workspaceDir: string, harnessHome?: string): string {
+    const claudeDir = join(harnessHome ?? this.harnessHome ?? realHomeFor('claude-code'), 'projects')
+    // Claude Code CLI encodes workspace paths by replacing all non-alphanumeric/non-hyphen chars with '-'
+    const encodedWorkspace = workspaceDir.replace(/[^a-zA-Z0-9-]/g, '-')
+    return join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
+  }
+
   /**
-   * Load conversation history from Claude session file
+   * Reads and parses a session JSONL without blocking the main process for
+   * long. Session files reach tens of MB: reading, decoding and parsing all of
+   * it in one go held the main thread for hundreds of ms. The file is read in
+   * 1 MB chunks, and each chunk is decoded and parsed before the next read, so
+   * every chunk is one short slice of main-thread work.
+   *
+   * The lines are exactly those of `content.trim().split('\n')`: blank lines
+   * at the start and end are dropped, the first line is trimmed at its start
+   * and the last at its end, and a blank line in the middle is kept (and fails
+   * to parse, as it did before).
+   *
+   * Returns null when the file does not exist. Throws on any other read error
+   * and on a line that is not JSON.
    */
+  private async readSessionFile(sessionFile: string): Promise<ParsedSessionFile | null> {
+    let handle: FileHandle
+    try {
+      handle = await open(sessionFile, 'r')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null
+      throw error
+    }
+
+    const lines: string[] = []
+    const entries: SessionEntry[] = []
+    const accept = (line: string): void => {
+      lines.push(line)
+      entries.push(JSON.parse(line))
+    }
+    // The newest non-blank line is held back until a later non-blank line
+    // shows it is not the last one (the last one is trimmed at its end).
+    let held: string | null = null
+    // Blank lines after `held`: interior if another line follows, else trailing.
+    let blanks: string[] = []
+    const take = (raw: string): void => {
+      if (raw.trim() === '') {
+        if (held !== null) blanks.push(raw)
+        return
+      }
+      if (held === null) {
+        held = raw.trimStart()
+        return
+      }
+      accept(held)
+      for (const blank of blanks) accept(blank)
+      blanks = []
+      held = raw
+    }
+
+    try {
+      const decoder = new StringDecoder('utf8')
+      const buffer = Buffer.allocUnsafe(SESSION_FILE_CHUNK_BYTES)
+      // Text of the line still being read, in pieces (a line can span chunks).
+      let partial: string[] = []
+      while (true) {
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, null)
+        if (bytesRead === 0) break
+        const chunk = decoder.write(buffer.subarray(0, bytesRead))
+        let nl = chunk.indexOf('\n')
+        if (nl === -1) {
+          partial.push(chunk)
+          continue
+        }
+        partial.push(chunk.slice(0, nl))
+        take(partial.join(''))
+        let pos = nl + 1
+        while ((nl = chunk.indexOf('\n', pos)) !== -1) {
+          take(chunk.slice(pos, nl))
+          pos = nl + 1
+        }
+        partial = [chunk.slice(pos)]
+      }
+      partial.push(decoder.end())
+      take(partial.join(''))
+    } finally {
+      await handle.close()
+    }
+    // An empty or blank file is one empty line, which does not parse.
+    accept(held === null ? '' : (held as string).trimEnd())
+    return { lines, entries }
+  }
+
   /**
    * Cleans the session file by removing messages with empty text blocks
    * This prevents API errors when resuming sessions
+   *
+   * Returns the cleaned entries so the caller does not read the file again, or
+   * undefined when the file is missing or could not be cleaned (the caller then
+   * reads it itself, as before). The file is only rewritten when a message was
+   * actually removed.
    */
-  private async cleanSessionFile(sessionId: string, workspaceDir: string, harnessHome?: string): Promise<void> {
+  private async cleanSessionFile(sessionId: string, workspaceDir: string, harnessHome?: string): Promise<SessionEntry[] | undefined> {
     try {
-      const { readFileSync, writeFileSync, existsSync } = await import('fs')
-      const { join } = await import('path')
-
-      const claudeDir = join(harnessHome ?? this.harnessHome ?? realHomeFor('claude-code'), 'projects')
-      // Claude Code CLI encodes workspace paths by replacing all non-alphanumeric/non-hyphen chars with '-'
-      const encodedWorkspace = workspaceDir.replace(/[^a-zA-Z0-9-]/g, '-')
-      const sessionFile = join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
+      const sessionFile = this.sessionFilePath(sessionId, workspaceDir, harnessHome)
 
       console.log(`[ClaudeCodeAdapter] Cleaning session file: ${sessionFile}`)
 
-      // Check if session file exists
-      if (!existsSync(sessionFile)) {
+      const parsed = await this.readSessionFile(sessionFile)
+      if (!parsed) {
         console.log(`[ClaudeCodeAdapter] Session file not found, skipping clean: ${sessionFile}`)
-        return
+        return undefined
       }
 
-      const content = readFileSync(sessionFile, 'utf-8')
-      const lines = content.trim().split('\n')
+      const { lines, entries } = parsed
       const cleanedLines: string[] = []
+      const cleanedEntries: SessionEntry[] = []
 
-      for (const line of lines) {
-        const entry = JSON.parse(line)
+      for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i]
 
         // Keep non-message entries as-is
         if (entry.type !== 'user' && entry.type !== 'assistant') {
-          cleanedLines.push(line)
+          cleanedLines.push(lines[i])
+          cleanedEntries.push(entry)
           continue
         }
 
@@ -504,15 +611,21 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
           }
         }
 
-        cleanedLines.push(line)
+        cleanedLines.push(lines[i])
+        cleanedEntries.push(entry)
       }
 
-      // Write cleaned content back
-      writeFileSync(sessionFile, cleanedLines.join('\n') + '\n', 'utf-8')
+      // Write cleaned content back — only when something was removed. An
+      // unchanged file is left alone instead of being rewritten in full.
+      if (cleanedLines.length !== lines.length) {
+        await writeFile(sessionFile, cleanedLines.join('\n') + '\n', 'utf-8')
+      }
       console.log(`[ClaudeCodeAdapter] Session file cleaned: ${lines.length} -> ${cleanedLines.length} lines`)
+      return cleanedEntries
     } catch (error) {
       console.warn(`[ClaudeCodeAdapter] Failed to clean session file:`, error)
       // Don't throw - let resume attempt proceed even if cleaning fails
+      return undefined
     }
   }
 
@@ -531,146 +644,44 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     }
   }
 
-  private async loadSessionHistory(sessionId: string, workspaceDir: string, harnessHome?: string): Promise<SessionMessage[]> {
+  /**
+   * Load conversation history from Claude session file. `preloaded` is the
+   * already parsed (and cleaned) file from {@link cleanSessionFile}, so a
+   * resume reads the file once.
+   */
+  private async loadSessionHistory(
+    sessionId: string,
+    workspaceDir: string,
+    harnessHome?: string,
+    preloaded?: SessionEntry[]
+  ): Promise<SessionMessage[]> {
     try {
-      const { readFileSync, existsSync } = await import('fs')
-      const { join } = await import('path')
-
       // Session files are stored in: ~/.claude/projects/[encoded-workspace]/[sessionId].jsonl
-      // Claude Code CLI encodes workspace paths by replacing all non-alphanumeric/non-hyphen chars with '-'
-      const claudeDir = join(harnessHome ?? this.harnessHome ?? realHomeFor('claude-code'), 'projects')
-      const encodedWorkspace = workspaceDir.replace(/[^a-zA-Z0-9-]/g, '-')
-      const sessionFile = join(claudeDir, encodedWorkspace, `${sessionId}.jsonl`)
+      const sessionFile = this.sessionFilePath(sessionId, workspaceDir, harnessHome)
 
       console.log(`[ClaudeCodeAdapter] Loading session history from: ${sessionFile}`)
 
-      // Check if session file exists
-      if (!existsSync(sessionFile)) {
-        console.warn(`[ClaudeCodeAdapter] Session file not found: ${sessionFile}`)
-        throw new Error('SESSION_FILE_NOT_FOUND: The Claude Code session file does not exist. This may happen if the session was deleted or never synced.')
+      let entries = preloaded
+      if (!entries) {
+        const parsed = await this.readSessionFile(sessionFile)
+        if (!parsed) {
+          console.warn(`[ClaudeCodeAdapter] Session file not found: ${sessionFile}`)
+          throw new Error('SESSION_FILE_NOT_FOUND: The Claude Code session file does not exist. This may happen if the session was deleted or never synced.')
+        }
+        entries = parsed.entries
       }
 
-      const content = readFileSync(sessionFile, 'utf-8')
-      const lines = content.trim().split('\n')
       const messages: SessionMessage[] = []
       // Map tool_use_id → part reference so tool_result can merge into it
       const toolUseParts = new Map<string, MessagePart['tool']>()
 
-      for (const line of lines) {
-        const entry = JSON.parse(line)
-
-        // Skip non-message entries (queue-operation, etc.)
-        if (entry.type !== 'user' && entry.type !== 'assistant') continue
-
-        const message: SessionMessage = {
-          id: entry.uuid,
-          role: entry.type === 'user' ? MessageRole.USER : MessageRole.ASSISTANT,
-          parts: []
-        }
-
-        // Parse message content
-        // Use the stable API message ID for part IDs — must match the pattern
-        // in convertSDKMessageToParts so that dedup state from loadSessionHistory
-        // correctly prevents re-emission of historical messages during streaming replay.
-        const stableId = entry.message?.id || entry.uuid || entry.type
-        if (entry.message?.content) {
-          for (let blockIdx = 0; blockIdx < entry.message.content.length; blockIdx++) {
-            const contentPart = entry.message.content[blockIdx]
-            if (contentPart.type === 'text') {
-              // Skip empty text blocks (corrupt messages)
-              if (!contentPart.text || contentPart.text.trim() === '') continue
-
-              message.parts.push({
-                id: `${stableId}-text-${blockIdx}`,
-                type: MessagePartType.TEXT,
-                text: contentPart.text,
-                content: contentPart.text
-              })
-            } else if (contentPart.type === 'thinking') {
-              if (!contentPart.thinking || contentPart.thinking.trim() === '') continue
-
-              message.parts.push({
-                id: `${stableId}-thinking-${blockIdx}`,
-                type: MessagePartType.REASONING,
-                text: contentPart.thinking,
-                content: contentPart.thinking
-              })
-            } else if (contentPart.type === 'tool_use') {
-              const rawInput = contentPart.input as Record<string, unknown> | undefined
-              const toolName = contentPart.name || 'unknown'
-              const title = this.buildToolTitle(toolName, rawInput)
-              const input = rawInput ? JSON.stringify(rawInput, null, 2) : undefined
-              const toolObj: MessagePart['tool'] = {
-                name: toolName,
-                status: 'pending',
-                title,
-                input,
-              }
-
-              // Detect TodoWrite → set todowrite type and extract todos
-              let partType: string = MessagePartType.TOOL
-              let todos = rawInput?.todos
-              if (typeof todos === 'string') { try { todos = JSON.parse(todos) } catch {} }
-              if (Array.isArray(todos) && todos.length > 0) {
-                partType = 'todowrite'
-                toolObj.todos = todos.map((t: Record<string, unknown>, i: number) => ({
-                  id: t.id || `todo-${i}`,
-                  content: t.content || '',
-                  status: t.status || 'pending',
-                  priority: t.priority,
-                }))
-              }
-
-              // Detect AskUserQuestion → set question type and extract questions
-              let questions = rawInput?.questions
-              if (typeof questions === 'string') { try { questions = JSON.parse(questions) } catch {} }
-              if (Array.isArray(questions) && questions.length > 0) {
-                partType = 'question'
-                toolObj.questions = questions
-              }
-
-              // Detect EnterPlanMode / ExitPlanMode → set planreview type
-              // For ExitPlanMode, the plan content is in input.plan (not in tool_result)
-              if (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode') {
-                partType = 'planreview'
-                toolObj.title = toolName === 'EnterPlanMode' ? 'Enter plan mode' : 'Exit plan mode'
-                if (toolName === 'ExitPlanMode' && rawInput?.plan) {
-                  toolObj.output = String(rawInput.plan).slice(0, 50000)
-                }
-              }
-
-              const toolPartId = contentPart.id ? `tool-${contentPart.id}` : `${stableId}-tool_use-${contentPart.id || blockIdx}`
-              message.parts.push({ id: toolPartId, type: partType as MessagePartType, tool: toolObj })
-              if (contentPart.id) toolUseParts.set(contentPart.id, toolObj)
-            } else if (contentPart.type === 'tool_result' && contentPart.tool_use_id) {
-              // Merge result into the matching tool_use part instead of creating separate entry
-              const matchingTool = toolUseParts.get(contentPart.tool_use_id)
-              if (matchingTool) {
-                matchingTool.status = 'success'
-                // Plan content should not be truncated (cap at 50K for safety)
-                const isPlan = matchingTool.name === 'ExitPlanMode' || matchingTool.name === 'EnterPlanMode'
-                const rawContent = contentPart.content ? String(contentPart.content) : undefined
-                // Filter out confirmation prompts like "Exit/Enter plan mode?"
-                const sanitized = isPlan && rawContent && /^(exit|enter) plan mode\??$/i.test(rawContent.trim())
-                  ? undefined : rawContent
-                matchingTool.output = sanitized
-                  ? (isPlan ? sanitized.slice(0, 50000) : sanitized.slice(0, 2000))
-                  : undefined
-              }
-              // Don't push a separate part — result is merged into tool_use
-            }
-          }
-        }
-
-        if (message.parts.length > 0) {
-          // Preserve the ORIGINAL event time from the session log so replay/
-          // rehydration shows real timestamps (and the durable projection stores
-          // them as created_at) instead of defaulting to "now" on every reload.
-          const receivedAt = entry.timestamp ? Date.parse(entry.timestamp) : NaN
-          if (!Number.isNaN(receivedAt)) {
-            for (const part of message.parts) part.receivedAt = receivedAt
-          }
-          messages.push(message)
+      let sliceStart = performance.now()
+      for (let i = 0; i < entries.length; i++) {
+        const message = this.sessionEntryToMessage(entries[i], toolUseParts)
+        if (message) messages.push(message)
+        if ((i & 255) === 255 && performance.now() - sliceStart > SESSION_FILE_SLICE_MS) {
+          await yieldToEventLoop()
+          sliceStart = performance.now()
         }
       }
 
@@ -686,6 +697,122 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       console.warn(`[ClaudeCodeAdapter] Failed to load session history:`, errMsg)
       return []
     }
+  }
+
+  /** One session-file entry as a history message, or null when it has nothing to show. */
+  private sessionEntryToMessage(entry: SessionEntry, toolUseParts: Map<string, MessagePart['tool']>): SessionMessage | null {
+    // Skip non-message entries (queue-operation, etc.)
+    if (entry.type !== 'user' && entry.type !== 'assistant') return null
+
+    const message: SessionMessage = {
+      id: entry.uuid,
+      role: entry.type === 'user' ? MessageRole.USER : MessageRole.ASSISTANT,
+      parts: []
+    }
+
+    // Parse message content
+    // Use the stable API message ID for part IDs — must match the pattern
+    // in convertSDKMessageToParts so that dedup state from loadSessionHistory
+    // correctly prevents re-emission of historical messages during streaming replay.
+    const stableId = entry.message?.id || entry.uuid || entry.type
+    if (entry.message?.content) {
+      for (let blockIdx = 0; blockIdx < entry.message.content.length; blockIdx++) {
+        const contentPart = entry.message.content[blockIdx]
+        if (contentPart.type === 'text') {
+          // Skip empty text blocks (corrupt messages)
+          if (!contentPart.text || contentPart.text.trim() === '') continue
+
+          message.parts.push({
+            id: `${stableId}-text-${blockIdx}`,
+            type: MessagePartType.TEXT,
+            text: contentPart.text,
+            content: contentPart.text
+          })
+        } else if (contentPart.type === 'thinking') {
+          if (!contentPart.thinking || contentPart.thinking.trim() === '') continue
+
+          message.parts.push({
+            id: `${stableId}-thinking-${blockIdx}`,
+            type: MessagePartType.REASONING,
+            text: contentPart.thinking,
+            content: contentPart.thinking
+          })
+        } else if (contentPart.type === 'tool_use') {
+          const rawInput = contentPart.input as Record<string, unknown> | undefined
+          const toolName = contentPart.name || 'unknown'
+          const title = this.buildToolTitle(toolName, rawInput)
+          const input = rawInput ? JSON.stringify(rawInput, null, 2) : undefined
+          const toolObj: MessagePart['tool'] = {
+            name: toolName,
+            status: 'pending',
+            title,
+            input,
+          }
+
+          // Detect TodoWrite → set todowrite type and extract todos
+          let partType: string = MessagePartType.TOOL
+          let todos = rawInput?.todos
+          if (typeof todos === 'string') { try { todos = JSON.parse(todos) } catch {} }
+          if (Array.isArray(todos) && todos.length > 0) {
+            partType = 'todowrite'
+            toolObj.todos = todos.map((t: Record<string, unknown>, i: number) => ({
+              id: t.id || `todo-${i}`,
+              content: t.content || '',
+              status: t.status || 'pending',
+              priority: t.priority,
+            }))
+          }
+
+          // Detect AskUserQuestion → set question type and extract questions
+          let questions = rawInput?.questions
+          if (typeof questions === 'string') { try { questions = JSON.parse(questions) } catch {} }
+          if (Array.isArray(questions) && questions.length > 0) {
+            partType = 'question'
+            toolObj.questions = questions
+          }
+
+          // Detect EnterPlanMode / ExitPlanMode → set planreview type
+          // For ExitPlanMode, the plan content is in input.plan (not in tool_result)
+          if (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode') {
+            partType = 'planreview'
+            toolObj.title = toolName === 'EnterPlanMode' ? 'Enter plan mode' : 'Exit plan mode'
+            if (toolName === 'ExitPlanMode' && rawInput?.plan) {
+              toolObj.output = String(rawInput.plan).slice(0, 50000)
+            }
+          }
+
+          const toolPartId = contentPart.id ? `tool-${contentPart.id}` : `${stableId}-tool_use-${contentPart.id || blockIdx}`
+          message.parts.push({ id: toolPartId, type: partType as MessagePartType, tool: toolObj })
+          if (contentPart.id) toolUseParts.set(contentPart.id, toolObj)
+        } else if (contentPart.type === 'tool_result' && contentPart.tool_use_id) {
+          // Merge result into the matching tool_use part instead of creating separate entry
+          const matchingTool = toolUseParts.get(contentPart.tool_use_id)
+          if (matchingTool) {
+            matchingTool.status = 'success'
+            // Plan content should not be truncated (cap at 50K for safety)
+            const isPlan = matchingTool.name === 'ExitPlanMode' || matchingTool.name === 'EnterPlanMode'
+            const rawContent = contentPart.content ? String(contentPart.content) : undefined
+            // Filter out confirmation prompts like "Exit/Enter plan mode?"
+            const sanitized = isPlan && rawContent && /^(exit|enter) plan mode\??$/i.test(rawContent.trim())
+              ? undefined : rawContent
+            matchingTool.output = sanitized
+              ? (isPlan ? sanitized.slice(0, 50000) : sanitized.slice(0, 2000))
+              : undefined
+          }
+          // Don't push a separate part — result is merged into tool_use
+        }
+      }
+    }
+
+    if (message.parts.length === 0) return null
+    // Preserve the ORIGINAL event time from the session log so replay/
+    // rehydration shows real timestamps (and the durable projection stores
+    // them as created_at) instead of defaulting to "now" on every reload.
+    const receivedAt = entry.timestamp ? Date.parse(entry.timestamp) : NaN
+    if (!Number.isNaN(receivedAt)) {
+      for (const part of message.parts) part.receivedAt = receivedAt
+    }
+    return message
   }
 
   async resumeSession(
@@ -705,8 +832,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
       )
     }
 
-    // Clean session file to remove empty text blocks before resuming
-    await this.cleanSessionFile(sessionId, config.workspaceDir, config.harnessHome)
+    // Clean session file to remove empty text blocks before resuming. The
+    // cleaned entries are reused below, so the file is read only once.
+    const cleanedEntries = await this.cleanSessionFile(sessionId, config.workspaceDir, config.harnessHome)
 
     // Create session state (idle until user sends a message)
     const session: ClaudeSession = {
@@ -734,7 +862,7 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
     console.log(`[ClaudeCodeAdapter] Session resumed: ${sessionId} (waiting for user prompt)`)
 
     // Load conversation history from session file
-    const messages = await this.loadSessionHistory(sessionId, config.workspaceDir, config.harnessHome)
+    const messages = await this.loadSessionHistory(sessionId, config.workspaceDir, config.harnessHome, cleanedEntries)
 
     console.log(`[ClaudeCodeAdapter] Session loaded with ${messages.length} messages`)
 

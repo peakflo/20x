@@ -24,7 +24,7 @@ import { onBrandSpacesChanged, setSelectedCompanyBrand } from './brand'
 import { panelBrowserBroker } from './panel-browser-broker'
 import { getAgentBrowserSession } from './agent-browser-session'
 import { VoiceSessionManager } from './voice/voice-session-manager'
-import { assistantTextParts, sinceLastUserMessage } from './voice/voice-answer-parts'
+import { assistantTextParts } from './voice/voice-answer-parts'
 import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { HeartbeatScheduler } from './heartbeat-scheduler'
@@ -195,8 +195,8 @@ function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseMana
       // Close the passage with the last words, which may have arrived after
       // the final transcript event. Only this turn's messages are considered:
       // everything the agent wrote since the user last spoke.
-      const stored = database.getTranscriptParts(event.taskId)
-      const all = assistantTextParts(sinceLastUserMessage(stored))
+      const stored = database.getTranscriptPartsSinceLastUserMessage(event.taskId)
+      const all = assistantTextParts(stored)
       // Whatever the user talked over is left out here too. Otherwise the
       // one-piece fallback below reads the whole interrupted answer at the
       // moment the agent stops.
