@@ -19,7 +19,6 @@ import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
 import { useClipboardAttachmentPaste } from '@/hooks/use-clipboard-attachment-paste'
 import { InlineHtmlRender } from '@/components/artifacts/InlineHtmlRender'
 import { findMessageArtifact } from '@/components/artifacts/find-message-artifact'
-import { htmlRenderFileName } from '@shared/html-render'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -678,9 +677,7 @@ function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFAC
             key={message.id}
             artifact={artifact}
             artifactApi={artifactApi}
-            onExpand={() => onOpenArtifact?.(artifact)}
             onLinkClick={openExternalLink}
-            onSaveAs={artifactApi.saveAs && artifact.path ? () => void artifactApi.saveAs!(artifact.taskId, artifact.path!, htmlRenderFileName(artifact.title)) : undefined}
           />
         )
       })}

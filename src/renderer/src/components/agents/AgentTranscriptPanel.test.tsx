@@ -620,7 +620,7 @@ git push 2>&1 | tail -2`
       />
     )
 
-    expect(screen.getByText('Q3 revenue')).toBeInTheDocument()
+    expect(screen.getByTestId('inline-html-render')).not.toHaveTextContent('Q3 revenue')
     expect(screen.queryByText('Preview · Click to open')).not.toBeInTheDocument()
     await waitFor(() => expect(screen.getByTitle('Q3 revenue').getAttribute('srcdoc')).toContain('<p>chart</p>'))
 
