@@ -136,7 +136,8 @@
       "node_modules/cloudflared/**",
       "out/main/mcp-servers/**",
       "out/main/voice/**",
-      "out/main/chunks/**"
+      "out/main/chunks/**",
+      "out/main/macos-swap-watchdog-worker.js"
     ],
     "extraResources": [
       {
