@@ -405,6 +405,17 @@ describe('useAgentStore', () => {
       statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.IDLE })
       expect(useAgentStore.getState().sessions.get('task-1')!.pendingApproval).toBeNull()
     })
+
+    it('keeps the sessions Map when a push repeats the current state', () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+      statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.WORKING })
+      const sessions = useAgentStore.getState().sessions
+      statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.WORKING })
+      expect(useAgentStore.getState().sessions).toBe(sessions)
+      statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.IDLE })
+      expect(useAgentStore.getState().sessions).not.toBe(sessions)
+      expect(useAgentStore.getState().sessions.get('task-1')!.status).toBe(SessionStatus.IDLE)
+    })
   })
 
   describe('pendingSend (starting indicator during resume)', () => {
