@@ -839,3 +839,154 @@ describe('AcpAgentAdapter spawn failures', () => {
     await expect(result).rejects.not.toThrow(/CURSOR_CLI_MISSING/)
   })
 })
+
+// Major finding, re-review (M8): the generic provider-credential denylist
+// strips credentials ACP agents need for THEIR OWN auth — the agent's own
+// configured Cursor key (never re-added at all before this fix) and ambient
+// GEMINI_API_KEY (the Gemini CLI registry agent's usual auth var) — with no
+// re-add. Also covers the generic per-agent "pass shell credentials" opt-in.
+describe('AcpAgentAdapter buildEnv — credential re-adds and the shell-credentials opt-in', () => {
+  function buildEnv(adapter: AcpAgentAdapter, config: Partial<SessionConfig>): Record<string, string | undefined> {
+    return (adapter as unknown as { buildEnv: (c: SessionConfig) => Record<string, string | undefined> }).buildEnv(
+      { agentId: 'a1', taskId: 't1', workspaceDir: '/tmp', ...config } as SessionConfig
+    )
+  }
+
+  it('re-adds the agent\'s own configured Cursor key as CURSOR_AUTH_TOKEN (never re-added before this fix)', () => {
+    const adapter = new AcpAgentAdapter({ command: 'cursor-agent', args: [] })
+    const env = buildEnv(adapter, { apiKeys: { cursor: 'cursor-key-value-123456' } })
+    expect(env.CURSOR_AUTH_TOKEN).toBe('cursor-key-value-123456')
+  })
+
+  it('re-adds ambient GEMINI_API_KEY for the Gemini CLI registry agent, and registers it with the live scrubber', () => {
+    const prev = process.env.GEMINI_API_KEY
+    process.env.GEMINI_API_KEY = 'gemini-key-value-123456'
+    try {
+      const adapter = new AcpAgentAdapter({ command: 'gemini', args: ['--acp'] })
+      const addEntries = vi.fn()
+      const env = buildEnv(adapter, { getLiveScrubber: () => ({ addEntries }) as unknown as ReturnType<NonNullable<SessionConfig['getLiveScrubber']>> })
+      expect(env.GEMINI_API_KEY).toBe('gemini-key-value-123456')
+      expect(addEntries).toHaveBeenCalledWith([{ name: 'GEMINI_API_KEY', value: 'gemini-key-value-123456' }])
+    } finally {
+      if (prev === undefined) delete process.env.GEMINI_API_KEY
+      else process.env.GEMINI_API_KEY = prev
+    }
+  })
+
+  // Minor/Medium finding, re-review (round 3): GEMINI_API_KEY used to be
+  // re-added unconditionally for every ACP agent, not just Gemini CLI — so
+  // cursor-agent (or any other registry/local-command ACP agent) picked up
+  // a Gemini key it had no use for whenever one happened to sit in the
+  // ambient shell env, reopening the exact leak path the denylist exists
+  // to close for an agent that doesn't actually need it.
+  it('does NOT re-add ambient GEMINI_API_KEY for a non-Gemini ACP agent (e.g. cursor-agent)', () => {
+    const prev = process.env.GEMINI_API_KEY
+    process.env.GEMINI_API_KEY = 'gemini-key-value-123456'
+    try {
+      const adapter = new AcpAgentAdapter({ command: 'cursor-agent', args: [] })
+      const env = buildEnv(adapter, {})
+      expect(env.GEMINI_API_KEY).toBeUndefined()
+    } finally {
+      if (prev === undefined) delete process.env.GEMINI_API_KEY
+      else process.env.GEMINI_API_KEY = prev
+    }
+  })
+
+  // Bug, re-review (round 4): the gate compared the resolved `command` to
+  // the literal string `'gemini'` — but a REGISTRY install never resolves
+  // to that bare literal. install-manager.ts joins a bin directory with the
+  // package's declared bin name (`join(binDir, binName)`), so a real Gemini
+  // CLI session's command is an absolute path like
+  // `<binDir>/gemini` (or `gemini.cmd`/`.exe` on Windows) — which the old
+  // `command === 'gemini'` check never matched. The round-3 test above only
+  // passed because it fabricated `command: 'gemini'` directly, not the
+  // real resolved shape. Gated on `registryAgentId` now (set at
+  // construction time by agent-manager.ts from the agent's own configured
+  // `registry_agent_id` — see resolveAcpInstanceCommand's caller), which
+  // doesn't depend on install method or platform at all.
+  it('re-adds ambient GEMINI_API_KEY for a REAL registry-resolved absolute path, via registryAgentId (the actual bug)', () => {
+    const prev = process.env.GEMINI_API_KEY
+    process.env.GEMINI_API_KEY = 'gemini-key-value-123456'
+    try {
+      const adapter = new AcpAgentAdapter({
+        command: '/Users/dev/Library/Application Support/20x/acp-registry/gemini/0.63.0/bin/gemini',
+        args: ['--acp'],
+        registryAgentId: 'gemini'
+      })
+      const env = buildEnv(adapter, {})
+      expect(env.GEMINI_API_KEY).toBe('gemini-key-value-123456')
+    } finally {
+      if (prev === undefined) delete process.env.GEMINI_API_KEY
+      else process.env.GEMINI_API_KEY = prev
+    }
+  })
+
+  it('does NOT re-add ambient GEMINI_API_KEY for a different registry agent at a path that happens to look Gemini-ish', () => {
+    const prev = process.env.GEMINI_API_KEY
+    process.env.GEMINI_API_KEY = 'gemini-key-value-123456'
+    try {
+      const adapter = new AcpAgentAdapter({
+        command: '/Users/dev/acp-registry/some-other-agent/bin/not-gemini',
+        args: [],
+        registryAgentId: 'some-other-agent'
+      })
+      const env = buildEnv(adapter, {})
+      expect(env.GEMINI_API_KEY).toBeUndefined()
+    } finally {
+      if (prev === undefined) delete process.env.GEMINI_API_KEY
+      else process.env.GEMINI_API_KEY = prev
+    }
+  })
+
+  it('falls back to the resolved command\'s basename when no registryAgentId is set (a local-command agent pointed directly at a gemini binary)', () => {
+    const prev = process.env.GEMINI_API_KEY
+    process.env.GEMINI_API_KEY = 'gemini-key-value-123456'
+    try {
+      const adapter = new AcpAgentAdapter({ command: '/usr/local/bin/gemini', args: [] })
+      const env = buildEnv(adapter, {})
+      expect(env.GEMINI_API_KEY).toBe('gemini-key-value-123456')
+    } finally {
+      if (prev === undefined) delete process.env.GEMINI_API_KEY
+      else process.env.GEMINI_API_KEY = prev
+    }
+  })
+
+  it('the basename fallback strips a Windows .cmd/.exe extension too', () => {
+    const prev = process.env.GEMINI_API_KEY
+    process.env.GEMINI_API_KEY = 'gemini-key-value-123456'
+    try {
+      const adapter = new AcpAgentAdapter({ command: 'C:\\Users\\dev\\AppData\\Roaming\\20x\\acp-registry\\gemini\\bin\\gemini.cmd', args: [] })
+      const env = buildEnv(adapter, {})
+      expect(env.GEMINI_API_KEY).toBe('gemini-key-value-123456')
+    } finally {
+      if (prev === undefined) delete process.env.GEMINI_API_KEY
+      else process.env.GEMINI_API_KEY = prev
+    }
+  })
+
+  it('the basename fallback does NOT match a different binary that happens to live in a path containing "gemini"', () => {
+    const prev = process.env.GEMINI_API_KEY
+    process.env.GEMINI_API_KEY = 'gemini-key-value-123456'
+    try {
+      const adapter = new AcpAgentAdapter({ command: '/usr/local/gemini-tools/bin/not-gemini', args: [] })
+      const env = buildEnv(adapter, {})
+      expect(env.GEMINI_API_KEY).toBeUndefined()
+    } finally {
+      if (prev === undefined) delete process.env.GEMINI_API_KEY
+      else process.env.GEMINI_API_KEY = prev
+    }
+  })
+
+  it('does not pass ambient GH_TOKEN through by default, but does once the agent opts in', () => {
+    const prev = process.env.GH_TOKEN
+    process.env.GH_TOKEN = 'gh-token-value-123456'
+    try {
+      const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [] })
+      expect(buildEnv(adapter, {}).GH_TOKEN).toBeUndefined()
+      expect(buildEnv(adapter, { allowShellCredentials: true }).GH_TOKEN).toBe('gh-token-value-123456')
+    } finally {
+      if (prev === undefined) delete process.env.GH_TOKEN
+      else process.env.GH_TOKEN = prev
+    }
+  })
+})

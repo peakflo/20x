@@ -2,7 +2,7 @@ import { isWorkfloLinkedTask } from './workflo-task-sync'
 import Database from 'better-sqlite3'
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
-import { existsSync, mkdirSync, rmSync } from 'fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync, unlinkSync, readdirSync, rmdirSync } from 'fs'
 import { createId } from '@paralleldrive/cuid2'
 import { TaskStatus } from '../shared/constants'
 import { desktopBrandName } from './brand'
@@ -67,6 +67,32 @@ export interface AgentConfigRecord {
     anthropic?: string
     cursor?: string
   }
+  /**
+   * Opt-in escape hatch: pass every credential-shaped var the login shell
+   * has (GH_TOKEN, AWS_SECRET_ACCESS_KEY, ...) through to this agent's
+   * process env, undoing the default strip (`harness-env.ts`'s pattern-based
+   * denylist). Off by default — stripping these is the safer default, but
+   * an agent that genuinely drives `gh`/`aws` CLIs via ambient shell
+   * credentials (rather than an explicit per-agent secret) needs this to
+   * keep working. Every value passed this way is still registered with the
+   * session's scrubber, so it's redacted if it's ever echoed.
+   *
+   * Distinct from `allow_secrets_in_env` below: this one is about the LOGIN
+   * SHELL's own ambient credentials; that one is about THIS AGENT's own
+   * configured secrets (`secret_ids`/`secretEnvVars`).
+   */
+  pass_shell_credentials?: boolean
+  /**
+   * Explicit opt-in for this agent's OWN configured secrets to sit in its
+   * harness's full process environment, for harnesses with no
+   * command-scoped exec hook to route them through the broker instead
+   * (Codex, ACP, Pi, Cursor — Claude Code and OpenCode always use the
+   * broker and ignore this). Off by default: an agent with secrets
+   * configured for one of these harnesses gets NONE of them in its env
+   * unless this is explicitly turned on, since there is no way to scrub
+   * what a harness with no exec hook does with them once they're there.
+   */
+  allow_secrets_in_env?: boolean
 }
 
 /** A stored harness instance. The implicit defaults ("Claude Code", "Codex") are not rows. */
@@ -1119,30 +1145,124 @@ function deserializeSecret(row: SecretRow): SecretRecord {
   }
 }
 
+/**
+ * Chromium os_crypt's own version prefix for a safeStorage-encrypted
+ * buffer. Empirically confirmed on this Mac: `safeStorage.encryptString`
+ * produces bytes starting with the literal ASCII `v10`, followed by binary
+ * ciphertext (`v11` is a known alternate scheme on some Linux backends).
+ * A buffer starting with either is real encrypted data — a decrypt failure
+ * on it must NOT be treated as "this was never encrypted".
+ */
+/**
+ * P2 finding, re-review: `env_var_name` was validated ONLY in the renderer
+ * before this fix — nothing stopped a malformed name from reaching the main
+ * process and the DB directly (any other caller, a future IPC surface, a
+ * bug in the renderer's own check). That matters here specifically because
+ * `secret-broker.ts`'s `/secrets/export` endpoint writes
+ * `export ${s.env_var_name}='${value}'` into text a caller `eval`s — an
+ * `env_var_name` like `FOO'; rm -rf ~; export BAR='` would be a shell
+ * injection into every command that sources it, not just a cosmetic
+ * validation gap.
+ */
+const VALID_ENV_VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+function assertValidEnvVarName(name: string): void {
+  if (!VALID_ENV_VAR_NAME.test(name)) {
+    throw new Error(`Invalid secret env var name "${name}" — must match ${VALID_ENV_VAR_NAME} (letters, digits, underscores; can't start with a digit).`)
+  }
+}
+
+const SAFE_STORAGE_PREFIXES = ['v10', 'v11'] as const
+
+function hasSafeStoragePrefix(value: Buffer): boolean {
+  return SAFE_STORAGE_PREFIXES.some(
+    (prefix) => value.length >= prefix.length && value.subarray(0, prefix.length).toString('latin1') === prefix
+  )
+}
+
+/** True iff decoding `value` as UTF-8 and re-encoding it produces the exact same bytes — a lossless round trip, i.e. `value` really is valid UTF-8 text (not binary ciphertext that happens to decode without throwing). */
+function isValidUtf8(value: Buffer): boolean {
+  return Buffer.from(value.toString('utf8'), 'utf8').equals(value)
+}
+
+/**
+ * True when `value` is a plaintext-fallback blob — written before the
+ * "refuse plaintext storage" fix, when safeStorage was never involved at
+ * all — detected POSITIVELY: no known safeStorage version prefix, AND the
+ * raw bytes are valid UTF-8 text (exactly the shape of a value written by
+ * `value.toString('utf8')` directly, never what real encrypted bytes look
+ * like).
+ *
+ * The original version used "safeStorage.decryptString throws" as the ONLY
+ * signal, which also fires for a row that WAS properly encrypted but can no
+ * longer be decrypted for a reason that has nothing to do with it being
+ * plaintext — the OS keychain/keyring entry was reset, the Linux
+ * secret-service backend changed, or the profile was copied to a different
+ * machine. Treating that case as "plaintext" and re-encrypting it would
+ * overwrite the real ciphertext with a UTF-8 misreading of binary bytes,
+ * destroying the secret permanently — the exact failure mode this positive
+ * check exists to rule out.
+ *
+ * Re-review (round 3, P2): the byte-prefix check alone has its own
+ * blind spot in the OTHER direction — a genuinely plaintext secret whose
+ * VALUE happens to start with the literal characters "v10"/"v11" (e.g. a
+ * password "v10-my-passphrase") would be misclassified as real ciphertext
+ * on prefix bytes alone, then permanently left unreadable (every future
+ * decrypt attempt throws, and it would never even be counted/warned about
+ * as a plaintext row). The prefix is no longer trusted by itself: when
+ * present, an ACTUAL decrypt attempt must succeed before this returns
+ * `false` (real ciphertext). If decrypt fails despite the prefix, this
+ * still falls back to the UTF-8 check — real encrypted bytes essentially
+ * never happen to be valid UTF-8, so that remains a reliable discriminator
+ * even in this narrower, decrypt-already-failed case.
+ */
+function isPlaintextFallback(value: Buffer): boolean {
+  if (!hasSafeStoragePrefix(value)) {
+    // No ciphertext-looking prefix at all — skip the decrypt attempt
+    // entirely (avoids touching the OS keychain for the common case).
+    return isValidUtf8(value)
+  }
+  try {
+    safeStorage.decryptString(value)
+    return false // decrypted cleanly -- genuinely ciphertext, not plaintext
+  } catch {
+    return isValidUtf8(value)
+  }
+}
+
+/**
+ * Decrypts a stored secret/token blob, tolerating a value written while
+ * safeStorage was unavailable (the plaintext-UTF8 fallback — see
+ * createSecret/createOAuthToken) even if encryption is available now.
+ *
+ * A genuine decrypt failure on what IS real encrypted data (keychain/keyring
+ * unavailable right now, or unreadable for some other environmental reason)
+ * is allowed to throw — callers decide how to handle that (skip the row,
+ * surface an error), rather than this function silently guessing the value
+ * is plaintext and returning a UTF-8 misreading of binary ciphertext.
+ */
+function safeDecryptBuffer(value: Buffer): string {
+  if (isPlaintextFallback(value)) {
+    return value.toString('utf8')
+  }
+  return safeStorage.decryptString(value)
+}
+
 function deserializeSecretWithValue(row: SecretRow): SecretRecordWithValue {
-  const decryptedValue = safeStorage.isEncryptionAvailable()
-    ? safeStorage.decryptString(row.value)
-    : row.value.toString('utf8')
   return {
     id: row.id,
     name: row.name,
     description: row.description,
     env_var_name: row.env_var_name,
-    value: decryptedValue,
+    value: safeDecryptBuffer(row.value),
     created_at: row.created_at,
     updated_at: row.updated_at
   }
 }
 
 function deserializeOAuthToken(row: OAuthTokenRow): OAuthTokenRecord {
-  // Decrypt tokens using safeStorage
-  const accessToken = safeStorage.isEncryptionAvailable()
-    ? safeStorage.decryptString(row.access_token)
-    : row.access_token.toString('utf8')
-
-  const refreshToken = row.refresh_token && safeStorage.isEncryptionAvailable()
-    ? safeStorage.decryptString(row.refresh_token)
-    : row.refresh_token?.toString('utf8') || null
+  const accessToken = safeDecryptBuffer(row.access_token)
+  const refreshToken = row.refresh_token ? safeDecryptBuffer(row.refresh_token) : null
 
   return {
     id: row.id,
@@ -4113,15 +4233,239 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const rows = this.db.prepare(
       `SELECT * FROM secrets WHERE id IN (${placeholders}) ORDER BY name ASC`
     ).all(...ids) as SecretRow[]
-    return rows.map(deserializeSecretWithValue)
+    // One row's decrypt failure (see safeDecryptBuffer — a genuine failure
+    // on real encrypted data now throws instead of being silently
+    // misread as plaintext) must not take every OTHER secret in the batch
+    // down with it. Skip and log; never any value.
+    const results: SecretRecordWithValue[] = []
+    for (const row of rows) {
+      try {
+        results.push(deserializeSecretWithValue(row))
+      } catch (err) {
+        console.error(`[DatabaseManager] Could not decrypt secret "${row.name}" (${row.id}) — skipping it this time, not touching its stored bytes:`, err)
+      }
+    }
+    return results
+  }
+
+  /**
+   * Error thrown by createSecret/updateSecret when the OS can't provide
+   * encryption-at-rest for a NEW secret value. Thrown, not silently
+   * swallowed into a plaintext fallback — a secret's whole point is that it
+   * isn't stored in the clear. The renderer shows this message as-is; it
+   * names no secret value.
+   */
+  static readonly SECRET_ENCRYPTION_UNAVAILABLE_MESSAGE =
+    'This secret cannot be saved: the OS keychain/keyring is unavailable, so 20x cannot encrypt it at rest. ' +
+    (process.platform === 'linux'
+      ? 'On Linux, safeStorage needs a keyring (gnome-keyring, kwallet, or kwallet6) running and unlocked — install/unlock one and try again.'
+      : 'Try again after unlocking your OS keychain, or restart 20x.')
+
+  isSecretEncryptionAvailable(): boolean {
+    return safeStorage.isEncryptionAvailable()
+  }
+
+  /**
+   * Counts existing plaintext-fallback rows WITHOUT requiring encryption to
+   * be available right now — `isPlaintextFallback` is a positive byte-shape
+   * check, not a decrypt-and-see probe, so it works either way. Used to
+   * show the user a warning when encryption is still unavailable (so
+   * `reencryptPlaintextFallbackRows` can't fix anything yet) — the brief
+   * asked for this; without it, a plaintext secret on a machine with no
+   * working keychain/keyring sits there with nothing ever telling the user.
+   */
+  countPlaintextFallbackRows(): { secrets: number; oauthTokens: number } {
+    const secretRows = this.db.prepare('SELECT value FROM secrets').all() as Array<{ value: Buffer }>
+    const secrets = secretRows.filter((r) => isPlaintextFallback(r.value)).length
+
+    const tokenRows = this.db.prepare('SELECT access_token, refresh_token FROM oauth_tokens').all() as Array<{
+      access_token: Buffer; refresh_token: Buffer | null
+    }>
+    const oauthTokens = tokenRows.filter(
+      (r) => isPlaintextFallback(r.access_token) || (r.refresh_token ? isPlaintextFallback(r.refresh_token) : false)
+    ).length
+
+    return { secrets, oauthTokens }
+  }
+
+  private secretReencryptBackupDir(): string {
+    return join(app.getPath('userData'), 'secret-reencrypt-backups')
+  }
+
+  /**
+   * Writes the ORIGINAL bytes of a row about to be overwritten to its OWN
+   * backup file, before the UPDATE that overwrites them runs — the backup
+   * requirement the re-review asked for. Returns the file's path.
+   *
+   * Re-review (P1): this used to append every row's original bytes to one
+   * shared, never-rewritten `backup.jsonl` with a comment claiming "these
+   * are never real secrets" — which was simply wrong. A row this function
+   * is called for IS, by construction, a real plaintext secret that just
+   * hasn't been encrypted yet (that's the entire premise of
+   * `isPlaintextFallback`); appending it to a log nothing ever trims kept
+   * every one of them in plaintext on disk forever, permanently, which is
+   * strictly worse than the single bounded window this backup is supposed
+   * to cover. One file per row/column instead.
+   *
+   * Re-review (round 4, residual risk): that window used to close as soon
+   * as the row's own UPDATE committed (deleted immediately by the caller).
+   * It's now instead swept up by `cleanupPriorReencryptBackups` at the
+   * START of the NEXT `reencryptPlaintextFallbackRows` call (the next app
+   * launch) — not deleted here or immediately after this row's UPDATE —
+   * giving at least one full restart's worth of time to notice a mistaken
+   * re-encrypt before the only copy of the original bytes disappears. See
+   * that function's docstring for the exact scenario this protects
+   * against.
+   */
+  private backupBeforeReencrypt(table: 'secrets' | 'oauth_tokens', id: string, column: string, original: Buffer): string {
+    const dir = this.secretReencryptBackupDir()
+    try {
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 })
+      const path = join(dir, `${table}-${id}-${column}-${createId()}.bak`)
+      // Backed up as base64, not re-decoded — this file exists purely so
+      // the original bytes can be restored by hand in the unlikely case a
+      // re-encrypt attempt is interrupted; nothing in 20x itself reads it
+      // back. 0600 from creation (not chmod'd after writing with default
+      // permissions — no window where the file is readable by anyone else).
+      writeFileSync(path, original.toString('base64'), { mode: 0o600 })
+      return path
+    } catch (err) {
+      // Failing to WRITE a backup must not block refusing to lose the
+      // original value — the caller must skip this row's re-encrypt
+      // entirely rather than overwrite it unbacked-up. Re-throw so it does.
+      throw new Error(`Failed to write re-encrypt backup, skipping this row to avoid an unbacked-up overwrite: ${err}`)
+    }
+  }
+
+  /**
+   * Best-effort: deletes every backup file left over from a PRIOR run —
+   * call ONLY at the very start of `reencryptPlaintextFallbackRows`,
+   * before it writes any of THIS run's own backups, so this can never
+   * delete a backup this very call is about to rely on.
+   *
+   * Re-review (round 4, residual risk): a round-3 fix made
+   * `isPlaintextFallback` require a decrypt attempt to succeed before
+   * trusting the v10/v11 prefix, falling back to a UTF-8-validity check
+   * when decrypt fails despite the prefix (to recover a genuinely
+   * plaintext value that happens to start with "v10"/"v11"). That same
+   * fallback has a residual, deliberately-accepted risk in the OTHER
+   * direction: a row that IS real ciphertext, whose keychain entry was
+   * reset (or whose keyring backend changed, or whose profile moved
+   * machines) so decrypt now genuinely fails, would ALSO be misread as
+   * plaintext if its random ciphertext bytes happened to pass the same
+   * UTF-8 check — astronomically unlikely for genuine AES-GCM output
+   * (every byte must independently satisfy strict UTF-8 continuation
+   * rules; one wrong byte anywhere invalidates the whole buffer), but not
+   * literally impossible. If it ever happened, the row would be
+   * "recovered" as the wrong (misread) value and the real ciphertext
+   * overwritten. Deleting that row's backup immediately after its UPDATE
+   * would make this unrecoverable the instant it happened. Backups are
+   * now kept until the NEXT app start instead (this function, not an
+   * immediate per-row delete) — bounding, not eliminating, the risk: at
+   * least one full restart's worth of time to notice something's wrong
+   * (the secret stops working, a user reports it, a log is checked)
+   * before the only copy of the original bytes disappears.
+   */
+  private cleanupPriorReencryptBackups(): void {
+    try {
+      const dir = this.secretReencryptBackupDir()
+      if (!existsSync(dir)) return
+      for (const entry of readdirSync(dir)) {
+        try {
+          unlinkSync(join(dir, entry))
+        } catch (err) {
+          console.error(`[DatabaseManager] Could not delete a leftover re-encrypt backup file (${entry}):`, err)
+        }
+      }
+      if (readdirSync(dir).length === 0) rmdirSync(dir)
+    } catch {
+      // Best-effort — leaving a stale backup or an empty directory behind is harmless.
+    }
+  }
+
+  /**
+   * Re-encrypts every secret/OAuth-token row still holding the
+   * plaintext-fallback bytes from a time safeStorage was unavailable (see
+   * createSecret/createOAuthToken). No-ops instantly when encryption still
+   * isn't available — there's nothing it could do. Safe to call on every
+   * app start; idempotent (a row already properly encrypted is left alone —
+   * isPlaintextFallback() checks each row's own bytes, not a stored flag).
+   * Every row's ORIGINAL bytes are backed up (see backupBeforeReencrypt)
+   * before its UPDATE runs; a row whose backup fails to write is skipped
+   * rather than overwritten unbacked-up. Returns counts only, never values.
+   *
+   * Backups are NOT deleted at the end of this same call — see
+   * `cleanupPriorReencryptBackups`'s docstring for why (residual risk,
+   * round 4): they're swept up at the START of the NEXT call instead (the
+   * next app start, since this only ever runs once per launch), so a
+   * mistaken re-encrypt has at least one full restart's worth of time to
+   * be noticed and recovered from before its backup disappears.
+   */
+  reencryptPlaintextFallbackRows(): { secrets: number; oauthTokens: number } {
+    // Re-review (round 5, Minor): this used to come AFTER the availability
+    // check below, so a machine where encryption is unavailable (Linux with
+    // a locked or missing keyring, most commonly) hit the early return on
+    // EVERY app launch without ever reaching this call — a prior run's
+    // backups (written back when encryption WAS available) would then
+    // persist on disk indefinitely instead of being swept up on the very
+    // next launch as intended. Cleanup must run regardless of whether this
+    // run itself can do any re-encrypting.
+    this.cleanupPriorReencryptBackups()
+
+    if (!safeStorage.isEncryptionAvailable()) return { secrets: 0, oauthTokens: 0 }
+
+    let secrets = 0
+    const secretRows = this.db.prepare('SELECT id, value FROM secrets').all() as Array<{ id: string; value: Buffer }>
+    for (const row of secretRows) {
+      if (!isPlaintextFallback(row.value)) continue
+      try {
+        this.backupBeforeReencrypt('secrets', row.id, 'value', row.value)
+      } catch (err) {
+        console.error(`[DatabaseManager] Skipping re-encrypt of secret ${row.id}:`, err)
+        continue
+      }
+      const reencrypted = safeStorage.encryptString(row.value.toString('utf8'))
+      this.db.prepare('UPDATE secrets SET value = ? WHERE id = ?').run(reencrypted, row.id)
+      secrets++
+    }
+
+    let oauthTokens = 0
+    const tokenRows = this.db.prepare('SELECT id, access_token, refresh_token FROM oauth_tokens').all() as Array<{
+      id: string; access_token: Buffer; refresh_token: Buffer | null
+    }>
+    for (const row of tokenRows) {
+      const accessIsPlaintext = isPlaintextFallback(row.access_token)
+      const refreshIsPlaintext = row.refresh_token ? isPlaintextFallback(row.refresh_token) : false
+      if (!accessIsPlaintext && !refreshIsPlaintext) continue
+      try {
+        if (accessIsPlaintext) this.backupBeforeReencrypt('oauth_tokens', row.id, 'access_token', row.access_token)
+        if (refreshIsPlaintext && row.refresh_token) this.backupBeforeReencrypt('oauth_tokens', row.id, 'refresh_token', row.refresh_token)
+      } catch (err) {
+        console.error(`[DatabaseManager] Skipping re-encrypt of OAuth token ${row.id}:`, err)
+        continue
+      }
+      const newAccess = accessIsPlaintext ? safeStorage.encryptString(row.access_token.toString('utf8')) : row.access_token
+      const newRefresh = refreshIsPlaintext && row.refresh_token
+        ? safeStorage.encryptString(row.refresh_token.toString('utf8'))
+        : row.refresh_token
+      this.db.prepare('UPDATE oauth_tokens SET access_token = ?, refresh_token = ? WHERE id = ?').run(newAccess, newRefresh, row.id)
+      oauthTokens++
+    }
+
+    if (secrets > 0 || oauthTokens > 0) {
+      console.log(`[DatabaseManager] Re-encrypted ${secrets} secret(s) and ${oauthTokens} OAuth token row(s) that were stored as plaintext`)
+    }
+    return { secrets, oauthTokens }
   }
 
   createSecret(data: CreateSecretData): SecretRecord | undefined {
+    assertValidEnvVarName(data.env_var_name)
+    if (!safeStorage.isEncryptionAvailable()) {
+      throw new Error(DatabaseManager.SECRET_ENCRYPTION_UNAVAILABLE_MESSAGE)
+    }
     const id = createId()
     const now = new Date().toISOString()
-    const encryptedValue = safeStorage.isEncryptionAvailable()
-      ? safeStorage.encryptString(data.value)
-      : Buffer.from(data.value, 'utf8')
+    const encryptedValue = safeStorage.encryptString(data.value)
     this.db.prepare(`
       INSERT INTO secrets (id, name, description, env_var_name, value, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -4130,8 +4474,12 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   }
 
   updateSecret(id: string, data: UpdateSecretData): SecretRecord | undefined {
+    if (data.env_var_name !== undefined) assertValidEnvVarName(data.env_var_name)
     const existing = this.getSecret(id)
     if (!existing) return undefined
+    if (data.value !== undefined && !safeStorage.isEncryptionAvailable()) {
+      throw new Error(DatabaseManager.SECRET_ENCRYPTION_UNAVAILABLE_MESSAGE)
+    }
 
     const setClauses: string[] = []
     const values: (string | Buffer)[] = []
@@ -4141,10 +4489,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (data.env_var_name !== undefined) { setClauses.push('env_var_name = ?'); values.push(data.env_var_name) }
     if (data.value !== undefined) {
       setClauses.push('value = ?')
-      const encryptedValue = safeStorage.isEncryptionAvailable()
-        ? safeStorage.encryptString(data.value)
-        : Buffer.from(data.value, 'utf8')
-      values.push(encryptedValue)
+      values.push(safeStorage.encryptString(data.value))
     }
 
     if (setClauses.length === 0) return existing
@@ -4193,6 +4538,15 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const id = createId()
     const now = new Date().toISOString()
     const expiresAt = new Date(Date.now() + data.expires_in * 1000).toISOString()
+
+    // OAuth tokens are written from automated connect/refresh flows, not a
+    // user-initiated save action — unlike createSecret/updateSecret, this
+    // isn't refused outright (that would silently break those flows with no
+    // UI to surface the failure to). Logged so the gap is visible instead of
+    // silent; refusing this too is tracked as a follow-up.
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn(`[DatabaseManager] safeStorage unavailable — OAuth token for provider "${data.provider}" stored as plaintext`)
+    }
 
     // Encrypt tokens before storing
     const encryptedAccessToken = safeStorage.isEncryptionAvailable()

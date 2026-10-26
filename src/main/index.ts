@@ -1,6 +1,6 @@
 import { execFile, execSync } from 'child_process'
 import { readdirSync } from 'fs'
-import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage } from 'electron'
+import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage, Notification } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
@@ -38,7 +38,7 @@ import { EnterpriseHeartbeat } from './enterprise-heartbeat'
 import { EnterpriseStateSync } from './enterprise-state-sync'
 import { UI_COMMAND_CHANNEL } from '../shared/ui-commands'
 import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiCommandSender, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
-import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
+import { startSecretBroker, stopSecretBroker, writeSecretLoaderScript, cleanupStaleSecretTokenFiles } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
@@ -1040,6 +1040,37 @@ app.whenReady().then(async () => {
 
   db = new DatabaseManager()
   db.initialize()
+  // One-time, idempotent: re-encrypts any secret/OAuth-token row still
+  // holding plaintext-fallback bytes from a time safeStorage was
+  // unavailable. No-ops instantly when it's still unavailable now.
+  try {
+    db.reencryptPlaintextFallbackRows()
+  } catch (err) {
+    console.warn('[Main] Re-encrypting plaintext-fallback secret rows failed:', err)
+  }
+  // User-visible warning for the case reencryptPlaintextFallbackRows can't
+  // fix: encryption is STILL unavailable, so any existing plaintext-fallback
+  // row just sits there unprotected with nothing else ever telling the
+  // user. Shown once per app run — not spammy, but not silent either.
+  try {
+    if (!db.isSecretEncryptionAvailable()) {
+      const { secrets: plaintextSecrets, oauthTokens: plaintextTokens } = db.countPlaintextFallbackRows()
+      if (plaintextSecrets > 0 || plaintextTokens > 0) {
+        const parts: string[] = []
+        if (plaintextSecrets > 0) parts.push(`${plaintextSecrets} secret(s)`)
+        if (plaintextTokens > 0) parts.push(`${plaintextTokens} connected-account token(s)`)
+        new Notification({
+          title: 'Secrets stored without encryption',
+          body: `${parts.join(' and ')} are stored in plaintext because this system's keychain/keyring is unavailable. ` +
+            (process.platform === 'linux'
+              ? 'Install and unlock a keyring (gnome-keyring, kwallet, or kwallet6), then restart 20x — they will be encrypted automatically.'
+              : 'Unlock your OS keychain, or restart 20x — they will be encrypted automatically.')
+        }).show()
+      }
+    }
+  } catch (err) {
+    console.warn('[Main] Failed to check for plaintext-fallback secret rows:', err)
+  }
   const savedBrand = db.getSetting('enterprise_brand_spaces')
   setSelectedCompanyBrand(savedBrand === 'true' ? true : savedBrand === 'false' ? false : null)
   onBrandSpacesChanged((enabled) => {
@@ -1119,6 +1150,30 @@ app.whenReady().then(async () => {
   mcpToolCaller.setOAuthManager(oauthManager)
   agentManager.setOAuthManager(oauthManager)
 
+  // Start the MCP auth proxy unconditionally (not just for enterprise auth):
+  // any remote MCP server authenticated via OAuthManager routes its Bearer
+  // token through this loopback proxy too, so the token never sits in the
+  // --mcp-config JSON a harness's CLI spawns with (visible to `ps -ef`).
+  // The later enterprise-restore path (if any) just supplies its own
+  // default token provider on top of the same running proxy.
+  try {
+    const proxyPort = await startMcpAuthProxy()
+    console.log(`[Main] MCP auth proxy started on port ${proxyPort}`)
+  } catch (proxyErr) {
+    console.warn('[Main] MCP auth proxy failed to start (MCP tokens will use static headers):', proxyErr)
+  }
+
+  // Nothing persists local-MCP env-file registrations across a restart —
+  // every session re-resolves its MCP config on its first prompt — so
+  // anything left in that directory now is stale, most likely from a force
+  // quit or crash that skipped the per-session cleanup in stopSession().
+  try {
+    const { cleanupStaleLocalMcpEnvFiles } = await import('./mcp-env-wrapper')
+    cleanupStaleLocalMcpEnvFiles()
+  } catch (cleanupErr) {
+    console.warn('[Main] Failed to clean up stale local-MCP env files:', cleanupErr)
+  }
+
   pluginRegistry = new PluginRegistry()
   pluginRegistry.register(new PeakfloPlugin())
   pluginRegistry.register(new LinearPlugin())
@@ -1131,6 +1186,25 @@ app.whenReady().then(async () => {
   agentManager.setSyncManager(syncManager)
   // Continue tasks that stopped on a usage limit once it resets (incl. overdue ones from before a restart).
   agentManager.startUsageLimitRecovery()
+
+  // One-time, idempotent: scrubs secret values out of transcript_parts and
+  // output_fields written before scrubbing existed. No-ops instantly once
+  // done (one setting read). Fire-and-forget — never blocks startup.
+  void (async () => {
+    try {
+      const { runSecretScrubMigrationIfNeeded } = await import('./secret-scrub-migration')
+      const result = await runSecretScrubMigrationIfNeeded(db!)
+      if (result) {
+        console.log(
+          `[Main] Secret scrub migration: ${result.tasksWithSecrets}/${result.tasksScanned} task(s) had secrets, ` +
+          `${result.partsScrubbed}/${result.partsScanned} transcript part(s) scrubbed, ` +
+          `${result.outputFieldsScrubbed} output field(s) scrubbed, ${result.durationMs}ms`
+        )
+      }
+    } catch (err) {
+      console.warn('[Main] Secret scrub migration failed (will retry next launch):', err)
+    }
+  })()
 
   recurrenceScheduler = new RecurrenceScheduler(db)
   heartbeatScheduler = new HeartbeatScheduler(db, agentManager)
@@ -1290,11 +1364,17 @@ app.whenReady().then(async () => {
   // Build the application menu (includes "Check for Updates…")
   buildAppMenu()
 
-  // Start secret broker and write shell wrapper (awaited so broker is ready before any sessions)
+  // Start secret broker and write the shared loader script (awaited so the
+  // broker is ready before any sessions).
   try {
     const brokerPort = await startSecretBroker(db)
     console.log(`[Main] Secret broker started on port ${brokerPort}`)
-    writeSecretShellWrapper()
+    writeSecretLoaderScript()
+    // Minor finding, re-review (round 3): nothing swept up stale token
+    // files left behind by a force quit/crash before this fix — the
+    // broker's own session map always starts empty on launch, so anything
+    // on disk at this point is definitely stale.
+    cleanupStaleSecretTokenFiles()
   } catch (err) {
     console.error('[Main] Failed to start secret broker:', err)
   }

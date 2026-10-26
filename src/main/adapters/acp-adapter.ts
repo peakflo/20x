@@ -47,6 +47,7 @@ import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-
 import type { ProviderUsageLimits } from '../../shared/usage'
 import { acpUsageUpdateCostUsd, normalizeAcpPromptUsage } from '../usage/usage-normalize'
 import { getWrapperHooks, type AcpWrapperHooks, type AcpErrorClass } from '../acp-registry/wrapper-hooks'
+import { buildHarnessBaseEnv, reAddAmbientCredentials, applyShellCredentialsOptIn } from './harness-env'
 
 // Type-only imports: real ACP wire shapes for v1 ("stable") and the
 // experimental v2 generation. Never imported as values — the package ships
@@ -259,14 +260,46 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
 
   private resolveProcessConfig?: () => Promise<AcpAgentProcessConfig>
   private processConfigResolved = false
+  /**
+   * The registry id this instance was configured as (e.g. `'gemini'`),
+   * when known — used to gate credential re-adds on the AGENT, not the
+   * resolved command path. Re-review (round 4, Bug): a registry install
+   * resolves `command` to an absolute path (`<binDir>/gemini`, or
+   * `gemini.cmd`/`gemini.exe` on Windows — see install-manager.ts /
+   * resolve-instance.ts), never the bare literal `'gemini'`, so gating on
+   * `processConfig.command === 'gemini'` never matched a real Gemini
+   * session and silently withheld GEMINI_API_KEY from every one of them.
+   */
+  private registryAgentId?: string
 
   constructor(options: AcpAgentAdapterOptions) {
     this.processConfig = { command: options.command, args: options.args, env: options.env }
     this.wrapperHooks = options.wrapperHooks ?? getWrapperHooks(options.registryAgentId)
+    this.registryAgentId = options.registryAgentId
     this.enableFs = options.enableFs ?? false
     this.enableTerminal = options.enableTerminal ?? false
     this.resolveProcessConfig = options.resolveProcessConfig
     this.debugRpcLogs = AcpAgentAdapter.isDebugLogLevel(process.env.LOG_LEVEL)
+  }
+
+  /**
+   * True when this instance is (as best this process can tell) running the
+   * Gemini CLI — by registry id first (the reliable signal: set once at
+   * configuration time, not derived from a resolved path that varies by
+   * install method/platform), falling back to the resolved command's own
+   * basename (strips a directory and a Windows `.cmd`/`.exe`/`.bat`
+   * extension) for a LOCAL-COMMAND agent pointed directly at a `gemini`
+   * binary with no registry id at all.
+   */
+  private isGeminiCli(): boolean {
+    if (this.registryAgentId) return this.registryAgentId === 'gemini'
+    // Split on BOTH `/` and `\` rather than using `path.basename()` — that
+    // function's separator handling is platform-dependent (POSIX only
+    // splits on `/`), but this code (and the Windows-style paths it has to
+    // recognize) can run on either OS regardless of which platform it was
+    // built/tested on.
+    const base = this.processConfig.command.split(/[\\/]/).pop() ?? ''
+    return base.replace(/\.(cmd|exe|bat)$/i, '') === 'gemini'
   }
 
   private static isDebugLogLevel(value: string | undefined): boolean {
@@ -388,11 +421,50 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
   }
 
   private buildEnv(config: SessionConfig): Record<string, string | undefined> {
+    // Base env with every known provider-credential var stripped — an ACP
+    // agent (cursor-agent, or a registry agent) gets back only the one key
+    // it was explicitly configured with below, never whatever else the login
+    // shell happened to export for other harnesses.
     const env: Record<string, string | undefined> = {
-      ...process.env,
+      ...buildHarnessBaseEnv(),
       ...this.processConfig.env
     }
-    if (config.apiKeys?.anthropic) env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
+    const scrubber = config.getLiveScrubber?.()
+    if (config.apiKeys?.anthropic) {
+      env.ANTHROPIC_API_KEY = config.apiKeys.anthropic
+      scrubber?.addEntries([{ name: 'ANTHROPIC_API_KEY', value: config.apiKeys.anthropic }])
+    }
+    // The agent's OWN configured Cursor key — same pattern as `anthropic`
+    // above, previously never re-added at all for ACP (cursor-agent runs
+    // through this same adapter).
+    if (config.apiKeys?.cursor) {
+      // CURSOR_AUTH_TOKEN, not CURSOR_API_KEY — matches the name
+      // `secret-entries.ts`'s `buildSecretEntriesFromSessionConfig` already
+      // uses for this same `apiKeys.cursor` value, and the established
+      // `KNOWN_PROVIDER_CREDENTIAL_ENV_VARS` entry for it.
+      env.CURSOR_AUTH_TOKEN = config.apiKeys.cursor
+      scrubber?.addEntries([{ name: 'CURSOR_AUTH_TOKEN', value: config.apiKeys.cursor }])
+    }
+    // Gemini CLI (a registry ACP agent — see the registry's own
+    // `id: "gemini"` entry) authenticates via ambient GEMINI_API_KEY —
+    // there's no `config.apiKeys.gemini` field for it (ACP runs many
+    // different third-party agent binaries, not one 20x explicitly manages
+    // auth for), so this is a re-add from the login shell, not from an
+    // explicit per-agent secret. Re-review (round 3, Medium): used to
+    // re-add it unconditionally for every ACP agent, not just Gemini — so
+    // cursor-agent, or any other registry/local-command ACP agent, got a
+    // GEMINI_API_KEY it had no use for whenever one happened to be sitting
+    // in the ambient shell env. Gated on `isGeminiCli()` (round 4, Bug fix:
+    // the original gate compared the resolved command to the literal
+    // string `'gemini'`, but a registry install resolves to an absolute
+    // path like `<binDir>/gemini` — see isGeminiCli()'s own docstring —
+    // so that gate never actually matched a real Gemini session and
+    // silently withheld the key from every one of them; only the test's
+    // own made-up `command: 'gemini'` fixture happened to match it).
+    if (this.isGeminiCli()) {
+      reAddAmbientCredentials(env as Record<string, string>, ['GEMINI_API_KEY'], scrubber)
+    }
+    applyShellCredentialsOptIn(env as Record<string, string>, config.allowShellCredentials, scrubber)
     if (config.secretEnvVars) {
       for (const [key, value] of Object.entries(config.secretEnvVars)) env[key] = value
     }
@@ -758,7 +830,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       return { available: true }
     }
     const probeProcess = spawn(this.processConfig.command, this.processConfig.args, {
-      env: { ...process.env, ...this.processConfig.env },
+      env: { ...buildHarnessBaseEnv(), ...this.processConfig.env },
       stdio: ['pipe', 'pipe', 'pipe']
     })
     probeProcess.on('error', () => { /* handled by the health result listener below */ })
@@ -1343,7 +1415,11 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         const args = Array.isArray(params?.args) ? (params?.args as string[]) : []
         const cwd = typeof params?.cwd === 'string' ? params.cwd : session.config.workspaceDir
         const terminalId = randomUUID()
-        const child = spawn(command, args, { cwd, env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] })
+        // Same scoped env as the agent process itself (buildEnv), not a raw
+        // `{...process.env}` spread — this terminal runs arbitrary commands
+        // on the agent's behalf and must not hand them provider credentials
+        // the ACP agent itself was never configured with.
+        const child = spawn(command, args, { cwd, env: this.buildEnv(session.config), stdio: ['pipe', 'pipe', 'pipe'] })
         const entry: AcpTerminalProcess = { process: child, stdout: '', stderr: '', exitCode: null, exitSignal: null, exited: false }
         child.on('error', (error) => {
           entry.exited = true

@@ -1025,6 +1025,10 @@ export function registerIpcHandlers(
   })
 
   // Secret handlers
+  ipcMain.handle('secrets:encryptionAvailable', () => {
+    return db.isSecretEncryptionAvailable()
+  })
+
   ipcMain.handle('secrets:getAll', () => {
     return db.getSecrets()
   })

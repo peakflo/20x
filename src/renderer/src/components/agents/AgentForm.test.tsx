@@ -180,3 +180,96 @@ describe('AgentForm speed mode', () => {
     expect(onSubmit.mock.calls[0][0].config.speed_mode).toBeUndefined()
   })
 })
+
+// Major finding, re-review (M8): the per-agent "pass shell credentials"
+// opt-in needs a form control — off by default, with a one-line note
+// explaining what it does.
+describe('AgentForm — pass_shell_credentials opt-in', () => {
+  it('defaults to off (unchecked) for a new agent, and submits undefined (not false)', async () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm onSubmit={onSubmit} onCancel={vi.fn()} />)
+    selectCodingAgent()
+
+    const checkbox = screen.getByText('Pass shell credentials (GH_TOKEN, AWS, …)').closest('label')!.querySelector('button, input')!
+    expect(checkbox).toHaveAttribute('aria-checked', 'false')
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'My Agent' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].config.pass_shell_credentials).toBeUndefined()
+  })
+
+  it('pre-fills a checked box when editing an agent that already opted in, and submits true', async () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm
+      agent={makeAgent({ coding_agent: CodingAgentType.CLAUDE_CODE, pass_shell_credentials: true })}
+      onSubmit={onSubmit}
+      onCancel={vi.fn()}
+    />)
+
+    const checkbox = screen.getByText('Pass shell credentials (GH_TOKEN, AWS, …)').closest('label')!.querySelector('button, input')!
+    expect(checkbox).toHaveAttribute('aria-checked', 'true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].config.pass_shell_credentials).toBe(true)
+  })
+
+  it('turning the checkbox on submits pass_shell_credentials: true', async () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm onSubmit={onSubmit} onCancel={vi.fn()} />)
+    selectCodingAgent()
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'My Agent' } })
+
+    const checkbox = screen.getByText('Pass shell credentials (GH_TOKEN, AWS, …)').closest('label')!.querySelector('button, input')!
+    fireEvent.click(checkbox)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].config.pass_shell_credentials).toBe(true)
+  })
+
+  it('shows the explanatory note', () => {
+    render(<AgentForm onSubmit={vi.fn()} onCancel={vi.fn()} />)
+    selectCodingAgent()
+    expect(screen.getByText(/credentials like GH_TOKEN and AWS keys are stripped/)).toBeTruthy()
+  })
+})
+
+describe('AgentForm — allow_secrets_in_env opt-in (harnesses with no command-scoped delivery)', () => {
+  it('is hidden when no secrets are selected', () => {
+    render(<AgentForm onSubmit={vi.fn()} onCancel={vi.fn()} />)
+    selectCodingAgent('codex')
+    expect(screen.queryByText("Allow secrets in this agent's environment")).toBeNull()
+  })
+
+  it('is hidden for Claude Code/OpenCode even with secrets selected (they never need it)', () => {
+    render(<AgentForm agent={makeAgent({ coding_agent: CodingAgentType.CLAUDE_CODE, secret_ids: ['s1'] })} onSubmit={vi.fn()} onCancel={vi.fn()} />)
+    expect(screen.queryByText("Allow secrets in this agent's environment")).toBeNull()
+  })
+
+  it('defaults to off and submits undefined for a harness with secrets selected (e.g. Codex)', async () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm agent={makeAgent({ coding_agent: CodingAgentType.CODEX, secret_ids: ['s1'] })} onSubmit={onSubmit} onCancel={vi.fn()} />)
+
+    const checkbox = screen.getByText("Allow secrets in this agent's environment").closest('label')!.querySelector('button, input')!
+    expect(checkbox).toHaveAttribute('aria-checked', 'false')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].config.allow_secrets_in_env).toBeUndefined()
+  })
+
+  it('submits true once turned on', async () => {
+    const onSubmit = vi.fn()
+    render(<AgentForm agent={makeAgent({ coding_agent: CodingAgentType.CODEX, secret_ids: ['s1'] })} onSubmit={onSubmit} onCancel={vi.fn()} />)
+
+    const checkbox = screen.getByText("Allow secrets in this agent's environment").closest('label')!.querySelector('button, input')!
+    fireEvent.click(checkbox)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
+    expect(onSubmit.mock.calls[0][0].config.allow_secrets_in_env).toBe(true)
+  })
+})
