@@ -4737,14 +4737,36 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     })
   }
 
-  /** Local agents help a human owner; only that human can accept completion. */
+  /** Complete local work without a session; source-owned work stays in review. */
   async completeTaskWithoutReview(taskId: string, knownTask?: TaskRecord): Promise<boolean> {
     const task = knownTask ?? this.db.getTask(taskId)
     if (!task) return false
 
-    // Agent-owned work completes through agent-harness. Local help must not
-    // use the human owner's token to accept its own result.
-    return false
+    // A source or server snapshot owns completion of its task. Do not use the
+    // human owner's credentials to close it from this local path (#521).
+    if (task.source_id || serverTaskSnapshot(this.db, taskId)) return false
+
+    const pendingSubtasks = this.db.getSubtasks(taskId).some((subtask) =>
+      subtask.status !== TaskStatus.Completed &&
+      subtask.status !== TaskStatus.ReadyForReview &&
+      // An unassigned child cannot start by itself. Leave it in the tree, but
+      // do not let it hold an unattended recurring parent in review for ever.
+      !(subtask.status === TaskStatus.NotStarted && !subtask.agent_id)
+    )
+    if (pendingSubtasks) return false
+
+    this.db.updateTask(taskId, { status: TaskStatus.Completed })
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    this.sendToRenderer('task:updated', {
+      taskId,
+      updates: { status: TaskStatus.Completed }
+    })
+    if (task.parent_task_id) {
+      this.notifyParentOfSubtaskCompletion(task.parent_task_id, taskId).catch((err) => {
+        console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${taskId} completed:`, err)
+      })
+    }
+    return true
   }
 
   private async transitionToIdle(sessionId: string, session: AgentSession): Promise<void> {
@@ -4895,7 +4917,16 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       return
     }
 
-    // Desktop agent work is help. Only the server can accept completion.
+    if (task.auto_complete_without_review && !task.source_id) {
+      const completed = await this.completeTaskWithoutReview(session.taskId, task)
+      if (completed) {
+        this.autoEnableHeartbeat(session)
+        this.sendToRenderer('agent:status', {
+          sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+        })
+        return
+      }
+    }
 
     // Update task status to ready_for_review (only if task exists)
     if (task) {

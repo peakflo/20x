@@ -194,7 +194,11 @@ export class TaskAutomationScheduler {
   private hasPendingSubtasks(taskId: string): boolean {
     return this.dbManager.getSubtasks(taskId).some(
       (subtask) =>
-        subtask.status !== TaskStatus.Completed && subtask.status !== TaskStatus.ReadyForReview
+        subtask.status !== TaskStatus.Completed &&
+        subtask.status !== TaskStatus.ReadyForReview &&
+        // The sweep can start only assigned children. Keep an unassigned child
+        // in the tree without holding its unattended parent in review for ever.
+        !(subtask.status === TaskStatus.NotStarted && !subtask.agent_id)
     )
   }
 

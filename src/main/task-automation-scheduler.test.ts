@@ -307,6 +307,38 @@ describe('TaskAutomationScheduler — parents and subtasks', () => {
     expect(agentManager.completeTaskWithoutReview).not.toHaveBeenCalled()
   })
 
+  it('does not let an unassigned child hold a parent in review', async () => {
+    const { parentId, childIds } = parentWithChildren(
+      { auto_complete_without_review: true },
+      [{ title: 'unassigned child', agent_id: null }]
+    )
+    db.updateTask(parentId, { status: TaskStatus.ReadyForReview })
+    const agentManager = mockAgentManager()
+
+    await new TaskAutomationScheduler(db, agentManager).runNow()
+
+    expect(agentManager.completeTaskWithoutReview).toHaveBeenCalledWith(parentId)
+    expect(db.getTask(childIds[0])?.status).toBe(TaskStatus.NotStarted)
+  })
+
+  it.each([
+    TaskStatus.AgentWorking,
+    TaskStatus.Triaging,
+    TaskStatus.AgentLearning,
+    TaskStatus.ModelError
+  ])('waits for a child in %s', async (status) => {
+    const { parentId } = parentWithChildren(
+      { auto_complete_without_review: true },
+      [{ title: 'active child', status, agent_id: null }]
+    )
+    db.updateTask(parentId, { status: TaskStatus.ReadyForReview })
+    const agentManager = mockAgentManager()
+
+    await new TaskAutomationScheduler(db, agentManager).runNow()
+
+    expect(agentManager.completeTaskWithoutReview).not.toHaveBeenCalled()
+  })
+
   it('completes the parent once every child has finished', async () => {
     const { parentId } = parentWithChildren(
       { auto_complete_without_review: true },
