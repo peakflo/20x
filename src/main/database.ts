@@ -1,6 +1,8 @@
 import { isWorkfloLinkedTask } from './workflo-task-sync'
 import Database from 'better-sqlite3'
 import { instrumentMainDatabase } from './perf/main-thread-perf'
+import { readTranscriptParts, type TranscriptPartRecord } from './db-read/transcript-query'
+import { DbReadClient, isDbReadWorkerEnabled } from './db-read/db-read-client'
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, rmSync } from 'fs'
@@ -434,20 +436,7 @@ export interface TranscriptPartInput {
 }
 
 /** Persisted transcript part returned by snapshot queries. */
-export interface TranscriptPartRecord {
-  taskId: string
-  partId: string
-  seq: number
-  role: string
-  content: string
-  partType?: string
-  tool?: unknown
-  payload?: unknown
-  createdAt: number
-  updatedAt: number
-  /** Global monotonic change cursor for this row (delta subscriptions). */
-  rev: number
-}
+export type { TranscriptPartRecord }
 
 /** Raw `agent_run_intervals` row, snake_case as stored. */
 interface AgentRunIntervalRow {
@@ -1227,6 +1216,10 @@ const SCHEMA_VERSION = 12
 export class DatabaseManager {
   public db!: Database.Database
   private usageStore: UsageStore | null = null
+  /** Read-only worker connection for heavy reads (null in tests and when disabled). */
+  private readClient: DbReadClient | null = null
+  /** Overrides the bundled worker script (tests and benchmarks run from source). */
+  readWorkerScriptPath: string | undefined
 
   /**
    * Subscription usage persistence (token usage events, session totals, plan
@@ -1243,6 +1236,8 @@ export class DatabaseManager {
   }
 
   close(): void {
+    void this.readClient?.close()
+    this.readClient = null
     if (this.ensureDbOpen()) {
       this.db.pragma('wal_checkpoint(TRUNCATE)')
       this.db.close()
@@ -1281,6 +1276,14 @@ export class DatabaseManager {
     this.initializeTasksFts()
     this.initializeTaskManagementMcpServer()
     this.initializeOrchestratorSkill()
+
+    // Heavy reads that are already async at their call site (transcript
+    // snapshots) run on a read-only connection in a worker thread, so a large
+    // transcript does not block the main thread. Writes stay on this connection.
+    if (isDbReadWorkerEnabled()) {
+      this.readClient = new DbReadClient({ dbPath, scriptPath: this.readWorkerScriptPath, fallback: { getTranscriptParts: (taskId, sinceSeq) => this.getTranscriptParts(taskId, sinceSeq) } })
+      this.readClient.start()
+    }
   }
 
   /**
@@ -2897,33 +2900,16 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   /** Snapshot query: ordered transcript for a task, optionally only parts after seq. */
   getTranscriptParts(taskId: string, sinceSeq?: number): TranscriptPartRecord[] {
     if (!this.ensureDbOpen()) return []
+    return readTranscriptParts(this.db, taskId, sinceSeq)
+  }
 
-    // Order by REAL event time (created_at), with seq as a stable tiebreaker.
-    // Insertion order (seq) is not chronological when a partial projection is
-    // later backfilled with older history — ordering by created_at keeps the
-    // transcript correct regardless of when each part was ingested.
-    const rows = (sinceSeq != null
-      ? this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? AND seq > ? ORDER BY created_at ASC, seq ASC').all(taskId, sinceSeq)
-      : this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? ORDER BY created_at ASC, seq ASC').all(taskId)
-    ) as Array<{
-      task_id: string; part_id: string; seq: number; role: string; content: string;
-      part_type: string | null; tool: string | null; payload: string | null;
-      created_at: number; updated_at: number; rev: number
-    }>
-
-    return rows.map((r) => ({
-      taskId: r.task_id,
-      partId: r.part_id,
-      seq: r.seq,
-      role: r.role,
-      content: r.content,
-      rev: r.rev ?? 0,
-      partType: r.part_type ?? undefined,
-      tool: r.tool ? (JSON.parse(r.tool) as unknown) : undefined,
-      payload: r.payload ? (JSON.parse(r.payload) as unknown) : undefined,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at
-    }))
+  /**
+   * Same result as getTranscriptParts, read off the main thread when the
+   * read worker is running. Use from async call sites (IPC/HTTP handlers).
+   */
+  getTranscriptPartsAsync(taskId: string, sinceSeq?: number): Promise<TranscriptPartRecord[]> {
+    if (this.readClient && this.ensureDbOpen()) return this.readClient.getTranscriptParts(taskId, sinceSeq)
+    return Promise.resolve(this.getTranscriptParts(taskId, sinceSeq))
   }
 
   /**

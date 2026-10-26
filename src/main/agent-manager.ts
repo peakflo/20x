@@ -4388,7 +4388,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     if (!this.ingestedTasks.has(taskId)) {
       await this.backfillTranscriptProjection(taskId)
     }
-    return this.db.getTranscriptParts(taskId, sinceSeq)
+    return this.db.getTranscriptPartsAsync(taskId, sinceSeq)
   }
 
   /**

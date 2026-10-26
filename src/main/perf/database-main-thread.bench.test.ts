@@ -19,14 +19,22 @@
  * Scenarios: app start, task list load, agent streaming (3 sessions writing
  * transcript parts at agent poll rates), task switch, and the cost a worker
  * would add back on the main thread (structured clone of results).
+ *
+ * Task-switch transcript reads go through `getTranscriptPartsAsync`, like the
+ * app. Compare `TWENTYX_DB_READ_WORKER=0` (main thread) against the default
+ * (read-only worker connection); "loop active ms" and the event-loop delay
+ * include the main-thread cost of receiving the worker's result.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { builtinModules } from 'node:module'
+import { build } from 'vite'
 import { tmpdir } from 'node:os'
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
 import { app } from 'electron'
 import { DatabaseManager } from '../database'
+import { isDbReadWorkerEnabled } from '../db-read/db-read-client'
 import { EVENT_LOOP_RESOLUTION_MS, eventLoopSnapshot, getMainThreadDbRecorder, type DbPerfSnapshot, type EventLoopSnapshot } from './main-thread-perf'
 
 vi.mock('../task-api-server', () => ({ startTaskApiServer: vi.fn(async () => 1234) }))
@@ -139,6 +147,7 @@ describe.skipIf(!TARGET)('main-thread better-sqlite3 cost per scenario', { timeo
   /** Mirrors index.ts startup DB work and the renderer's first loads. */
   function appStart(): void {
     db = new DatabaseManager()
+    db.readWorkerScriptPath = workerScript
     step(() => db.initialize())
     step(() => db.getSetting('enterprise_brand_spaces'))
     step(() => db.getSetting('enterprise_user_email'))
@@ -154,13 +163,33 @@ describe.skipIf(!TARGET)('main-thread better-sqlite3 cost per scenario', { timeo
     return ids
   }
 
-  beforeAll(() => {
+  let workerScript: string | undefined
+  const workerOutDir = resolve(__dirname, '../../../node_modules/.cache/20x-db-read-worker-bench')
+
+  beforeAll(async () => {
     process.env.TWENTYX_PERF = '1'
+    extra['read worker'] = isDbReadWorkerEnabled() ? 'ON (TWENTYX_DB_READ_WORKER != 0)' : 'OFF (TWENTYX_DB_READ_WORKER=0)'
+    if (isDbReadWorkerEnabled()) {
+      await build({
+        logLevel: 'silent',
+        configFile: false,
+        build: {
+          outDir: workerOutDir,
+          emptyOutDir: true,
+          ssr: true,
+          minify: false,
+          lib: { entry: resolve(__dirname, '../db-read/db-read-worker.ts'), formats: ['cjs'], fileName: () => 'db-read-worker.js' },
+          rollupOptions: { external: ['better-sqlite3', ...builtinModules, ...builtinModules.map((m) => `node:${m}`)] }
+        }
+      })
+      workerScript = join(workerOutDir, 'db-read-worker.js')
+    }
     if (TARGET === 'synthetic') {
       dir = mkdtempSync(join(tmpdir(), '20x-db-main-thread-'))
       ownsDir = true
       vi.mocked(app.getPath).mockReturnValue(dir)
       db = new DatabaseManager()
+      db.readWorkerScriptPath = workerScript
       db.initialize()
       seedSynthetic()
       db.close()
@@ -175,11 +204,11 @@ describe.skipIf(!TARGET)('main-thread better-sqlite3 cost per scenario', { timeo
   afterAll(() => {
     const fmt = (n: number): string => n.toFixed(1)
     const lines = [`[perf] main-thread DB benchmark (${TARGET})`]
-    lines.push('scenario | wall ms | loop active ms | handler ms | db ms | db share of handler | db calls | max call ms | >16ms | >50ms | loop delay p50/p95/p99/max ms')
+    lines.push('scenario | wall ms | loop active ms | handler ms | db ms | db share of loop active | db calls | max call ms | >16ms | >50ms | loop delay p50/p95/p99/max ms')
     for (const r of results) {
       lines.push([
         r.name, fmt(r.wallMs), fmt(r.activeMs), fmt(r.handlerMs), fmt(r.db.blockedMs),
-        `${r.handlerMs > 0 ? Math.round((r.db.blockedMs / r.handlerMs) * 100) : 0}%`,
+        `${r.activeMs > 0 ? Math.round((r.db.blockedMs / r.activeMs) * 100) : 0}%`,
         r.db.calls, fmt(r.db.maxMs), r.db.over16ms, r.db.over50ms,
         `${fmt(r.loop.p50)}/${fmt(r.loop.p95)}/${fmt(r.loop.p99)}/${fmt(r.loop.max)}`
       ].join(' | '))
@@ -194,6 +223,7 @@ describe.skipIf(!TARGET)('main-thread better-sqlite3 cost per scenario', { timeo
     console.log(lines.join('\n'))
     db?.close()
     if (ownsDir) rmSync(dir, { recursive: true, force: true })
+    rmSync(workerOutDir, { recursive: true, force: true })
   }, 120_000)
 
   let openIds: string[] = []
@@ -240,7 +270,8 @@ describe.skipIf(!TARGET)('main-thread better-sqlite3 cost per scenario', { timeo
       for (const t of transcriptTasks) {
         step(() => db.getTask(t.id))
         // agentSession:getTranscriptSnapshot -> AgentManager.getTranscriptSnapshot
-        step(() => { if (!db.hasTranscriptParts(t.id)) return null; return db.getTranscriptParts(t.id) })
+        // Same as AgentManager.getTranscriptSnapshot: read worker when enabled.
+        if (step(() => db.hasTranscriptParts(t.id))) await db.getTranscriptPartsAsync(t.id)
         step(() => db.getSubtasks(t.id))
         step(() => db.getHeartbeatLogs(t.id))
         await sleep(300)

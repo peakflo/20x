@@ -431,7 +431,7 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
   // one-time seed of pre-store sessions.
   const transcriptMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transcript$/)
   if (transcriptMatch) {
-    return db.getTranscriptParts(decodeURIComponent(transcriptMatch[1]))
+    return db.getTranscriptPartsAsync(decodeURIComponent(transcriptMatch[1]))
   }
 
   // GET /api/tasks/:taskId/transcript/delta?sinceRev=N — parts changed since rev.
