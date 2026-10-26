@@ -106,3 +106,22 @@ describe('review seen state', () => {
     expect(db.markAllReviewSeen()).toEqual([])
   })
 })
+
+describe('ensureReviewSeenColumns self-heal', () => {
+  it('re-adds missing review columns on a DB already stamped at the current schema version', () => {
+    const task = db.createTask(makeTask({ status: TaskStatus.ReadyForReview }))!
+    db.db.exec('ALTER TABLE tasks DROP COLUMN review_entered_at')
+    db.db.exec('ALTER TABLE tasks DROP COLUMN review_seen_at')
+    expect(() => db.createTask(makeTask())).toThrow(/review_entered_at/)
+
+    db.ensureReviewSeenColumns()
+
+    const created = db.createTask(makeTask({ status: TaskStatus.AgentWorking }))!
+    expect(created.review_entered_at).toBeNull()
+    // existing in-review task is backfilled as seen
+    const old = db.getTask(task.id)!
+    expect(old.review_entered_at).not.toBeNull()
+    expect(isReviewUnseen(old)).toBe(false)
+    expect(() => db.ensureReviewSeenColumns()).not.toThrow()
+  })
+})

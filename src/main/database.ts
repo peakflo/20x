@@ -1273,6 +1273,7 @@ export class DatabaseManager {
     // ensure default records exist (default agent, MCP server,
     // orchestrator skill).
     this.ensureTranscriptRevColumn()
+    this.ensureReviewSeenColumns()
     this.seedDefaultAgent()
     this.migrateAgentPermissionDefaults()
     this.initializeTasksFts()
@@ -1314,6 +1315,25 @@ export class DatabaseManager {
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_created ON transcript_parts(task_id, created_at, seq)`)
     } catch (err) {
       console.error('[Database] ensureTranscriptRevColumn failed:', err)
+    }
+  }
+
+  /**
+   * Self-heal for tasks.review_entered_at / review_seen_at on every startup.
+   * The SCHEMA_VERSION gate can be skipped when the shared pf-desktop.db was
+   * already stamped at v11 by another build/worktree that did not add these
+   * columns; createTask then fails with "table tasks has no column named
+   * review_entered_at". Idempotent; backfills only if it had to add columns.
+   */
+  ensureReviewSeenColumns(): void {
+    try {
+      const cols = this.db.pragma('table_info(tasks)') as { name: string }[]
+      const names = new Set(cols.map((c) => c.name))
+      if (names.has('review_entered_at') && names.has('review_seen_at')) return
+      this.migrateReviewSeenColumns(names, true)
+      console.log('[Database] Self-healed missing tasks.review_entered_at/review_seen_at columns')
+    } catch (err) {
+      console.error('[Database] ensureReviewSeenColumns failed:', err)
     }
   }
 
