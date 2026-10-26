@@ -4737,14 +4737,76 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     })
   }
 
-  /** Local agents help a human owner; only that human can accept completion. */
+  /**
+   * Completes a task that must not wait for a human review.
+   *
+   * This is deliberately session-independent: a task can reach this point
+   * without a live agent session — the TaskAutomationScheduler reconciliation
+   * sweep finds tasks left in review while their auto_complete_without_review
+   * flag was set, a coordinator marks its parent, an MCP client sets the
+   * status. Every route that honours the flag funnels through here.
+   *
+   * Only a task 20x itself owns may close here. A task with a source_id (or a
+   * server snapshot) is owned by its source — local help must not use the
+   * human owner's token to accept its own result there (#521), so it is left
+   * for review and the source's own completion flow decides.
+   *
+   * Returns false when the task was left for review instead.
+   */
   async completeTaskWithoutReview(taskId: string, knownTask?: TaskRecord): Promise<boolean> {
     const task = knownTask ?? this.db.getTask(taskId)
     if (!task) return false
 
-    // Agent-owned work completes through agent-harness. Local help must not
-    // use the human owner's token to accept its own result.
-    return false
+    const yieldEventLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
+
+    if (task.source_id || serverTaskSnapshot(this.db, taskId)) {
+      console.log(
+        `[AgentManager] Task ${taskId} is owned by its source — completion must be confirmed there, leaving it for review`
+      )
+      return false
+    }
+
+    // A coordinator is not finished while its children are still to run.
+    //
+    // An agent that creates subtasks and then stops leaves them in
+    // not_started. Completing the parent there would mark the whole recurring
+    // occurrence done while none of the actual work had run. Park it in review
+    // instead; the parent is woken again by notifyParentOfSubtaskCompletion
+    // once every child reaches a terminal state, and completes then.
+    const pendingSubtasks = this.db.getSubtasks(taskId).filter(
+      (subtask) =>
+        subtask.status !== TaskStatus.Completed && subtask.status !== TaskStatus.ReadyForReview
+    )
+    if (pendingSubtasks.length > 0) {
+      console.log(
+        `[AgentManager] Task ${taskId} completes without review, but ${pendingSubtasks.length} ` +
+        `subtask(s) have not finished — leaving it for review`
+      )
+      if (task.status !== TaskStatus.ReadyForReview) {
+        this.db.updateTask(taskId, { status: TaskStatus.ReadyForReview })
+        await yieldEventLoop()
+        this.sendToRenderer('task:updated', {
+          taskId,
+          updates: { status: TaskStatus.ReadyForReview }
+        })
+      }
+      return false
+    }
+
+    this.db.updateTask(taskId, { status: TaskStatus.Completed })
+    await yieldEventLoop()
+    this.sendToRenderer('task:updated', {
+      taskId,
+      updates: { status: TaskStatus.Completed }
+    })
+
+    // A subtask that finishes must still wake its parent.
+    if (task.parent_task_id) {
+      this.notifyParentOfSubtaskCompletion(task.parent_task_id, taskId).catch((err) => {
+        console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${taskId} completed:`, err)
+      })
+    }
+    return true
   }
 
   private async transitionToIdle(sessionId: string, session: AgentSession): Promise<void> {
@@ -4895,7 +4957,22 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       return
     }
 
-    // Desktop agent work is help. Only the server can accept completion.
+    // A task told to finish without review finishes here, in main — but only
+    // when 20x owns the task. A source-linked task still goes to review: the
+    // source system must confirm completion first (see #521), and
+    // completeTaskWithoutReview refuses it anyway.
+    if (task.auto_complete_without_review && !task.source_id) {
+      console.log(`[AgentManager] Task ${session.taskId} completes without review`)
+      const completed = await this.completeTaskWithoutReview(session.taskId, task)
+      if (completed) this.autoEnableHeartbeat(session)
+      this.sendToRenderer('agent:status', {
+        sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+      })
+      return
+    }
+
+    // Desktop agent work is help for source-owned tasks. Only the source can
+    // accept their completion.
 
     // Update task status to ready_for_review (only if task exists)
     if (task) {

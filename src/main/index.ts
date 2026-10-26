@@ -44,6 +44,7 @@ import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, se
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
 import { installProcessStreamErrorHandlers } from './process-stream-errors'
+import { startMacosSwapWatchdog } from './macos-swap-watchdog'
 import { getWindowsPathEntries, prependMissingWindowsPaths } from './windows-runtime-paths'
 import { initAnalytics, shutdownAnalytics } from './analytics-service'
 import {
@@ -93,6 +94,7 @@ let enterpriseHeartbeatInstance: EnterpriseHeartbeat | null = null
 let enterpriseStateSyncInstance: EnterpriseStateSync | null = null
 let voiceSessionManager: VoiceSessionManager | null = null
 let isShuttingDown = false
+let stopSwapWatchdog: (() => void) | null = null
 
 /**
  * Sends one voice event to the desktop renderer and to the mobile clients.
@@ -306,6 +308,8 @@ async function sweepLeakedWorkspaces(graceMs?: number, orphansIgnoreTaskState = 
 }
 
 async function shutdownAppServices(): Promise<void> {
+  stopSwapWatchdog?.()
+  stopSwapWatchdog = null
   voiceSessionManager?.shutdown()
   enterpriseHeartbeatInstance?.stop()
   heartbeatScheduler?.stop()
@@ -1003,6 +1007,7 @@ app.commandLine.appendSwitch('disable-features', [
 installProcessStreamErrorHandlers()
 
 app.whenReady().then(async () => {
+  stopSwapWatchdog = startMacosSwapWatchdog()
   const analytics = initAnalytics()
 
   // Collect MCP server processes that a previous crash or force-quit orphaned.

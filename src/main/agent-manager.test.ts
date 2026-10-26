@@ -1752,19 +1752,68 @@ describe('AgentManager transitionToIdle — completing without review', () => {
     return { mgr, session }
   }
 
-  it.each([true,false])('desktop work requires server review with auto-complete=%s', async auto => {
-    const mockDb=makeDb({auto_complete_without_review:auto});const {mgr,session}=setup(mockDb)
-    const executeAction=vi.fn();mgr.setSyncManager({executeAction} as never)
-    await (mgr as any).transitionToIdle('session-1',session)
-    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1',{status:TaskStatus.Completed})
-    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1',{status:TaskStatus.ReadyForReview})
+  it('completes a source-less task in main when the flag is set', async () => {
+    const mockDb = makeDb({ auto_complete_without_review: true })
+    const { mgr, session } = setup(mockDb)
+    await (mgr as any).transitionToIdle('session-1', session)
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+  })
+  it('leaves a source-less task in review when the flag is off', async () => {
+    const mockDb = makeDb({ auto_complete_without_review: false })
+    const { mgr, session } = setup(mockDb)
+    await (mgr as any).transitionToIdle('session-1', session)
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+  })
+  it('leaves a source-linked task in review even with the flag set', async () => {
+    const mockDb = makeDb({ source_id: 'source-1' })
+    const { mgr, session } = setup(mockDb)
+    const executeAction = vi.fn(); mgr.setSyncManager({ executeAction } as never)
+    await (mgr as any).transitionToIdle('session-1', session)
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
     expect(executeAction).not.toHaveBeenCalled()
   })
-  it('cannot complete from a desktop agent without a server credential', async()=>{
-    const mockDb=makeDb();const {mgr}=setup(mockDb)
-    const executeAction=vi.fn();mgr.setSyncManager({executeAction} as never)
-    expect(await mgr.completeTaskWithoutReview('task-1')).toBe(false)
-    expect(mockDb.updateTask).not.toHaveBeenCalled();expect(executeAction).not.toHaveBeenCalled()
+  /** The same completion has to be reachable without a session.
+   *
+   * A task can land in ready_for_review by routes that never run
+   * transitionToIdle — a coordinator marking its parent once every subtask is
+   * done, an MCP client setting the status, the mobile API. Those routes used
+   * to ignore auto_complete_without_review entirely, which is why a recurring
+   * task could reach review and then sit there for ever.
+   */
+  describe('completeTaskWithoutReview — no session required', () => {
+    it('completes a source-less task that no session is attached to', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview })
+      const mgr = new AgentManager(mockDb)
+      vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(true)
+
+      expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    })
+
+    it('refuses a source-linked task and touches nothing', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview, source_id: 'source-1' })
+      const mgr = new AgentManager(mockDb)
+      vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(false)
+
+      expect(mockDb.updateTask).not.toHaveBeenCalled()
+    })
+
+    it('does nothing for a task that no longer exists', async () => {
+      const mockDb = makeDb()
+      ;(mockDb.getTask as any).mockReturnValue(undefined)
+      const mgr = new AgentManager(mockDb)
+      vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      await expect(mgr.completeTaskWithoutReview('task-gone')).resolves.toBe(false)
+
+      expect(mockDb.updateTask).not.toHaveBeenCalled()
+    })
   })
 })
 
