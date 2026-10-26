@@ -19,6 +19,7 @@ import { DrawingProperties } from './drawing/DrawingProperties'
 import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
+import { flattenPanelScrollers, restorePanelScrollers, type FlattenedScroller } from './flatten-panel-scrollers'
 import { CanvasMinimap } from './CanvasMinimap'
 import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Move, ZoomIn, ZoomOut, RotateCcw, Maximize2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -510,6 +511,8 @@ export function InfiniteCanvas() {
   const viewportDirtyRef = useRef(false)
   const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layerReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Panel scrollers made non-composited for the current gesture (see flattenPanelScrollers).
+  const flattenedScrollersRef = useRef<FlattenedScroller[] | null>(null)
 
   const pendingPanRef = useRef({ dx: 0, dy: 0 })
   const pendingZoomRef = useRef<{ deltaY: number; clientX: number; clientY: number; rect: DOMRect } | null>(null)
@@ -564,7 +567,11 @@ export function InfiniteCanvas() {
     // Promote the layer for the duration of the gesture only — a permanent
     // will-change keeps a dedicated compositor layer (and its memory) alive.
     const layer = transformLayerRef.current
-    if (layer) layer.style.willChange = 'transform'
+    if (layer) {
+      layer.style.willChange = 'transform'
+      // Still flattened if the previous gesture's release timer was pending.
+      if (!flattenedScrollersRef.current) flattenedScrollersRef.current = flattenPanelScrollers(layer)
+    }
   }, [])
 
   const flushViewportUpdate = useCallback(() => {
@@ -605,6 +612,11 @@ export function InfiniteCanvas() {
       if (layerReleaseTimerRef.current != null) clearTimeout(layerReleaseTimerRef.current)
       layerReleaseTimerRef.current = setTimeout(() => {
         if (layer) layer.style.willChange = ''
+        // Same moment as the layer release: one re-layerization, not two.
+        if (flattenedScrollersRef.current) {
+          restorePanelScrollers(flattenedScrollersRef.current)
+          flattenedScrollersRef.current = null
+        }
         layerReleaseTimerRef.current = null
       }, LAYER_RELEASE_MS)
     }
@@ -710,6 +722,10 @@ export function InfiniteCanvas() {
       if (viewportRafRef.current != null) cancelAnimationFrame(viewportRafRef.current)
       if (wheelIdleTimerRef.current != null) clearTimeout(wheelIdleTimerRef.current)
       if (layerReleaseTimerRef.current != null) clearTimeout(layerReleaseTimerRef.current)
+      if (flattenedScrollersRef.current) {
+        restorePanelScrollers(flattenedScrollersRef.current)
+        flattenedScrollersRef.current = null
+      }
     }
   }, [])
 
