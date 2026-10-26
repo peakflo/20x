@@ -6,6 +6,7 @@ import { useDrawingStore } from '@/stores/drawing-store'
 import { DEFAULT_TOOL_OPTIONS } from './drawing/types'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
+import { autoTypeIntoComposer } from '@/lib/keyboard-shortcuts'
 
 // Mock only the clipboard paste (no real clipboard in happy-dom) — the
 // DrawingLayer component itself stays real.
@@ -929,6 +930,68 @@ describe('InfiniteCanvas', () => {
       fireEvent.keyDown(window, { code: 'Escape' })
       fireEvent.keyDown(window, { code: 'KeyR' })
       expect(useDrawingStore.getState().activeTool).toBe('rectangle')
+    })
+
+    it('keeps the canvas, HUD and panels in place when "t" types into the selected task composer', () => {
+      addTaskPanel()
+      const { container } = render(<InfiniteCanvas />)
+      const panel = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
+      fireEvent.mouseDown(panel)
+      const root = container.querySelector('[data-canvas-root="true"]') as HTMLElement
+
+      // The selected task panel's composer (TaskWorkspace is not rendered here).
+      const composer = document.createElement('div')
+      composer.setAttribute('data-testid', 'transcript-composer')
+      const textarea = document.createElement('textarea')
+      composer.appendChild(textarea)
+      panel.appendChild(composer)
+      Object.defineProperty(textarea, 'offsetParent', { get: () => composer, configurable: true })
+
+      // Emulate Chromium: focus() scrolls even an overflow:hidden ancestor to
+      // reveal an off-screen element, unless preventScroll is set.
+      const nativeFocus = HTMLElement.prototype.focus
+      const focusSpy = vi.spyOn(textarea, 'focus').mockImplementation(function (this: HTMLTextAreaElement, options?: FocusOptions) {
+        nativeFocus.call(this, options)
+        if (!options?.preventScroll) {
+          root.scrollTop = 600
+          root.scrollLeft = 200
+          fireEvent.scroll(root)
+        }
+      })
+
+      // The global "just start typing" route AppLayout takes for "t".
+      const onKeyDown = (e: KeyboardEvent) => { autoTypeIntoComposer(e) }
+      window.addEventListener('keydown', onKeyDown)
+      try {
+        fireEvent.keyDown(window, { key: 't', code: 'KeyT' })
+      } finally {
+        window.removeEventListener('keydown', onKeyDown)
+      }
+
+      // "t" did its intended action…
+      expect(textarea.value).toBe('t')
+      expect(document.activeElement).toBe(textarea)
+      expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true })
+      // …without shifting the canvas out of view.
+      expect(root.scrollTop).toBe(0)
+      expect(root.scrollLeft).toBe(0)
+      expect(screen.getByTitle('Zoom in')).toBeTruthy()
+      expect(screen.getByTitle('Zoom out')).toBeTruthy()
+      expect(container.querySelector('svg.cursor-crosshair')).toBeTruthy()
+      expect(container.querySelector('[data-canvas-panel="true"]')).toBe(panel)
+      expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
+      expect(useDrawingStore.getState().activeTool).toBe('select')
+    })
+
+    it('undoes any stray scroll of the overflow-hidden canvas root', () => {
+      addTaskPanel()
+      const { container } = render(<InfiniteCanvas />)
+      const root = container.querySelector('[data-canvas-root="true"]') as HTMLElement
+      root.scrollTop = 600
+      root.scrollLeft = 200
+      fireEvent.scroll(root)
+      expect(root.scrollTop).toBe(0)
+      expect(root.scrollLeft).toBe(0)
     })
 
     it('keeps drawing tool shortcuts for non-task selections', () => {

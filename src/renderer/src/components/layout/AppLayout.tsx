@@ -45,7 +45,7 @@ import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog'
 import { SubtaskPickerDialog } from '@/components/tasks/SubtaskPickerDialog'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
-import { createChordTracker, dispatchTaskShortcut, findComposerElement, focusComposerInput, getNextNudgeMessage, getShortcutKey, insertIntoComposer, isGlobalShortcutBlocked, isModifierKeyEvent, onShortcutFeedback, shouldAutoFocusComposer, TaskShortcutAction, type ChordCommand } from '@/lib/keyboard-shortcuts'
+import { autoTypeIntoComposer, createChordTracker, dispatchTaskShortcut, focusComposerInput, getNextNudgeMessage, getShortcutKey, isGlobalShortcutBlocked, isModifierKeyEvent, onShortcutFeedback, TaskShortcutAction, type ChordCommand } from '@/lib/keyboard-shortcuts'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import { composerCanSubmit, MASTERMIND_COMPOSER_KEY, sendComposerMessage, setActiveComposer } from '@/lib/voice-dictation-target'
 
@@ -673,15 +673,9 @@ export function AppLayout() {
 
     // Just start typing: any printable key that is not a defined shortcut focuses the
     // composer and inserts the character, so the first keystroke is not lost.
-    if (shouldAutoFocusComposer(e, chords.isPending())) {
-      const composer = findComposerElement()
-      if (composer) {
-        e.preventDefault()
-        composer.focus()
-        insertIntoComposer(composer, e.key)
-        captureAnalyticsEvent('composer_focused', { source: 'keyboard', trigger: 'auto_type' })
-        return
-      }
+    if (autoTypeIntoComposer(e, chords.isPending())) {
+      captureAnalyticsEvent('composer_focused', { source: 'keyboard', trigger: 'auto_type' })
+      return
     }
 
     if (e.key === 'Enter' && !(e.target as HTMLElement | null)?.closest('button, a')) { e.preventDefault(); openSelectedTask() }

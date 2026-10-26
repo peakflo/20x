@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo, type CSSProperties } from 'react'
+import { useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo, type CSSProperties, type UIEvent } from 'react'
 import {
   useCanvasStore,
   DEFAULT_PANEL_WIDTH,
@@ -131,6 +131,20 @@ function isTaskPanelSelected(): boolean {
   const { selectedPanelId, panels } = useCanvasStore.getState()
   if (!selectedPanelId) return false
   return panels.find((p) => p.id === selectedPanelId)?.type === 'task'
+}
+
+/**
+ * The canvas root is `overflow: hidden` and never scrolls on purpose, but
+ * focus() / scrollIntoView() on an element in a partly off-screen panel still
+ * scrolls it. That shifts the panels, zoom controls and minimap out of view
+ * with no way back, so undo any such scroll.
+ */
+function resetCanvasRootScroll(e: UIEvent<HTMLDivElement>): void {
+  const el = e.currentTarget
+  if (el.scrollTop !== 0 || el.scrollLeft !== 0) {
+    el.scrollTop = 0
+    el.scrollLeft = 0
+  }
 }
 
 /** False when the element, or an ancestor, is `visibility: hidden` (the canvas is hidden in other views). */
@@ -1014,7 +1028,7 @@ export function InfiniteCanvas() {
       : 'default'
 
   return (
-    <div data-canvas-root="true" className="overflow-hidden bg-[var(--canvas-bg)]" style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div data-canvas-root="true" className="overflow-hidden bg-[var(--canvas-bg)]" style={{ position: 'relative', width: '100%', height: '100%' }} onScroll={resetCanvasRootScroll}>
       {/* Canvas container */}
       <div
         ref={containerRef}
