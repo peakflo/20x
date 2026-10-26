@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { Profiler } from 'react'
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { useCanvasStore } from '@/stores/canvas-store'
@@ -609,6 +610,47 @@ describe('InfiniteCanvas', () => {
       expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -50, zoom: 1 })
       await advanceTime(250)
       expect(layer.style.willChange).toBe('')
+    })
+
+    it('does zero React commits per wheel frame, however many panels are open', async () => {
+      useCanvasStore.setState({
+        panels: Array.from({ length: 30 }, (_, i) => ({
+          id: `p-${i}`,
+          type: 'app' as const,
+          title: `App ${i}`,
+          x: (i % 6) * 700,
+          y: Math.floor(i / 6) * 500,
+          width: 600,
+          height: 400,
+          zIndex: i + 1,
+        })),
+      })
+      let commits = 0
+      const { container } = render(
+        <Profiler id="canvas" onRender={() => { commits++ }}>
+          <InfiniteCanvas />
+        </Profiler>
+      )
+      await flushFrames()
+      const layer = container.querySelector('[data-canvas-transform-layer="true"]') as HTMLElement
+      const canvas = layer.parentElement as HTMLElement
+
+      commits = 0
+      // 30 frames of mixed pinch-zoom and trackpad pan, all inside one gesture.
+      for (let i = 0; i < 30; i++) {
+        if (i % 2 === 0) fireEvent.wheel(canvas, { deltaY: -4, ctrlKey: true, clientX: 400, clientY: 300 })
+        else fireEvent.wheel(canvas, { deltaX: 3, deltaY: 2 })
+        await flushFrames()
+      }
+      expect(layer.style.transform).not.toBe('translate(0px, 0px) scale(1)')
+      expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
+      expect(commits).toBe(0)
+
+      // Wheel idle → the single store commit re-renders the canvas once.
+      await advanceTime(200)
+      expect(useCanvasStore.getState().viewport).not.toEqual({ x: 0, y: 0, zoom: 1 })
+      expect(commits).toBeGreaterThan(0)
+      expect(commits).toBeLessThanOrEqual(2)
     })
 
     it('commits the viewport on mouseup after a drag-pan', async () => {

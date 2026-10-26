@@ -1,0 +1,186 @@
+<!doctype html>
+<!--
+  Canvas gesture benchmark page. Loaded by main.cjs in a real Electron window.
+
+  It rebuilds the DOM shape of the 20x canvas (workspace card → canvas root →
+  static grid + transformed layer → N task panels with TaskWorkspace-like
+  content) with the class names the app uses, and styles it with the app's
+  REAL compiled CSS (pass ?css=<path to out/renderer/assets/index-*.css>).
+  It then drives the same imperative per-frame path as InfiniteCanvas
+  (style.transform + grid background, will-change during the gesture) and
+  measures delivered frame intervals with requestAnimationFrame.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>canvas-gesture-bench</title>
+    <script>
+      const params = new URLSearchParams(location.search)
+      const link = document.createElement('link')
+      link.rel = 'stylesheet'
+      link.href = params.get('css')
+      document.head.appendChild(link)
+      document.documentElement.classList.add(params.get('theme') === 'light' ? 'light' : 'dark')
+      if (params.get('backdrop') === '1') document.documentElement.classList.add('native-desktop-backdrop')
+    </script>
+  </head>
+  <body>
+    <div id="root" style="height: 100vh">
+      <div class="app-chrome-field flex flex-1 min-h-0 overflow-hidden bg-background" style="height: 100%">
+        <main class="canvas-workspace-surface flex flex-col flex-1 min-w-0 overflow-hidden rounded-2xl border border-border bg-card shadow-card m-2">
+          <div class="flex-1 h-0 overflow-hidden relative">
+            <div data-canvas-root="true" class="overflow-hidden bg-[var(--canvas-bg)]" style="position: relative; width: 100%; height: 100%">
+              <div id="container" class="absolute inset-0">
+                <div id="grid" aria-hidden="true" class="absolute inset-0" style="pointer-events: none"></div>
+                <div id="layer" data-canvas-transform-layer="true" style="transform-origin: 0 0; position: absolute; top: 0; left: 0; width: 0; height: 0"></div>
+              </div>
+              <div class="glass-panel absolute bottom-4 left-4 z-10 flex items-center gap-1 rounded-full border p-1">
+                <span class="text-xs text-muted-foreground w-10 text-center tabular-nums" id="zoomLabel">100%</span>
+              </div>
+              <div class="absolute bottom-4 right-4 z-10 w-[200px] h-[150px] rounded-lg border border-border/40 bg-[var(--canvas-toolbar)] backdrop-blur-sm"></div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <script>
+      const N = Number(params.get('panels') || 20)
+      const DURATION = Number(params.get('ms') || 3000)
+      const PANEL_W = 900
+      const PANEL_H = 650
+      const GAP = 60
+
+      function panelHtml(i) {
+        const lines = []
+        for (let k = 0; k < 40; k++) {
+          lines.push(
+            `<div class="px-4 py-1.5 text-sm text-foreground leading-6">${k % 3 === 0 ? '<b>Agent</b> ' : ''}Message ${k} for task ${i}: lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore.</div>`
+          )
+        }
+        return `
+<div class="relative z-[1] flex flex-col flex-1 min-h-0 overflow-hidden rounded-[11px]">
+  <div class="flex items-center gap-2 px-3 py-2 border-b border-border/40 flex-shrink-0 bg-[var(--canvas-panel)]">
+    <span class="text-[10px] font-medium uppercase px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">Task</span>
+    <span class="text-xs text-foreground truncate flex-1 font-medium">Task ${i}</span>
+  </div>
+  <div class="flex-1 overflow-hidden min-h-0 flex flex-col bg-[var(--canvas-panel)]">
+    <header class="glass-bar glass-task-detail-bar relative z-20 flex h-12 shrink-0 items-center gap-2 border-b px-3 -mb-12">
+      <span class="flex-1 text-sm">Task ${i} header</span>
+      <button class="glass-action !h-[24px] !w-[24px]"></button>
+      <button class="glass-action !h-[24px] !w-[24px]"></button>
+    </header>
+    <div class="flex-1 min-h-0 overflow-y-auto pt-12">${lines.join('')}</div>
+    <div class="glass-todo-summary pointer-events-auto mx-3 mb-2 shrink-0 overflow-hidden rounded-xl px-3 py-2 text-xs">3 / 7 todos</div>
+    <button class="glass-action absolute bottom-24 right-4 z-20 !h-[28px] !w-[28px]"></button>
+    <div class="glass-bar glass-composer-rail relative z-10 shrink-0 -mt-[64px] px-3 pb-3 pt-2">
+      <div class="flex items-end gap-2">
+        <button class="glass-action !h-[32px] !w-[32px]"></button>
+        <div class="glass-composer flex min-w-0 flex-1 items-center"><div class="w-full min-h-[32px] px-5 py-[5px] text-sm text-muted-foreground">Message the agent…</div></div>
+        <button class="glass-action !h-[32px] !w-[32px] !rounded-full"></button>
+        <button class="glass-action glass-send !h-[32px] !w-[32px]"></button>
+      </div>
+    </div>
+  </div>
+</div>
+<div data-canvas-panel-border="true" class="pointer-events-none absolute -inset-px z-[2] rounded-xl border border-blue-500/40"></div>`
+      }
+
+      const layer = document.getElementById('layer')
+      const grid = document.getElementById('grid')
+      const container = document.getElementById('container')
+      const cols = Math.ceil(Math.sqrt(N))
+      for (let i = 0; i < N; i++) {
+        const el = document.createElement('div')
+        el.setAttribute('data-canvas-panel', 'true')
+        el.className = 'absolute rounded-xl border border-transparent bg-[var(--canvas-chrome)] shadow-2xl flex flex-col transition-shadow duration-150 group/panel'
+        el.style.left = `${(i % cols) * (PANEL_W + GAP)}px`
+        el.style.top = `${Math.floor(i / cols) * (PANEL_H + GAP)}px`
+        el.style.width = `${PANEL_W}px`
+        el.style.height = `${PANEL_H}px`
+        el.innerHTML = panelHtml(i)
+        layer.appendChild(el)
+      }
+
+      // Same per-frame writes as InfiniteCanvas.applyViewportToDom.
+      const zoomLabel = document.getElementById('zoomLabel')
+      function apply(vp) {
+        layer.style.transform = `translate(${vp.x}px, ${vp.y}px) scale(${vp.zoom})`
+        const size = 40 * vp.zoom
+        const dot = Math.max(vp.zoom, Math.min(2 * vp.zoom, 1.5))
+        grid.style.backgroundImage = `radial-gradient(circle, var(--canvas-dot) ${dot}px, transparent ${dot}px)`
+        grid.style.backgroundSize = `${size}px ${size}px`
+        grid.style.backgroundPosition = `${vp.x + size / 2}px ${vp.y + size / 2}px`
+        zoomLabel.textContent = `${Math.round(vp.zoom * 100)}%`
+      }
+
+      // Fit all panels (what the user sees when many panels are open).
+      const rows = Math.ceil(N / cols)
+      const contentW = cols * (PANEL_W + GAP)
+      const contentH = rows * (PANEL_H + GAP)
+      function fit() {
+        const r = container.getBoundingClientRect()
+        const zoom = Math.min(1, Math.min(r.width / contentW, r.height / contentH) * 0.95)
+        return { zoom, x: (r.width - contentW * zoom) / 2, y: (r.height - contentH * zoom) / 2, w: r.width, h: r.height }
+      }
+
+      function stats(intervals) {
+        const s = [...intervals].sort((a, b) => a - b)
+        const q = (p) => s[Math.min(s.length - 1, Math.floor(p * s.length))] || 0
+        const total = intervals.reduce((a, b) => a + b, 0)
+        return {
+          frames: intervals.length,
+          fps: +(intervals.length / (total / 1000)).toFixed(1),
+          p50: +q(0.5).toFixed(1),
+          p95: +q(0.95).toFixed(1),
+          max: +(s[s.length - 1] || 0).toFixed(1),
+          over17: intervals.filter((v) => v > 17.5).length,
+          over33: intervals.filter((v) => v > 34).length,
+          over50: intervals.filter((v) => v > 50).length,
+        }
+      }
+
+      function runGesture(kind) {
+        return new Promise((resolve) => {
+          const base = fit()
+          apply(base)
+          layer.style.willChange = 'transform'
+          const intervals = []
+          let start = null
+          let last = null
+          const step = (t) => {
+            if (start == null) { start = t; last = t } else { intervals.push(t - last); last = t }
+            const p = (t - start) / DURATION
+            let vp
+            if (kind === 'zoom') {
+              // Pinch-zoom in and out around the centre (×0.6 … ×2.2).
+              const f = Math.exp(Math.sin(p * Math.PI * 4) * 0.6 + 0.2)
+              const zoom = base.zoom * f
+              const cx = base.w / 2
+              const cy = base.h / 2
+              vp = { zoom, x: cx - (cx - base.x) * f, y: cy - (cy - base.y) * f }
+            } else {
+              vp = { zoom: base.zoom, x: base.x + Math.sin(p * Math.PI * 4) * 400, y: base.y + Math.cos(p * Math.PI * 4) * 250 }
+            }
+            apply(vp)
+            if (t - start < DURATION) requestAnimationFrame(step)
+            else {
+              apply(base)
+              layer.style.willChange = ''
+              resolve(stats(intervals))
+            }
+          }
+          requestAnimationFrame(step)
+        })
+      }
+
+      window.runBench = async () => {
+        // Let first raster settle.
+        await new Promise((r) => setTimeout(r, 800))
+        const zoom = await runGesture('zoom')
+        await new Promise((r) => setTimeout(r, 400))
+        const pan = await runGesture('pan')
+        return { zoom, pan, backdropFilterElements: [...layer.querySelectorAll('*')].reduce((n, e) => n + (getComputedStyle(e).backdropFilter !== 'none' ? 1 : 0) + (getComputedStyle(e, '::before').backdropFilter !== 'none' ? 1 : 0), 0) }
+      }
+    </script>
+  </body>
+</html>
