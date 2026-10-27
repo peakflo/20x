@@ -11,6 +11,7 @@ import { join } from 'path'
  * second copy that drifted would make a process look un-leaked and keep it.
  */
 export const WORKSPACES_DIR = join(app.getPath('userData'), 'workspaces')
+export const REPOS_DIR = join(app.getPath('userData'), 'repos')
 
 /**
  * The workspace directory names present on disk right now, or NULL when the

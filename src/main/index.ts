@@ -30,6 +30,7 @@ import { RecurrenceScheduler } from './recurrence-scheduler'
 import { HeartbeatScheduler } from './heartbeat-scheduler'
 import { TaskAutomationScheduler } from './task-automation-scheduler'
 import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
+import { configureSharedPnpmStore } from './pnpm-store'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { parseProcessTable, selectKillableMcpPids } from './mcp-process-cleanup'
 import { buildWorkspaceStates, sweepLeakedWorkspaceProcesses, readDiskSpace, workspacePressureWarning, SHUTDOWN_GRACE_MS } from './workspace-process-cleanup'
@@ -1096,6 +1097,8 @@ app.whenReady().then(async () => {
 
   // Ensure PATH is ready before creating managers that may spawn child processes
   await pathFixPromise
+  const sharedPnpmStore = await configureSharedPnpmStore(app.getPath('userData'))
+  if (sharedPnpmStore) console.log(`[Main] Agent-launched pnpm installs use shared store: ${sharedPnpmStore}`)
 
   agentManager = new AgentManager(db)
   try {
