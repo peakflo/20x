@@ -44,6 +44,7 @@ import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
+import { logMainThreadPerfReport, startMainThreadPerf } from './perf/main-thread-perf'
 import { installProcessStreamErrorHandlers } from './process-stream-errors'
 import { startMacosSwapWatchdog } from './macos-swap-watchdog'
 import { getWindowsPathEntries, prependMissingWindowsPaths } from './windows-runtime-paths'
@@ -1024,6 +1025,8 @@ installProcessStreamErrorHandlers()
 
 app.whenReady().then(async () => {
   stopSwapWatchdog = startMacosSwapWatchdog()
+  // Opt-in event-loop/DB timing (TWENTYX_PERF=1); no-op otherwise.
+  startMainThreadPerf()
   const analytics = initAnalytics()
 
   // Collect MCP server processes that a previous crash or force-quit orphaned.
@@ -1473,6 +1476,7 @@ app.on('before-quit', async (event) => {
   if (isShuttingDown) {
     return
   }
+  logMainThreadPerfReport('quit')
 
   // Defensive close for the open app-focus interval, independent of whatever
   // combination of 'blur'/'hide'/'closed' did or didn't fire on the way

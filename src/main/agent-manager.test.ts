@@ -127,6 +127,10 @@ function makeSkillRecord(overrides: Partial<{
 
 function createMockDb(agentConfig: Record<string, unknown> = {}) {
   return {
+    // Mirrors DatabaseManager: same rows as getTranscriptParts (worker read in production).
+    getTranscriptPartsAsync: vi.fn(function (this: { getTranscriptParts: (taskId: string, sinceSeq?: number) => unknown }, taskId: string, sinceSeq?: number) {
+      return Promise.resolve(this.getTranscriptParts(taskId, sinceSeq))
+    }),
     getTask: vi.fn(() => ({
       id: 'task-1',
       title: 'Test Task',
