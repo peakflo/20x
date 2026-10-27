@@ -43,10 +43,13 @@ import {
   createRegisteredTaskArtifact,
   editRegisteredTaskArtifactFile,
   listRegisteredTaskArtifacts,
+  listTaskArtifactEntries,
   readRegisteredTaskArtifactFile,
+  readTaskArtifact,
   writeRegisteredTaskArtifactFile
 } from './artifacts'
 import { panelBrowserBroker } from './panel-browser-broker'
+import { canvasArtifactBroker } from './canvas-artifact-broker'
 import * as electron from 'electron'
 import { appearanceFromInput, captureHtmlPreview, HtmlRenderImageError, HtmlRenderPageTooLargeError, inlineLocalImages } from './html-render'
 import {
@@ -1447,6 +1450,33 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       } catch (error) {
         return { error: error instanceof Error ? error.message : 'Could not read the browser recording' }
       }
+    }
+
+    case '/canvas_artifact_list': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      const artifacts = canvasArtifactBroker.list(taskId).map((artifact) => ({
+        ...artifact,
+        owner_task_title: db.getTask(artifact.owner_task_id)?.title
+      }))
+      return { artifacts }
+    }
+
+    case '/canvas_artifact_read': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      return canvasArtifactBroker.read(
+        taskId,
+        {
+          panelId: typeof params.panel_id === 'string' ? params.panel_id : null,
+          file: typeof params.file === 'string' ? params.file : null
+        },
+        {
+          getWorkspaceDir: (id) => db.getWorkspaceDir(id),
+          listEntries: listTaskArtifactEntries,
+          readArtifact: readTaskArtifact
+        }
+      )
     }
 
     case '/browser_list_panels': {

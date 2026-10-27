@@ -1,11 +1,12 @@
 import { useCallback, useEffect } from 'react'
 import { TaskWorkspace, type TaskWorkspaceLayout } from '@/components/tasks/TaskWorkspace'
-import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT } from '@/stores/canvas-store'
+import { useCanvasStore, DEFAULT_PANEL_WIDTH, DEFAULT_PANEL_HEIGHT, openArtifactPanel } from '@/stores/canvas-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useAgentStore } from '@/stores/agent-store'
 import { useUIStore } from '@/stores/ui-store'
 import { useTaskCompletion } from '@/hooks/use-task-completion'
 import type { FileAttachment } from '@/types'
+import type { Artifact } from '@shared/artifacts'
 
 interface TaskPanelContentProps {
   panelId: string
@@ -131,6 +132,16 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
     [panelId, addPanel, addEdge, bringToFront]
   )
 
+  // Open a task artifact as its own canvas panel, linked to this task panel
+  // by an artifact edge. Other task panels can then be connected to it so
+  // their agents can read it (see canvas_artifact_* MCP tools).
+  const handleOpenArtifactInWindow = useCallback(
+    (artifact: Artifact) => {
+      openArtifactPanel(panelId, { id: artifact.id, taskId: artifact.taskId, title: artifact.title })
+    },
+    [panelId]
+  )
+
   if (!task) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground/50 text-xs">
@@ -154,6 +165,7 @@ export function TaskPanelContent({ panelId, taskId, panelLayout = 'both' }: Task
         onUpdateTask={handleUpdateTask}
         onNavigateToTask={handleNavigateToTask}
         onOpenSubtaskInWindow={handleOpenSubtaskInWindow}
+        onOpenArtifactInWindow={handleOpenArtifactInWindow}
         panelLayout={panelLayout}
       />
     </div>

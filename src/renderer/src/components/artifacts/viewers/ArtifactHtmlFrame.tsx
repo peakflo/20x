@@ -63,13 +63,16 @@ const EMPTY_DOCUMENT = '<!doctype html><html><head></head><body></body></html>'
  * theme changes are pushed over `postMessage` by the caller instead of
  * calling this again — changing srcDoc would reload the document.
  */
-export function hardenArtifactHtml(source: string, theme?: HtmlRenderTheme): string {
+export function hardenArtifactHtml(source: string, theme?: HtmlRenderTheme, inline = false): string {
   const shelled = applyHtmlRenderShell(source, theme)
   // Insert the interactive scripts right after the shell `applyHtmlRenderShell`
   // just added (CSP meta + base + theme style), still before any artifact
   // content/markup.
   const shellEnd = shelled.indexOf('</style>') + '</style>'.length
-  return `${shelled.slice(0, shellEnd)}${interactiveScripts()}${shelled.slice(shellEnd)}`
+  // The browser paints a default canvas color when color-scheme is dark.
+  // Set the inline canvas to the exact chat background theme variable.
+  const inlineBackground = inline ? '<style>html{background:var(--background)}</style>' : ''
+  return `${shelled.slice(0, shellEnd)}${inlineBackground}${interactiveScripts()}${shelled.slice(shellEnd)}`
 }
 
 type Reply = (message: Record<string, unknown>) => void
@@ -132,8 +135,8 @@ export function ArtifactHtmlFrame({
   const bakedThemeRef = useRef<HtmlRenderTheme | undefined>(undefined)
   const srcDoc = useMemo(() => {
     bakedThemeRef.current = themeRef.current
-    return hardenArtifactHtml(prepared || EMPTY_DOCUMENT, themeRef.current)
-  }, [prepared])
+    return hardenArtifactHtml(prepared || EMPTY_DOCUMENT, themeRef.current, !fill)
+  }, [prepared, fill])
 
   useEffect(() => {
     if (bakedThemeRef.current === theme) return
@@ -182,7 +185,7 @@ export function ArtifactHtmlFrame({
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
       srcDoc={srcDoc}
-      className={fill ? 'h-full w-full border-0 bg-white' : 'w-full border-0'}
+      className={fill ? 'h-full w-full border-0 bg-white' : 'w-full border-0 bg-transparent'}
       style={fill ? undefined : { height: `${height ?? 80}px` }}
     />
   )

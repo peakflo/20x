@@ -2,7 +2,7 @@ import type { BrowserRecordingManifest } from '../shared/browser-recording'
 import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '../shared/browser-session-import'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { createBrandFlagCache } from './brand-cache'
-import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, PullRequestDetails } from '../shared/artifacts'
+import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, CanvasArtifactPanelRegistration, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, UI_COMMAND_RESULT_CHANNEL, type UiCommandAck, type UiCommandEnvelope } from '../shared/ui-commands'
 import type { TaskRunDuration } from '../shared/task-run-duration'
 import {
@@ -848,6 +848,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         return () => ipcRenderer.removeListener('voice:tts:modelProgress', handler)
       }
     }
+  },
+  canvasArtifacts: {
+    registerPanel: (payload: CanvasArtifactPanelRegistration): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('canvasArtifact:registerPanel', payload),
+    unregisterPanel: (panelId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('canvasArtifact:unregisterPanel', panelId)
   },
   browser: {
     listImportSources: (): Promise<BrowserImportSource[]> => ipcRenderer.invoke('browser:listImportSources'),

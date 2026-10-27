@@ -9,6 +9,7 @@ import { act, cleanup, render } from '@testing-library/react'
 import { UI_PUBLISH_THROTTLE_MS, useUiRemoteControl } from './use-ui-remote-control'
 import { useUIStore } from '@/stores/ui-store'
 import { useTaskStore } from '@/stores/task-store'
+import { useAgentStore } from '@/stores/agent-store'
 import type { UiCommandAck, UiCommandEnvelope } from '@shared/ui-commands'
 
 /**
@@ -80,6 +81,34 @@ describe('useUiRemoteControl', () => {
     })
     expect(published).toHaveLength(1)
     expect(published[0]).toMatchObject({ view: 'skills' })
+  })
+
+  it('ignores streamed agent output but publishes when the selected task starts waiting', () => {
+    useTaskStore.setState({ selectedTaskId: 't1' })
+    useAgentStore.setState({ sessions: new Map() })
+    render(<Harness />)
+    published.length = 0
+    const setSession = (pendingApproval: unknown, content: string): void => {
+      act(() => {
+        useAgentStore.setState({
+          sessions: new Map([['t1', { sessionId: 's1', agentId: 'a1', taskId: 't1', status: 'working', messages: [{ id: 'm', content }], pendingApproval } as never]])
+        })
+        vi.advanceTimersByTime(UI_PUBLISH_THROTTLE_MS)
+      })
+    }
+
+    // Streamed deltas replace `sessions` but change nothing on the screen.
+    for (let i = 0; i < 10; i++) setSession(null, `token ${i}`)
+    expect(published).toHaveLength(0)
+
+    setSession({ id: 'perm-1' }, 'token 10')
+    expect(published).toHaveLength(1)
+    expect(published[0]).toMatchObject({ waitingForYou: true })
+
+    setSession(null, 'token 11')
+    expect(published).toHaveLength(2)
+    expect(published[1]).toMatchObject({ waitingForYou: false })
+    useAgentStore.setState({ sessions: new Map() })
   })
 
   it('stays quiet when nothing changes', () => {

@@ -90,6 +90,8 @@ interface TaskWorkspaceProps {
   onNavigateToTask?: (taskId: string) => void
   /** When provided, each subtask shows an action to open it as a separate canvas window/panel. */
   onOpenSubtaskInWindow?: (taskId: string) => void
+  /** Canvas only: open an artifact of this task as its own canvas panel. */
+  onOpenArtifactInWindow?: (artifact: Artifact) => void
   onBack?: () => void
   onOpenFullView?: () => void
   /** Override the layout — which panels to show. Default: 'both' */
@@ -108,6 +110,7 @@ function TaskWorkspaceComponent({
   onUpdateTask,
   onNavigateToTask,
   onOpenSubtaskInWindow,
+  onOpenArtifactInWindow,
   onBack,
   onOpenFullView,
   panelLayout = 'both'
@@ -1173,6 +1176,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
       changes={<ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} onPullRequests={handlePullRequests} />}
       output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={!isTaskClosed(task.status)} onComplete={handleCompleteTask} taskUpdatedAt={task.updated_at} />}
       className="min-w-[320px] flex-1 border-l border-border/50 pt-12"
+      onOpenArtifactInWindow={onOpenArtifactInWindow}
     />
   )
   const rightRail = (

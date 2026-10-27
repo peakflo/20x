@@ -32,6 +32,11 @@ describe('hardenArtifactHtml CSP', () => {
     expect(srcDoc).toContain('color-scheme:dark;')
   })
 
+  it('uses the chat background variable for inline pages only', () => {
+    expect(hardenArtifactHtml('<p>hi</p>', HTML_RENDER_DEFAULT_THEME.dark, true)).toContain('<style>html{background:var(--background)}</style>')
+    expect(hardenArtifactHtml('<p>hi</p>', HTML_RENDER_DEFAULT_THEME.dark)).not.toContain('<style>html{background:var(--background)}</style>')
+  })
+
   it('still puts the CSP before any artifact text', () => {
     const srcDoc = hardenArtifactHtml('<html data-x="<head>"><body><p>decoy</p></body></html>')
     expect(srcDoc.startsWith('<!doctype html><meta http-equiv="Content-Security-Policy"')).toBe(true)
@@ -64,6 +69,7 @@ describe('ArtifactHtmlFrame auto-height (fill=false)', () => {
     const frame = screen.getByTitle('Chart') as HTMLIFrameElement
     expect(frame.className).not.toContain('bg-white')
     expect(frame.className).not.toContain('h-full')
+    expect(frame.getAttribute('srcdoc')).toContain('<style>html{background:var(--background)}</style>')
     expect(frame.style.height).toBe('240px')
   })
 

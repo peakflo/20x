@@ -38,7 +38,7 @@ import type {
   PluginResources,
   HeartbeatLog
 } from './index'
-import type { PullRequestDetails } from '@shared/artifacts'
+import type { CanvasArtifactPanelRegistration, PullRequestDetails } from '@shared/artifacts'
 import type { HarnessInstanceView } from '@shared/harness-instances'
 import type {
   AcpAgentInstanceView,
@@ -601,6 +601,10 @@ interface ElectronAPI {
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onWorkspaceCleanupProgress: (callback: (event: WorkspaceCleanupProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
+  canvasArtifacts: {
+    registerPanel: (payload: CanvasArtifactPanelRegistration) => Promise<{ success: boolean }>
+    unregisterPanel: (panelId: string) => Promise<{ success: boolean }>
+  }
   browser: {
     listImportSources: () => Promise<BrowserImportSource[]>
     importSessions: (input: BrowserImportRequest) => Promise<BrowserImportResult>

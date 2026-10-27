@@ -399,6 +399,14 @@ body, .theme-transition {
 .glass-panel .glass-action:hover:not(:disabled) { background: color-mix(in srgb, var(--glass-inset) 94%, white); box-shadow: none; }
 .glass-solid-mode .glass-task-detail-bar, .glass-solid-mode .glass-panel, .glass-solid-mode .glass-popover, .glass-solid-mode .glass-control, .glass-solid-mode .glass-action, .glass-solid-mode .glass-filter-block, .glass-solid-mode .glass-attachment-chip, .glass-solid-mode .glass-todo-summary, .glass-solid-mode .glass-composer::before { background: var(--glass-solid); box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; }
 .glass-solid-mode .glass-send:not(:disabled) { background: var(--primary); }
+/* Canvas panels live under the canvas pan/zoom transform. Every backdrop-filter
+   in them is a separate blur pass that the compositor redoes on every gesture
+   frame (about 9 per task panel), so zoom and pan slow down with each open
+   panel. Panels are opaque, so use a near-solid fill instead of a live blur. */
+[data-canvas-panel] :is(.glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-filter-block, .glass-attachment-chip, .glass-todo-summary),
+[data-canvas-panel] .glass-composer::before { -webkit-backdrop-filter: none; backdrop-filter: none; }
+[data-canvas-panel] :is(.glass-task-detail-bar, .glass-todo-summary, .glass-attachment-chip, .glass-popover),
+[data-canvas-panel] .glass-composer::before { background: color-mix(in srgb, var(--glass-solid) 94%, transparent); }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass-task-detail-bar, .glass-panel, .glass-popover, .glass-control, .glass-action, .glass-filter-block, .glass-attachment-chip, .glass-todo-summary { background-color: var(--glass-solid); box-shadow: none; }
   .glass-composer::before { background: var(--glass-solid); box-shadow: none; }
