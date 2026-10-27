@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { TaskStatus } from '../shared/constants'
+import { gitChildEnv } from './git-child-env'
 import { finishedWorkspaceIds, retireFinishedWorkspaces, type FinishedWorkspaceTask } from './finished-workspace-gc'
 import { findWorkspacesWithLiveProcesses } from './workspace-node-modules-gc'
 
@@ -17,11 +18,12 @@ function task(id: string, status: TaskStatus, parent_task_id: string | null = nu
   return { id, status, parent_task_id, updated_at }
 }
 
-function git(cwd: string, ...args: string[]): void {
-  execFileSync('git', args, { cwd, stdio: 'pipe' })
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync('git', args, { cwd, env: gitChildEnv(), encoding: 'utf8', stdio: 'pipe' })
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs()
   vi.mocked(findWorkspacesWithLiveProcesses).mockReturnValue(new Set())
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
@@ -111,7 +113,7 @@ describe('finished workspace retirement', () => {
     expect(readFileSync(join(workspacesRoot, 'ignored', 'clone', 'output', 'final.pdf'), 'utf8')).toBe('keep me')
     expect(existsSync(join(workspacesRoot, 'ignored', 'clone', '.git'))).toBe(false)
     expect(existsSync(join(workspacesRoot, 'ignored', 'clone', 'local.txt'))).toBe(false)
-    const worktrees = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: base, encoding: 'utf8' })
+    const worktrees = git(base, 'worktree', 'list', '--porcelain')
     expect(worktrees).not.toContain(join(workspacesRoot, 'dirty', 'repo'))
     expect(await retireFinishedWorkspaces({
       workspacesRoot,
@@ -119,6 +121,50 @@ describe('finished workspace retirement', () => {
       inactiveDays: 7,
       nowMs: Date.parse('2026-10-27T12:00:00.000Z')
     })).toEqual({ workspaces: 0, errors: [] })
+  })
+
+  it('ignores Git paths inherited from a different repository', async () => {
+    const root = mkdtempSync(join(tmpdir(), '20x-finished-gc-'))
+    roots.push(root)
+    const other = join(root, 'other')
+    const base = join(root, 'base')
+    const workspace = join(root, 'workspaces', 'done')
+    mkdirSync(other)
+    mkdirSync(base)
+    mkdirSync(workspace, { recursive: true })
+    git(other, 'init', '-q')
+    git(other, 'config', 'user.email', 'test@example.com')
+    git(other, 'config', 'user.name', 'Test')
+    writeFileSync(join(other, 'safe.txt'), 'unchanged')
+    git(other, 'add', 'safe.txt')
+    git(other, 'commit', '-qm', 'keep this commit')
+    const otherHead = git(other, 'rev-parse', 'HEAD').trim()
+
+    const otherGit = join(other, '.git')
+    vi.stubEnv('GIT_DIR', otherGit)
+    vi.stubEnv('GIT_INDEX_FILE', join(otherGit, 'index'))
+    vi.stubEnv('GIT_WORK_TREE', other)
+    vi.stubEnv('GIT_COMMON_DIR', otherGit)
+    vi.stubEnv('GIT_OBJECT_DIRECTORY', join(otherGit, 'objects'))
+    vi.stubEnv('GIT_PREFIX', 'unrelated/')
+
+    git(base, 'init', '-q')
+    git(base, 'config', 'user.email', 'test@example.com')
+    git(base, 'config', 'user.name', 'Test')
+    writeFileSync(join(base, 'file.txt'), 'fixture')
+    git(base, 'add', 'file.txt')
+    git(base, 'commit', '-qm', 'fixture commit')
+    git(base, 'worktree', 'add', '-q', join(workspace, 'repo'), '-b', 'fixture')
+
+    expect(await retireFinishedWorkspaces({
+      workspacesRoot: join(root, 'workspaces'),
+      tasks: [task('done', TaskStatus.Completed)],
+      inactiveDays: 7,
+      nowMs: Date.parse('2026-10-27T12:00:00.000Z')
+    })).toEqual({ workspaces: 1, errors: [] })
+    expect(existsSync(join(workspace, 'repo'))).toBe(false)
+    expect(git(other, 'rev-parse', 'HEAD').trim()).toBe(otherHead)
+    expect(git(other, 'status', '--porcelain').trim()).toBe('')
   })
 
   it('keeps a workspace that has a live process', async () => {
