@@ -16,10 +16,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # x64 is built, signed and notarized on Intel, but stapled by the
+          # staple-mac-x64 job on Apple silicon: stapler on macos-15-intel can't
+          # reliably reach api.apple-cloudkit.com (Error 68,
+          # https://github.com/actions/runner-images/issues/14924).
           - arch: x64
             runner: macos-15-intel
+            staple: false
           - arch: arm64
             runner: macos-14
+            staple: true
 
     steps:
       - uses: actions/checkout@v4
@@ -105,13 +111,18 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        # Retries notarytool/stapler calls: Apple's ticket CDN often drops the
-        # connection right after a submission is Accepted (stapler Error 68).
+        # Retries notarytool/stapler calls: Apple's ticket CDN sometimes drops
+        # the connection right after a submission is Accepted (stapler Error 68).
         run: |
+          if [ "${{ matrix.staple }}" = "true" ]; then
+            mode=(--assess)
+          else
+            mode=(--notarize-only)
+          fi
           ./scripts/ci-notarize-staple.sh \
             "${{ steps.mac-artifacts.outputs.zip_path }}" \
             "${{ steps.mac-artifacts.outputs.app_path }}" \
-            --assess
+            "${mode[@]}"
 
       - name: Notarize and staple mac DMG
         env:
@@ -119,17 +130,119 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          mode=()
+          if [ "${{ matrix.staple }}" != "true" ]; then
+            mode=(--notarize-only)
+          fi
           ./scripts/ci-notarize-staple.sh \
             "${{ steps.mac-artifacts.outputs.dmg_path }}" \
-            "${{ steps.mac-artifacts.outputs.dmg_path }}"
+            "${{ steps.mac-artifacts.outputs.dmg_path }}" \
+            "${mode[@]}"
+
+      # Unstapled x64 builds go to staple-mac-x64; nothing is published from here.
+      - name: Upload notarized x64 build for stapling
+        if: ${{ !matrix.staple }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-${{ matrix.arch }}-notarized
+          path: |
+            dist/20x-*-${{ matrix.arch }}.zip
+            dist/20x-*-${{ matrix.arch }}.dmg
+            dist/*.blockmap
+            dist/latest-mac.yml
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+
+      # Stapling appends the ticket to the DMG, so the sha512/size that
+      # electron-builder wrote into latest-mac.yml must be recomputed.
+      - name: Refresh update manifest after stapling
+        if: ${{ matrix.staple }}
+        run: python3 scripts/ci-refresh-mac-manifest.py dist/latest-mac.yml "${{ steps.mac-artifacts.outputs.dmg_path }}"
 
       - name: Rename arch-specific update manifest
+        if: ${{ matrix.staple }}
         run: cp dist/latest-mac.yml dist/latest-mac-${{ matrix.arch }}.yml
 
       - name: Create stable asset names
+        if: ${{ matrix.staple }}
         run: |
           cp dist/20x-*-${{ matrix.arch }}.dmg dist/20x-mac-${{ matrix.arch }}.dmg
           cp dist/20x-*-${{ matrix.arch }}.zip dist/20x-mac-${{ matrix.arch }}.zip
+
+      - name: Upload release assets directly
+        if: ${{ matrix.staple }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.blockmap
+
+      - name: Upload manifest artifact
+        if: ${{ matrix.staple }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-mac-${{ matrix.arch }}
+          path: dist/latest-mac-${{ matrix.arch }}.yml
+
+  # Staples the x64 build notarized by build-mac on Apple silicon, then publishes
+  # it. stapler only reads the code signature and fetches the ticket, so it works
+  # on x86_64 bundles from an arm64 host.
+  staple-mac-x64:
+    needs: build-mac
+    runs-on: macos-14
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download notarized x64 build
+        uses: actions/download-artifact@v4
+        with:
+          name: mac-x64-notarized
+          path: dist
+
+      - name: Resolve mac artifacts
+        id: mac-artifacts
+        run: |
+          ZIP_PATH="$(find dist -maxdepth 1 -type f -name '20x-*-x64.zip' | head -n 1)"
+          DMG_PATH="$(find dist -maxdepth 1 -type f -name '20x-*-x64.dmg' | head -n 1)"
+
+          test -f "$ZIP_PATH"
+          test -f "$DMG_PATH"
+          test -f dist/latest-mac.yml
+
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
+          ls -lah dist
+
+      # Same check the arm64 build runs on dist/mac/20x.app: the ZIP ships the
+      # notarized app as built (not re-zipped), so this only proves the ticket
+      # exists and Gatekeeper accepts the app.
+      - name: Staple and assess x64 app
+        run: |
+          APP_DIR="$RUNNER_TEMP/x64-app"
+          mkdir -p "$APP_DIR"
+          ditto -x -k "${{ steps.mac-artifacts.outputs.zip_path }}" "$APP_DIR"
+          test -d "$APP_DIR/20x.app"
+          lipo -archs "$APP_DIR/20x.app/Contents/MacOS/20x" || true
+          ./scripts/ci-notarize-staple.sh --staple-only "$APP_DIR/20x.app" --assess
+
+      - name: Staple x64 DMG
+        run: ./scripts/ci-notarize-staple.sh --staple-only "${{ steps.mac-artifacts.outputs.dmg_path }}"
+
+      - name: Refresh update manifest after stapling
+        run: python3 scripts/ci-refresh-mac-manifest.py dist/latest-mac.yml "${{ steps.mac-artifacts.outputs.dmg_path }}"
+
+      - name: Rename arch-specific update manifest
+        run: cp dist/latest-mac.yml dist/latest-mac-x64.yml
+
+      - name: Create stable asset names
+        run: |
+          cp dist/20x-*-x64.dmg dist/20x-mac-x64.dmg
+          cp dist/20x-*-x64.zip dist/20x-mac-x64.zip
 
       - name: Upload release assets directly
         uses: softprops/action-gh-release@v2
@@ -142,8 +255,8 @@ jobs:
       - name: Upload manifest artifact
         uses: actions/upload-artifact@v4
         with:
-          name: manifest-mac-${{ matrix.arch }}
-          path: dist/latest-mac-${{ matrix.arch }}.yml
+          name: manifest-mac-x64
+          path: dist/latest-mac-x64.yml
 
   build-windows:
     # Pinned to windows-2022: windows-latest ships Visual Studio 18 (VS 2026),
@@ -247,7 +360,7 @@ jobs:
           path: dist/latest-linux.yml
 
   publish-manifests:
-    needs: [build-mac, build-windows, build-linux]
+    needs: [build-mac, staple-mac-x64, build-windows, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
