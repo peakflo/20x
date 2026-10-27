@@ -40,7 +40,7 @@ describe('finished workspace retirement', () => {
     expect(finishedWorkspaceIds(tasks, 7, Date.parse('2026-10-27T12:00:00.000Z'))).toEqual(['done', 'child'])
   })
 
-  it('retires only clean worktrees and keeps task artifacts and local edits', async () => {
+  it('retires only clean worktrees and keeps task artifacts, local edits, and ignored files', async () => {
     const root = mkdtempSync(join(tmpdir(), '20x-finished-gc-'))
     roots.push(root)
     const base = join(root, 'base')
@@ -53,7 +53,10 @@ describe('finished workspace retirement', () => {
     writeFileSync(join(base, 'file.txt'), 'original')
     git(base, 'add', 'file.txt')
     git(base, 'commit', '-qm', 'initial')
-    for (const id of ['clean', 'dirty']) {
+    writeFileSync(join(base, '.gitignore'), 'node_modules/\n')
+    git(base, 'add', '.gitignore')
+    git(base, 'commit', '-qm', 'ignore dependencies')
+    for (const id of ['clean', 'dirty', 'ignored']) {
       const workspace = join(workspacesRoot, id)
       mkdirSync(workspace)
       mkdirSync(join(workspace, 'artifacts'))
@@ -61,10 +64,12 @@ describe('finished workspace retirement', () => {
       git(base, 'worktree', 'add', '-q', join(workspace, 'repo'), '-b', id)
     }
     writeFileSync(join(workspacesRoot, 'dirty', 'repo', 'file.txt'), 'local edit')
+    mkdirSync(join(workspacesRoot, 'ignored', 'repo', 'node_modules'))
+    writeFileSync(join(workspacesRoot, 'ignored', 'repo', 'node_modules', 'local.txt'), 'ignored data')
 
     const result = await retireFinishedWorktrees({
       workspacesRoot,
-      tasks: [task('clean', TaskStatus.Completed), task('dirty', TaskStatus.Completed)],
+      tasks: [task('clean', TaskStatus.Completed), task('dirty', TaskStatus.Completed), task('ignored', TaskStatus.Completed)],
       inactiveDays: 7,
       nowMs: Date.parse('2026-10-27T12:00:00.000Z')
     })
@@ -73,6 +78,7 @@ describe('finished workspace retirement', () => {
     expect(existsSync(join(workspacesRoot, 'clean', 'repo'))).toBe(false)
     expect(readFileSync(join(workspacesRoot, 'clean', 'artifacts', 'report.txt'), 'utf8')).toBe('clean')
     expect(readFileSync(join(workspacesRoot, 'dirty', 'repo', 'file.txt'), 'utf8')).toBe('local edit')
+    expect(readFileSync(join(workspacesRoot, 'ignored', 'repo', 'node_modules', 'local.txt'), 'utf8')).toBe('ignored data')
   })
 
   it('does not retire worktrees when process liveness is unknown', async () => {

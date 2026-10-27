@@ -36,8 +36,9 @@ export function finishedWorkspaceIds(tasks: readonly FinishedWorkspaceTask[], in
   }).map((task) => task.id)
 }
 
-/** Remove only clean Git worktrees. Git refuses worktrees with local changes,
- * untracked files, or ignored files. The task root and its artifacts remain. */
+/** Remove only worktrees with no local files. Git refuses tracked edits and
+ * untracked files, but it removes ignored files without asking. Check those
+ * explicitly so local ignored data stays in place. Task artifacts remain. */
 export async function retireFinishedWorktrees(input: {
   workspacesRoot: string
   tasks: readonly FinishedWorkspaceTask[]
@@ -71,6 +72,10 @@ export async function retireFinishedWorktrees(input: {
       try {
         const gitMarker = await lstat(join(worktree, '.git'))
         if (!gitMarker.isFile()) continue // A managed worktree has a .git file.
+        const { stdout } = await execFileAsync('git', [
+          '-C', worktree, 'status', '--porcelain=v1', '--untracked-files=normal', '--ignored=matching'
+        ], { timeout: 60_000 })
+        if (stdout.trim()) continue
         await execFileAsync('git', ['-C', worktree, 'worktree', 'remove', worktree], { timeout: 60_000 })
         result.worktrees++
       } catch (error) {
