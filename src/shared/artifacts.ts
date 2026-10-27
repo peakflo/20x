@@ -239,9 +239,10 @@ export function pullRequestUrlFromTool(value: unknown): string | undefined {
 
 /** Directories that form an explicit deliverable boundary. Files elsewhere in
  * a repository are code and belong in Changes, not in the artifact picker. */
-const ARTIFACT_OUTPUT_DIRECTORIES = new Set([
+export const ARTIFACT_OUTPUT_DIRECTORIES: ReadonlySet<string> = new Set([
   'artifacts',
   'deliverables',
+  'output',
   'outputs',
   'reports'
 ])

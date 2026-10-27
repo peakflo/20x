@@ -32,6 +32,18 @@ describe('open task set and completed paging', () => {
     expect(ids.has(done.id)).toBe(false)
   })
 
+  it('treats a review subtask of a completed parent as completed in task pages', () => {
+    const parent = create({ title: 'finished parent' }, TaskStatus.Completed)
+    const child = create({ title: 'review child', parent_task_id: parent.id }, TaskStatus.ReadyForReview)
+
+    const openIds = new Set(db.getOpenTasks().map((task) => task.id))
+    expect(openIds.has(parent.id)).toBe(false)
+    expect(openIds.has(child.id)).toBe(false)
+    const page = db.getCompletedTasksPage(0, 10)
+    expect(page.tasks.find((task) => task.id === child.id)?.status).toBe(TaskStatus.Completed)
+    expect(db.getTask(child.id)?.status).toBe(TaskStatus.ReadyForReview)
+  })
+
   it('pages completed top-level tasks with their subtasks and a total', () => {
     const parents = Array.from({ length: 5 }, (_, i) => create({ title: `done ${i}` }, TaskStatus.Completed))
     create({ title: 'sub of done 0', parent_task_id: parents[0].id }, TaskStatus.Completed)

@@ -2688,13 +2688,17 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const closedStatuses = [TaskStatus.Completed, TaskStatus.Cancelled, TaskStatus.Expired]
     const rows = this.db.prepare(`
       SELECT * FROM tasks t
-      WHERE t.status NOT IN (?, ?, ?)
+      WHERE (t.status NOT IN (?, ?, ?)
+        AND NOT (t.status = ? AND EXISTS (
+          SELECT 1 FROM tasks p WHERE p.id = t.parent_task_id AND p.status = ?)))
         OR (t.is_recurring = 1 AND t.recurrence_parent_id IS NULL)
         OR (t.parent_task_id IS NOT NULL AND EXISTS (
           SELECT 1 FROM tasks p WHERE p.id = t.parent_task_id AND p.status NOT IN (?, ?, ?)))
-        OR EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id = t.id AND c.status NOT IN (?, ?, ?))
+        OR EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id = t.id AND c.status NOT IN (?, ?, ?)
+          AND NOT (t.status = ? AND c.status = ?))
       ORDER BY t.created_at DESC
-    `).all(...closedStatuses, ...closedStatuses, ...closedStatuses) as TaskRow[]
+    `).all(...closedStatuses, TaskStatus.ReadyForReview, TaskStatus.Completed,
+      ...closedStatuses, ...closedStatuses, TaskStatus.Completed, TaskStatus.ReadyForReview) as TaskRow[]
 
     return this.decorateTaskRows(rows)
   }
@@ -2736,8 +2740,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       `SELECT * FROM tasks WHERE parent_task_id IN (${ids.map(() => '?').join(',')}) ORDER BY sort_order ASC, created_at ASC`
     ).all(...ids) as TaskRow[]
 
+    const parentStatus = new Map(parents.map((parent) => [parent.id, parent.status]))
     return {
-      tasks: this.decorateTaskRows([...parents, ...children]),
+      tasks: this.decorateTaskRows([...parents, ...children]).map((task) =>
+        task.status === TaskStatus.ReadyForReview && task.parent_task_id &&
+        parentStatus.get(task.parent_task_id) === TaskStatus.Completed
+          ? { ...task, status: TaskStatus.Completed }
+          : task
+      ),
       total
     }
   }

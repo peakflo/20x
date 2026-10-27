@@ -13,16 +13,22 @@ import { MASTERMIND_PREWARM_SETTING } from '@/components/orchestrator/Orchestrat
 import { PushNotificationSettings } from './PushNotificationSettings'
 
 /** Human-readable summary of a cleanup run, or null when there is nothing to report. */
-function describeCleanupOutcome(cleaned: number | undefined, nodeModulesCleaned: number | undefined, nextCachesCleaned: number | undefined): string | null {
+function describeCleanupOutcome(cleaned: number | undefined, retiredWorkspaces: number | undefined, nodeModulesCleaned: number | undefined, nextCachesCleaned: number | undefined, turboFilesCleaned: number | undefined): string | null {
   const parts: string[] = []
   if (cleaned !== undefined && cleaned > 0) {
     parts.push(`Cleaned ${cleaned} workspace${cleaned !== 1 ? 's' : ''}`)
+  }
+  if (retiredWorkspaces !== undefined && retiredWorkspaces > 0) {
+    parts.push(`retired ${retiredWorkspaces} finished workspace${retiredWorkspaces !== 1 ? 's' : ''}`)
   }
   if (nodeModulesCleaned !== undefined && nodeModulesCleaned > 0) {
     parts.push(`pruned ${nodeModulesCleaned} idle node_modules`)
   }
   if (nextCachesCleaned !== undefined && nextCachesCleaned > 0) {
     parts.push(`pruned ${nextCachesCleaned} idle .next/cache folder${nextCachesCleaned !== 1 ? 's' : ''}`)
+  }
+  if (turboFilesCleaned !== undefined && turboFilesCleaned > 0) {
+    parts.push(`pruned ${turboFilesCleaned} old Turbo cache files`)
   }
   return parts.length > 0 ? parts.join(', ') : null
 }
@@ -69,13 +75,13 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
       if (event.phase === 'done') {
         setCleanupRunning(false)
         setCleanupProgress(null)
-        const summary = describeCleanupOutcome(event.cleaned, event.nodeModulesCleaned, event.nextCachesCleaned)
+        const summary = describeCleanupOutcome(event.cleaned, event.retiredWorkspaces, event.nodeModulesCleaned, event.nextCachesCleaned, event.turboFilesCleaned)
         if (summary) {
           setCleanupResult(summary)
         } else if (event.errors && event.errors.length > 0) {
           setCleanupResult(`Cleanup finished with ${event.errors.length} error${event.errors.length !== 1 ? 's' : ''}`)
         } else {
-          setCleanupResult('No workspaces to clean')
+          setCleanupResult('No old data to clean')
         }
       } else {
         setCleanupRunning(true)
@@ -602,14 +608,14 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
 
     <SettingsSection
       title="Workspace Auto-Cleanup"
-      description="Preserve task workspaces and artifacts; clean up old orphaned workspaces and idle dependencies"
+      description="Keep artifacts and outputs; remove old finished workspace files, idle dependencies, and cache files"
     >
       <div className="space-y-4">
         <div className="flex items-center justify-between py-2 border-b border-border">
           <div className="space-y-0.5">
             <Label htmlFor="autoclean-enabled">Enable auto-cleanup</Label>
             <p className="text-xs text-muted-foreground">
-              Automatically remove old workspace directories only when their task no longer exists
+              After this period, remove finished workspace files, local edits, and separate Git clones. Keep artifacts and outputs. Clear old Turbo cache files.
             </p>
           </div>
           <Switch
@@ -627,7 +633,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
           <div className="space-y-0.5">
             <Label htmlFor="autoclean-days">Retention period</Label>
             <p className="text-xs text-muted-foreground">
-              Days to keep orphaned workspace directories
+              Days to keep orphaned workspaces, finished workspace files, and Turbo cache files
             </p>
           </div>
           <select
@@ -649,6 +655,10 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             <option value="90">90 days</option>
           </select>
         </div>
+
+        <p className="text-xs text-muted-foreground">
+          20x uses your existing pnpm package store for agent-run installs. Each workspace still has its own dependency links.
+        </p>
 
         <div className="flex items-center justify-between py-2 border-b border-border">
           <div className="space-y-0.5">
@@ -699,7 +709,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             <div className="space-y-0.5">
               <Label>Manual cleanup</Label>
               <p className="text-xs text-muted-foreground">
-                Remove old orphaned workspaces and prune idle dependencies now
+                Remove old orphaned and finished workspace files, idle dependencies, and cache files now
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -719,13 +729,13 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                     // The progress listener handles the final state via the 'done' event,
                     // but also handle the IPC response as a fallback
                     if (!cleanupProgress) {
-                      const summary = describeCleanupOutcome(result.cleaned, result.nodeModulesCleaned, result.nextCachesCleaned)
+                      const summary = describeCleanupOutcome(result.cleaned, result.retiredWorkspaces, result.nodeModulesCleaned, result.nextCachesCleaned, result.turboFilesCleaned)
                       if (summary) {
                         setCleanupResult(summary)
                       } else if (result.errors.length > 0 && result.errors[0] === 'Cleanup is already in progress') {
                         setCleanupResult('Cleanup already in progress')
                       } else {
-                        setCleanupResult('No workspaces to clean')
+                        setCleanupResult('No old data to clean')
                       }
                       setCleanupRunning(false)
                     }

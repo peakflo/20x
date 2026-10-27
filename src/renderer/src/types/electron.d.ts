@@ -204,13 +204,16 @@ export interface WorktreeProgressEvent {
 }
 
 export interface WorkspaceCleanupProgressEvent {
-  phase: 'starting' | 'scanning' | 'cleaning' | 'pruning' | 'done'
+  phase: 'starting' | 'scanning' | 'cleaning' | 'pruning' | 'retiring' | 'turbo' | 'done'
   current: number
   total: number
   message?: string
   cleaned?: number
+  retiredWorkspaces?: number
   nodeModulesCleaned?: number
   nextCachesCleaned?: number
+  turboFilesCleaned?: number
+  turboBytesCleaned?: number
   errors?: string[]
 }
 
@@ -383,7 +386,7 @@ interface ElectronAPI {
     changes: (taskId: string, repos: { fullName: string }[]) => Promise<Array<{ repo: string; diff: string; allFiles?: string[]; workspace?: boolean; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>>
     files: (taskId: string, repos: { fullName: string }[]) => Promise<Array<{ repo: string; allFiles: string[]; workspace?: boolean; error?: string; noWorktree?: boolean; path?: string }>>
     readFile: (taskId: string, repoFullName: string | null, filePath: string) => Promise<{ content: string; size: number; binary: boolean; truncated: boolean } | null>
-    runCleanupNow: () => Promise<{ cleaned: number; errors: string[]; nodeModulesCleaned: number; nextCachesCleaned: number }>
+    runCleanupNow: () => Promise<{ cleaned: number; retiredWorkspaces: number; errors: string[]; nodeModulesCleaned: number; nextCachesCleaned: number; turboFilesCleaned: number; turboBytesCleaned: number }>
   }
   taskSources: {
     getAll: () => Promise<TaskSource[]>

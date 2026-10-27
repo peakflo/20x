@@ -5,7 +5,7 @@ import { TaskStatus } from '../shared/constants'
 import { runWorkspaceCleanupWorker } from './workspace-cleanup-worker-client'
 
 vi.mock('./workspace-cleanup-worker-client', () => ({ runWorkspaceCleanupWorker: vi.fn() }))
-vi.mock('./workspace-paths', () => ({ WORKSPACES_DIR: '/test/workspaces', listWorkspaceDirs: () => [] }))
+vi.mock('./workspace-paths', () => ({ WORKSPACES_DIR: '/test/workspaces', REPOS_DIR: '/test/repos', listWorkspaceDirs: () => [] }))
 vi.mock('./workspace-process-cleanup', () => ({ readDiskSpace: () => null, workspacePressureWarning: () => null }))
 
 function makeTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
@@ -30,9 +30,12 @@ describe('WorkspaceCleanupScheduler', () => {
     db = mockDbManager()
     scheduler = new WorkspaceCleanupScheduler(db)
     runWorker.mockReset()
-    runWorker.mockImplementation(async (job) => job.kind === 'orphans'
-      ? { kind: 'orphans', cleaned: 0, errors: [] }
-      : { kind: 'node-modules', pruned: 0, nextCachesPruned: 0, errors: [] })
+    runWorker.mockImplementation(async (job) => {
+      if (job.kind === 'orphans') return { kind: 'orphans', cleaned: 0, errors: [] }
+      if (job.kind === 'node-modules') return { kind: 'node-modules', pruned: 0, nextCachesPruned: 0, errors: [] }
+      if (job.kind === 'finished-workspaces') return { kind: 'finished-workspaces', workspaces: 0, errors: [] }
+      return { kind: 'turbo', files: 0, bytes: 0, errors: [] }
+    })
   })
 
   afterEach(() => scheduler.stop())
@@ -55,23 +58,30 @@ describe('WorkspaceCleanupScheduler', () => {
     }), expect.any(Function))
   })
 
-  it('returns the worker result and starts the dependency pass after the orphan pass', async () => {
+  it('returns all worker results and runs each cleanup phase', async () => {
     vi.mocked(db.getTasks).mockReturnValue([makeTask()])
-    runWorker.mockImplementation(async (job) => job.kind === 'orphans'
-      ? { kind: 'orphans', cleaned: 2, errors: [] }
-      : { kind: 'node-modules', pruned: 3, nextCachesPruned: 2, errors: [] })
-    expect(await scheduler.runNow()).toEqual({ cleaned: 2, nodeModulesCleaned: 3, nextCachesCleaned: 2, errors: [] })
-    expect(runWorker.mock.calls.map(([job]) => job.kind)).toEqual(['orphans', 'node-modules'])
+    runWorker.mockImplementation(async (job) => {
+      if (job.kind === 'orphans') return { kind: 'orphans', cleaned: 2, errors: [] }
+      if (job.kind === 'node-modules') return { kind: 'node-modules', pruned: 3, nextCachesPruned: 2, errors: [] }
+      if (job.kind === 'finished-workspaces') return { kind: 'finished-workspaces', workspaces: 4, errors: [] }
+      return { kind: 'turbo', files: 5, bytes: 1024, errors: [] }
+    })
+    expect(await scheduler.runNow()).toEqual({ cleaned: 2, retiredWorkspaces: 4, nodeModulesCleaned: 3, nextCachesCleaned: 2, turboFilesCleaned: 5, turboBytesCleaned: 1024, errors: [] })
+    expect(runWorker.mock.calls.map(([job]) => job.kind)).toEqual(['orphans', 'node-modules', 'finished-workspaces', 'turbo'])
+    expect(runWorker).toHaveBeenCalledWith(expect.objectContaining({ kind: 'turbo', reposRoot: '/test/repos', inactiveDays: 7 }), expect.any(Function))
   })
 
   it('does not start a second cleanup while the worker is running', async () => {
     vi.mocked(db.getTasks).mockReturnValue([makeTask()])
     let finish!: (value: { kind: 'orphans'; cleaned: number; errors: string[] }) => void
-    runWorker.mockImplementation((job) => job.kind === 'orphans'
-      ? new Promise((resolve) => { finish = resolve })
-      : Promise.resolve({ kind: 'node-modules', pruned: 0, nextCachesPruned: 0, errors: [] }))
+    runWorker.mockImplementation((job) => {
+      if (job.kind === 'orphans') return new Promise((resolve) => { finish = resolve })
+      if (job.kind === 'node-modules') return Promise.resolve({ kind: 'node-modules', pruned: 0, nextCachesPruned: 0, errors: [] })
+      if (job.kind === 'finished-workspaces') return Promise.resolve({ kind: 'finished-workspaces', workspaces: 0, errors: [] })
+      return Promise.resolve({ kind: 'turbo', files: 0, bytes: 0, errors: [] })
+    })
     const first = scheduler.runNow()
-    expect(await scheduler.runNow()).toEqual({ cleaned: 0, nodeModulesCleaned: 0, nextCachesCleaned: 0, errors: ['Cleanup is already in progress'] })
+    expect(await scheduler.runNow()).toEqual({ cleaned: 0, retiredWorkspaces: 0, nodeModulesCleaned: 0, nextCachesCleaned: 0, turboFilesCleaned: 0, turboBytesCleaned: 0, errors: ['Cleanup is already in progress'] })
     finish({ kind: 'orphans', cleaned: 0, errors: [] })
     await first
   })

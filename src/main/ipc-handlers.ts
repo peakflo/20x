@@ -950,7 +950,7 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('workspace:runCleanupNow', async () => {
-    if (!workspaceCleanupScheduler) return { cleaned: 0, errors: ['Cleanup scheduler not initialized'] }
+    if (!workspaceCleanupScheduler) return { cleaned: 0, retiredWorkspaces: 0, nodeModulesCleaned: 0, nextCachesCleaned: 0, turboFilesCleaned: 0, turboBytesCleaned: 0, errors: ['Cleanup scheduler not initialized'] }
     return await workspaceCleanupScheduler.runNow()
   })
 
