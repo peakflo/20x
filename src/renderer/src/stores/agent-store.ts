@@ -431,7 +431,13 @@ export const useAgentStore = create<AgentState>((set, get) => {
     // Turn confirmed running (or errored/awaiting input) — stop showing
     // "starting". Interim `idle` events during resume must NOT clear it.
     if (event.status !== SessionStatus.IDLE) updated.pendingSend = false
-    set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
+    // Repeated pushes of the same status are common; publishing a new Map for
+    // them would re-render every `sessions` subscriber for nothing.
+    const unchanged = updated.status === session.status
+      && updated.sessionId === session.sessionId
+      && updated.pendingApproval === session.pendingApproval
+      && !updated.pendingSend === !session.pendingSend
+    if (!unchanged) set({ sessions: new Map(state.sessions).set(session.taskId, updated) })
     if (previousStatus === SessionStatus.IDLE && event.status !== SessionStatus.IDLE) {
       useArtifactStore.getState().beginTurn(session.taskId)
     } else if (previousStatus !== SessionStatus.IDLE && event.status === SessionStatus.IDLE) {

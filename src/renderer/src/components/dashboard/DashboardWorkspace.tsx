@@ -60,6 +60,7 @@ export function DashboardWorkspace() {
   }, [setSyncing, setSyncResult])
 
   const tasks = useTaskStore((s) => s.tasks)
+  const completedTotal = useTaskStore((s) => s.completedTotal)
   const openSettings = useUIStore((s) => s.openSettings)
   const setSettingsTab = useUIStore((s) => s.setSettingsTab)
   const openCreateWithPrefill = useUIStore((s) => s.openCreateWithPrefill)
@@ -77,8 +78,8 @@ export function DashboardWorkspace() {
 
   // Always compute local stats from task store
   useEffect(() => {
-    updateLocalStats(tasks)
-  }, [tasks, timeWindow])
+    updateLocalStats(tasks, completedTotal)
+  }, [tasks, timeWindow, completedTotal])
 
   // Fetch cloud data when authenticated
   useEffect(() => {
