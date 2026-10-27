@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   activeStatusWorkspaceIds,
+  findPrunableCacheDirs,
   findTopLevelNodeModules,
   findWorkspacesWithLiveProcesses,
   isInactive,
@@ -95,6 +96,13 @@ describe('findTopLevelNodeModules', () => {
   it('returns empty for a missing directory', () => {
     expect(findTopLevelNodeModules(join(root, 'nope'))).toEqual([])
   })
+
+  it('finds only .next/cache under a nested repository', () => {
+    const ws = join(root, 'task-1')
+    mkdirSync(join(ws, 'repo', '.next', 'cache'), { recursive: true })
+    mkdirSync(join(ws, 'repo', '.next', 'server'), { recursive: true })
+    expect(findPrunableCacheDirs(ws).nextCaches).toEqual([join(ws, 'repo', '.next', 'cache')])
+  })
 })
 
 describe('pruneStaleNodeModules', () => {
@@ -120,6 +128,7 @@ describe('pruneStaleNodeModules', () => {
     const result = pruneStaleNodeModules({ workspacesRoot: root, inactiveDays: 7 })
 
     expect(result.errors).toEqual([])
+    expect(result.nextCachesPruned).toEqual([])
     expect(result.pruned.sort()).toEqual(
       [join(oldWs, '.opencode', 'node_modules'), join(oldWs, 'repo', 'node_modules')].sort()
     )
@@ -135,6 +144,7 @@ describe('pruneStaleNodeModules', () => {
   it('respects skipWorkspaceIds (live activity)', () => {
     const ws = join(root, 'task-busy')
     makeAgedDir(join(ws, 'repo', 'node_modules'), 30)
+    makeAgedDir(join(ws, 'repo', '.next', 'cache'), 30)
 
     const result = pruneStaleNodeModules({
       workspacesRoot: root,
@@ -143,7 +153,25 @@ describe('pruneStaleNodeModules', () => {
     })
 
     expect(result.pruned).toEqual([])
+    expect(result.nextCachesPruned).toEqual([])
     expect(existsSync(join(ws, 'repo', 'node_modules'))).toBe(true)
+    expect(existsSync(join(ws, 'repo', '.next', 'cache'))).toBe(true)
+  })
+
+  it('prunes old .next/cache but keeps recent cache and other .next output', () => {
+    const old = join(root, 'old', 'repo', '.next')
+    const recent = join(root, 'recent', 'repo', '.next')
+    makeAgedDir(join(old, 'cache'), 30)
+    makeAgedDir(join(recent, 'cache'), 1)
+    mkdirSync(join(old, 'server'), { recursive: true })
+    writeFileSync(join(old, 'server', 'page.js'), 'output')
+    const result = pruneStaleNodeModules({ workspacesRoot: root, inactiveDays: 7 })
+    expect(result.errors).toEqual([])
+    expect(result.pruned).toEqual([])
+    expect(result.nextCachesPruned).toEqual([join(old, 'cache')])
+    expect(existsSync(join(old, 'cache'))).toBe(false)
+    expect(existsSync(join(old, 'server', 'page.js'))).toBe(true)
+    expect(existsSync(join(recent, 'cache'))).toBe(true)
   })
 
   it('refuses an invalid threshold instead of pruning everything', () => {
@@ -160,7 +188,7 @@ describe('pruneStaleNodeModules', () => {
   it('returns empty when the workspaces root is missing', () => {
     const result = pruneStaleNodeModules({ workspacesRoot: join(root, 'nope'), inactiveDays: 7 })
 
-    expect(result).toEqual({ pruned: [], errors: [] })
+    expect(result).toEqual({ pruned: [], nextCachesPruned: [], errors: [] })
   })
 
   it('reports progress per workspace', () => {

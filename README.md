@@ -121,7 +121,7 @@ Open a parent task and its subtasks as linked panels. Keep an embedded browser b
 - **Repository context** — Agents know which repos to work on (GitHub & GitLab)
 - **MCP servers** — Connect Model Context Protocol tools with auto-registration
 - **Browser MCP tools** — Expose console logs and network activity from browser panels to agents
-- **Idle workspace cleanup** — Prunes `node_modules` in workspaces idle for 7+ days to reclaim disk
+- **Idle workspace cleanup** — Prunes `node_modules` and `.next/cache` folders after 7+ days of inactivity to reclaim disk
 - **Local-first** — SQLite database, no cloud required
 
 ### 📋 Task Management

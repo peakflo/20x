@@ -32,7 +32,7 @@ describe('WorkspaceCleanupScheduler', () => {
     runWorker.mockReset()
     runWorker.mockImplementation(async (job) => job.kind === 'orphans'
       ? { kind: 'orphans', cleaned: 0, errors: [] }
-      : { kind: 'node-modules', pruned: 0, errors: [] })
+      : { kind: 'node-modules', pruned: 0, nextCachesPruned: 0, errors: [] })
   })
 
   afterEach(() => scheduler.stop())
@@ -59,8 +59,8 @@ describe('WorkspaceCleanupScheduler', () => {
     vi.mocked(db.getTasks).mockReturnValue([makeTask()])
     runWorker.mockImplementation(async (job) => job.kind === 'orphans'
       ? { kind: 'orphans', cleaned: 2, errors: [] }
-      : { kind: 'node-modules', pruned: 3, errors: [] })
-    expect(await scheduler.runNow()).toEqual({ cleaned: 2, nodeModulesCleaned: 3, errors: [] })
+      : { kind: 'node-modules', pruned: 3, nextCachesPruned: 2, errors: [] })
+    expect(await scheduler.runNow()).toEqual({ cleaned: 2, nodeModulesCleaned: 3, nextCachesCleaned: 2, errors: [] })
     expect(runWorker.mock.calls.map(([job]) => job.kind)).toEqual(['orphans', 'node-modules'])
   })
 
@@ -69,9 +69,9 @@ describe('WorkspaceCleanupScheduler', () => {
     let finish!: (value: { kind: 'orphans'; cleaned: number; errors: string[] }) => void
     runWorker.mockImplementation((job) => job.kind === 'orphans'
       ? new Promise((resolve) => { finish = resolve })
-      : Promise.resolve({ kind: 'node-modules', pruned: 0, errors: [] }))
+      : Promise.resolve({ kind: 'node-modules', pruned: 0, nextCachesPruned: 0, errors: [] }))
     const first = scheduler.runNow()
-    expect(await scheduler.runNow()).toEqual({ cleaned: 0, nodeModulesCleaned: 0, errors: ['Cleanup is already in progress'] })
+    expect(await scheduler.runNow()).toEqual({ cleaned: 0, nodeModulesCleaned: 0, nextCachesCleaned: 0, errors: ['Cleanup is already in progress'] })
     finish({ kind: 'orphans', cleaned: 0, errors: [] })
     await first
   })

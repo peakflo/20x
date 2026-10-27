@@ -13,13 +13,16 @@ import { MASTERMIND_PREWARM_SETTING } from '@/components/orchestrator/Orchestrat
 import { PushNotificationSettings } from './PushNotificationSettings'
 
 /** Human-readable summary of a cleanup run, or null when there is nothing to report. */
-function describeCleanupOutcome(cleaned: number | undefined, nodeModulesCleaned: number | undefined): string | null {
+function describeCleanupOutcome(cleaned: number | undefined, nodeModulesCleaned: number | undefined, nextCachesCleaned: number | undefined): string | null {
   const parts: string[] = []
   if (cleaned !== undefined && cleaned > 0) {
     parts.push(`Cleaned ${cleaned} workspace${cleaned !== 1 ? 's' : ''}`)
   }
   if (nodeModulesCleaned !== undefined && nodeModulesCleaned > 0) {
     parts.push(`pruned ${nodeModulesCleaned} idle node_modules`)
+  }
+  if (nextCachesCleaned !== undefined && nextCachesCleaned > 0) {
+    parts.push(`pruned ${nextCachesCleaned} idle .next/cache folder${nextCachesCleaned !== 1 ? 's' : ''}`)
   }
   return parts.length > 0 ? parts.join(', ') : null
 }
@@ -66,7 +69,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
       if (event.phase === 'done') {
         setCleanupRunning(false)
         setCleanupProgress(null)
-        const summary = describeCleanupOutcome(event.cleaned, event.nodeModulesCleaned)
+        const summary = describeCleanupOutcome(event.cleaned, event.nodeModulesCleaned, event.nextCachesCleaned)
         if (summary) {
           setCleanupResult(summary)
         } else if (event.errors && event.errors.length > 0) {
@@ -649,10 +652,10 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
 
         <div className="flex items-center justify-between py-2 border-b border-border">
           <div className="space-y-0.5">
-            <Label htmlFor="nodemodules-gc-enabled">Prune idle node_modules</Label>
+            <Label htmlFor="nodemodules-gc-enabled">Prune idle node_modules and .next/cache</Label>
             <p className="text-xs text-muted-foreground">
-              Delete dependency folders untouched for more than the configured days, in every workspace.
-              Source files are kept — dependencies reinstall on the next run.
+              Delete idle dependency and Next.js cache folders in every workspace.
+              Source files are kept. The deleted folders are made again when needed.
             </p>
           </div>
           <Switch
@@ -670,7 +673,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
           <div className="space-y-0.5">
             <Label htmlFor="nodemodules-gc-days">Dependency inactivity period</Label>
             <p className="text-xs text-muted-foreground">
-              Days without changes before a node_modules folder is pruned
+              Days without changes before these folders are pruned
             </p>
           </div>
           <select
@@ -716,7 +719,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                     // The progress listener handles the final state via the 'done' event,
                     // but also handle the IPC response as a fallback
                     if (!cleanupProgress) {
-                      const summary = describeCleanupOutcome(result.cleaned, result.nodeModulesCleaned)
+                      const summary = describeCleanupOutcome(result.cleaned, result.nodeModulesCleaned, result.nextCachesCleaned)
                       if (summary) {
                         setCleanupResult(summary)
                       } else if (result.errors.length > 0 && result.errors[0] === 'Cleanup is already in progress') {

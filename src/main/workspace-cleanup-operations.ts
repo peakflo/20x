@@ -13,7 +13,7 @@ export type WorkspaceCleanupJob =
 
 export type WorkspaceCleanupJobResult =
   | { kind: 'orphans'; cleaned: number; errors: string[] }
-  | { kind: 'node-modules'; pruned: number; errors: string[] }
+  | { kind: 'node-modules'; pruned: number; nextCachesPruned: number; errors: string[] }
 
 export type WorkspaceCleanupWorkerProgress = {
   phase: 'scanning' | 'cleaning' | 'pruning'
@@ -38,20 +38,20 @@ export async function executeWorkspaceCleanupJob(
       }
     } catch (error) {
       errors.push(`Could not list workspaces directory: ${error instanceof Error ? error.message : String(error)}`)
-      return { kind: 'node-modules', pruned: 0, errors }
+      return { kind: 'node-modules', pruned: 0, nextCachesPruned: 0, errors }
     }
 
     let skip = findWorkspacesWithLiveProcesses(job.workspacesRoot, dirs)
     if (skip === null) skip = activeStatusWorkspaceIds(job.tasks)
-    onProgress({ phase: 'pruning', current: 0, total: dirs.length, message: `Pruning idle node_modules (inactive > ${job.inactiveDays} days)...` })
+    onProgress({ phase: 'pruning', current: 0, total: dirs.length, message: `Pruning idle cache folders (inactive > ${job.inactiveDays} days)...` })
     const result = pruneStaleNodeModules({
       workspacesRoot: job.workspacesRoot,
       inactiveDays: job.inactiveDays,
       skipWorkspaceIds: skip,
-      onProgress: (current, total) => onProgress({ phase: 'pruning', current, total, message: 'Pruning idle node_modules...' })
+      onProgress: (current, total) => onProgress({ phase: 'pruning', current, total, message: 'Pruning idle cache folders...' })
     })
-    onProgress({ phase: 'pruning', current: dirs.length, total: dirs.length, message: `Pruned ${result.pruned.length} idle node_modules` })
-    return { kind: 'node-modules', pruned: result.pruned.length, errors: [...errors, ...result.errors] }
+    onProgress({ phase: 'pruning', current: dirs.length, total: dirs.length, message: `Pruned ${result.pruned.length + result.nextCachesPruned.length} idle cache folders` })
+    return { kind: 'node-modules', pruned: result.pruned.length, nextCachesPruned: result.nextCachesPruned.length, errors: [...errors, ...result.errors] }
   }
 
   const errors: string[] = []

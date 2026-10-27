@@ -15,6 +15,7 @@ export interface CleanupResult {
   cleaned: number
   errors: string[]
   nodeModulesCleaned: number
+  nextCachesCleaned: number
 }
 
 /**
@@ -23,14 +24,14 @@ export interface CleanupResult {
  * Runs once daily (every 24 hours). On each tick:
  * 1. Checks if auto-cleanup is enabled via settings
  * 2. Removes old orphaned workspace directories (no matching task in DB)
- * 3. Prunes idle `node_modules` directories at any depth, for tasks in ANY status
+ * 3. Prunes idle `node_modules` and `.next/cache` directories at any depth, for tasks in ANY status
  *    (own enable flag + retention, on by default — deps reinstall from package.json)
  *
  * Settings:
  * - `workspace_autocleanup_enabled` — "true"/"false" (default: "false")
  * - `workspace_autocleanup_days` — age of orphaned directory before removal (default: 7)
  * - `workspace_nodemodules_gc_enabled` — "true"/"false" (default: "true")
- * - `workspace_nodemodules_gc_days` — days of node_modules inactivity before pruning (default: 7)
+ * - `workspace_nodemodules_gc_days` — days of dependency or cache inactivity before pruning (default: 7)
  */
 export class WorkspaceCleanupScheduler {
   private dbManager: DatabaseManager
@@ -71,12 +72,12 @@ export class WorkspaceCleanupScheduler {
 
   /**
    * Manually trigger a cleanup run. Returns the number of workspaces cleaned
-   * plus the number of idle node_modules directories pruned.
+   * plus the number of idle dependency and Next.js cache directories pruned.
    * Rejects if a cleanup is already in progress (prevents concurrent runs).
    */
   async runNow(): Promise<CleanupResult> {
     if (this.isRunning) {
-      return { cleaned: 0, errors: ['Cleanup is already in progress'], nodeModulesCleaned: 0 }
+      return { cleaned: 0, errors: ['Cleanup is already in progress'], nodeModulesCleaned: 0, nextCachesCleaned: 0 }
     }
     this.isRunning = true
     this.sendToRenderer('workspace:cleanup-progress', { phase: 'starting', current: 0, total: 0 })
@@ -86,7 +87,8 @@ export class WorkspaceCleanupScheduler {
       const combined: CleanupResult = {
         cleaned: result.cleaned,
         errors: [...result.errors, ...nm.errors],
-        nodeModulesCleaned: nm.pruned
+        nodeModulesCleaned: nm.pruned,
+        nextCachesCleaned: nm.nextCachesPruned
       }
       this.sendToRenderer('workspace:cleanup-progress', {
         phase: 'done',
@@ -94,6 +96,7 @@ export class WorkspaceCleanupScheduler {
         total: combined.cleaned,
         cleaned: combined.cleaned,
         nodeModulesCleaned: combined.nodeModulesCleaned,
+        nextCachesCleaned: combined.nextCachesCleaned,
         errors: combined.errors
       })
       return combined
@@ -109,7 +112,7 @@ export class WorkspaceCleanupScheduler {
     this.isRunning = true
 
     try {
-      // Idle node_modules pruning has its own flag and schedule: it is safe for
+      // Idle dependency and cache pruning has its own flag and schedule: it is safe for
       // every task status (only regenerable deps go), so it runs whether or not
       // orphaned-workspace auto-cleanup is enabled.
       await this.runNodeModulesGcAuto()
@@ -231,8 +234,8 @@ export class WorkspaceCleanupScheduler {
     }
     const nm = await this.runNodeModulesPhase(false)
     this.dbManager.setSetting(NODE_MODULES_GC_LAST_RUN_KEY, new Date().toISOString())
-    if (nm.pruned > 0) {
-      console.log(`[WorkspaceCleanup] Pruned ${nm.pruned} idle node_modules`)
+    if (nm.pruned > 0 || nm.nextCachesPruned > 0) {
+      console.log(`[WorkspaceCleanup] Pruned ${nm.pruned} idle node_modules and ${nm.nextCachesPruned} .next/cache folders`)
     }
     if (nm.errors.length > 0) {
       console.warn(`[WorkspaceCleanup] node_modules prune errors: ${nm.errors.join('; ')}`)
@@ -240,14 +243,14 @@ export class WorkspaceCleanupScheduler {
   }
 
   /**
-   * One node_modules pruning pass over every workspace on disk, regardless of
+   * One dependency and cache pruning pass over every workspace on disk, regardless of
    * task status. Workspaces with a live process rooted in them are skipped; when
    * liveness cannot be observed (Windows, unreadable process table), tasks in an
    * active status are skipped instead — a build lock inside node_modules must
    * never be pulled out from under a running agent.
    */
-  private async runNodeModulesPhase(reportProgress: boolean): Promise<{ pruned: number; errors: string[] }> {
-    if (!this.isNodeModulesGcEnabled()) return { pruned: 0, errors: [] }
+  private async runNodeModulesPhase(reportProgress: boolean): Promise<{ pruned: number; nextCachesPruned: number; errors: string[] }> {
+    if (!this.isNodeModulesGcEnabled()) return { pruned: 0, nextCachesPruned: 0, errors: [] }
     const result = await runWorkspaceCleanupWorker({
       kind: 'node-modules',
       workspacesRoot: WORKSPACES_DIR,
