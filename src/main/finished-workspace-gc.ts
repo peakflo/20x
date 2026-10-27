@@ -5,6 +5,7 @@ import { extname, join, relative } from 'path'
 import { TaskStatus } from '../shared/constants'
 import { ARTIFACT_OUTPUT_DIRECTORIES, artifactWorkpieceForPath } from '../shared/artifacts'
 import { artifactTypeForPath } from './artifacts'
+import { gitChildEnv } from './git-child-env'
 import { findWorkspacesWithLiveProcesses } from './workspace-node-modules-gc'
 
 const execFileAsync = promisify(execFile)
@@ -118,7 +119,11 @@ async function retireDirectory(workspace: string, directory: string, outputs: re
     if (gitMarker?.isFile()) {
       // Force is intentional: the finished task has passed its retention period.
       // Git removes its worktree registration as well as its checkout.
-      await execFileAsync('git', ['-C', directory, 'worktree', 'remove', '--force', directory], { timeout: 120_000 })
+      await execFileAsync('git', ['worktree', 'remove', '--force', directory], {
+        cwd: directory,
+        env: gitChildEnv(),
+        timeout: 120_000
+      })
     } else {
       // This also removes separate clones and local files in ordinary directories.
       await rm(directory, { recursive: true, force: true })
