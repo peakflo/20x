@@ -1,17 +1,13 @@
 import { BrowserWindow } from 'electron'
-import { existsSync, readdirSync, statSync, rmSync } from 'fs'
-import { join } from 'path'
 import type { DatabaseManager } from './database'
 import { WORKSPACES_DIR, listWorkspaceDirs } from './workspace-paths'
-import { terminateProcessesInWorkspaces, readDiskSpace, workspacePressureWarning } from './workspace-process-cleanup'
+import { readDiskSpace, workspacePressureWarning } from './workspace-process-cleanup'
+import { runWorkspaceCleanupWorker } from './workspace-cleanup-worker-client'
 import {
   NODE_MODULES_GC_DAYS_KEY,
   NODE_MODULES_GC_ENABLED_KEY,
   NODE_MODULES_GC_LAST_RUN_KEY,
-  DEFAULT_NODE_MODULES_GC_DAYS,
-  activeStatusWorkspaceIds,
-  findWorkspacesWithLiveProcesses,
-  pruneStaleNodeModules
+  DEFAULT_NODE_MODULES_GC_DAYS
 } from './workspace-node-modules-gc'
 
 /** Combined outcome of a cleanup run: whole workspaces plus pruned dependency dirs. */
@@ -19,6 +15,7 @@ export interface CleanupResult {
   cleaned: number
   errors: string[]
   nodeModulesCleaned: number
+  nextCachesCleaned: number
 }
 
 /**
@@ -27,14 +24,14 @@ export interface CleanupResult {
  * Runs once daily (every 24 hours). On each tick:
  * 1. Checks if auto-cleanup is enabled via settings
  * 2. Removes old orphaned workspace directories (no matching task in DB)
- * 3. Prunes idle `node_modules` directories at any depth, for tasks in ANY status
+ * 3. Prunes idle `node_modules` and `.next/cache` directories at any depth, for tasks in ANY status
  *    (own enable flag + retention, on by default — deps reinstall from package.json)
  *
  * Settings:
  * - `workspace_autocleanup_enabled` — "true"/"false" (default: "false")
  * - `workspace_autocleanup_days` — age of orphaned directory before removal (default: 7)
  * - `workspace_nodemodules_gc_enabled` — "true"/"false" (default: "true")
- * - `workspace_nodemodules_gc_days` — days of node_modules inactivity before pruning (default: 7)
+ * - `workspace_nodemodules_gc_days` — days of dependency or cache inactivity before pruning (default: 7)
  */
 export class WorkspaceCleanupScheduler {
   private dbManager: DatabaseManager
@@ -75,12 +72,12 @@ export class WorkspaceCleanupScheduler {
 
   /**
    * Manually trigger a cleanup run. Returns the number of workspaces cleaned
-   * plus the number of idle node_modules directories pruned.
+   * plus the number of idle dependency and Next.js cache directories pruned.
    * Rejects if a cleanup is already in progress (prevents concurrent runs).
    */
   async runNow(): Promise<CleanupResult> {
     if (this.isRunning) {
-      return { cleaned: 0, errors: ['Cleanup is already in progress'], nodeModulesCleaned: 0 }
+      return { cleaned: 0, errors: ['Cleanup is already in progress'], nodeModulesCleaned: 0, nextCachesCleaned: 0 }
     }
     this.isRunning = true
     this.sendToRenderer('workspace:cleanup-progress', { phase: 'starting', current: 0, total: 0 })
@@ -90,7 +87,8 @@ export class WorkspaceCleanupScheduler {
       const combined: CleanupResult = {
         cleaned: result.cleaned,
         errors: [...result.errors, ...nm.errors],
-        nodeModulesCleaned: nm.pruned
+        nodeModulesCleaned: nm.pruned,
+        nextCachesCleaned: nm.nextCachesPruned
       }
       this.sendToRenderer('workspace:cleanup-progress', {
         phase: 'done',
@@ -98,6 +96,7 @@ export class WorkspaceCleanupScheduler {
         total: combined.cleaned,
         cleaned: combined.cleaned,
         nodeModulesCleaned: combined.nodeModulesCleaned,
+        nextCachesCleaned: combined.nextCachesCleaned,
         errors: combined.errors
       })
       return combined
@@ -110,9 +109,10 @@ export class WorkspaceCleanupScheduler {
 
   private async runCleanup(): Promise<void> {
     if (this.isRunning) return
+    this.isRunning = true
 
     try {
-      // Idle node_modules pruning has its own flag and schedule: it is safe for
+      // Idle dependency and cache pruning has its own flag and schedule: it is safe for
       // every task status (only regenerable deps go), so it runs whether or not
       // orphaned-workspace auto-cleanup is enabled.
       await this.runNodeModulesGcAuto()
@@ -134,7 +134,6 @@ export class WorkspaceCleanupScheduler {
         if (hoursSinceLastRun < 23) return // Run at most once per day
       }
 
-      this.isRunning = true
       const result = await this.doCleanup(false)
 
       // Record last run time
@@ -155,12 +154,6 @@ export class WorkspaceCleanupScheduler {
   }
 
   private async doCleanup(reportProgress: boolean): Promise<{ cleaned: number; errors: string[] }> {
-    const retentionDays = this.getRetentionDays()
-    const cutoffDate = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000)
-
-    let cleaned = 0
-    const errors: string[] = []
-
     // A task workspace contains its artifact registry and files. Keep it for
     // every status, including completed, review-pending, and agent failures.
     const allTasks = this.dbManager.getTasks()
@@ -168,91 +161,17 @@ export class WorkspaceCleanupScheduler {
       // An unavailable database also reads as an empty task list. Do not infer
       // that every workspace is orphaned when ownership cannot be verified.
       this.reportWorkspaceCount()
-      return { cleaned, errors }
+      return { cleaned: 0, errors: [] }
     }
-
-    // Count orphaned directories
-    let orphanDirs: string[] = []
-    try {
-      if (existsSync(WORKSPACES_DIR)) {
-        const taskIds = new Set(allTasks.map((t) => t.id))
-        const dirs = readdirSync(WORKSPACES_DIR, { withFileTypes: true })
-        orphanDirs = dirs
-          .filter((d) => d.isDirectory() && !taskIds.has(d.name))
-          .map((d) => d.name)
-          .filter((name) => {
-            try {
-              return statSync(join(WORKSPACES_DIR, name)).mtime < cutoffDate
-            } catch {
-              return false
-            }
-          })
-      }
-    } catch {
-      // ignore scan errors for counting
-    }
-
-    const total = orphanDirs.length
-    let processed = 0
-
-    // A process must not outlive its workspace. Removing the directory under a
-    // running watcher leaves it holding several thousand descriptors on files
-    // that no longer exist — the exact leak this cleanup is supposed to end.
-    // Killed BEFORE any removal, and by cwd only, so a watcher the user started
-    // in their own checkout is never a candidate.
-    if (total > 0) {
-      try {
-        const killed = await terminateProcessesInWorkspaces({
-          workspacesRoot: WORKSPACES_DIR,
-          workspaceIds: orphanDirs
-        })
-        if (killed.length > 0) {
-          console.log(`[WorkspaceCleanup] Terminated ${killed.length} process(es) rooted in workspaces being removed`)
-        }
-      } catch (err) {
-        const message = `Failed to terminate processes in workspaces being removed: ${err instanceof Error ? err.message : String(err)}`
-        console.warn(`[WorkspaceCleanup] ${message}`)
-        errors.push(message)
-      }
-    }
-
-    if (reportProgress) {
-      this.sendToRenderer('workspace:cleanup-progress', {
-        phase: 'scanning',
-        current: 0,
-        total,
-        message: `Found ${total} workspace${total !== 1 ? 's' : ''} to clean`
-      })
-    }
-
-    // Clean orphaned workspace directories (no matching task in DB).
-    for (const name of orphanDirs) {
-      const dirPath = join(WORKSPACES_DIR, name)
-
-      if (reportProgress) {
-        this.sendToRenderer('workspace:cleanup-progress', {
-          phase: 'cleaning',
-          current: processed,
-          total,
-          message: `Cleaning orphaned workspace ${name.substring(0, 12)}...`
-        })
-      }
-
-      try {
-        rmSync(dirPath, { recursive: true, force: true })
-        cleaned++
-        console.log(`[WorkspaceCleanup] Cleaned orphaned workspace directory: ${name}`)
-      } catch (err) {
-        const message = `Failed to clean orphaned directory ${name}: ${err instanceof Error ? err.message : String(err)}`
-        console.error(`[WorkspaceCleanup] ${message}`)
-        errors.push(message)
-      }
-      processed++
-    }
-
+    const result = await runWorkspaceCleanupWorker({
+      kind: 'orphans',
+      workspacesRoot: WORKSPACES_DIR,
+      taskIds: allTasks.map((task) => task.id),
+      retentionDays: this.getRetentionDays()
+    }, reportProgress ? (progress) => this.sendToRenderer('workspace:cleanup-progress', progress) : undefined)
+    if (result.kind !== 'orphans') throw new Error('Unexpected workspace cleanup result')
     this.reportWorkspaceCount()
-
-    return { cleaned, errors }
+    return result
   }
 
   /**
@@ -315,8 +234,8 @@ export class WorkspaceCleanupScheduler {
     }
     const nm = await this.runNodeModulesPhase(false)
     this.dbManager.setSetting(NODE_MODULES_GC_LAST_RUN_KEY, new Date().toISOString())
-    if (nm.pruned > 0) {
-      console.log(`[WorkspaceCleanup] Pruned ${nm.pruned} idle node_modules`)
+    if (nm.pruned > 0 || nm.nextCachesPruned > 0) {
+      console.log(`[WorkspaceCleanup] Pruned ${nm.pruned} idle node_modules and ${nm.nextCachesPruned} .next/cache folders`)
     }
     if (nm.errors.length > 0) {
       console.warn(`[WorkspaceCleanup] node_modules prune errors: ${nm.errors.join('; ')}`)
@@ -324,58 +243,22 @@ export class WorkspaceCleanupScheduler {
   }
 
   /**
-   * One node_modules pruning pass over every workspace on disk, regardless of
+   * One dependency and cache pruning pass over every workspace on disk, regardless of
    * task status. Workspaces with a live process rooted in them are skipped; when
    * liveness cannot be observed (Windows, unreadable process table), tasks in an
    * active status are skipped instead — a build lock inside node_modules must
    * never be pulled out from under a running agent.
    */
-  private async runNodeModulesPhase(reportProgress: boolean): Promise<{ pruned: number; errors: string[] }> {
-    if (!this.isNodeModulesGcEnabled()) return { pruned: 0, errors: [] }
-    const days = this.getNodeModulesGcDays()
-    const dirs = listWorkspaceDirs() ?? []
-    const allTasks = this.dbManager.getTasks()
-
-    let skip = findWorkspacesWithLiveProcesses(WORKSPACES_DIR, dirs)
-    if (skip === null) skip = activeStatusWorkspaceIds(allTasks)
-
-    if (reportProgress) {
-      this.sendToRenderer('workspace:cleanup-progress', {
-        phase: 'pruning',
-        current: 0,
-        total: dirs.length,
-        message: `Pruning idle node_modules (inactive > ${days} day${days !== 1 ? 's' : ''})...`
-      })
-    }
-
-    const result = pruneStaleNodeModules({
+  private async runNodeModulesPhase(reportProgress: boolean): Promise<{ pruned: number; nextCachesPruned: number; errors: string[] }> {
+    if (!this.isNodeModulesGcEnabled()) return { pruned: 0, nextCachesPruned: 0, errors: [] }
+    const result = await runWorkspaceCleanupWorker({
+      kind: 'node-modules',
       workspacesRoot: WORKSPACES_DIR,
-      inactiveDays: days,
-      skipWorkspaceIds: skip,
-      onProgress: reportProgress
-        ? (processed, total, currentPath) => {
-            this.sendToRenderer('workspace:cleanup-progress', {
-              phase: 'pruning',
-              current: processed,
-              total,
-              message: currentPath ? `Pruning idle node_modules...` : `Pruned idle node_modules`
-            })
-          }
-        : undefined
-    })
-
-    if (reportProgress) {
-      this.sendToRenderer('workspace:cleanup-progress', {
-        phase: 'pruning',
-        current: dirs.length,
-        total: dirs.length,
-        message: result.pruned.length > 0
-          ? `Pruned ${result.pruned.length} idle node_modules`
-          : 'No idle node_modules to prune'
-      })
-    }
-
-    return { pruned: result.pruned.length, errors: result.errors }
+      inactiveDays: this.getNodeModulesGcDays(),
+      tasks: this.dbManager.getTasks().map((task) => ({ id: task.id, status: task.status }))
+    }, reportProgress ? (progress) => this.sendToRenderer('workspace:cleanup-progress', progress) : undefined)
+    if (result.kind !== 'node-modules') throw new Error('Unexpected node_modules cleanup result')
+    return result
   }
 
   private sendToRenderer(channel: string, data: unknown): void {

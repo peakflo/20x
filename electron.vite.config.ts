@@ -63,6 +63,7 @@ export default defineConfig({
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),
           'macos-swap-watchdog-worker': resolve(__dirname, 'src/main/macos-swap-watchdog-worker.ts'),
+          'workspace-cleanup-worker': resolve(__dirname, 'src/main/workspace-cleanup-worker.ts'),
           // Built from the TypeScript entry, which shares every tool definition
           // with the in-process endpoint. A duplicate hand-maintained .js copy
           // used to be the build input, and the two copies could drift apart.
