@@ -8,7 +8,7 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { mkdir, writeFile } from 'fs/promises'
 import { app, Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
-import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord, AgentRunIntervalRecord } from './database'
+import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord, AgentRunIntervalRecord, TranscriptPartRecord } from './database'
 import { TaskStatus, SessionStatus, isTaskClosed } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -87,6 +87,7 @@ import {
 } from './usage/agent-run-intervals'
 import { computeParallelismSummary, periodBoundsForDays, type UsageParallelismResponse, type ParallelismSummary } from './usage/usage-parallelism'
 import type { UsageParallelismQuery } from './usage/usage-query'
+import { TranscriptDeltaEncoder, type TranscriptSyncResult } from '../shared/transcript-stream'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -492,6 +493,11 @@ export class AgentManager extends EventEmitter {
   private transcriptChangedTimer: ReturnType<typeof setTimeout> | null = null
   private pendingTranscriptChanged = new Map<string, { sinceRev: number; maxRev: number }>()
   private static readonly TRANSCRIPT_CHANGED_FLUSH_MS = 125
+  /** Diffs changed parts against what was last sent (append vs whole part) and
+   *  numbers each task's `transcript:changed` events (see shared/transcript-stream). */
+  private transcriptEncoder = new TranscriptDeltaEncoder()
+  /** In-process consumers that need the full records of changed parts (voice). */
+  private transcriptPartsListeners: Array<(taskId: string, parts: TranscriptPartRecord[]) => void> = []
   private pollingInProgress = false  // Prevents overlapping tick() calls
   private pollTickFn: (() => Promise<void>) | null = null  // Reference to the tick function
 
@@ -6609,6 +6615,15 @@ Important:
     this.externalListeners.push(fn)
   }
 
+  /**
+   * Register an in-process listener for the full records of changed transcript
+   * parts. `transcript:changed` itself only carries deltas (appended text), so
+   * consumers that read whole parts (voice) subscribe here instead.
+   */
+  addTranscriptPartsListener(fn: (taskId: string, parts: TranscriptPartRecord[]) => void): void {
+    this.transcriptPartsListeners.push(fn)
+  }
+
   private hasHeartbeatFile(taskId: string): boolean {
     try {
       return existsSync(join(this.db.getWorkspaceDir(taskId), 'heartbeat.md'))
@@ -6739,23 +6754,72 @@ Important:
   private flushTranscriptChanged(): void {
     const pending = this.pendingTranscriptChanged
     this.pendingTranscriptChanged = new Map()
-    for (const [taskId, { sinceRev, maxRev: queuedMaxRev }] of pending) {
-      const { parts, maxRev } = this.db.getTranscriptDelta(taskId, sinceRev)
-      const effectiveMaxRev = Math.max(maxRev, queuedMaxRev)
-      if (parts.length === 0 && effectiveMaxRev <= sinceRev) continue
-      this.sendTranscriptChangedNow(taskId, parts, effectiveMaxRev)
-    }
+    for (const [taskId, range] of pending) this.flushTranscriptChangedRange(taskId, range)
   }
 
-  private sendTranscriptChangedNow(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>, maxRev: number): void {
-    const payload = { taskId, parts, maxRev }
+  /** Send a task's queued changes now (before a resync read, so the read and
+   *  the stream position agree). */
+  private flushTranscriptChangedFor(taskId: string): void {
+    const range = this.pendingTranscriptChanged.get(taskId)
+    if (!range) return
+    this.pendingTranscriptChanged.delete(taskId)
+    this.flushTranscriptChangedRange(taskId, range)
+  }
+
+  private flushTranscriptChangedRange(taskId: string, { sinceRev, maxRev: queuedMaxRev }: { sinceRev: number; maxRev: number }): void {
+    const { parts, maxRev } = this.db.getTranscriptDelta(taskId, sinceRev)
+    const effectiveMaxRev = Math.max(maxRev, queuedMaxRev)
+    if (parts.length === 0 && effectiveMaxRev <= sinceRev) return
+    this.sendTranscriptChangedNow(taskId, parts, effectiveMaxRev)
+  }
+
+  private sendTranscriptChangedNow(taskId: string, parts: TranscriptPartRecord[], maxRev: number): void {
+    // Window and mobile get the same numbered delta: appended text for a part
+    // that only grew, the whole part otherwise.
+    const payload = this.transcriptEncoder.encode(taskId, parts, maxRev)
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send('transcript:changed', payload)
     }
     for (const fn of this.externalListeners) {
       try { fn('transcript:changed', payload) } catch { /* ignore */ }
     }
+    for (const fn of this.transcriptPartsListeners) {
+      try { fn(taskId, parts) } catch { /* ignore */ }
+    }
     this.emitArtifactUpdatesFromParts(taskId, parts)
+  }
+
+  /**
+   * Resync for a `transcript:changed` receiver (first bind, gap, reconnect):
+   * the whole transcript, or the parts changed since `sinceRev`, plus the
+   * stream position they are consistent with. Pending changes for the task are
+   * sent first, so the receiver can apply the event with `seq + 1` next.
+   *
+   * `backfill: false` keeps the read pure for mobile readers (no one-time
+   * history ingest, which writes to the projection).
+   */
+  async getTranscriptSync(taskId: string, sinceRev?: number, options: { backfill?: boolean } = {}): Promise<TranscriptSyncResult<TranscriptPartRecord>> {
+    if (options.backfill !== false && !this.ingestedTasks.has(taskId)) {
+      await this.backfillTranscriptProjection(taskId)
+    }
+    this.flushTranscriptChangedFor(taskId)
+    const full = typeof sinceRev !== 'number'
+    let parts: TranscriptPartRecord[]
+    let maxRev: number
+    if (full) {
+      parts = this.db.getTranscriptParts(taskId)
+      maxRev = parts.reduce((m, p) => Math.max(m, p.rev || 0), 0)
+    } else {
+      ({ parts, maxRev } = this.db.getTranscriptDelta(taskId, sinceRev))
+    }
+    return {
+      taskId,
+      epoch: this.transcriptEncoder.epoch,
+      seq: this.transcriptEncoder.currentSeq(taskId),
+      maxRev,
+      full,
+      parts
+    }
   }
 
   /** Broadcast automatically discovered URL/screenshot artifacts. Durable file

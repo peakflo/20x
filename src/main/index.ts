@@ -4,7 +4,7 @@ import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, 
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
-import { DatabaseManager, type TranscriptPartRecord } from './database'
+import { DatabaseManager } from './database'
 import { AgentManager } from './agent-manager'
 import { GitHubManager } from './github-manager'
 import { GitLabManager } from './gitlab-manager'
@@ -166,24 +166,28 @@ function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseMana
   /** The newest assistant text of each task, as it is written. */
   const writing = new Map<string, true>()
 
+  // Full records of the parts each `transcript:changed` delta touched (the
+  // event itself only carries appended text).
+  agents.addTranscriptPartsListener((taskId, changed) => {
+    try {
+      if (!taskId || changed.length === 0) return
+      // Every message that changed, in order. A turn can hold several: the
+      // agent says something, uses a tool, and says something else. Taking
+      // only the newest skipped the first message entirely whenever both
+      // landed in one flush.
+      const parts = assistantTextParts(changed)
+      if (parts.length === 0) return
+      writing.set(taskId, true)
+      void voiceSessionManager
+        ?.streamAgentAnswer(taskId, parts)
+        .catch((err) => console.error('[voice] reading the answer failed:', err))
+    } catch (err) {
+      console.error('[voice] watching the transcript failed:', err)
+    }
+  })
+
   agents.addExternalListener((channel, data) => {
     try {
-      if (channel === 'transcript:changed') {
-        const event = data as { taskId?: string; parts?: TranscriptPartRecord[] }
-        if (!event?.taskId || !event.parts?.length) return
-        // Every message that changed, in order. A turn can hold several: the
-        // agent says something, uses a tool, and says something else. Taking
-        // only the newest skipped the first message entirely whenever both
-        // landed in one flush.
-        const parts = assistantTextParts(event.parts)
-        if (parts.length === 0) return
-        writing.set(event.taskId, true)
-        void voiceSessionManager
-          ?.streamAgentAnswer(event.taskId, parts)
-          .catch((err) => console.error('[voice] reading the answer failed:', err))
-        return
-      }
-
       if (channel !== 'agent:status') return
       const event = data as { sessionId?: string; taskId?: string; status?: string }
       if (!event?.sessionId || !event.taskId || !event.status) return

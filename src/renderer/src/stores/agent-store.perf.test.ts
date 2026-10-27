@@ -16,8 +16,16 @@ vi.mock('@/lib/analytics', () => ({
 
 const electronAPI = window.electronAPI
 const transcriptCb = (electronAPI.onTranscriptChanged as unknown as Mock).mock.calls[0][0] as (e: TranscriptChangedEvent) => void
-const getSnapshotMock = electronAPI.agentSession.getTranscriptSnapshot as unknown as Mock
-const getDeltaMock = electronAPI.agentSession.getTranscriptDelta as unknown as Mock
+const getSyncMock = electronAPI.agentSession.getTranscriptSync as unknown as Mock
+
+/** Answer whole-transcript resyncs from `byTask`; catch-ups bring nothing new. */
+function mockSync(byTask: (taskId: string) => TranscriptPartRecord[]): void {
+  getSyncMock.mockImplementation(async (taskId: string, sinceRev?: number) => {
+    const parts = typeof sinceRev === 'number' ? [] : byTask(taskId)
+    const maxRev = parts.reduce((m, p) => Math.max(m, p.rev), sinceRev ?? 0)
+    return { taskId, epoch: 'test-epoch', seq: 0, maxRev, full: typeof sinceRev !== 'number', parts }
+  })
+}
 
 const BASE = 1_750_000_000_000
 function makeTranscript(taskId: string, count: number): TranscriptPartRecord[] {
@@ -66,7 +74,6 @@ beforeEach(() => {
   useAgentStore.setState({ agents: [], isLoading: false, error: null, sessions: new Map() })
   __clearProjectionsForTest()
   vi.clearAllMocks()
-  getDeltaMock.mockResolvedValue({ parts: [], maxRev: 0 })
 })
 
 afterEach(() => {
@@ -76,7 +83,7 @@ afterEach(() => {
 describe('agent-store long-transcript benchmark', () => {
   it('applies one streamed part update to a 5,000-part transcript', async () => {
     const parts = makeTranscript('task-stream', 5000)
-    getSnapshotMock.mockResolvedValue(parts)
+    mockSync(() => parts)
     const release = useAgentStore.getState().bindTranscript('task-stream')
     await waitForMessages('task-stream', 5000)
 
@@ -84,7 +91,7 @@ describe('agent-store long-transcript benchmark', () => {
     for (let i = 0; i < 30; i += 1) {
       const streamed = { ...parts[parts.length - 1], content: `streamed ${i} `.repeat(50), rev: 5001 + i }
       const start = performance.now()
-      transcriptCb({ taskId: 'task-stream', parts: [streamed], maxRev: 5001 + i })
+      transcriptCb({ taskId: 'task-stream', epoch: 'test-epoch', seq: i + 1, maxRev: 5001 + i, ops: [{ op: 'put', part: streamed }] })
       times.push(performance.now() - start)
     }
     report['store: streamed delta into 5k-part transcript (median ms)'] = +median(times).toFixed(3)
@@ -95,7 +102,7 @@ describe('agent-store long-transcript benchmark', () => {
   it('switches back to a recently viewed 5,000-part task', async () => {
     const taskA = makeTranscript('task-a', 5000)
     const taskB = makeTranscript('task-b', 5000)
-    getSnapshotMock.mockImplementation(async (taskId: string) => (taskId === 'task-a' ? taskA : taskB))
+    mockSync((taskId) => (taskId === 'task-a' ? taskA : taskB))
 
     const times: number[] = []
     let releaseCurrent = useAgentStore.getState().bindTranscript('task-a')

@@ -80,8 +80,9 @@ const mockElectronAPI = {
     syncSkillsForTask: vi.fn().mockResolvedValue({ created: [], updated: [], unchanged: [] }),
     learnFromSession: vi.fn().mockResolvedValue({ created: [], updated: [], unchanged: [] }),
     getRawTranscript: vi.fn().mockResolvedValue([]),
-    getTranscriptSnapshot: vi.fn().mockResolvedValue([]),
-    getTranscriptDelta: vi.fn().mockResolvedValue({ parts: [], maxRev: 0 })
+    getTranscriptSync: vi.fn(async (taskId: string, sinceRev?: number) => ({
+      taskId, epoch: 'test-epoch', seq: 0, maxRev: 0, full: typeof sinceRev !== 'number', parts: []
+    }))
   },
   agentConfig: {
     getProviders: vi.fn().mockResolvedValue(null)

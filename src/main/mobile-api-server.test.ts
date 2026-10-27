@@ -38,6 +38,32 @@ describe('mobile task history endpoints', () => {
   })
 })
 
+describe('mobile transcript sync endpoint', () => {
+  it('returns the stream resync answer without backfilling (whole, or since a rev)', async () => {
+    const { db } = createTestDb()
+    const token = 'transcript-sync-token'
+    db.createMobileSession('transcript-phone', createHash('sha256').update(token).digest('hex'), 'Phone')
+    const getTranscriptSync = vi.fn(async (taskId: string, sinceRev?: number) => ({
+      taskId, epoch: 'e1', seq: 7, maxRev: 9, full: typeof sinceRev !== 'number', parts: []
+    }))
+    const port = await startMobileApiServer(db, { getTranscriptSync } as never, {} as never, 21000 + Math.floor(Math.random() * 40000))
+    const headers = { Authorization: `Bearer ${token}` }
+    try {
+      const base = `http://127.0.0.1:${port}/api/tasks/task%2F1/transcript/sync`
+      const whole = await fetch(base, { headers })
+      expect(whole.status).toBe(200)
+      expect(await whole.json()).toEqual({ taskId: 'task/1', epoch: 'e1', seq: 7, maxRev: 9, full: true, parts: [] })
+      const since = await fetch(`${base}?sinceRev=4`, { headers })
+      expect((await since.json()).full).toBe(false)
+      expect(getTranscriptSync.mock.calls).toEqual([
+        ['task/1', undefined, { backfill: false }],
+        ['task/1', 4, { backfill: false }]
+      ])
+      expect((await fetch(base)).status).toBe(401)
+    } finally { stopMobileApiServer(); db.close() }
+  })
+})
+
 describe('mobile push subscription endpoint', () => {
   it('requires a paired session and stores the subscription against it', async () => {
     const { db } = createTestDb()
