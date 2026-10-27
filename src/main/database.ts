@@ -432,6 +432,29 @@ export interface TranscriptPartInput {
   receivedAt?: number
 }
 
+/** A `transcript_parts` row as stored (mapped like `getTranscriptParts`). */
+interface TranscriptPartRow {
+  task_id: string; part_id: string; seq: number; role: string; content: string;
+  part_type: string | null; tool: string | null; payload: string | null;
+  created_at: number; updated_at: number; rev: number
+}
+
+function toTranscriptPartRecord(r: TranscriptPartRow): TranscriptPartRecord {
+  return {
+    taskId: r.task_id,
+    partId: r.part_id,
+    seq: r.seq,
+    role: r.role,
+    content: r.content,
+    rev: r.rev ?? 0,
+    partType: r.part_type ?? undefined,
+    tool: r.tool ? (JSON.parse(r.tool) as unknown) : undefined,
+    payload: r.payload ? (JSON.parse(r.payload) as unknown) : undefined,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }
+}
+
 /** Persisted transcript part returned by snapshot queries. */
 export interface TranscriptPartRecord {
   taskId: string
@@ -2925,6 +2948,24 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   }
 
   /**
+   * The parts written after the task's last user message, in transcript order —
+   * the same result as `sinceLastUserMessage(getTranscriptParts(taskId))`, but
+   * only this turn is read instead of the whole conversation. With no user
+   * message at all, the whole transcript is returned.
+   */
+  getTranscriptPartsSinceLastUserMessage(taskId: string): TranscriptPartRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const last = this.db.prepare(
+      "SELECT created_at, seq FROM transcript_parts WHERE task_id = ? AND role = 'user' ORDER BY created_at DESC, seq DESC LIMIT 1"
+    ).get(taskId) as { created_at: number; seq: number } | undefined
+    if (!last) return this.getTranscriptParts(taskId)
+    const rows = this.db.prepare(
+      'SELECT * FROM transcript_parts WHERE task_id = ? AND (created_at > ? OR (created_at = ? AND seq > ?)) ORDER BY created_at ASC, seq ASC'
+    ).all(taskId, last.created_at, last.created_at, last.seq) as TranscriptPartRow[]
+    return rows.map(toTranscriptPartRecord)
+  }
+
+  /**
    * Records that a task left `fromAgentId` and its earlier conversation has not
    * yet been handed to the agent that now owns it. A task with no transcript has
    * nothing to hand over. When the task passes through unassigned, the agent it
@@ -4031,6 +4072,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   deleteTaskSource(id: string): boolean {
     const result = this.db.prepare('DELETE FROM task_sources WHERE id = ?').run(id)
     return result.changes > 0
+  }
+
+  /** Id and external id of every task that has one, newest first. */
+  getExternalTaskIds(): Array<{ id: string; external_id: string }> {
+    if (!this.ensureDbOpen()) return []
+    return this.db.prepare(
+      'SELECT id, external_id FROM tasks WHERE external_id IS NOT NULL ORDER BY created_at DESC'
+    ).all() as Array<{ id: string; external_id: string }>
   }
 
   getTaskByExternalId(sourceId: string, externalId: string): TaskRecord | undefined {
