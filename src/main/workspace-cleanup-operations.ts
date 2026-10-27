@@ -2,7 +2,7 @@ import { existsSync, readdirSync, rmSync, statSync } from 'fs'
 import { join } from 'path'
 import { terminateProcessesInWorkspaces } from './workspace-process-cleanup'
 import { pruneStaleTurboCache } from './turbo-cache-gc'
-import { retireFinishedWorktrees, type FinishedWorkspaceTask } from './finished-workspace-gc'
+import { retireFinishedWorkspaces, type FinishedWorkspaceTask } from './finished-workspace-gc'
 import {
   activeStatusWorkspaceIds,
   findWorkspacesWithLiveProcesses,
@@ -12,13 +12,13 @@ import {
 export type WorkspaceCleanupJob =
   | { kind: 'orphans'; workspacesRoot: string; taskIds: string[]; retentionDays: number }
   | { kind: 'node-modules'; workspacesRoot: string; tasks: { id: string; status: string }[]; inactiveDays: number }
-  | { kind: 'finished-worktrees'; workspacesRoot: string; tasks: FinishedWorkspaceTask[]; inactiveDays: number }
+  | { kind: 'finished-workspaces'; workspacesRoot: string; tasks: FinishedWorkspaceTask[]; inactiveDays: number }
   | { kind: 'turbo'; reposRoot: string; workspacesRoot: string; inactiveDays: number }
 
 export type WorkspaceCleanupJobResult =
   | { kind: 'orphans'; cleaned: number; errors: string[] }
   | { kind: 'node-modules'; pruned: number; nextCachesPruned: number; errors: string[] }
-  | { kind: 'finished-worktrees'; worktrees: number; errors: string[] }
+  | { kind: 'finished-workspaces'; workspaces: number; errors: string[] }
   | { kind: 'turbo'; files: number; bytes: number; errors: string[] }
 
 export type WorkspaceCleanupWorkerProgress = {
@@ -33,9 +33,11 @@ export async function executeWorkspaceCleanupJob(
   job: WorkspaceCleanupJob,
   onProgress: (progress: WorkspaceCleanupWorkerProgress) => void = () => {}
 ): Promise<WorkspaceCleanupJobResult> {
-  if (job.kind === 'finished-worktrees') {
-    onProgress({ phase: 'retiring', current: 0, total: 0, message: 'Retiring old, clean worktrees...' })
-    return { kind: 'finished-worktrees', ...await retireFinishedWorktrees(job) }
+  if (job.kind === 'finished-workspaces') {
+    onProgress({ phase: 'retiring', current: 0, total: 0, message: 'Retiring finished workspaces...' })
+    return { kind: 'finished-workspaces', ...await retireFinishedWorkspaces({ ...job,
+      onProgress: (current, total) => onProgress({ phase: 'retiring', current, total, message: 'Retiring finished workspaces...' })
+    }) }
   }
   if (job.kind === 'turbo') {
     onProgress({ phase: 'turbo', current: 0, total: 0, message: 'Pruning old Turbo cache files...' })

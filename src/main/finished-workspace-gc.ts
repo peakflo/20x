@@ -1,12 +1,19 @@
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { lstat, readdir } from 'fs/promises'
-import { join } from 'path'
+import { lstat, mkdir, readdir, rename, rm, rmdir } from 'fs/promises'
+import { extname, join, relative } from 'path'
 import { TaskStatus } from '../shared/constants'
+import { ARTIFACT_OUTPUT_DIRECTORIES, artifactWorkpieceForPath } from '../shared/artifacts'
+import { artifactTypeForPath } from './artifacts'
 import { findWorkspacesWithLiveProcesses } from './workspace-node-modules-gc'
 
 const execFileAsync = promisify(execFile)
 const DAY_MS = 24 * 60 * 60 * 1000
+const OUTPUT_DIRECTORIES = ARTIFACT_OUTPUT_DIRECTORIES
+const SKIP_OUTPUT_SCAN = new Set(['.git', '.next', '.turbo', 'node_modules'])
+const ROOT_OUTPUT_EXTENSIONS = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.zip'])
+const ROOT_NON_OUTPUTS = new Set(['AGENTS.md', 'CLAUDE.md', 'heartbeat.md'])
+const STAGING_DIRECTORY = 'retire-staging'
 
 export interface FinishedWorkspaceTask {
   id: string
@@ -16,7 +23,7 @@ export interface FinishedWorkspaceTask {
 }
 
 export interface FinishedWorkspaceResult {
-  worktrees: number
+  workspaces: number
   errors: string[]
 }
 
@@ -36,56 +43,179 @@ export function finishedWorkspaceIds(tasks: readonly FinishedWorkspaceTask[], in
   }).map((task) => task.id)
 }
 
-/** Remove only worktrees with no local files. Git refuses tracked edits and
- * untracked files, but it removes ignored files without asking. Check those
- * explicitly so local ignored data stays in place. Task artifacts remain. */
-export async function retireFinishedWorktrees(input: {
+function isRootOutputFile(name: string): boolean {
+  if (ROOT_NON_OUTPUTS.has(name)) return false
+  const type = artifactTypeForPath(name)
+  return (type !== null && artifactWorkpieceForPath(name, type) !== null) ||
+    ROOT_OUTPUT_EXTENSIONS.has(extname(name).toLowerCase())
+}
+
+/** Find output folders and disposable content without entering dependencies or Git internals. */
+async function inspectDirectory(root: string): Promise<{ outputs: string[]; disposable: boolean }> {
+  const outputs: string[] = []
+  async function visit(directory: string): Promise<{ hasOutput: boolean; disposable: boolean }> {
+    let hasOutput = false
+    let disposable = false
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const child = join(directory, entry.name)
+      if (OUTPUT_DIRECTORIES.has(entry.name.toLowerCase()) && (entry.isDirectory() || entry.isSymbolicLink())) {
+        outputs.push(child)
+        hasOutput = true
+      } else if (entry.isDirectory() && !entry.isSymbolicLink() && !SKIP_OUTPUT_SCAN.has(entry.name)) {
+        const nested = await visit(child)
+        hasOutput ||= nested.hasOutput
+        disposable ||= nested.disposable || !nested.hasOutput
+      } else {
+        disposable = true
+      }
+    }
+    return { hasOutput, disposable }
+  }
+  const { disposable } = await visit(root)
+  return { outputs, disposable }
+}
+
+/** Recover outputs if an earlier cleanup stopped after staging them. */
+async function restoreStagedOutputs(workspace: string): Promise<void> {
+  const stage = join(workspace, '.20x', STAGING_DIRECTORY)
+  try {
+    const metadata = await lstat(stage)
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) throw new Error('Output staging path is not a directory')
+  }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  async function restore(directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const source = join(directory, entry.name)
+      const destination = join(workspace, relative(stage, source))
+      if (OUTPUT_DIRECTORIES.has(entry.name.toLowerCase()) && (entry.isDirectory() || entry.isSymbolicLink())) {
+        await mkdir(join(destination, '..'), { recursive: true })
+        await rename(source, destination)
+      } else if (entry.isDirectory()) {
+        await restore(source)
+        await rmdir(source)
+      }
+    }
+  }
+  await restore(stage)
+  await rmdir(stage)
+}
+
+async function retireDirectory(workspace: string, directory: string, outputs: readonly string[]): Promise<void> {
+  const stage = join(workspace, '.20x', STAGING_DIRECTORY)
+  try {
+    for (const output of outputs) {
+      const destination = join(stage, relative(workspace, output))
+      await mkdir(join(destination, '..'), { recursive: true })
+      await rename(output, destination)
+    }
+    const gitMarker = await lstat(join(directory, '.git')).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (gitMarker?.isFile()) {
+      // Force is intentional: the finished task has passed its retention period.
+      // Git removes its worktree registration as well as its checkout.
+      await execFileAsync('git', ['-C', directory, 'worktree', 'remove', '--force', directory], { timeout: 120_000 })
+    } else {
+      // This also removes separate clones and local files in ordinary directories.
+      await rm(directory, { recursive: true, force: true })
+    }
+  } finally {
+    await restoreStagedOutputs(workspace)
+  }
+}
+
+async function pruneWorkspaceMetadata(workspace: string): Promise<boolean> {
+  const metadata = join(workspace, '.20x')
+  let entries
+  try { entries = await readdir(metadata, { withFileTypes: true }) }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+  let removed = false
+  for (const entry of entries) {
+    if (entry.name === 'artifacts.json' || OUTPUT_DIRECTORIES.has(entry.name.toLowerCase())) continue
+    await rm(join(metadata, entry.name), { recursive: true, force: true })
+    removed = true
+  }
+  return removed
+}
+
+/** Retire all non-output files in old finished task workspaces. The task root,
+ * artifact registry, artifact folders, and output folders remain available. */
+export async function retireFinishedWorkspaces(input: {
   workspacesRoot: string
   tasks: readonly FinishedWorkspaceTask[]
   inactiveDays: number
   nowMs?: number
+  onProgress?: (current: number, total: number) => void
 }): Promise<FinishedWorkspaceResult> {
-  const result: FinishedWorkspaceResult = { worktrees: 0, errors: [] }
+  const result: FinishedWorkspaceResult = { workspaces: 0, errors: [] }
+  if (!Number.isFinite(input.inactiveDays) || input.inactiveDays < 1) {
+    result.errors.push(`Refusing finished workspace retirement with invalid threshold: ${input.inactiveDays}`)
+    return result
+  }
   const ids = finishedWorkspaceIds(input.tasks, input.inactiveDays, input.nowMs)
   if (ids.length === 0) return result
 
-  // When process liveness is unknown, keep every worktree. A running agent may
-  // have a completed task status after a delayed event or another app instance.
+  // A finished status can coexist with a running agent. Keep the workspace
+  // when process liveness cannot be established.
   const live = findWorkspacesWithLiveProcesses(input.workspacesRoot, ids)
   if (live === null) return result
 
-  for (const id of ids) {
-    if (live.has(id)) continue
+  for (const [index, id] of ids.entries()) {
     const workspace = join(input.workspacesRoot, id)
-    let entries
     try {
-      entries = await readdir(workspace, { withFileTypes: true })
+      if (live.has(id)) continue
+      const rootMetadata = await lstat(workspace)
+      if (!rootMetadata.isDirectory() || rootMetadata.isSymbolicLink()) {
+        result.errors.push(`Finished workspace ${id} is not a directory`)
+        continue
+      }
+      const internalMetadata = await lstat(join(workspace, '.20x')).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return null
+        throw error
+      })
+      if (internalMetadata && (!internalMetadata.isDirectory() || internalMetadata.isSymbolicLink())) {
+        result.errors.push(`Finished workspace ${id} has invalid artifact metadata`)
+        continue
+      }
+      await restoreStagedOutputs(workspace)
+      const entries = await readdir(workspace, { withFileTypes: true })
+      let changed = false
+      for (const entry of entries) {
+        const path = join(workspace, entry.name)
+        if (entry.isDirectory() && !entry.isSymbolicLink()) {
+          if (entry.name === '.20x' || OUTPUT_DIRECTORIES.has(entry.name.toLowerCase())) continue
+          if (entry.name === '.git') {
+            await rm(path, { recursive: true, force: true })
+            changed = true
+            continue
+          }
+          const inspected = await inspectDirectory(path)
+          if (inspected.disposable || inspected.outputs.length === 0) {
+            await retireDirectory(workspace, path, inspected.outputs)
+            changed = true
+          }
+        } else if (OUTPUT_DIRECTORIES.has(entry.name.toLowerCase()) && entry.isSymbolicLink()) {
+          continue
+        } else if (!entry.isFile() || !isRootOutputFile(entry.name)) {
+          await rm(path, { recursive: true, force: true })
+          changed = true
+        }
+      }
+      changed = await pruneWorkspaceMetadata(workspace) || changed
+      if (changed) result.workspaces++
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        result.errors.push(`Could not read finished workspace ${id}: ${String(error)}`)
+        result.errors.push(`Could not retire finished workspace ${id}: ${String(error)}`)
       }
-      continue
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.isSymbolicLink()) continue
-      const worktree = join(workspace, entry.name)
-      try {
-        const gitMarker = await lstat(join(worktree, '.git'))
-        if (!gitMarker.isFile()) continue // A managed worktree has a .git file.
-        const { stdout } = await execFileAsync('git', [
-          '-C', worktree, 'status', '--porcelain=v1', '--untracked-files=normal', '--ignored=matching'
-        ], { timeout: 60_000 })
-        if (stdout.trim()) continue
-        await execFileAsync('git', ['-C', worktree, 'worktree', 'remove', worktree], { timeout: 60_000 })
-        result.worktrees++
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
-        // Git refusal means the checkout has local data. Leave it in place and
-        // retry on a later cleanup if the user clears it.
-        const gitError = error as { stderr?: string }
-        if (/contains modified or untracked files|is dirty/i.test(gitError.stderr || '')) continue
-        result.errors.push(`Could not retire worktree ${id}/${entry.name}: ${String(error)}`)
-      }
+    } finally {
+      input.onProgress?.(index + 1, ids.length)
     }
   }
   return result

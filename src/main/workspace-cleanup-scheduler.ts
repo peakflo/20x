@@ -13,7 +13,7 @@ import {
 /** Combined outcome of a cleanup run. */
 export interface CleanupResult {
   cleaned: number
-  retiredWorktrees: number
+  retiredWorkspaces: number
   errors: string[]
   nodeModulesCleaned: number
   nextCachesCleaned: number
@@ -26,14 +26,14 @@ export interface CleanupResult {
  *
  * Runs once daily (every 24 hours). On each tick:
  * 1. Checks if auto-cleanup is enabled via settings
- * 2. Removes old orphaned workspace directories and clean worktrees of finished tasks
+ * 2. Removes old orphaned workspace directories and non-output files of finished tasks
  * 3. Prunes idle `node_modules` and `.next/cache` directories at any depth, for tasks in ANY status
  *    (own enable flag + retention, on by default — deps reinstall from package.json)
  * 4. Prunes old Turbo cache files
  *
  * Settings:
  * - `workspace_autocleanup_enabled` — "true"/"false" (default: "false")
- * - `workspace_autocleanup_days` — age of orphaned directories, finished worktrees, and Turbo files before removal (default: 7)
+ * - `workspace_autocleanup_days` — age of orphaned directories, finished workspaces, and Turbo files before removal (default: 7)
  * - `workspace_nodemodules_gc_enabled` — "true"/"false" (default: "true")
  * - `workspace_nodemodules_gc_days` — days of dependency or cache inactivity before pruning (default: 7)
  */
@@ -76,12 +76,12 @@ export class WorkspaceCleanupScheduler {
 
   /**
    * Manually trigger a cleanup run. Returns the number of workspaces cleaned
-   * plus retired worktrees and the number of idle cache directories and files pruned.
+   * plus retired finished workspaces and the number of idle cache directories and files pruned.
    * Rejects if a cleanup is already in progress (prevents concurrent runs).
    */
   async runNow(): Promise<CleanupResult> {
     if (this.isRunning) {
-      return { cleaned: 0, retiredWorktrees: 0, errors: ['Cleanup is already in progress'], nodeModulesCleaned: 0, nextCachesCleaned: 0, turboFilesCleaned: 0, turboBytesCleaned: 0 }
+      return { cleaned: 0, retiredWorkspaces: 0, errors: ['Cleanup is already in progress'], nodeModulesCleaned: 0, nextCachesCleaned: 0, turboFilesCleaned: 0, turboBytesCleaned: 0 }
     }
     this.isRunning = true
     this.sendToRenderer('workspace:cleanup-progress', { phase: 'starting', current: 0, total: 0 })
@@ -92,7 +92,7 @@ export class WorkspaceCleanupScheduler {
       const turbo = await this.runTurboCachePhase(true)
       const combined: CleanupResult = {
         cleaned: result.cleaned,
-        retiredWorktrees: retired.worktrees,
+        retiredWorkspaces: retired.workspaces,
         errors: [...result.errors, ...nm.errors, ...retired.errors, ...turbo.errors],
         nodeModulesCleaned: nm.pruned,
         nextCachesCleaned: nm.nextCachesPruned,
@@ -104,7 +104,7 @@ export class WorkspaceCleanupScheduler {
         current: combined.cleaned,
         total: combined.cleaned,
         cleaned: combined.cleaned,
-        retiredWorktrees: combined.retiredWorktrees,
+        retiredWorkspaces: combined.retiredWorkspaces,
         nodeModulesCleaned: combined.nodeModulesCleaned,
         nextCachesCleaned: combined.nextCachesCleaned,
         turboFilesCleaned: combined.turboFilesCleaned,
@@ -153,17 +153,17 @@ export class WorkspaceCleanupScheduler {
       // Record last run time
       this.dbManager.setSetting('workspace_autocleanup_last_run', new Date().toISOString())
 
-      if (result.cleaned > 0 || retired.worktrees > 0 || turbo.files > 0) {
-        console.log(`[WorkspaceCleanup] Cleaned ${result.cleaned} orphaned workspace(s), retired ${retired.worktrees} worktree(s), and pruned ${turbo.files} Turbo cache file(s)`)
+      if (result.cleaned > 0 || retired.workspaces > 0 || turbo.files > 0) {
+        console.log(`[WorkspaceCleanup] Cleaned ${result.cleaned} orphaned workspace(s), retired ${retired.workspaces} workspace(s), and pruned ${turbo.files} Turbo cache file(s)`)
         this.sendToRenderer('workspace:cleanup-complete', {
           cleaned: result.cleaned,
-          retiredWorktrees: retired.worktrees,
+          retiredWorkspaces: retired.workspaces,
           turboFilesCleaned: turbo.files,
           turboBytesCleaned: turbo.bytes,
           errors: [...result.errors, ...retired.errors, ...turbo.errors]
         })
       }
-      if (retired.errors.length > 0) console.warn(`[WorkspaceCleanup] Worktree retirement errors: ${retired.errors.join('; ')}`)
+      if (retired.errors.length > 0) console.warn(`[WorkspaceCleanup] Workspace retirement errors: ${retired.errors.join('; ')}`)
       if (turbo.errors.length > 0) console.warn(`[WorkspaceCleanup] Turbo cache errors: ${turbo.errors.join('; ')}`)
     } catch (err) {
       console.error('[WorkspaceCleanup] Error in runCleanup:', err)
@@ -173,8 +173,8 @@ export class WorkspaceCleanupScheduler {
   }
 
   private async doCleanup(reportProgress: boolean): Promise<{ cleaned: number; errors: string[] }> {
-    // Keep task roots and artifacts. A separate worker phase can retire their
-    // clean Git worktrees after the retention period.
+    // Keep task roots and artifacts. A separate worker phase retires all
+    // non-output files of finished tasks after the retention period.
     const allTasks = this.dbManager.getTasks()
     if (allTasks.length === 0) {
       // An unavailable database also reads as an empty task list. Do not infer
@@ -223,14 +223,14 @@ export class WorkspaceCleanupScheduler {
     return this.DEFAULT_RETENTION_DAYS
   }
 
-  private async runFinishedWorkspacePhase(reportProgress: boolean): Promise<{ worktrees: number; errors: string[] }> {
+  private async runFinishedWorkspacePhase(reportProgress: boolean): Promise<{ workspaces: number; errors: string[] }> {
     const result = await runWorkspaceCleanupWorker({
-      kind: 'finished-worktrees',
+      kind: 'finished-workspaces',
       workspacesRoot: WORKSPACES_DIR,
       tasks: this.dbManager.getTasks().map(({ id, status, parent_task_id, updated_at }) => ({ id, status, parent_task_id, updated_at })),
       inactiveDays: this.getRetentionDays()
     }, reportProgress ? (progress) => this.sendToRenderer('workspace:cleanup-progress', progress) : undefined)
-    if (result.kind !== 'finished-worktrees') throw new Error('Unexpected finished worktree cleanup result')
+    if (result.kind !== 'finished-workspaces') throw new Error('Unexpected finished workspace cleanup result')
     return result
   }
 

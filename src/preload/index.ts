@@ -365,7 +365,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('worktree:files', taskId, repos),
     readFile: (taskId: string, repoFullName: string | null, filePath: string): Promise<{ content: string; size: number; binary: boolean; truncated: boolean } | null> =>
       ipcRenderer.invoke('worktree:readFile', taskId, repoFullName, filePath),
-    runCleanupNow: (): Promise<{ cleaned: number; retiredWorktrees: number; errors: string[]; nodeModulesCleaned: number; nextCachesCleaned: number; turboFilesCleaned: number; turboBytesCleaned: number }> =>
+    runCleanupNow: (): Promise<{ cleaned: number; retiredWorkspaces: number; errors: string[]; nodeModulesCleaned: number; nextCachesCleaned: number; turboFilesCleaned: number; turboBytesCleaned: number }> =>
       ipcRenderer.invoke('workspace:runCleanupNow')
   },
   taskSources: {
@@ -479,8 +479,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('worktree:progress', handler)
     return () => ipcRenderer.removeListener('worktree:progress', handler)
   },
-  onWorkspaceCleanupProgress: (callback: (event: { phase: string; current: number; total: number; message?: string; cleaned?: number; retiredWorktrees?: number; nodeModulesCleaned?: number; nextCachesCleaned?: number; turboFilesCleaned?: number; turboBytesCleaned?: number; errors?: string[] }) => void): (() => void) => {
-    const handler = (_: unknown, data: { phase: string; current: number; total: number; message?: string; cleaned?: number; retiredWorktrees?: number; nodeModulesCleaned?: number; nextCachesCleaned?: number; turboFilesCleaned?: number; turboBytesCleaned?: number; errors?: string[] }): void => callback(data)
+  onWorkspaceCleanupProgress: (callback: (event: { phase: string; current: number; total: number; message?: string; cleaned?: number; retiredWorkspaces?: number; nodeModulesCleaned?: number; nextCachesCleaned?: number; turboFilesCleaned?: number; turboBytesCleaned?: number; errors?: string[] }) => void): (() => void) => {
+    const handler = (_: unknown, data: { phase: string; current: number; total: number; message?: string; cleaned?: number; retiredWorkspaces?: number; nodeModulesCleaned?: number; nextCachesCleaned?: number; turboFilesCleaned?: number; turboBytesCleaned?: number; errors?: string[] }): void => callback(data)
     ipcRenderer.on('workspace:cleanup-progress', handler)
     return () => ipcRenderer.removeListener('workspace:cleanup-progress', handler)
   },

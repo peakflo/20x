@@ -13,13 +13,13 @@ import { MASTERMIND_PREWARM_SETTING } from '@/components/orchestrator/Orchestrat
 import { PushNotificationSettings } from './PushNotificationSettings'
 
 /** Human-readable summary of a cleanup run, or null when there is nothing to report. */
-function describeCleanupOutcome(cleaned: number | undefined, retiredWorktrees: number | undefined, nodeModulesCleaned: number | undefined, nextCachesCleaned: number | undefined, turboFilesCleaned: number | undefined): string | null {
+function describeCleanupOutcome(cleaned: number | undefined, retiredWorkspaces: number | undefined, nodeModulesCleaned: number | undefined, nextCachesCleaned: number | undefined, turboFilesCleaned: number | undefined): string | null {
   const parts: string[] = []
   if (cleaned !== undefined && cleaned > 0) {
     parts.push(`Cleaned ${cleaned} workspace${cleaned !== 1 ? 's' : ''}`)
   }
-  if (retiredWorktrees !== undefined && retiredWorktrees > 0) {
-    parts.push(`retired ${retiredWorktrees} finished worktree${retiredWorktrees !== 1 ? 's' : ''}`)
+  if (retiredWorkspaces !== undefined && retiredWorkspaces > 0) {
+    parts.push(`retired ${retiredWorkspaces} finished workspace${retiredWorkspaces !== 1 ? 's' : ''}`)
   }
   if (nodeModulesCleaned !== undefined && nodeModulesCleaned > 0) {
     parts.push(`pruned ${nodeModulesCleaned} idle node_modules`)
@@ -75,7 +75,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
       if (event.phase === 'done') {
         setCleanupRunning(false)
         setCleanupProgress(null)
-        const summary = describeCleanupOutcome(event.cleaned, event.retiredWorktrees, event.nodeModulesCleaned, event.nextCachesCleaned, event.turboFilesCleaned)
+        const summary = describeCleanupOutcome(event.cleaned, event.retiredWorkspaces, event.nodeModulesCleaned, event.nextCachesCleaned, event.turboFilesCleaned)
         if (summary) {
           setCleanupResult(summary)
         } else if (event.errors && event.errors.length > 0) {
@@ -608,14 +608,14 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
 
     <SettingsSection
       title="Workspace Auto-Cleanup"
-      description="Keep task files; remove old orphaned workspaces, clean finished worktrees, idle dependencies, and cache files"
+      description="Keep artifacts and outputs; remove old finished workspace files, idle dependencies, and cache files"
     >
       <div className="space-y-4">
         <div className="flex items-center justify-between py-2 border-b border-border">
           <div className="space-y-0.5">
             <Label htmlFor="autoclean-enabled">Enable auto-cleanup</Label>
             <p className="text-xs text-muted-foreground">
-              Remove old workspaces without a task record, clean finished worktrees, and old Turbo cache files
+              After this period, remove finished workspace files, local edits, and separate Git clones. Keep artifacts and outputs. Clear old Turbo cache files.
             </p>
           </div>
           <Switch
@@ -633,7 +633,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
           <div className="space-y-0.5">
             <Label htmlFor="autoclean-days">Retention period</Label>
             <p className="text-xs text-muted-foreground">
-              Days to keep orphaned workspaces, finished worktrees, and Turbo cache files
+              Days to keep orphaned workspaces, finished workspace files, and Turbo cache files
             </p>
           </div>
           <select
@@ -709,7 +709,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             <div className="space-y-0.5">
               <Label>Manual cleanup</Label>
               <p className="text-xs text-muted-foreground">
-                Remove old orphaned workspaces, clean finished worktrees, idle dependencies, and cache files now
+                Remove old orphaned and finished workspace files, idle dependencies, and cache files now
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -729,7 +729,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                     // The progress listener handles the final state via the 'done' event,
                     // but also handle the IPC response as a fallback
                     if (!cleanupProgress) {
-                      const summary = describeCleanupOutcome(result.cleaned, result.retiredWorktrees, result.nodeModulesCleaned, result.nextCachesCleaned, result.turboFilesCleaned)
+                      const summary = describeCleanupOutcome(result.cleaned, result.retiredWorkspaces, result.nodeModulesCleaned, result.nextCachesCleaned, result.turboFilesCleaned)
                       if (summary) {
                         setCleanupResult(summary)
                       } else if (result.errors.length > 0 && result.errors[0] === 'Cleanup is already in progress') {
