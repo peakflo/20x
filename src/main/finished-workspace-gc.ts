@@ -165,7 +165,10 @@ export async function retireFinishedWorkspaces(input: {
   // A finished status can coexist with a running agent. Keep the workspace
   // when process liveness cannot be established.
   const live = findWorkspacesWithLiveProcesses(input.workspacesRoot, ids)
-  if (live === null) return result
+  if (live === null) {
+    result.errors.push('Could not check running workspace processes; finished workspace retirement was skipped')
+    return result
+  }
 
   for (const [index, id] of ids.entries()) {
     const workspace = join(input.workspacesRoot, id)

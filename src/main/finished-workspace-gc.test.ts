@@ -173,7 +173,8 @@ describe('finished workspace retirement', () => {
       workspacesRoot: '/missing', tasks: [task('done', TaskStatus.Completed)], inactiveDays: 7,
       nowMs: Date.parse('2026-10-27T12:00:00.000Z')
     })
-    expect(result).toEqual({ workspaces: 0, errors: [] })
+    expect(result.workspaces).toBe(0)
+    expect(result.errors).toEqual(['Could not check running workspace processes; finished workspace retirement was skipped'])
   })
 
   it('rejects an invalid retention period', async () => {
