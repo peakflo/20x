@@ -175,8 +175,13 @@ function buildPeakDayLanes(intervals: ClippedInterval[], dayStartMs: number, day
 
   if (dayClipped.length === 0) return []
 
-  const windowStart = Math.min(...dayClipped.map((iv) => iv.start))
-  const windowEnd = Math.max(...dayClipped.map((iv) => iv.end))
+  // Plain loop, not Math.min(...spread): spreading 100k+ args throws RangeError.
+  let windowStart = Infinity
+  let windowEnd = -Infinity
+  for (const iv of dayClipped) {
+    if (iv.start < windowStart) windowStart = iv.start
+    if (iv.end > windowEnd) windowEnd = iv.end
+  }
   const windowSpan = windowEnd - windowStart
   if (windowSpan <= 0) return []
 
@@ -203,18 +208,34 @@ function buildPeakDayLanes(intervals: ClippedInterval[], dayStartMs: number, day
   return [...bySession.values()]
 }
 
-/** Per-calendar-day run/wall hours, one row per day in `[periodStartMs, periodEndMs)` regardless of activity. */
+/**
+ * Per-calendar-day run/wall hours, one row per day in `[periodStartMs, periodEndMs)` regardless of activity.
+ *
+ * Each interval is bucketed only into the days it actually overlaps (one
+ * pass, O(n + total day-spans)) rather than re-clipping every interval for
+ * every day (O(days × n) — ~9M allocations for 50k intervals over 182 days).
+ */
 function buildPerDay(intervals: ClippedInterval[], periodStartMs: number, periodEndMs: number, utcOffsetMinutes: number): ParallelismDayRow[] {
-  const days: ParallelismDayRow[] = []
-  let dayStart = localDayStartMs(periodStartMs, utcOffsetMinutes)
-  while (dayStart < periodEndMs) {
-    const dayEnd = dayStart + MS_PER_DAY
-    const rangeStart = Math.max(dayStart, periodStartMs)
-    const rangeEnd = Math.min(dayEnd, periodEndMs)
+  const firstDayStart = localDayStartMs(periodStartMs, utcOffsetMinutes)
+  const dayCount = Math.max(0, Math.ceil((periodEndMs - firstDayStart) / MS_PER_DAY))
+  const buckets: Array<Array<{ start: number; end: number }>> = Array.from({ length: dayCount }, () => [])
 
-    const dayIntervals = intervals
-      .map((iv) => ({ start: Math.max(iv.start, rangeStart), end: Math.min(iv.end, rangeEnd) }))
-      .filter((iv) => iv.end > iv.start)
+  for (const iv of intervals) {
+    // `intervals` are already clipped to the period, so every index is in range.
+    const firstIdx = Math.floor((iv.start - firstDayStart) / MS_PER_DAY)
+    const lastIdx = Math.min(dayCount - 1, Math.floor((iv.end - 1 - firstDayStart) / MS_PER_DAY))
+    for (let d = Math.max(0, firstIdx); d <= lastIdx; d++) {
+      const dayStart = firstDayStart + d * MS_PER_DAY
+      const start = Math.max(iv.start, dayStart, periodStartMs)
+      const end = Math.min(iv.end, dayStart + MS_PER_DAY, periodEndMs)
+      if (end > start) buckets[d].push({ start, end })
+    }
+  }
+
+  const days: ParallelismDayRow[] = []
+  for (let d = 0; d < dayCount; d++) {
+    const rangeStart = Math.max(firstDayStart + d * MS_PER_DAY, periodStartMs)
+    const dayIntervals = buckets[d]
 
     const runMs = dayIntervals.reduce((sum, iv) => sum + (iv.end - iv.start), 0)
     const { wallMs } = sweep(dayIntervals)
@@ -224,7 +245,6 @@ function buildPerDay(intervals: ClippedInterval[], periodStartMs: number, period
       runHours: runMs / MS_PER_HOUR,
       wallHours: wallMs / MS_PER_HOUR
     })
-    dayStart = dayEnd
   }
   return days
 }
