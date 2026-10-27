@@ -1005,6 +1005,17 @@ app.commandLine.appendSwitch('disable-features', [
   'AcceptCHFrame',                 // Electron-only ALPS extension not in Chrome
 ].join(','))
 
+// Raise the renderer's GPU tile memory budget. With many task panels on the
+// canvas a zoom needs tiles at the new scale for every visible panel at once.
+// At Chromium's default budget cc runs out ("not enough memory for tiles
+// needed now") and draws the tiles it could not raster as holes — panels blink
+// out while zooming. Measured with 50 task panels (M1 Pro): 2048 MB removed all
+// missing tiles (1024 MB did not); tile memory at rest is unchanged (~200 MB),
+// and peaks at ~1.1 GB only during the zoom. This is a cap, not an allocation.
+if (!app.commandLine.hasSwitch('force-gpu-mem-available-mb')) {
+  app.commandLine.appendSwitch('force-gpu-mem-available-mb', '2048')
+}
+
 installProcessStreamErrorHandlers()
 
 app.whenReady().then(async () => {

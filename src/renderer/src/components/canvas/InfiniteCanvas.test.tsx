@@ -612,6 +612,42 @@ describe('InfiniteCanvas', () => {
       expect(layer.style.willChange).toBe('')
     })
 
+    it('makes panel scrollers non-composited for the gesture and restores them with the layer', async () => {
+      useCanvasStore.setState({
+        panels: [{ id: 'p-1', type: 'app' as const, title: 'App', x: 0, y: 0, width: 600, height: 400, zIndex: 1 }],
+      })
+      const { container } = render(<InfiniteCanvas />)
+      await flushFrames()
+      const layer = container.querySelector('[data-canvas-transform-layer="true"]') as HTMLElement
+      const canvas = layer.parentElement as HTMLElement
+      const panel = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
+
+      // A transcript-like scroller with overflowing content, scrolled down…
+      const transcript = document.createElement('div')
+      transcript.className = 'h-full overflow-y-auto'
+      Object.defineProperty(transcript, 'scrollHeight', { value: 5000, configurable: true })
+      Object.defineProperty(transcript, 'clientHeight', { value: 400, configurable: true })
+      transcript.scrollTop = 1234
+      // …and one that does not overflow (never composited, left alone).
+      const idle = document.createElement('div')
+      idle.className = 'overflow-auto'
+      panel.append(transcript, idle)
+
+      fireEvent.wheel(canvas, { deltaY: -4, ctrlKey: true, clientX: 100, clientY: 100 })
+      await flushFrames()
+      expect(transcript.style.overflow).toBe('hidden')
+      expect(transcript.scrollTop).toBe(1234)
+      expect(idle.style.overflow).toBe('')
+
+      // Committed, but still inside the layer release window.
+      await advanceTime(200)
+      expect(transcript.style.overflow).toBe('hidden')
+      await advanceTime(350)
+      expect(layer.style.willChange).toBe('')
+      expect(transcript.style.overflow).toBe('')
+      expect(transcript.scrollTop).toBe(1234)
+    })
+
     it('does zero React commits per wheel frame, however many panels are open', async () => {
       useCanvasStore.setState({
         panels: Array.from({ length: 30 }, (_, i) => ({
