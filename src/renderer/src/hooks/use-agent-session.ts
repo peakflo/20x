@@ -210,7 +210,9 @@ export function useAgentSession(taskId: string | undefined) {
       store.beginSend(taskId)
       try {
         if (currentSession?.sessionId) {
-          const result = await agentSessionApi.send(currentSession.sessionId, message, taskId, currentSession.agentId, options?.attachments, options?.inlineChoice)
+          const result = options?.inlineChoice
+            ? await agentSessionApi.send(currentSession.sessionId, message, taskId, currentSession.agentId, options.attachments, options.inlineChoice)
+            : await agentSessionApi.send(currentSession.sessionId, message, taskId, currentSession.agentId, options?.attachments)
           // Session was recreated on the main process — update renderer store
           if (result.newSessionId && taskId) {
             initSession(taskId, result.newSessionId, currentSession.agentId)
@@ -226,7 +228,9 @@ export function useAgentSession(taskId: string | undefined) {
           // Fallback: session mapping lost in renderer — ask the backend
           // to find (or resume/create) the session by taskId directly.
           console.log('[use-agent-session] sendMessage() no sessionId, falling back to sendByTaskId:', taskId)
-          const result = await agentSessionApi.sendByTaskId(taskId, message, options?.attachments, options?.inlineChoice)
+          const result = options?.inlineChoice
+            ? await agentSessionApi.sendByTaskId(taskId, message, options.attachments, options.inlineChoice)
+            : await agentSessionApi.sendByTaskId(taskId, message, options?.attachments)
           // Update renderer store with the recovered/new sessionId
           const resolvedSessionId = result.newSessionId || result.sessionId
           if (resolvedSessionId) {

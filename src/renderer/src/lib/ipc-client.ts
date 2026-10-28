@@ -269,11 +269,15 @@ export const agentSessionApi = {
   },
 
   send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[], inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice): Promise<{ success: boolean; newSessionId?: string }> => {
-    return window.electronAPI.agentSession.send(sessionId, message, taskId, agentId, attachments, inlineChoice)
+    return inlineChoice
+      ? window.electronAPI.agentSession.send(sessionId, message, taskId, agentId, attachments, inlineChoice)
+      : window.electronAPI.agentSession.send(sessionId, message, taskId, agentId, attachments)
   },
 
   sendByTaskId: (taskId: string, message: string, attachments?: AgentMessageAttachment[], inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice): Promise<{ success: boolean; sessionId: string | null; newSessionId?: string }> => {
-    return window.electronAPI.agentSession.sendByTaskId(taskId, message, attachments, inlineChoice)
+    return inlineChoice
+      ? window.electronAPI.agentSession.sendByTaskId(taskId, message, attachments, inlineChoice)
+      : window.electronAPI.agentSession.sendByTaskId(taskId, message, attachments)
   },
 
   approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string): Promise<{ success: boolean }> => {
