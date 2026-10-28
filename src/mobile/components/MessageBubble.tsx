@@ -472,7 +472,7 @@ const ReasoningMessage = memo(function ReasoningMessage({ message, searchQuery }
 // virtualization, which makes this the difference between O(changed) and O(all)
 // work per delta.
 export const MessageActivityGroup = memo(
-  function MessageActivityGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
+  function MessageActivityGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact, onInlineChoice }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void; onInlineChoice?: (text: string, choice: import('@shared/inline-html-choice').InlineHtmlChoice) => void | Promise<unknown> }) {
     return (
       <>
         <div className="w-full border-l border-border/30 pl-2 py-0.5">
@@ -502,6 +502,8 @@ export const MessageActivityGroup = memo(
               artifact={artifact}
               artifactApi={mobileArtifactApi}
               onLinkClick={openExternalLink}
+              sourceMessageId={message.role === 'assistant' ? message.id : undefined}
+              onChoice={message.role === 'assistant' ? onInlineChoice : undefined}
             />
           )
         })}
@@ -512,6 +514,7 @@ export const MessageActivityGroup = memo(
     prev.searchQuery === next.searchQuery &&
     prev.artifacts === next.artifacts &&
     prev.onOpenArtifact === next.onOpenArtifact &&
+    prev.onInlineChoice === next.onInlineChoice &&
     prev.messages.length === next.messages.length &&
     prev.messages.every((message, index) => message === next.messages[index])
 )
@@ -618,6 +621,7 @@ export const MessageBubble = memo(function MessageBubble({ message, onAnswer, ca
         isError && 'w-full border-l border-red-500/40 pl-3 py-1 text-red-200',
         !isUser && !isSystem && !isError && 'w-full py-1 text-foreground/80'
       )}>
+        {isUser && message.inlineChoice && <div className="text-[10px] text-muted-foreground">Sent from a button</div>}
         <div className="break-words min-w-0">
           <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
         </div>

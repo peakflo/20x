@@ -593,7 +593,7 @@ function TaskWorkspaceComponent({
   }, [fetchTasks, resume, start, task?.agent_id, task?.id, task?.session_id])
 
   const handleSend = useCallback(
-    async (message: string, options?: { attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }> }) => {
+    async (message: string, options?: { attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>; inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice }) => {
       // Read messages from the store at call time instead of closing over the
       // render-time array: depending on `session.messages` gives this callback
       // a new identity on every streamed delta, which defeats React.memo on
@@ -609,7 +609,7 @@ function TaskWorkspaceComponent({
       }
       const hasActiveQuestion = questionIndex >= 0
         && !messages.slice(questionIndex + 1).some((m) => m.role === 'user')
-      if (hasActiveQuestion) {
+      if (hasActiveQuestion && !options?.inlineChoice) {
         const question = messages[questionIndex]
         const questionKey = question.tool?.requestId || question.id
         if (submittedQuestionIdsRef.current.has(questionKey)) return

@@ -268,12 +268,12 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.stopByTaskId(taskId)
   },
 
-  send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[]): Promise<{ success: boolean; newSessionId?: string }> => {
-    return window.electronAPI.agentSession.send(sessionId, message, taskId, agentId, attachments)
+  send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[], inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice): Promise<{ success: boolean; newSessionId?: string }> => {
+    return window.electronAPI.agentSession.send(sessionId, message, taskId, agentId, attachments, inlineChoice)
   },
 
-  sendByTaskId: (taskId: string, message: string, attachments?: AgentMessageAttachment[]): Promise<{ success: boolean; sessionId: string | null; newSessionId?: string }> => {
-    return window.electronAPI.agentSession.sendByTaskId(taskId, message, attachments)
+  sendByTaskId: (taskId: string, message: string, attachments?: AgentMessageAttachment[], inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice): Promise<{ success: boolean; sessionId: string | null; newSessionId?: string }> => {
+    return window.electronAPI.agentSession.sendByTaskId(taskId, message, attachments, inlineChoice)
   },
 
   approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string): Promise<{ success: boolean }> => {

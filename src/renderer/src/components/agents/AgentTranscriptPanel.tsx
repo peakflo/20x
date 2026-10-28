@@ -263,7 +263,7 @@ interface AgentTranscriptPanelProps {
   onStop: () => void
   onRestart?: () => void
   /** May be async: a rejected send is reported to the user instead of vanishing. */
-  onSend?: (message: string, options?: { attachments?: ComposerAttachment[] }) => void | Promise<void>
+  onSend?: (message: string, options?: { attachments?: ComposerAttachment[]; inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice }) => void | Promise<void>
   onPickAttachments?: () => Promise<ComposerAttachment[]>
   onAddAttachmentPaths?: (filePaths: string[]) => Promise<ComposerAttachment[]>
   className?: string
@@ -645,7 +645,7 @@ function openExternalLink(href: string): boolean {
   return true
 }
 
-function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
+function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact, onInlineChoice }: { messages: AgentMessage[]; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void; onInlineChoice?: (text: string, choice: import('@shared/inline-html-choice').InlineHtmlChoice) => void | Promise<unknown> }) {
   return (
     <>
       <div className="w-full border-l border-border/30 pl-2 py-0.5">
@@ -678,6 +678,8 @@ function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFAC
             artifact={artifact}
             artifactApi={artifactApi}
             onLinkClick={openExternalLink}
+            sourceMessageId={message.role === 'assistant' ? message.id : undefined}
+            onChoice={message.role === 'assistant' ? onInlineChoice : undefined}
           />
         )
       })}
@@ -735,6 +737,7 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
             <AlertTriangle className="h-3 w-3" /> Error
           </span>
         )}
+        {isUser && message.inlineChoice && <div className="text-[10px] text-muted-foreground">Sent from a button</div>}
         <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
         {scadArtifact && artifactApi.renderScad && <InlineScadPreview artifact={scadArtifact} renderModel={artifactApi.renderScad} onOpen={() => onOpenArtifact?.(scadArtifact)} />}
         <div className={`flex items-center gap-2 mt-1 ${!isUser ? 'opacity-70' : ''}`}>
@@ -764,6 +767,7 @@ const MemoizedActivityGroup = React.memo(
     prev.searchQuery === next.searchQuery &&
     prev.artifacts === next.artifacts &&
     prev.onOpenArtifact === next.onOpenArtifact &&
+    prev.onInlineChoice === next.onInlineChoice &&
     prev.messages.length === next.messages.length &&
     prev.messages.every((message, index) => message === next.messages[index])
 )
@@ -1484,7 +1488,7 @@ export function AgentTranscriptPanel({
                       >
                         <div className="pb-2">
                           {item.type === 'activity' ? (
-                            <MemoizedActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} artifacts={taskArtifacts} onOpenArtifact={handleOpenArtifact} />
+                            <MemoizedActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} artifacts={taskArtifacts} onOpenArtifact={handleOpenArtifact} onInlineChoice={onSend ? (text, choice) => onSend(text, { inlineChoice: choice }) : undefined} />
                           ) : (
                             <MemoizedMessageBubble
                               message={item.message}

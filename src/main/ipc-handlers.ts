@@ -677,18 +677,18 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     'agentSession:sendByTaskId',
-    async (_, taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
+    async (_, taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>, inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice) => {
       agentManager.noteUserTaskActivity(taskId)
-      const result = await agentManager.sendByTaskId(taskId, message, attachments)
+      const result = await agentManager.sendByTaskId(taskId, message, attachments, inlineChoice)
       return { success: true, ...result }
     }
   )
 
   ipcMain.handle(
     'agentSession:send',
-    async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) => {
+    async (_, sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>, inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice) => {
       agentManager.noteUserTaskActivity(taskId, sessionId)
-      const result = await agentManager.sendMessage(sessionId, message, taskId, agentId, attachments)
+      const result = await agentManager.sendMessage(sessionId, message, taskId, agentId, attachments, inlineChoice)
       return { success: true, ...result }
     }
   )

@@ -307,8 +307,8 @@ interface ElectronAPI {
     abort: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stopByTaskId: (taskId: string) => Promise<AgentSessionSuccessResult & { sessionId: string | null }>
-    send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[]) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
-    sendByTaskId: (taskId: string, message: string, attachments?: AgentMessageAttachment[]) => Promise<AgentSessionSuccessResult & { sessionId: string | null; newSessionId?: string }>
+    send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[], inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
+    sendByTaskId: (taskId: string, message: string, attachments?: AgentMessageAttachment[], inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice) => Promise<AgentSessionSuccessResult & { sessionId: string | null; newSessionId?: string }>
     approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string) => Promise<AgentSessionSuccessResult>
     syncSkills: (sessionId: string) => Promise<SkillSyncResult>
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>

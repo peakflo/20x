@@ -346,6 +346,25 @@ describe('AgentManager skill file paths', () => {
       )
       expect(file?.[1]).toContain('Approved workflow instructions')
     })
+    it('attaches a default-only system skill only to the default agent', async () => {
+      const skill = makeSkillRecord({ id: 'find-skill', name: 'find-and-automate',
+        enterprise_scope: 'system', enterprise_auto_attach: true,
+        tags: ['attach-to:default-agent'] })
+      const base = createMockDb({ coding_agent: 'codex' })
+      const mockDb = { ...base, getSkills: vi.fn(() => [skill]),
+        getSkillsByIds: vi.fn(() => []),
+        getAgent: vi.fn((id: string) => ({ id, name: id,
+          is_default: id === 'default-agent', config: { coding_agent: 'codex' } }))
+      } as unknown as ConstructorParameters<typeof AgentManager>[0]
+      manager = new AgentManager(mockDb)
+      await (manager as any).writeSkillFiles('task-1', 'default-agent', '/tmp/test-workspace')
+      expect(mockedWriteFileAsync.mock.calls.some((call) =>
+        asPosix(String(call[0])).endsWith('/find-and-automate/SKILL.md'))).toBe(true)
+      mockedWriteFileAsync.mockClear()
+      await (manager as any).writeSkillFiles('task-1', 'other-agent', '/tmp/test-workspace')
+      expect(mockedWriteFileAsync.mock.calls.some((call) =>
+        asPosix(String(call[0])).endsWith('/find-and-automate/SKILL.md'))).toBe(false)
+    })
     it('merges task and agent skill selections, removes duplicates, and excludes unselected skills', async () => {
       const taskSkill = makeSkillRecord({ id: 'task-skill', name: 'task-skill' })
       const sharedSkill = makeSkillRecord({ id: 'shared-skill', name: 'shared-skill' })
@@ -512,6 +531,22 @@ describe('AgentManager skill file paths', () => {
       // are treated as literal YAML string content instead of breaking the parser.
       expect(writtenContent).toContain('name: "[Workflo] gh-pr-base-branch-check"')
       expect(writtenContent).toContain('description: "Check base branch {details}: see #docs"')
+    })
+  })
+
+  describe('inline HTML message source', () => {
+    it('accepts only an assistant part from the same task', () => {
+      const mockDb = { ...createMockDb(), getTranscriptParts: vi.fn((taskId: string) =>
+        taskId === 'task-1' ? [{ partId: 'assistant-1', role: 'assistant' }] : [])
+      } as unknown as ConstructorParameters<typeof AgentManager>[0]
+      manager = new AgentManager(mockDb)
+      const session = { taskId: 'task-1' }
+      expect(() => (manager as any).assertInlineChoice(session, 'Explore my systems', undefined,
+        { sourceMessageId: 'assistant-1', action: 'explore.start' })).not.toThrow()
+      expect(() => (manager as any).assertInlineChoice(session, 'Explore my systems', undefined,
+        { sourceMessageId: 'other-task', action: 'explore.start' })).toThrow('Invalid inline HTML choice')
+      expect(() => (manager as any).assertInlineChoice(session, '<b>Explore</b>', undefined,
+        { sourceMessageId: 'assistant-1' })).toThrow('Invalid inline HTML choice')
     })
   })
 
