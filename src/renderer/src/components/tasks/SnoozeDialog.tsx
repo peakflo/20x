@@ -44,7 +44,7 @@ export function SnoozeDialog({ open, onOpenChange, onSnooze }: SnoozeDialogProps
               value={customDate}
               onChange={(e) => setCustomDate(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleCustomSubmit()}
-              className="flex-1 rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
+              className="flex-1 rounded-md border border-input glass-surface px-3 py-2 text-sm placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
             />
             {customDate && (
               <button

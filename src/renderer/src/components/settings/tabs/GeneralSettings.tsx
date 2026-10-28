@@ -531,7 +531,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
               <img src={qrDataUrl} alt="QR code" className="rounded-lg border border-border" width={200} height={200} />
               {/* PIN overlay — shown when phone has scanned and is waiting for PIN */}
               {pairingPin && (
-                <div className="absolute inset-0 bg-background/95 rounded-lg flex flex-col items-center justify-center gap-2">
+                <div className="absolute inset-0 glass-surface rounded-lg flex flex-col items-center justify-center gap-2">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Enter this PIN on your phone</p>
                   <div className="flex gap-1.5">
                     {pairingPin.split('').map((d, i) => (
@@ -845,7 +845,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                 await settingsApi.set('heartbeat_active_hours_start', e.target.value)
               }}
               disabled={loading || !heartbeatEnabled}
-              className="bg-transparent border rounded px-2 py-1 text-sm disabled:opacity-50"
+              className="glass-surface border rounded px-2 py-1 text-sm disabled:opacity-50"
               placeholder="09:00"
             />
             <span className="text-muted-foreground">to</span>
@@ -857,7 +857,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                 await settingsApi.set('heartbeat_active_hours_end', e.target.value)
               }}
               disabled={loading || !heartbeatEnabled}
-              className="bg-transparent border rounded px-2 py-1 text-sm disabled:opacity-50"
+              className="glass-surface border rounded px-2 py-1 text-sm disabled:opacity-50"
               placeholder="22:00"
             />
           </div>
@@ -879,7 +879,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             }}
             disabled={loading || !heartbeatEnabled}
             rows={6}
-            className="w-full bg-transparent border rounded px-3 py-2 text-sm font-mono disabled:opacity-50 resize-y placeholder:text-muted-foreground"
+            className="w-full glass-surface border rounded px-3 py-2 text-sm font-mono disabled:opacity-50 resize-y placeholder:text-muted-foreground"
             placeholder="e.g. Always run `gh api` calls to verify status. Never skip checks. Reply HEARTBEAT_OK only when everything is clean."
           />
         </div>

@@ -595,6 +595,7 @@ describe('InfiniteCanvas', () => {
       // DOM moved…
       expect(layer.style.transform).toBe('translate(-30px, -40px) scale(1)')
       expect(layer.style.willChange).toBe('transform')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(true)
       // …but the store was NOT written during the gesture.
       expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
 
@@ -602,14 +603,17 @@ describe('InfiniteCanvas', () => {
       await advanceTime(200)
       expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -40, zoom: 1 })
       expect(layer.style.willChange).toBe('transform')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(true)
       // A second wheel event inside the release window keeps the same layer.
       fireEvent.wheel(canvas, { deltaY: 10 })
       await flushFrames()
       await advanceTime(250)
       expect(layer.style.willChange).toBe('transform')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(true)
       expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -50, zoom: 1 })
       await advanceTime(250)
       expect(layer.style.willChange).toBe('')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(false)
     })
 
     it('makes panel scrollers non-composited for the gesture and restores them with the layer', async () => {
@@ -644,6 +648,7 @@ describe('InfiniteCanvas', () => {
       expect(transcript.style.overflow).toBe('hidden')
       await advanceTime(350)
       expect(layer.style.willChange).toBe('')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(false)
       expect(transcript.style.overflow).toBe('')
       expect(transcript.scrollTop).toBe(1234)
     })
@@ -786,6 +791,7 @@ describe('InfiniteCanvas', () => {
       // Moved on the compositor, store untouched (left/top still the origin).
       expect(panelEl.style.transform).toBe('translate(60px, 50px)')
       expect(panelEl.style.willChange).toBe('transform')
+      expect(panelEl.dataset.canvasMoving).toBe('true')
       expect(useCanvasStore.getState().panels[0]).toMatchObject({ x: 100, y: 100 })
 
       await act(async () => {
@@ -795,6 +801,7 @@ describe('InfiniteCanvas', () => {
       expect(useCanvasStore.getState().panels[0]).toMatchObject({ x: 160, y: 150 })
       expect(panelEl.style.transform).toBe('')
       expect(panelEl.style.willChange).toBe('')
+      expect(panelEl.hasAttribute('data-canvas-moving')).toBe(false)
     })
   })
 
