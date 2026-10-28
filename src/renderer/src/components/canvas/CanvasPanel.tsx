@@ -506,6 +506,7 @@ export const CanvasPanel = memo(function CanvasPanel({ panel, commitPendingViewp
     <div
       ref={panelRef}
       data-canvas-panel="true"
+      data-canvas-moving={isDragging || isResizing ? 'true' : undefined}
       data-canvas-panel-selected={isSelected ? 'true' : 'false'}
       onMouseDown={handleMouseDown}
       onMouseEnter={handlePanelMouseEnter}

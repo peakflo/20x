@@ -568,6 +568,7 @@ export function InfiniteCanvas() {
     // will-change keeps a dedicated compositor layer (and its memory) alive.
     const layer = transformLayerRef.current
     if (layer) {
+      layer.setAttribute('data-canvas-gesturing', '')
       layer.style.willChange = 'transform'
       // Still flattened if the previous gesture's release timer was pending.
       if (!flattenedScrollersRef.current) flattenedScrollersRef.current = flattenPanelScrollers(layer)
@@ -611,7 +612,10 @@ export function InfiniteCanvas() {
       const layer = transformLayerRef.current
       if (layerReleaseTimerRef.current != null) clearTimeout(layerReleaseTimerRef.current)
       layerReleaseTimerRef.current = setTimeout(() => {
-        if (layer) layer.style.willChange = ''
+        if (layer) {
+          layer.style.willChange = ''
+          layer.removeAttribute('data-canvas-gesturing')
+        }
         // Same moment as the layer release: one re-layerization, not two.
         if (flattenedScrollersRef.current) {
           restorePanelScrollers(flattenedScrollersRef.current)

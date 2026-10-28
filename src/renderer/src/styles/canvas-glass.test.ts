@@ -2,30 +2,27 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 
-// Each backdrop-filter inside a canvas panel is a blur pass that the
-// compositor redoes on every pan/zoom frame. In a real Electron window
-// (scripts/perf/canvas-gesture-bench) 20 task panels dropped zoom from
-// ~117 fps to ~18 fps with them. Keep them switched off inside panels.
+// Keep the gesture performance fallback, but never leave idle glass unblurred.
 describe('canvas panel glass', () => {
   const css = readFileSync(join(__dirname, 'globals.css'), 'utf8')
+  const motionRule = css.match(/:is\(\[data-canvas-gesturing\][^{]+\{([^}]*)\}/)!
 
-  it('turns off backdrop-filter for every glass surface inside a canvas panel', () => {
-    const rule = css.match(/\[data-canvas-panel\] :is\(([^)]*)\),\s*\[data-canvas-panel\] \.glass-composer::before \{([^}]*)\}/)
-    expect(rule).toBeTruthy()
-    const [, selectors, body] = rule!
-    for (const cls of ['glass-task-detail-bar', 'glass-control', 'glass-action', 'glass-todo-summary', 'glass-attachment-chip', 'glass-popover']) {
-      expect(selectors).toContain(`.${cls}`)
-    }
-    expect(body).toContain('-webkit-backdrop-filter: none')
-    expect(body).toMatch(/(^|[^-])backdrop-filter: none/)
+  it('uses an opaque fill when motion disables blur', () => {
+    expect(motionRule).toBeTruthy()
+    expect(motionRule[1]).toContain('background: var(--glass-solid)')
+    expect(motionRule[1]).toContain('-webkit-backdrop-filter: none')
+    expect(motionRule[1]).toMatch(/(^|[^-])backdrop-filter: none/)
+    expect(motionRule[0]).toContain('[data-canvas-moving="true"]')
+    expect(css).not.toMatch(/^\[data-canvas-panel\] .*backdrop-filter: none/m)
   })
 
-  it('covers every glass class that sets a backdrop-filter', () => {
-    const blurred = css.match(/^\.glass-task-detail-bar, ([^{]*)\{\s*border-color: var\(--glass-outline\);\s*-webkit-backdrop-filter/m)
+  it('freezes every glass surface, including composer pseudo-elements', () => {
+    const blurred = css.match(/^\.glass-task-detail-bar, ([^{]*)\{\s*border-color: var\(--glass-outline\);\s*-webkit-backdrop-filter/m)!
     expect(blurred).toBeTruthy()
-    const rule = css.match(/\[data-canvas-panel\] :is\(([^)]*)\)/)!
-    for (const cls of blurred![1].split(',').map((s) => s.trim()).filter(Boolean)) {
-      expect(rule[1]).toContain(cls)
+    for (const cls of blurred[1].split(',').map((s) => s.trim()).filter(Boolean)) {
+      expect(motionRule[0]).toContain(cls)
     }
+    expect(motionRule[0]).toContain('.glass-todo-summary')
+    expect(motionRule[0]).toContain('.glass-composer::before')
   })
 })

@@ -1541,7 +1541,7 @@ export function AgentTranscriptPanel({
             onDrop={handleComposerDrop}
           >
             {isDragOverComposer && (
-              <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-xl border border-dashed border-primary/40 bg-background/90">
+              <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-xl border border-dashed border-primary/40 glass-surface">
                 <span className="text-xs font-medium text-primary">Drop files to attach them to this message</span>
               </div>
             )}
@@ -1593,7 +1593,7 @@ export function AgentTranscriptPanel({
                 />
               </div>
               <VoiceMicButton mode="dictation" onSubmit={handleSend} className="glass-action !h-[32px] !w-[32px] !rounded-full" />
-              <Button variant="default" size="icon" onClick={handleSend} disabled={isStarting || !inputHasValue} className="glass-action glass-send !h-[32px] !w-[32px] disabled:!bg-[var(--glass-control)] disabled:!text-muted-foreground" aria-label="Send message">
+              <Button variant="default" size="icon" onClick={handleSend} disabled={isStarting || !inputHasValue} className="glass-action glass-send !h-[32px] !w-[32px] disabled:!text-muted-foreground" aria-label="Send message">
                 <Send className="h-4 w-4" />
               </Button>
             </div>

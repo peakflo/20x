@@ -77,7 +77,7 @@ export function SkillSelectorDialog({ open, onOpenChange, initialSkillIds, onCon
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Filter skills..."
-              className="w-full rounded-md border border-input bg-transparent pl-9 pr-3 py-2 text-sm placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
+              className="w-full rounded-md border border-input glass-surface pl-9 pr-3 py-2 text-sm placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
             />
           </div>
 
