@@ -47,6 +47,11 @@ const COLUMNS: StatusColumn[] = [
   { key: TaskStatus.AgentLearning, label: 'Agent Learning', Icon: Sparkles, iconColor: 'text-blue-400', surface: 'border-blue-500/15 bg-blue-500/[0.06]' }
 ]
 
+// Model Error is only relevant when something has failed: the column is hidden
+// unless at least one task is in that state (and in the loading skeleton,
+// where the count is not yet known).
+const isConditionalColumn = (key: TaskStatus): boolean => key === TaskStatus.ModelError
+
 const PRIORITY_ORDER: Record<string, number> = {
   critical: 0,
   high: 1,
@@ -388,6 +393,11 @@ export function TaskBoard() {
 
   const activeTasks = topLevelTasks.length - tasksByStatus.completedCount
 
+  const visibleColumns = useMemo(
+    () => COLUMNS.filter((col) => !isConditionalColumn(col.key) || tasksByStatus.grouped[col.key].length > 0),
+    [tasksByStatus]
+  )
+
   return (
     <section>
       {/* Header */}
@@ -408,7 +418,7 @@ export function TaskBoard() {
 
       {isLoading ? (
         <div className="flex gap-3 pb-2 overflow-x-auto">
-          {COLUMNS.map((col) => (
+          {COLUMNS.filter((col) => !isConditionalColumn(col.key)).map((col) => (
             <div key={col.key} className={cn(COLUMN_SURFACE, col.surface)}>
               <div className="flex items-center gap-2 px-3 h-10">
                 <col.Icon className={`h-3.5 w-3.5 ${col.iconColor} opacity-50`} strokeWidth={2.25} />
@@ -434,7 +444,7 @@ export function TaskBoard() {
         </div>
       ) : (
         <div className="flex gap-3 pb-2 overflow-x-auto">
-          {COLUMNS.map((col) => (
+          {visibleColumns.map((col) => (
             <BoardColumn
               key={col.key}
               column={col}
