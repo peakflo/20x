@@ -24,6 +24,8 @@ export function findMessageArtifact(message: ArtifactLookupMessage, artifacts: A
   try { haystack += `\n${typeof message.tool.input === 'string' ? message.tool.input : JSON.stringify(message.tool.input)}\n${typeof message.tool.output === 'string' ? message.tool.output : JSON.stringify(message.tool.output)}` } catch { /* ignore unserializable tool payloads */ }
   return artifacts.find((artifact) => {
     const target = artifact.path || artifact.url
-    return !!target && (haystack.includes(target) || haystack.replace(/\\/g, '/').includes(target.replace(/\\/g, '/')))
+    const artifactKey = artifact.workpieceKey || artifact.path?.match(/(?:^|\/)artifacts\/([^/]+)\//)?.[1]
+    return (!!artifactKey && haystack.includes(artifactKey)) ||
+      (!!target && (haystack.includes(target) || haystack.replace(/\\/g, '/').includes(target.replace(/\\/g, '/'))))
   })
 }
