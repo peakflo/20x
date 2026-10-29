@@ -261,6 +261,33 @@ describe('DashboardWorkspace', () => {
     expect(screen.getByText('high')).toBeDefined()
   })
 
+  it('hides the Model Error column when no task is in that state', () => {
+    useTaskStore.setState({
+      tasks: [
+        makeTask({ id: 'task-1', title: 'Some task', status: TaskStatus.NotStarted })
+      ]
+    })
+
+    render(<DashboardWorkspace />)
+    expect(screen.queryByText('Model Error')).toBeNull()
+    // Other empty columns still render
+    expect(screen.getByText('Triaging')).toBeDefined()
+    expect(screen.getByText('Ready for Review')).toBeDefined()
+  })
+
+  it('shows the Model Error column when at least one task is in that state', () => {
+    useTaskStore.setState({
+      tasks: [
+        makeTask({ id: 'task-1', title: 'Some task', status: TaskStatus.NotStarted }),
+        makeTask({ id: 'task-2', title: 'Failed task', status: TaskStatus.ModelError })
+      ]
+    })
+
+    render(<DashboardWorkspace />)
+    expect(screen.getByText('Model Error')).toBeDefined()
+    expect(screen.getByText('Failed task')).toBeDefined()
+  })
+
   it('filters out subtasks from the task board', () => {
     useEnterpriseStore.setState({ isAuthenticated: true })
     useTaskStore.setState({
