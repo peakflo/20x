@@ -25,8 +25,9 @@ import type { WorkfloTask, Agent } from '@/types'
 
 // ── Status column definitions (matching 20x local TaskStatus enum) ──
 // Completed is excluded from columns — shown as a count-only summary instead.
-// Columns stay neutral; status colour lives only on the header icon so the
-// board reads calmly in both light and dark mode. `text-*-400` shades are
+// Each column gets a faint wash of its header-icon hue. The tint is an
+// opacity-based `-500` shade, so it sits subtly on both the light and dark
+// background and white cards keep their contrast. `text-*-400` shades are
 // remapped to darker, legible values in light mode by globals.css.
 
 interface StatusColumn {
@@ -34,15 +35,16 @@ interface StatusColumn {
   label: string
   Icon: LucideIcon
   iconColor: string
+  surface: string
 }
 
 const COLUMNS: StatusColumn[] = [
-  { key: TaskStatus.NotStarted, label: 'Not Started', Icon: Circle, iconColor: 'text-muted-foreground' },
-  { key: TaskStatus.Triaging, label: 'Triaging', Icon: CircleDashed, iconColor: 'text-slate-400' },
-  { key: TaskStatus.AgentWorking, label: 'Agent Working', Icon: CircleDotDashed, iconColor: 'text-amber-400' },
-  { key: TaskStatus.ModelError, label: 'Model Error', Icon: CircleAlert, iconColor: 'text-red-400' },
-  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', Icon: CircleDot, iconColor: 'text-pink-400' },
-  { key: TaskStatus.AgentLearning, label: 'Agent Learning', Icon: Sparkles, iconColor: 'text-blue-400' }
+  { key: TaskStatus.NotStarted, label: 'Not Started', Icon: Circle, iconColor: 'text-muted-foreground', surface: 'border-border/70 bg-foreground/[0.025]' },
+  { key: TaskStatus.Triaging, label: 'Triaging', Icon: CircleDashed, iconColor: 'text-slate-400', surface: 'border-slate-500/15 bg-slate-500/[0.06]' },
+  { key: TaskStatus.AgentWorking, label: 'Agent Working', Icon: CircleDotDashed, iconColor: 'text-amber-400', surface: 'border-amber-500/15 bg-amber-500/[0.06]' },
+  { key: TaskStatus.ModelError, label: 'Model Error', Icon: CircleAlert, iconColor: 'text-red-400', surface: 'border-red-500/15 bg-red-500/[0.06]' },
+  { key: TaskStatus.ReadyForReview, label: 'Ready for Review', Icon: CircleDot, iconColor: 'text-pink-400', surface: 'border-pink-500/15 bg-pink-500/[0.06]' },
+  { key: TaskStatus.AgentLearning, label: 'Agent Learning', Icon: Sparkles, iconColor: 'text-blue-400', surface: 'border-blue-500/15 bg-blue-500/[0.06]' }
 ]
 
 const PRIORITY_ORDER: Record<string, number> = {
@@ -302,13 +304,13 @@ const ColumnHeader = memo(function ColumnHeader({ column, count }: { column: Sta
 })
 
 const COLUMN_SURFACE =
-  'min-w-[240px] max-w-[320px] flex-1 flex flex-col rounded-xl border border-border/70 bg-foreground/[0.025]'
+  'min-w-[240px] max-w-[320px] flex-1 flex flex-col rounded-xl border'
 
 // ── Column wrapper ───────────────────────────────────────────
 
 const BoardColumn = memo(function BoardColumn({ column, tasks, onSelect, agentMap }: { column: StatusColumn; tasks: WorkfloTask[]; onSelect: (id: string) => void; agentMap: Map<string, Agent> }) {
   return (
-    <div className={COLUMN_SURFACE}>
+    <div className={cn(COLUMN_SURFACE, column.surface)}>
       {/* Sticky header within column */}
       <div className="sticky top-0 z-10 rounded-t-xl">
         <ColumnHeader column={column} count={tasks.length} />
@@ -407,7 +409,7 @@ export function TaskBoard() {
       {isLoading ? (
         <div className="flex gap-3 pb-2 overflow-x-auto">
           {COLUMNS.map((col) => (
-            <div key={col.key} className={COLUMN_SURFACE}>
+            <div key={col.key} className={cn(COLUMN_SURFACE, col.surface)}>
               <div className="flex items-center gap-2 px-3 h-10">
                 <col.Icon className={`h-3.5 w-3.5 ${col.iconColor} opacity-50`} strokeWidth={2.25} />
                 <span className="text-[12.5px] font-semibold text-muted-foreground/70">{col.label}</span>
