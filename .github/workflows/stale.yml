@@ -1,0 +1,45 @@
+name: Close stale pull requests
+
+on:
+  schedule:
+    # Every Saturday at 03:17 UTC.
+    - cron: '17 3 * * 6'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: stale-pull-requests
+  cancel-in-progress: false
+
+jobs:
+  stale:
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 20
+    permissions:
+      actions: write
+      pull-requests: write
+    steps:
+      - name: Mark and close inactive pull requests
+        uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93 # v11.0.0
+        with:
+          # Issues are outside this cleanup policy.
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+          days-before-pr-stale: 30
+          days-before-pr-close: 30
+          exempt-draft-pr: true
+          delete-branch: false
+          stale-pr-label: stale
+          remove-pr-stale-when-updated: true
+          ignore-pr-updates: false
+          operations-per-run: 1000
+          stale-pr-message: >-
+            This pull request has had no activity for 30 days and is now marked
+            as stale. It will be closed after another 30 days without activity.
+            Comment or update the pull request to keep it open. Draft pull
+            requests are exempt. The branch will not be deleted.
+          close-pr-message: >-
+            This pull request has been closed after another 30 days without
+            activity since it was marked stale. You can reopen it when work
+            resumes. The branch has not been deleted.

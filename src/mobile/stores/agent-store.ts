@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { api, type TranscriptPartRecord } from '../api/client'
 import { onEvent } from '../api/websocket'
+import { TranscriptStreamReceiver, type TranscriptDeltaEvent } from '@shared/transcript-stream'
 import { captureAnalyticsEvent } from '@/lib/analytics'
 
 // ── Message types (mirrors desktop agent-store) ──────────────
@@ -96,7 +97,8 @@ export interface Skill {
 // Identical model to the desktop store: the main process owns the durable
 // transcript; the mobile client keeps a per-task cache keyed by stable part id
 // and renders a derived sorted list. One write path: applyParts(), fed by a
-// full snapshot on bind (REST) and idempotent `transcript:changed` deltas (WS).
+// resync on bind (REST) and `transcript:changed` deltas (WS), applied in seq
+// order by the same TranscriptStreamReceiver the desktop uses.
 
 interface ProjectionCache {
   parts: Map<string, TranscriptPartRecord>
@@ -104,14 +106,15 @@ interface ProjectionCache {
 }
 
 const projections = new Map<string, ProjectionCache>()
-const bindingTasks = new Set<string>()
 const outputAnalyticsByTask = new Map<string, { messageCount: number; toolNames: Set<string> }>()
+// Seq/epoch tracking for `transcript:changed`; created with the store below.
+let transcriptReceiver: TranscriptStreamReceiver<TranscriptPartRecord> | null = null
 
 /** Test-only: reset the module-level projection cache between tests. */
 export function __clearProjectionsForTest(): void {
   projections.clear()
-  bindingTasks.clear()
   outputAnalyticsByTask.clear()
+  transcriptReceiver?.forgetAll()
 }
 
 function getProjection(taskId: string): ProjectionCache {
@@ -200,11 +203,12 @@ export const useAgentStore = create<AgentState>((set, get) => {
     commitMessages(taskId)
   }
 
-  const accumulateOutputAnalytics = (taskId: string, parts: TranscriptPartRecord[]): void => {
-    if (parts.length === 0) return
+  const accumulateOutputAnalytics = (taskId: string, changedCount: number, wholeParts: TranscriptPartRecord[]): void => {
+    if (changedCount === 0) return
     const aggregate = outputAnalyticsByTask.get(taskId) || { messageCount: 0, toolNames: new Set<string>() }
-    aggregate.messageCount += parts.length
-    for (const part of parts) {
+    aggregate.messageCount += changedCount
+    // Appends never change a part's tool, so whole parts carry every tool name.
+    for (const part of wholeParts) {
       const toolName = (part.tool as { name?: string } | undefined)?.name
       if (toolName) aggregate.toolNames.add(toolName)
     }
@@ -224,41 +228,50 @@ export const useAgentStore = create<AgentState>((set, get) => {
     })
   }
 
-  const bindTranscript = async (taskId: string): Promise<void> => {
-    if (!taskId || bindingTasks.has(taskId)) return
-    bindingTasks.add(taskId)
-    try {
-      const snapshot = await api.transcript.snapshot(taskId)
-      if (!Array.isArray(snapshot) || snapshot.length === 0) return
-      const maxRev = snapshot.reduce((m, p) => Math.max(m, p.rev || 0), 0)
+  // Applies `transcript:changed` in seq order; pulls a resync on first bind,
+  // a gap, a new sender epoch or a diverged append (see @shared/transcript-stream).
+  const receiver = new TranscriptStreamReceiver<TranscriptPartRecord>({
+    // Only tasks this client bound are followed; others are loaded on bind.
+    isTracked: (taskId) => projections.has(taskId),
+    getPart: (taskId, partId) => projections.get(taskId)?.parts.get(partId),
+    getRev: (taskId) => projections.get(taskId)?.rev ?? 0,
+    commit: (taskId, parts, maxRev) => {
+      if (parts.length > 0) applyParts(taskId, parts, maxRev)
+      else { const cache = projections.get(taskId); if (cache) cache.rev = Math.max(cache.rev, maxRev) }
+    },
+    replace: (taskId, snapshot, maxRev) => {
       projections.set(taskId, { parts: new Map(snapshot.map((p) => [p.partId, p])), rev: maxRev })
-      commitMessages(taskId)
-    } catch (e) {
-      console.error(`[mobile] bindTranscript failed for ${taskId}:`, e)
-    } finally {
-      bindingTasks.delete(taskId)
-    }
+      // An empty task is followed (its first messages must show up) but gets no
+      // phantom session.
+      if (snapshot.length > 0 || get().sessions.has(taskId)) commitMessages(taskId)
+      return true
+    },
+    fetchSync: (taskId, sinceRev) => api.transcript.sync(taskId, sinceRev)
+  })
+  transcriptReceiver = receiver
+
+  /** Load a task's whole transcript and follow its deltas from there. */
+  const bindTranscript = (taskId: string): Promise<void> => {
+    if (!taskId) return Promise.resolve()
+    return receiver.resync(taskId, { full: true })
   }
 
+  /** Catch a followed task up on everything changed since its rev (safety net). */
   const reconcileDelta = async (taskId: string): Promise<void> => {
-    try {
-      const sinceRev = getProjection(taskId).rev
-      const { parts, maxRev } = await api.transcript.delta(taskId, sinceRev)
-      if (parts.length > 0) applyParts(taskId, parts, maxRev)
-      else if (maxRev > sinceRev) getProjection(taskId).rev = maxRev
-    } catch (e) {
-      console.error(`[mobile] reconcileDelta failed for ${taskId}:`, e)
-    }
+    if (!projections.has(taskId)) return
+    await receiver.resync(taskId, { full: false })
   }
 
   // ── WebSocket event subscriptions ──
 
-  // Transcript content: the ONLY writer of messages. Idempotent delta apply.
+  // Transcript content: the ONLY writer of messages.
   onEvent('transcript:changed', (payload) => {
-    const event = payload as { taskId?: string; parts?: TranscriptPartRecord[]; maxRev?: number }
-    if (!event?.taskId) return
-    applyParts(event.taskId, event.parts || [], event.maxRev)
-    accumulateOutputAnalytics(event.taskId, event.parts || [])
+    const event = payload as TranscriptDeltaEvent<TranscriptPartRecord> | undefined
+    if (!event?.taskId || !Array.isArray(event.ops)) return
+    const wholeParts: TranscriptPartRecord[] = []
+    for (const op of event.ops) if (op.op === 'put') wholeParts.push(op.part)
+    receiver.handle(event)
+    accumulateOutputAnalytics(event.taskId, event.ops.length, wholeParts)
   })
 
   // Session state only (status / sessionId) — never messages.
@@ -349,7 +362,14 @@ export const useAgentStore = create<AgentState>((set, get) => {
         const activeSessions = (await api.sessions.list()) as Array<{
           sessionId: string; agentId: string; taskId: string; status: string
         }>
-        if (activeSessions.length === 0) return
+        // A (re)connect may have missed any number of deltas: every followed
+        // task resyncs from a whole snapshot.
+        receiver.forgetAll()
+        const followed = [...projections.keys()]
+        if (activeSessions.length === 0) {
+          await Promise.all(followed.map((taskId) => bindTranscript(taskId)))
+          return
+        }
 
         set((state) => {
           const nextSessions = new Map(state.sessions)
@@ -366,7 +386,8 @@ export const useAgentStore = create<AgentState>((set, get) => {
           return { sessions: nextSessions }
         })
 
-        await Promise.all(activeSessions.map((a) => bindTranscript(a.taskId)))
+        const toBind = new Set([...followed, ...activeSessions.map((a) => a.taskId)])
+        await Promise.all([...toBind].map((taskId) => bindTranscript(taskId)))
       } catch (e) {
         console.error('Failed to sync active sessions:', e)
       }
@@ -411,6 +432,7 @@ export const useAgentStore = create<AgentState>((set, get) => {
 
     removeSession: (taskId) => {
       projections.delete(taskId)
+      receiver.forget(taskId)
       set((state) => {
         const next = new Map(state.sessions)
         next.delete(taskId)

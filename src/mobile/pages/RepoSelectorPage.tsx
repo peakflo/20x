@@ -165,7 +165,7 @@ export function RepoSelectorPage({
 
         <div className="px-2">
           {isLoadingOrgs ? (
-            <div className="h-8 rounded-md border border-input bg-transparent px-3 text-xs text-muted-foreground flex items-center">
+            <div className="h-8 rounded-md border border-input glass-surface px-3 text-xs text-muted-foreground flex items-center">
               Loading organizations...
             </div>
           ) : (
@@ -173,7 +173,7 @@ export function RepoSelectorPage({
               value={selectedOrg}
               onChange={(e) => handleOrgChange(e.target.value)}
               disabled={orgOptions.length === 0}
-              className="h-8 w-full rounded-md border border-input bg-transparent px-2 text-xs text-foreground focus:border-ring focus:ring-1 focus:ring-ring/30 disabled:opacity-50"
+              className="h-8 w-full rounded-md border border-input glass-surface px-2 text-xs text-foreground focus:border-ring focus:ring-1 focus:ring-ring/30 disabled:opacity-50"
             >
               {orgOptions.map((owner) => (
                 <option key={owner.value} value={owner.value}>
@@ -205,7 +205,7 @@ export function RepoSelectorPage({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Filter repositories..."
-            className="w-full rounded-md border border-input bg-transparent pl-9 pr-3 py-2 text-sm placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
+            className="w-full rounded-md border border-input glass-surface pl-9 pr-3 py-2 text-sm placeholder:text-muted-foreground focus:border-ring focus:ring-1 focus:ring-ring/30"
           />
         </div>
       </div>

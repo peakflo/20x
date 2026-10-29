@@ -194,6 +194,26 @@ describe('WorktreeManager', () => {
     expect(execFileMock.mock.calls.some(([file, args]) => file === 'git' && args[0] === 'worktree' && args[1] === 'add')).toBe(false)
   })
 
+  it('removes a managed worktree without inherited Git repository paths', async () => {
+    const barePath = path.join('/tmp/20x-user-data', 'repos', 'peakflo', '20x.git')
+    const wtPath = path.join('/tmp/20x-user-data', 'workspaces', 'task-clean', '20x')
+    existsSyncMock.mockImplementation((candidate: string) => candidate === barePath || candidate === wtPath)
+    execFileMock.mockImplementation((_file: string, _args: string[], _options: unknown,
+      callback: (error: Error | null, stdout?: string, stderr?: string) => void) => callback(null, '', ''))
+    vi.stubEnv('GIT_DIR', '/tmp/wrong-repo/.git')
+    vi.stubEnv('GIT_INDEX_FILE', '/tmp/wrong-repo/.git/index')
+    try {
+      await new WorktreeManager().cleanupTaskWorkspace('task-clean', [{ fullName: 'peakflo/20x' }], 'peakflo', false)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    const call = execFileMock.mock.calls.find(([, args]) => args[0] === 'worktree' && args[1] === 'remove')
+    expect(call?.[2]).toEqual(expect.objectContaining({ cwd: barePath }))
+    const options = call?.[2] as { env: NodeJS.ProcessEnv } | undefined
+    expect(options?.env.GIT_DIR).toBeUndefined()
+    expect(options?.env.GIT_INDEX_FILE).toBeUndefined()
+  })
+
   it('re-attaches the stored branch when the directory is missing, even after title and settings change', async () => {
     const settings: Record<string, string> = { worktree_branch_mode: 'type-title' }
     let title = 'Fix login redirect'

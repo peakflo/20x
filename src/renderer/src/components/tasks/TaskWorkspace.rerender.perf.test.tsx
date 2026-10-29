@@ -74,8 +74,11 @@ describe('TaskWorkspace forced re-render cost', () => {
   it('measures one parent-forced re-render with a 500-part transcript', async () => {
     __clearProjectionsForTest()
     useAgentStore.setState({ agents, sessions: new Map() })
-    ;(window.electronAPI.agentSession.getTranscriptSnapshot as unknown as Mock).mockResolvedValue(transcript(500))
-    ;(window.electronAPI.agentSession.getTranscriptDelta as unknown as Mock).mockResolvedValue({ parts: [], maxRev: 500 })
+    ;(window.electronAPI.agentSession.getTranscriptSync as unknown as Mock).mockImplementation(async (taskId: string, sinceRev?: number) => (
+      typeof sinceRev === 'number'
+        ? { taskId, epoch: 'test-epoch', seq: 0, maxRev: 500, full: false, parts: [] }
+        : { taskId, epoch: 'test-epoch', seq: 0, maxRev: 500, full: true, parts: transcript(500) }
+    ))
 
     const durations: number[] = []
     let record = false

@@ -967,7 +967,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const outputOffset = params.output_offset !== undefined ? Number(params.output_offset) : 0
       const role = params.role ? String(params.role) : null
 
-      let parts = db.getTranscriptParts(taskId)
+      let parts = await db.getTranscriptPartsAsync(taskId)
       // One message by its sequence number, as cited by a context handoff. Tool
       // output is returned here only when the caller asks for it, as below.
       if (params.seq !== undefined) {

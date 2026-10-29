@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, X } from 'lucide-react'
+import { AlertTriangle, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useHarnessMaintenanceStore } from '@/stores/harness-maintenance-store'
 import { useUIStore } from '@/stores/ui-store'
@@ -47,31 +47,59 @@ function noticeLine(status: HarnessMaintenanceStatus): string {
 export function HarnessUpdateNotice() {
   const statuses = useHarnessMaintenanceStore((s) => s.statuses)
   const init = useHarnessMaintenanceStore((s) => s.init)
+  const update = useHarnessMaintenanceStore((s) => s.update)
+  const updates = useHarnessMaintenanceStore((s) => s.updates)
   const openSettings = useUIStore((s) => s.openSettings)
   const setSettingsTab = useUIStore((s) => s.setSettingsTab)
 
   const [pending, setPending] = useState<HarnessMaintenanceStatus[]>([])
+  const [updating, setUpdating] = useState(false)
+  const [attempted, setAttempted] = useState(false)
 
   useEffect(() => init(), [init])
 
   useEffect(() => {
+    if (updating || attempted) return
     const notified = loadNotified()
     const unseen = statuses.filter((s) => statusNeedsAttention(s.status) && notified[s.harness] !== noticeVersionKey(s))
-    if (unseen.length > 0) setPending(unseen)
-  }, [statuses])
+    setPending(unseen)
+  }, [statuses, updating, attempted])
 
   const markNotified = (): void => {
     const notified = loadNotified()
     for (const status of pending) notified[status.harness] = noticeVersionKey(status)
     saveNotified(notified)
     setPending([])
+    setAttempted(false)
+  }
+
+  const updateTargets = pending.filter((status) =>
+    status.canUpdate && (!attempted || updates[status.harness]?.run?.status === 'failed')
+  )
+  const hasFailed = attempted && pending.some((status) => updates[status.harness]?.run?.status === 'failed')
+
+  const handleUpdate = async (): Promise<void> => {
+    if (updating || updateTargets.length === 0) return
+    setUpdating(true)
+    try {
+      // The maintenance service applies installer locks. Run each selected
+      // harness in order so the notice reports a result for every one.
+      for (const status of updateTargets) await update(status.harness)
+    } finally {
+      setAttempted(true)
+      setUpdating(false)
+    }
   }
 
   if (pending.length === 0) return null
 
-  const title = pending.length === 1
-    ? `${harnessDisplayLabel(pending[0].harness)} update available`
-    : `${pending.length} harness updates available`
+  const title = updating
+    ? 'Updating harness…'
+    : attempted
+      ? hasFailed ? 'Harness update failed' : 'Harness update complete'
+      : pending.length === 1
+        ? `${harnessDisplayLabel(pending[0].harness)} update available`
+        : `${pending.length} harness updates available`
 
   return (
     <div
@@ -84,11 +112,18 @@ export function HarnessUpdateNotice() {
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium">{title}</p>
           <p className="text-xs text-muted-foreground mt-1 space-y-0.5">
-            {pending.map((s) => <span key={s.harness} className="block">{noticeLine(s)}</span>)}
+            {pending.map((s) => (
+              <span key={s.harness} className="block">
+                {attempted && updates[s.harness]?.run
+                  ? `${harnessDisplayLabel(s.harness)}: ${updates[s.harness].run?.message ?? updates[s.harness].run?.status}`
+                  : noticeLine(s)}
+              </span>
+            ))}
           </p>
         </div>
         <button
           onClick={markNotified}
+          disabled={updating}
           aria-label="Dismiss notice"
           className="shrink-0 text-muted-foreground hover:text-foreground"
         >
@@ -96,9 +131,11 @@ export function HarnessUpdateNotice() {
         </button>
       </div>
       <div className="flex justify-end gap-2">
-        <Button size="sm" variant="ghost" onClick={markNotified}>Dismiss</Button>
+        <Button size="sm" variant="ghost" onClick={markNotified} disabled={updating}>Dismiss</Button>
         <Button
           size="sm"
+          variant={updateTargets.length > 0 ? 'outline' : 'default'}
+          disabled={updating}
           onClick={() => {
             setSettingsTab(SettingsTab.HARNESSES)
             openSettings()
@@ -107,6 +144,12 @@ export function HarnessUpdateNotice() {
         >
           Review
         </Button>
+        {updateTargets.length > 0 && (
+          <Button size="sm" onClick={() => void handleUpdate()} disabled={updating || updateTargets.some((s) => updates[s.harness]?.running)}>
+            {updating && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {updating ? 'Updating…' : attempted ? 'Try again' : updateTargets.length === 1 ? 'Update now' : 'Update all'}
+          </Button>
+        )}
       </div>
     </div>
   )

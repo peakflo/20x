@@ -4,7 +4,7 @@ import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, 
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { is } from '@electron-toolkit/utils'
-import { DatabaseManager, type TranscriptPartRecord } from './database'
+import { DatabaseManager } from './database'
 import { AgentManager } from './agent-manager'
 import { GitHubManager } from './github-manager'
 import { GitLabManager } from './gitlab-manager'
@@ -24,12 +24,13 @@ import { onBrandSpacesChanged, setSelectedCompanyBrand } from './brand'
 import { panelBrowserBroker } from './panel-browser-broker'
 import { getAgentBrowserSession } from './agent-browser-session'
 import { VoiceSessionManager } from './voice/voice-session-manager'
-import { assistantTextParts, sinceLastUserMessage } from './voice/voice-answer-parts'
+import { assistantTextParts } from './voice/voice-answer-parts'
 import { EnterpriseAuth } from './enterprise-auth'
 import { RecurrenceScheduler } from './recurrence-scheduler'
 import { HeartbeatScheduler } from './heartbeat-scheduler'
 import { TaskAutomationScheduler } from './task-automation-scheduler'
 import { WorkspaceCleanupScheduler } from './workspace-cleanup-scheduler'
+import { configureSharedPnpmStore } from './pnpm-store'
 import { ClaudePluginManager } from './claude-plugin-manager'
 import { parseProcessTable, selectKillableMcpPids } from './mcp-process-cleanup'
 import { buildWorkspaceStates, sweepLeakedWorkspaceProcesses, readDiskSpace, workspacePressureWarning, SHUTDOWN_GRACE_MS } from './workspace-process-cleanup'
@@ -43,6 +44,7 @@ import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
+import { logMainThreadPerfReport, startMainThreadPerf } from './perf/main-thread-perf'
 import { installProcessStreamErrorHandlers } from './process-stream-errors'
 import { startMacosSwapWatchdog } from './macos-swap-watchdog'
 import { getWindowsPathEntries, prependMissingWindowsPaths } from './windows-runtime-paths'
@@ -165,24 +167,28 @@ function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseMana
   /** The newest assistant text of each task, as it is written. */
   const writing = new Map<string, true>()
 
+  // Full records of the parts each `transcript:changed` delta touched (the
+  // event itself only carries appended text).
+  agents.addTranscriptPartsListener((taskId, changed) => {
+    try {
+      if (!taskId || changed.length === 0) return
+      // Every message that changed, in order. A turn can hold several: the
+      // agent says something, uses a tool, and says something else. Taking
+      // only the newest skipped the first message entirely whenever both
+      // landed in one flush.
+      const parts = assistantTextParts(changed)
+      if (parts.length === 0) return
+      writing.set(taskId, true)
+      void voiceSessionManager
+        ?.streamAgentAnswer(taskId, parts)
+        .catch((err) => console.error('[voice] reading the answer failed:', err))
+    } catch (err) {
+      console.error('[voice] watching the transcript failed:', err)
+    }
+  })
+
   agents.addExternalListener((channel, data) => {
     try {
-      if (channel === 'transcript:changed') {
-        const event = data as { taskId?: string; parts?: TranscriptPartRecord[] }
-        if (!event?.taskId || !event.parts?.length) return
-        // Every message that changed, in order. A turn can hold several: the
-        // agent says something, uses a tool, and says something else. Taking
-        // only the newest skipped the first message entirely whenever both
-        // landed in one flush.
-        const parts = assistantTextParts(event.parts)
-        if (parts.length === 0) return
-        writing.set(event.taskId, true)
-        void voiceSessionManager
-          ?.streamAgentAnswer(event.taskId, parts)
-          .catch((err) => console.error('[voice] reading the answer failed:', err))
-        return
-      }
-
       if (channel !== 'agent:status') return
       const event = data as { sessionId?: string; taskId?: string; status?: string }
       if (!event?.sessionId || !event.taskId || !event.status) return
@@ -195,8 +201,8 @@ function watchAgentAnswersForSpeech(agents: AgentManager, database: DatabaseMana
       // Close the passage with the last words, which may have arrived after
       // the final transcript event. Only this turn's messages are considered:
       // everything the agent wrote since the user last spoke.
-      const stored = database.getTranscriptParts(event.taskId)
-      const all = assistantTextParts(sinceLastUserMessage(stored))
+      const stored = database.getTranscriptPartsSinceLastUserMessage(event.taskId)
+      const all = assistantTextParts(stored)
       // Whatever the user talked over is left out here too. Otherwise the
       // one-piece fallback below reads the whole interrupted answer at the
       // moment the agent stops.
@@ -1004,10 +1010,23 @@ app.commandLine.appendSwitch('disable-features', [
   'AcceptCHFrame',                 // Electron-only ALPS extension not in Chrome
 ].join(','))
 
+// Raise the renderer's GPU tile memory budget. With many task panels on the
+// canvas a zoom needs tiles at the new scale for every visible panel at once.
+// At Chromium's default budget cc runs out ("not enough memory for tiles
+// needed now") and draws the tiles it could not raster as holes — panels blink
+// out while zooming. Measured with 50 task panels (M1 Pro): 2048 MB removed all
+// missing tiles (1024 MB did not); tile memory at rest is unchanged (~200 MB),
+// and peaks at ~1.1 GB only during the zoom. This is a cap, not an allocation.
+if (!app.commandLine.hasSwitch('force-gpu-mem-available-mb')) {
+  app.commandLine.appendSwitch('force-gpu-mem-available-mb', '2048')
+}
+
 installProcessStreamErrorHandlers()
 
 app.whenReady().then(async () => {
   stopSwapWatchdog = startMacosSwapWatchdog()
+  // Opt-in event-loop/DB timing (TWENTYX_PERF=1); no-op otherwise.
+  startMainThreadPerf()
   const analytics = initAnalytics()
 
   // Collect MCP server processes that a previous crash or force-quit orphaned.
@@ -1096,6 +1115,8 @@ app.whenReady().then(async () => {
 
   // Ensure PATH is ready before creating managers that may spawn child processes
   await pathFixPromise
+  const sharedPnpmStore = await configureSharedPnpmStore(app.getPath('userData'))
+  if (sharedPnpmStore) console.log(`[Main] Agent-launched pnpm installs use shared store: ${sharedPnpmStore}`)
 
   agentManager = new AgentManager(db)
   try {
@@ -1455,6 +1476,7 @@ app.on('before-quit', async (event) => {
   if (isShuttingDown) {
     return
   }
+  logMainThreadPerfReport('quit')
 
   // Defensive close for the open app-focus interval, independent of whatever
   // combination of 'blur'/'hide'/'closed' did or didn't fire on the way

@@ -128,6 +128,10 @@ function makeSkillRecord(overrides: Partial<{
 
 function createMockDb(agentConfig: Record<string, unknown> = {}) {
   return {
+    // Mirrors DatabaseManager: same rows as getTranscriptParts (worker read in production).
+    getTranscriptPartsAsync: vi.fn(function (this: { getTranscriptParts: (taskId: string, sinceSeq?: number) => unknown }, taskId: string, sinceSeq?: number) {
+      return Promise.resolve(this.getTranscriptParts(taskId, sinceSeq))
+    }),
     getTask: vi.fn(() => ({
       id: 'task-1',
       title: 'Test Task',
@@ -4145,8 +4149,10 @@ describe('AgentManager durable transcript write-through', () => {
       expect((mockDb as any).getTranscriptDelta).toHaveBeenCalledWith('task-1', 0)
       const transcriptEvents = sent.filter((e) => e.channel === 'transcript:changed')
       expect(transcriptEvents).toHaveLength(1)
-      expect(transcriptEvents[0].data).toMatchObject({ taskId: 'task-1', maxRev: 3 })
-      expect((transcriptEvents[0].data as { parts: Array<{ partId: string }> }).parts.map((p) => p.partId)).toEqual(['p1', 'p2', 'p3'])
+      expect(transcriptEvents[0].data).toMatchObject({ taskId: 'task-1', maxRev: 3, seq: 1 })
+      const ops = (transcriptEvents[0].data as { ops: Array<{ op: string; part: { partId: string } }> }).ops
+      expect(ops.map((o) => o.op)).toEqual(['put', 'put', 'put'])
+      expect(ops.map((o) => o.part.partId)).toEqual(['p1', 'p2', 'p3'])
     } finally {
       vi.useRealTimers()
     }

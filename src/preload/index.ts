@@ -196,10 +196,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:learnFromSession', sessionId, message),
     getRawTranscript: (taskId: string): Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>> =>
       ipcRenderer.invoke('agentSession:getRawTranscript', taskId),
-    getTranscriptSnapshot: (taskId: string, sinceSeq?: number): Promise<Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number; rev: number }>> =>
-      ipcRenderer.invoke('agentSession:getTranscriptSnapshot', taskId, sinceSeq),
-    getTranscriptDelta: (taskId: string, sinceRev: number): Promise<{ parts: Array<{ taskId: string; partId: string; seq: number; role: string; content: string; partType?: string; tool?: unknown; payload?: unknown; createdAt: number; updatedAt: number; rev: number }>; maxRev: number }> =>
-      ipcRenderer.invoke('agentSession:getTranscriptDelta', taskId, sinceRev)
+    getTranscriptSync: (taskId: string, sinceRev?: number): Promise<unknown> =>
+      ipcRenderer.invoke('agentSession:getTranscriptSync', taskId, sinceRev)
   },
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> =>
@@ -365,7 +363,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('worktree:files', taskId, repos),
     readFile: (taskId: string, repoFullName: string | null, filePath: string): Promise<{ content: string; size: number; binary: boolean; truncated: boolean } | null> =>
       ipcRenderer.invoke('worktree:readFile', taskId, repoFullName, filePath),
-    runCleanupNow: (): Promise<{ cleaned: number; errors: string[]; nodeModulesCleaned: number }> =>
+    runCleanupNow: (): Promise<{ cleaned: number; retiredWorkspaces: number; errors: string[]; nodeModulesCleaned: number; nextCachesCleaned: number; turboFilesCleaned: number; turboBytesCleaned: number }> =>
       ipcRenderer.invoke('workspace:runCleanupNow')
   },
   taskSources: {
@@ -483,8 +481,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('worktree:progress', handler)
     return () => ipcRenderer.removeListener('worktree:progress', handler)
   },
-  onWorkspaceCleanupProgress: (callback: (event: { phase: string; current: number; total: number; message?: string; cleaned?: number; errors?: string[] }) => void): (() => void) => {
-    const handler = (_: unknown, data: { phase: string; current: number; total: number; message?: string; cleaned?: number; errors?: string[] }): void => callback(data)
+  onWorkspaceCleanupProgress: (callback: (event: { phase: string; current: number; total: number; message?: string; cleaned?: number; retiredWorkspaces?: number; nodeModulesCleaned?: number; nextCachesCleaned?: number; turboFilesCleaned?: number; turboBytesCleaned?: number; errors?: string[] }) => void): (() => void) => {
+    const handler = (_: unknown, data: { phase: string; current: number; total: number; message?: string; cleaned?: number; retiredWorkspaces?: number; nodeModulesCleaned?: number; nextCachesCleaned?: number; turboFilesCleaned?: number; turboBytesCleaned?: number; errors?: string[] }): void => callback(data)
     ipcRenderer.on('workspace:cleanup-progress', handler)
     return () => ipcRenderer.removeListener('workspace:cleanup-progress', handler)
   },

@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { HarnessMaintenanceStatus } from '@shared/harness-maintenance'
 
-const { get } = vi.hoisted(() => ({ get: vi.fn() }))
+const { get, update } = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn() }))
 
 vi.mock('@/lib/ipc-client', () => ({
   harnessMaintenanceApi: {
     get: (...args: unknown[]) => get(...args),
     refresh: vi.fn().mockResolvedValue([]),
-    update: vi.fn(),
+    update,
     updateAll: vi.fn(),
     onUpdated: vi.fn(() => vi.fn()),
     onProgress: vi.fn(() => vi.fn())
@@ -44,6 +44,7 @@ beforeEach(() => {
   useHarnessMaintenanceStore.setState({ statuses: [], loaded: false, refreshing: false, error: null, updates: {} })
   useUIStore.setState({ activeModal: null, settingsTab: SettingsTab.GENERAL } as Partial<ReturnType<typeof useUIStore.getState>>)
   get.mockReset().mockResolvedValue([])
+  update.mockReset()
 })
 
 describe('HarnessUpdateNotice', () => {
@@ -80,6 +81,71 @@ describe('HarnessUpdateNotice', () => {
     expect(useUIStore.getState().activeModal).toBe('settings')
     expect(useUIStore.getState().settingsTab).toBe(SettingsTab.HARNESSES)
     expect(screen.queryByTestId('harness-update-notice')).toBeNull()
+  })
+
+  it('updates a harness from the notice and shows the result', async () => {
+    get.mockResolvedValue([statusFor({})])
+    update.mockResolvedValue({
+      harness: 'codex',
+      run: { harness: 'codex', status: 'succeeded', message: 'Updated to 0.162.1.', startedAt: now },
+      newStatus: statusFor({ version: '0.162.1', latestVersion: '0.162.1', status: 'up_to_date' })
+    })
+    await act(async () => { render(<HarnessUpdateNotice />) })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update now' }))
+
+    await waitFor(() => expect(screen.getByTestId('harness-update-notice').textContent).toContain('Updated to 0.162.1.'))
+    expect(update).toHaveBeenCalledTimes(1)
+    expect(update).toHaveBeenCalledWith('codex')
+    expect(screen.getByTestId('harness-update-notice').textContent).toContain('Harness update complete')
+    expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
+    expect(useUIStore.getState().activeModal).toBeNull()
+  })
+
+  it('shows a failed update and allows a retry from the notice', async () => {
+    get.mockResolvedValue([statusFor({})])
+    update.mockResolvedValue({
+      harness: 'codex',
+      run: { harness: 'codex', status: 'failed', message: 'Update command failed.', startedAt: now },
+      newStatus: statusFor({})
+    })
+    await act(async () => { render(<HarnessUpdateNotice />) })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update now' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy())
+    expect(screen.getByTestId('harness-update-notice').textContent).toContain('Update command failed.')
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(2))
+  })
+
+  it('updates each eligible harness in a combined notice', async () => {
+    get.mockResolvedValue([
+      statusFor({ harness: 'codex' }),
+      statusFor({ harness: 'opencode', version: '1.0.0', latestVersion: '1.1.0' }),
+      statusFor({ harness: 'pi', canUpdate: false, installer: 'manual' })
+    ])
+    update.mockImplementation(async (harness: string) => ({
+      harness,
+      run: { harness, status: 'succeeded', message: 'Updated.', startedAt: now },
+      newStatus: statusFor({ harness: harness as HarnessMaintenanceStatus['harness'], status: 'up_to_date' })
+    }))
+    await act(async () => { render(<HarnessUpdateNotice />) })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update all' }))
+
+    await waitFor(() => expect(screen.getByTestId('harness-update-notice').textContent).toContain('Harness update complete'))
+    expect(update.mock.calls.map(([harness]) => harness)).toEqual(['codex', 'opencode'])
+    expect(screen.getByTestId('harness-update-notice').textContent).toContain('Pi')
+  })
+
+  it('keeps Review for installs that need a manual update', async () => {
+    get.mockResolvedValue([statusFor({ canUpdate: false, installer: 'manual' })])
+    await act(async () => { render(<HarnessUpdateNotice />) })
+
+    expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Review' }))
+    expect(useUIStore.getState().settingsTab).toBe(SettingsTab.HARNESSES)
   })
 
   it('"Dismiss" hides the notice without opening Settings, and it does not reappear for the same version', async () => {

@@ -1,5 +1,8 @@
 import { isWorkfloLinkedTask } from './workflo-task-sync'
 import Database from 'better-sqlite3'
+import { instrumentMainDatabase } from './perf/main-thread-perf'
+import { readTranscriptParts, type TranscriptPartRecord } from './db-read/transcript-query'
+import { DbReadClient, isDbReadWorkerEnabled } from './db-read/db-read-client'
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, rmSync } from 'fs'
@@ -432,21 +435,31 @@ export interface TranscriptPartInput {
   receivedAt?: number
 }
 
-/** Persisted transcript part returned by snapshot queries. */
-export interface TranscriptPartRecord {
-  taskId: string
-  partId: string
-  seq: number
-  role: string
-  content: string
-  partType?: string
-  tool?: unknown
-  payload?: unknown
-  createdAt: number
-  updatedAt: number
-  /** Global monotonic change cursor for this row (delta subscriptions). */
-  rev: number
+/** A `transcript_parts` row as stored (mapped like `getTranscriptParts`). */
+interface TranscriptPartRow {
+  task_id: string; part_id: string; seq: number; role: string; content: string;
+  part_type: string | null; tool: string | null; payload: string | null;
+  created_at: number; updated_at: number; rev: number
 }
+
+function toTranscriptPartRecord(r: TranscriptPartRow): TranscriptPartRecord {
+  return {
+    taskId: r.task_id,
+    partId: r.part_id,
+    seq: r.seq,
+    role: r.role,
+    content: r.content,
+    rev: r.rev ?? 0,
+    partType: r.part_type ?? undefined,
+    tool: r.tool ? (JSON.parse(r.tool) as unknown) : undefined,
+    payload: r.payload ? (JSON.parse(r.payload) as unknown) : undefined,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }
+}
+
+/** Persisted transcript part returned by snapshot queries. */
+export type { TranscriptPartRecord }
 
 /** Raw `agent_run_intervals` row, snake_case as stored. */
 interface AgentRunIntervalRow {
@@ -1258,6 +1271,10 @@ const SCHEMA_VERSION = 13
 export class DatabaseManager {
   public db!: Database.Database
   private usageStore: UsageStore | null = null
+  /** Read-only worker connection for heavy reads (null in tests and when disabled). */
+  private readClient: DbReadClient | null = null
+  /** Overrides the bundled worker script (tests and benchmarks run from source). */
+  readWorkerScriptPath: string | undefined
 
   /**
    * Subscription usage persistence (token usage events, session totals, plan
@@ -1274,6 +1291,8 @@ export class DatabaseManager {
   }
 
   close(): void {
+    void this.readClient?.close()
+    this.readClient = null
     if (this.ensureDbOpen()) {
       this.db.pragma('wal_checkpoint(TRUNCATE)')
       this.db.close()
@@ -1284,7 +1303,8 @@ export class DatabaseManager {
     const userDataPath = app.getPath('userData')
     const dbPath = join(userDataPath, 'pf-desktop.db')
 
-    this.db = new Database(dbPath)
+    // No-op unless TWENTYX_PERF=1 (opt-in main-thread DB timing).
+    this.db = instrumentMainDatabase(new Database(dbPath))
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('foreign_keys = ON')
     this.db.pragma('busy_timeout = 5000') // Retry on SQLITE_BUSY for up to 5s
@@ -1311,6 +1331,14 @@ export class DatabaseManager {
     this.initializeTasksFts()
     this.initializeTaskManagementMcpServer()
     this.initializeOrchestratorSkill()
+
+    // Heavy reads that are already async at their call site (transcript
+    // snapshots) run on a read-only connection in a worker thread, so a large
+    // transcript does not block the main thread. Writes stay on this connection.
+    if (isDbReadWorkerEnabled()) {
+      this.readClient = new DbReadClient({ dbPath, scriptPath: this.readWorkerScriptPath, fallback: { getTranscriptParts: (taskId, sinceSeq) => this.getTranscriptParts(taskId, sinceSeq) } })
+      this.readClient.start()
+    }
   }
 
   /**
@@ -2728,13 +2756,17 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const closedStatuses = [TaskStatus.Completed, TaskStatus.Cancelled, TaskStatus.Expired]
     const rows = this.db.prepare(`
       SELECT * FROM tasks t
-      WHERE t.status NOT IN (?, ?, ?)
+      WHERE (t.status NOT IN (?, ?, ?)
+        AND NOT (t.status = ? AND EXISTS (
+          SELECT 1 FROM tasks p WHERE p.id = t.parent_task_id AND p.status = ?)))
         OR (t.is_recurring = 1 AND t.recurrence_parent_id IS NULL)
         OR (t.parent_task_id IS NOT NULL AND EXISTS (
           SELECT 1 FROM tasks p WHERE p.id = t.parent_task_id AND p.status NOT IN (?, ?, ?)))
-        OR EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id = t.id AND c.status NOT IN (?, ?, ?))
+        OR EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id = t.id AND c.status NOT IN (?, ?, ?)
+          AND NOT (t.status = ? AND c.status = ?))
       ORDER BY t.created_at DESC
-    `).all(...closedStatuses, ...closedStatuses, ...closedStatuses) as TaskRow[]
+    `).all(...closedStatuses, TaskStatus.ReadyForReview, TaskStatus.Completed,
+      ...closedStatuses, ...closedStatuses, TaskStatus.Completed, TaskStatus.ReadyForReview) as TaskRow[]
 
     return this.decorateTaskRows(rows)
   }
@@ -2776,8 +2808,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       `SELECT * FROM tasks WHERE parent_task_id IN (${ids.map(() => '?').join(',')}) ORDER BY sort_order ASC, created_at ASC`
     ).all(...ids) as TaskRow[]
 
+    const parentStatus = new Map(parents.map((parent) => [parent.id, parent.status]))
     return {
-      tasks: this.decorateTaskRows([...parents, ...children]),
+      tasks: this.decorateTaskRows([...parents, ...children]).map((task) =>
+        task.status === TaskStatus.ReadyForReview && task.parent_task_id &&
+        parentStatus.get(task.parent_task_id) === TaskStatus.Completed
+          ? { ...task, status: TaskStatus.Completed }
+          : task
+      ),
       total
     }
   }
@@ -2925,33 +2963,34 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   /** Snapshot query: ordered transcript for a task, optionally only parts after seq. */
   getTranscriptParts(taskId: string, sinceSeq?: number): TranscriptPartRecord[] {
     if (!this.ensureDbOpen()) return []
+    return readTranscriptParts(this.db, taskId, sinceSeq)
+  }
 
-    // Order by REAL event time (created_at), with seq as a stable tiebreaker.
-    // Insertion order (seq) is not chronological when a partial projection is
-    // later backfilled with older history — ordering by created_at keeps the
-    // transcript correct regardless of when each part was ingested.
-    const rows = (sinceSeq != null
-      ? this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? AND seq > ? ORDER BY created_at ASC, seq ASC').all(taskId, sinceSeq)
-      : this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? ORDER BY created_at ASC, seq ASC').all(taskId)
-    ) as Array<{
-      task_id: string; part_id: string; seq: number; role: string; content: string;
-      part_type: string | null; tool: string | null; payload: string | null;
-      created_at: number; updated_at: number; rev: number
-    }>
+  /**
+   * Same result as getTranscriptParts, read off the main thread when the
+   * read worker is running. Use from async call sites (IPC/HTTP handlers).
+   */
+  getTranscriptPartsAsync(taskId: string, sinceSeq?: number): Promise<TranscriptPartRecord[]> {
+    if (this.readClient && this.ensureDbOpen()) return this.readClient.getTranscriptParts(taskId, sinceSeq)
+    return Promise.resolve(this.getTranscriptParts(taskId, sinceSeq))
+  }
 
-    return rows.map((r) => ({
-      taskId: r.task_id,
-      partId: r.part_id,
-      seq: r.seq,
-      role: r.role,
-      content: r.content,
-      rev: r.rev ?? 0,
-      partType: r.part_type ?? undefined,
-      tool: r.tool ? (JSON.parse(r.tool) as unknown) : undefined,
-      payload: r.payload ? (JSON.parse(r.payload) as unknown) : undefined,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at
-    }))
+  /**
+   * The parts written after the task's last user message, in transcript order —
+   * the same result as `sinceLastUserMessage(getTranscriptParts(taskId))`, but
+   * only this turn is read instead of the whole conversation. With no user
+   * message at all, the whole transcript is returned.
+   */
+  getTranscriptPartsSinceLastUserMessage(taskId: string): TranscriptPartRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const last = this.db.prepare(
+      "SELECT created_at, seq FROM transcript_parts WHERE task_id = ? AND role = 'user' ORDER BY created_at DESC, seq DESC LIMIT 1"
+    ).get(taskId) as { created_at: number; seq: number } | undefined
+    if (!last) return this.getTranscriptParts(taskId)
+    const rows = this.db.prepare(
+      'SELECT * FROM transcript_parts WHERE task_id = ? AND (created_at > ? OR (created_at = ? AND seq > ?)) ORDER BY created_at ASC, seq ASC'
+    ).all(taskId, last.created_at, last.created_at, last.seq) as TranscriptPartRow[]
+    return rows.map(toTranscriptPartRecord)
   }
 
   /**
@@ -4061,6 +4100,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   deleteTaskSource(id: string): boolean {
     const result = this.db.prepare('DELETE FROM task_sources WHERE id = ?').run(id)
     return result.changes > 0
+  }
+
+  /** Id and external id of every task that has one, newest first. */
+  getExternalTaskIds(): Array<{ id: string; external_id: string }> {
+    if (!this.ensureDbOpen()) return []
+    return this.db.prepare(
+      'SELECT id, external_id FROM tasks WHERE external_id IS NOT NULL ORDER BY created_at DESC'
+    ).all() as Array<{ id: string; external_id: string }>
   }
 
   getTaskByExternalId(sourceId: string, externalId: string): TaskRecord | undefined {

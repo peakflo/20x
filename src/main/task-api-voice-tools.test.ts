@@ -88,6 +88,10 @@ function makeDb() {
     getTasks: vi.fn(() => TASKS),
     getTask: vi.fn((id: string) => TASKS.find((t) => t.id === id)),
     getTranscriptParts: vi.fn(() => PARTS),
+    // Mirrors DatabaseManager: same rows as getTranscriptParts (worker read in production).
+    getTranscriptPartsAsync: vi.fn(function (this: { getTranscriptParts: (taskId: string) => unknown }, taskId: string) {
+      return Promise.resolve(this.getTranscriptParts(taskId))
+    }),
   } as never
 }
 

@@ -595,6 +595,7 @@ describe('InfiniteCanvas', () => {
       // DOM moved…
       expect(layer.style.transform).toBe('translate(-30px, -40px) scale(1)')
       expect(layer.style.willChange).toBe('transform')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(true)
       // …but the store was NOT written during the gesture.
       expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
 
@@ -602,14 +603,54 @@ describe('InfiniteCanvas', () => {
       await advanceTime(200)
       expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -40, zoom: 1 })
       expect(layer.style.willChange).toBe('transform')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(true)
       // A second wheel event inside the release window keeps the same layer.
       fireEvent.wheel(canvas, { deltaY: 10 })
       await flushFrames()
       await advanceTime(250)
       expect(layer.style.willChange).toBe('transform')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(true)
       expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -50, zoom: 1 })
       await advanceTime(250)
       expect(layer.style.willChange).toBe('')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(false)
+    })
+
+    it('makes panel scrollers non-composited for the gesture and restores them with the layer', async () => {
+      useCanvasStore.setState({
+        panels: [{ id: 'p-1', type: 'app' as const, title: 'App', x: 0, y: 0, width: 600, height: 400, zIndex: 1 }],
+      })
+      const { container } = render(<InfiniteCanvas />)
+      await flushFrames()
+      const layer = container.querySelector('[data-canvas-transform-layer="true"]') as HTMLElement
+      const canvas = layer.parentElement as HTMLElement
+      const panel = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
+
+      // A transcript-like scroller with overflowing content, scrolled down…
+      const transcript = document.createElement('div')
+      transcript.className = 'h-full overflow-y-auto'
+      Object.defineProperty(transcript, 'scrollHeight', { value: 5000, configurable: true })
+      Object.defineProperty(transcript, 'clientHeight', { value: 400, configurable: true })
+      transcript.scrollTop = 1234
+      // …and one that does not overflow (never composited, left alone).
+      const idle = document.createElement('div')
+      idle.className = 'overflow-auto'
+      panel.append(transcript, idle)
+
+      fireEvent.wheel(canvas, { deltaY: -4, ctrlKey: true, clientX: 100, clientY: 100 })
+      await flushFrames()
+      expect(transcript.style.overflow).toBe('hidden')
+      expect(transcript.scrollTop).toBe(1234)
+      expect(idle.style.overflow).toBe('')
+
+      // Committed, but still inside the layer release window.
+      await advanceTime(200)
+      expect(transcript.style.overflow).toBe('hidden')
+      await advanceTime(350)
+      expect(layer.style.willChange).toBe('')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(false)
+      expect(transcript.style.overflow).toBe('')
+      expect(transcript.scrollTop).toBe(1234)
     })
 
     it('does zero React commits per wheel frame, however many panels are open', async () => {
@@ -750,6 +791,7 @@ describe('InfiniteCanvas', () => {
       // Moved on the compositor, store untouched (left/top still the origin).
       expect(panelEl.style.transform).toBe('translate(60px, 50px)')
       expect(panelEl.style.willChange).toBe('transform')
+      expect(panelEl.dataset.canvasMoving).toBe('true')
       expect(useCanvasStore.getState().panels[0]).toMatchObject({ x: 100, y: 100 })
 
       await act(async () => {
@@ -759,6 +801,7 @@ describe('InfiniteCanvas', () => {
       expect(useCanvasStore.getState().panels[0]).toMatchObject({ x: 160, y: 150 })
       expect(panelEl.style.transform).toBe('')
       expect(panelEl.style.willChange).toBe('')
+      expect(panelEl.hasAttribute('data-canvas-moving')).toBe(false)
     })
   })
 

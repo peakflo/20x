@@ -31,6 +31,9 @@ import { TaskStatus } from '../shared/constants'
  * (up to one tick), never correctness. Callers that want the fast path call
  * {@link runNow} right after they change something.
  */
+/** The subtask columns this scheduler reads. */
+type SubtaskRow = Pick<TaskRecord, 'id' | 'status' | 'agent_id' | 'sort_order'> & { parent_task_id: string }
+
 export class TaskAutomationScheduler {
   private dbManager: DatabaseManager
   private agentManager: AgentManager
@@ -166,16 +169,24 @@ export class TaskAutomationScheduler {
       ORDER BY created_at ASC
     `).all(now) as { id: string; status: string }[]
 
+    // One query for the subtasks of every flagged parent instead of one per
+    // parent: the flagged set never shrinks (completed tasks keep the flag),
+    // and this pass runs every minute and after every status change.
+    const subtasksByParent = this.getSubtasksByParent(
+      flagged.map((row) => row.id)
+    )
+
     const candidateIds: string[] = []
     for (const row of flagged) {
+      const subtasks = subtasksByParent.get(row.id) ?? []
       // A parent with children hands over to them — starting it again would
       // run the coordinator a second time.
-      const nextSubtaskId = this.getNextStartableSubtaskId(row.id)
+      const nextSubtaskId = this.getNextStartableSubtaskId(subtasks)
       if (nextSubtaskId) {
         candidateIds.push(nextSubtaskId)
         continue
       }
-      if (row.status === TaskStatus.NotStarted && !this.hasSubtasks(row.id)) {
+      if (row.status === TaskStatus.NotStarted && subtasks.length === 0) {
         candidateIds.push(row.id)
       }
     }
@@ -186,13 +197,34 @@ export class TaskAutomationScheduler {
       .filter((task): task is TaskRecord => !!task && !isWorkfloLinkedTask(this.dbManager, task))
   }
 
-  private hasSubtasks(taskId: string): boolean {
-    return this.dbManager.getSubtasks(taskId).length > 0
+  /**
+   * Subtasks of the given parents, grouped by parent, each group in the same
+   * order as `getSubtasks` (sort_order, then created_at). One statement per
+   * chunk of parents rather than one per parent.
+   */
+  private getSubtasksByParent(parentIds: string[]): Map<string, SubtaskRow[]> {
+    const byParent = new Map<string, SubtaskRow[]>()
+    // Stay well below SQLite's bound-parameter limit.
+    const CHUNK = 500
+    for (let i = 0; i < parentIds.length; i += CHUNK) {
+      const chunk = parentIds.slice(i, i + CHUNK)
+      const rows = this.dbManager.db.prepare(`
+        SELECT id, parent_task_id, status, agent_id, sort_order FROM tasks
+        WHERE parent_task_id IN (${chunk.map(() => '?').join(',')})
+        ORDER BY sort_order ASC, created_at ASC
+      `).all(...chunk) as SubtaskRow[]
+      for (const row of rows) {
+        const group = byParent.get(row.parent_task_id)
+        if (group) group.push(row)
+        else byParent.set(row.parent_task_id, [row])
+      }
+    }
+    return byParent
   }
 
   /** Subtasks that still have work left before their parent can finish. */
-  private hasPendingSubtasks(taskId: string): boolean {
-    return this.dbManager.getSubtasks(taskId).some(
+  private hasPendingSubtasks(subtasks: SubtaskRow[]): boolean {
+    return subtasks.some(
       (subtask) =>
         subtask.status !== TaskStatus.Completed && subtask.status !== TaskStatus.ReadyForReview
     )
@@ -210,8 +242,8 @@ export class TaskAutomationScheduler {
    * child after it. A child in review has finished its agent run, and
    * notifyParentOfSubtaskCompletion already counts that state as terminal.
    */
-  private getNextStartableSubtaskId(parentId: string): string | null {
-    const subtasks = this.dbManager.getSubtasks(parentId)
+  private getNextStartableSubtaskId(parentSubtasks: SubtaskRow[]): string | null {
+    const subtasks = [...parentSubtasks]
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
     if (subtasks.length === 0) return null
 
@@ -243,12 +275,12 @@ export class TaskAutomationScheduler {
    */
   private async autoCompleteReviewedTasks(): Promise<void> {
     const rows = this.dbManager.db.prepare(`
-      SELECT id FROM tasks
+      SELECT id, external_id, source_id FROM tasks
       WHERE auto_complete_without_review = 1
         AND status = ?
         AND NOT (is_recurring = 1 AND recurrence_parent_id IS NULL)
       ORDER BY updated_at ASC
-    `).all(TaskStatus.ReadyForReview) as { id: string }[]
+    `).all(TaskStatus.ReadyForReview) as Array<Pick<TaskRecord, 'id' | 'external_id' | 'source_id'>>
 
     const candidates = rows.filter(
       (row) => (this.failedCompletions.get(row.id) ?? 0) < this.MAX_COMPLETE_ATTEMPTS
@@ -257,9 +289,11 @@ export class TaskAutomationScheduler {
 
     console.log(`[TaskAutomation] Found ${candidates.length} task(s) to auto-complete`)
 
+    const subtasksByParent = this.getSubtasksByParent(candidates.map((row) => row.id))
+
     for (const row of candidates) {
-      const task = this.dbManager.getTask(row.id)
-      if (task && isWorkfloLinkedTask(this.dbManager, task)) continue
+      // The row carries the only columns the link check reads.
+      if (isWorkfloLinkedTask(this.dbManager, row)) continue
       if (this.inFlight.has(row.id)) continue
       if (this.agentManager.hasActiveSessionForTask(row.id)) {
         console.log(`[TaskAutomation] Skipping auto-complete of ${row.id} — agent session still active`)
@@ -268,7 +302,7 @@ export class TaskAutomationScheduler {
       // Waiting for children is not a failure, so it must not burn an attempt.
       // AgentManager refuses this too; skipping here keeps the retry counter
       // for genuine refusals only.
-      if (this.hasPendingSubtasks(row.id)) {
+      if (this.hasPendingSubtasks(subtasksByParent.get(row.id) ?? [])) {
         console.log(`[TaskAutomation] Skipping auto-complete of ${row.id} — subtasks have not finished`)
         continue
       }

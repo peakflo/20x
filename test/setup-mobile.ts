@@ -36,8 +36,9 @@ vi.mock('../src/mobile/api/client', () => ({
       stop: vi.fn().mockResolvedValue({ success: true })
     },
     transcript: {
-      snapshot: vi.fn().mockResolvedValue([]),
-      delta: vi.fn().mockResolvedValue({ parts: [], maxRev: 0 })
+      sync: vi.fn(async (taskId: string, sinceRev?: number) => ({
+        taskId, epoch: 'test-epoch', seq: 0, maxRev: 0, full: typeof sinceRev !== 'number', parts: []
+      }))
     },
     artifacts: {
       list: vi.fn().mockResolvedValue([]),

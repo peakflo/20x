@@ -3,7 +3,8 @@ import type { Mock } from 'vitest'
 import { captureAnalyticsEvent } from '@/lib/analytics'
 import { useAgentStore, SessionStatus, __clearProjectionsForTest } from './agent-store'
 import type { Agent, CreateAgentDTO, UpdateAgentDTO } from '@/types'
-import type { AgentStatusEvent, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
+import type { AgentStatusEvent, TranscriptPartRecord, TranscriptChangedEvent, TranscriptSync } from '@/types/electron'
+import { FakeTranscriptServer } from '@shared/transcript-stream.testing'
 
 vi.mock('@/lib/analytics', () => ({
   captureAnalyticsEvent: vi.fn()
@@ -19,8 +20,10 @@ function firstCb<T>(fn: unknown): T | null {
 const transcriptCb = firstCb<(e: TranscriptChangedEvent) => void>(mockElectronAPI.onTranscriptChanged)
 const statusCallback = firstCb<(e: AgentStatusEvent) => void>(mockElectronAPI.onAgentStatus)
 
-const getSnapshotMock = mockElectronAPI.agentSession.getTranscriptSnapshot as unknown as Mock
-const getDeltaMock = mockElectronAPI.agentSession.getTranscriptDelta as unknown as Mock
+const getSyncMock = mockElectronAPI.agentSession.getTranscriptSync as unknown as Mock
+const EPOCH = 'test-epoch'
+// Stream position per task, as the main process would number events.
+const streamSeq = new Map<string, number>()
 
 let partSeq = 0
 function part(overrides: Partial<TranscriptPartRecord> & { partId: string }): TranscriptPartRecord {
@@ -40,16 +43,46 @@ function part(overrides: Partial<TranscriptPartRecord> & { partId: string }): Tr
   }
 }
 
+/** Push the next `transcript:changed` event for a task with whole parts. */
 function fireDelta(taskId: string, parts: TranscriptPartRecord[], maxRev?: number): void {
-  transcriptCb!({ taskId, parts, maxRev: maxRev ?? Math.max(0, ...parts.map((p) => p.rev)) })
+  const seq = (streamSeq.get(taskId) ?? 0) + 1
+  streamSeq.set(taskId, seq)
+  transcriptCb!({
+    taskId, epoch: EPOCH, seq,
+    maxRev: maxRev ?? Math.max(0, ...parts.map((p) => p.rev)),
+    ops: parts.map((p) => ({ op: 'put' as const, part: p }))
+  })
+}
+
+function syncResult(taskId: string, parts: TranscriptPartRecord[], full = true): TranscriptSync {
+  return { taskId, epoch: EPOCH, seq: streamSeq.get(taskId) ?? 0, maxRev: Math.max(0, ...parts.map((p) => p.rev)), full, parts }
+}
+
+/** Answer every whole-transcript resync with `parts` (catch-ups get nothing new). */
+function mockSnapshot(parts: TranscriptPartRecord[]): void {
+  getSyncMock.mockImplementation(async (taskId: string, sinceRev?: number) =>
+    typeof sinceRev === 'number' ? syncResult(taskId, [], false) : syncResult(taskId, parts))
+}
+
+/** Answer the next resync only. */
+function mockSnapshotOnce(parts: TranscriptPartRecord[], full = true): void {
+  getSyncMock.mockImplementationOnce(async (taskId: string) => syncResult(taskId, parts, full))
+}
+
+const fullSyncCalls = (): string[] => getSyncMock.mock.calls.filter((call) => typeof call[1] !== 'number').map((call) => call[0] as string)
+
+/** Start a session view that follows the stream from an (empty) snapshot. */
+async function follow(taskId: string): Promise<void> {
+  useAgentStore.getState().initSession(taskId, 'sess-1', 'agent-1')
+  await useAgentStore.getState().hydrateTranscript(taskId)
 }
 
 beforeEach(() => {
   useAgentStore.setState({ agents: [], isLoading: false, error: null, sessions: new Map() })
   __clearProjectionsForTest()
   vi.clearAllMocks()
-  getSnapshotMock.mockResolvedValue([])
-  getDeltaMock.mockResolvedValue({ parts: [], maxRev: 0 })
+  streamSeq.clear()
+  mockSnapshot([])
   partSeq = 0
 })
 
@@ -130,8 +163,8 @@ describe('useAgentStore', () => {
   })
 
   describe('Transcript projection (transcript:changed deltas)', () => {
-    it('keeps sorted order for out-of-order and moved parts (incremental cache)', () => {
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+    it('keeps sorted order for out-of-order and moved parts (incremental cache)', async () => {
+      await follow('task-1')
       fireDelta('task-1', [
         part({ partId: 'a', createdAt: 100 }),
         part({ partId: 'c', createdAt: 300 })
@@ -150,8 +183,8 @@ describe('useAgentStore', () => {
       expect(ids()).toEqual(['b', 'c', 'a', 'e', 'd'])
     })
 
-    it('preserves unchanged row identity and skips publishing a re-delivered part', () => {
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+    it('preserves unchanged row identity and skips publishing a re-delivered part', async () => {
+      await follow('task-1')
       const p1 = part({ partId: 'p1', content: 'one', createdAt: 100, rev: 1 })
       fireDelta('task-1', [p1, part({ partId: 'p2', content: 'two', createdAt: 200, rev: 2 })])
       const before = useAgentStore.getState().sessions.get('task-1')!.messages
@@ -167,8 +200,8 @@ describe('useAgentStore', () => {
       expect(useAgentStore.getState().sessions).toBe(sessions)
     })
 
-    it('renders parts from a delta, sorted by createdAt', () => {
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+    it('renders parts from a delta, sorted by createdAt', async () => {
+      await follow('task-1')
       fireDelta('task-1', [
         part({ partId: 'p1', role: 'user', content: 'hello', createdAt: 100 }),
         part({ partId: 'p2', role: 'assistant', content: 'hi', createdAt: 200 })
@@ -178,16 +211,16 @@ describe('useAgentStore', () => {
       expect(msgs.map((m) => m.content)).toEqual(['hello', 'hi'])
     })
 
-    it('is idempotent — the same delta applied twice does not duplicate', () => {
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+    it('is idempotent — the same delta applied twice does not duplicate', async () => {
+      await follow('task-1')
       const d = [part({ partId: 'p1', content: 'x', createdAt: 100 })]
       fireDelta('task-1', d)
       fireDelta('task-1', d)
       expect(useAgentStore.getState().sessions.get('task-1')!.messages).toHaveLength(1)
     })
 
-    it('content update to an existing part replaces in place (no new row, same position)', () => {
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+    it('content update to an existing part replaces in place (no new row, same position)', async () => {
+      await follow('task-1')
       fireDelta('task-1', [
         part({ partId: 'p1', content: 'partial', createdAt: 100, rev: 1 }),
         part({ partId: 'p2', content: 'after', createdAt: 200, rev: 2 })
@@ -199,8 +232,8 @@ describe('useAgentStore', () => {
       expect(msgs[0].content).toBe('partial then complete')
     })
 
-    it('two legitimately-identical messages under different ids both render (id-keyed, never content-collapsed)', () => {
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+    it('two legitimately-identical messages under different ids both render (id-keyed, never content-collapsed)', async () => {
+      await follow('task-1')
       fireDelta('task-1', [
         part({ partId: 'u1', role: 'user', content: 'run it again', createdAt: 100 }),
         part({ partId: 'u2', role: 'user', content: 'run it again', createdAt: 200 })
@@ -208,15 +241,15 @@ describe('useAgentStore', () => {
       expect(useAgentStore.getState().sessions.get('task-1')!.messages.filter((m) => m.content === 'run it again')).toHaveLength(2)
     })
 
-    it('out-of-order deltas converge to chronological order', () => {
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+    it('out-of-order deltas converge to chronological order', async () => {
+      await follow('task-1')
       fireDelta('task-1', [part({ partId: 'p2', content: 'second', createdAt: 200 })])
       fireDelta('task-1', [part({ partId: 'p1', content: 'first', createdAt: 100 })])
       expect(useAgentStore.getState().sessions.get('task-1')!.messages.map((m) => m.id)).toEqual(['p1', 'p2'])
     })
 
-    it('reconstructs tool + taskProgress from the part', () => {
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+    it('reconstructs tool + taskProgress from the part', async () => {
+      await follow('task-1')
       fireDelta('task-1', [
         part({ partId: 't1', partType: 'tool', content: '', tool: { name: 'Bash', status: 'success' } as never }),
         part({ partId: 'tp1', partType: 'task_progress', content: '', payload: { taskProgress: { taskId: 'x', status: 'running', description: 'go' } } })
@@ -226,8 +259,8 @@ describe('useAgentStore', () => {
       expect(msgs.find((m) => m.id === 'tp1')!.taskProgress?.status).toBe('running')
     })
 
-    it('batches output analytics until the task goes idle', () => {
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+    it('batches output analytics until the task goes idle', async () => {
+      await follow('task-1')
 
       fireDelta('task-1', [
         part({ partId: 'p1', content: 'one', rev: 1 }),
@@ -255,9 +288,132 @@ describe('useAgentStore', () => {
     })
   })
 
+  describe('transcript:changed delta stream (seq, appends, resync)', () => {
+    let server: FakeTranscriptServer
+    const content = (taskId: string): string[] => (useAgentStore.getState().sessions.get(taskId)?.messages ?? []).map((m) => m.content)
+    const push = (taskId: string, writes: Parameters<FakeTranscriptServer['write']>[1]): TranscriptChangedEvent => {
+      const event = server.write(taskId, writes) as TranscriptChangedEvent
+      transcriptCb!(event)
+      return event
+    }
+    const settle = async (): Promise<void> => {
+      await vi.waitFor(() => expect(getSyncMock.mock.results.every((r) => r.type !== 'incomplete')).toBe(true))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+
+    beforeEach(() => {
+      server = new FakeTranscriptServer(EPOCH)
+      getSyncMock.mockImplementation(async (taskId: string, sinceRev?: number) => server.sync(taskId, sinceRev))
+    })
+
+    it('renders a streamed answer from appended text, keeping earlier rows', async () => {
+      server.write('task-1', [{ partId: 'q', role: 'user', content: 'question' }])
+      await follow('task-1')
+      const first = push('task-1', [{ partId: 'a', content: 'Hel' }])
+      expect(first.ops[0].op).toBe('put')
+      const before = useAgentStore.getState().sessions.get('task-1')!.messages
+      const next = push('task-1', [{ partId: 'a', content: 'Hello' }])
+      expect(next.ops).toEqual([expect.objectContaining({ op: 'append', at: 3, text: 'lo' })])
+      const after = useAgentStore.getState().sessions.get('task-1')!.messages
+      expect(after.map((m) => m.content)).toEqual(['question', 'Hello'])
+      expect(after[0]).toBe(before[0])
+      expect(getSyncMock).toHaveBeenCalledTimes(1) // only the bind
+    })
+
+    it('drops a stale or duplicate event without publishing', async () => {
+      await follow('task-1')
+      const event = push('task-1', [{ partId: 'a', content: 'one' }])
+      const sessions = useAgentStore.getState().sessions
+      transcriptCb!(event)
+      expect(useAgentStore.getState().sessions).toBe(sessions)
+      expect(content('task-1')).toEqual(['one'])
+    })
+
+    it('gap -> catches up since its rev and keeps following', async () => {
+      await follow('task-1')
+      push('task-1', [{ partId: 'a', content: 'A' }])
+      getSyncMock.mockClear()
+      server.write('task-1', [{ partId: 'a', content: 'AB' }]) // lost on the way
+      push('task-1', [{ partId: 'a', content: 'ABC' }])
+      expect(content('task-1')).toEqual(['A']) // not applied on top of a hole
+      await settle()
+      expect(getSyncMock).toHaveBeenCalledWith('task-1', expect.any(Number))
+      expect(fullSyncCalls()).toEqual([])
+      expect(content('task-1')).toEqual(['ABC'])
+      push('task-1', [{ partId: 'a', content: 'ABCD' }])
+      expect(content('task-1')).toEqual(['ABCD'])
+    })
+
+    it('out-of-order events converge to the latest content', async () => {
+      await follow('task-1')
+      push('task-1', [{ partId: 'a', content: '1' }])
+      const e2 = server.write('task-1', [{ partId: 'a', content: '12' }]) as TranscriptChangedEvent
+      const e3 = server.write('task-1', [{ partId: 'a', content: '123' }]) as TranscriptChangedEvent
+      transcriptCb!(e3)
+      transcriptCb!(e2)
+      await settle()
+      expect(content('task-1')).toEqual(['123'])
+    })
+
+    it('a patch of an earlier part replaces it in place', async () => {
+      await follow('task-1')
+      push('task-1', [{ partId: 'a', content: 'first draft' }, { partId: 'b', content: 'later' }])
+      const patch = push('task-1', [{ partId: 'a', content: 'final' }])
+      expect(patch.ops[0].op).toBe('put')
+      expect(content('task-1')).toEqual(['final', 'later'])
+    })
+
+    it('a new sender epoch (app or session restart) reloads the whole transcript', async () => {
+      await follow('task-1')
+      push('task-1', [{ partId: 'a', content: 'before' }])
+      getSyncMock.mockClear()
+      server.restart('epoch-2')
+      push('task-1', [{ partId: 'a', content: 'before after' }])
+      await settle()
+      expect(fullSyncCalls()).toEqual(['task-1'])
+      expect(content('task-1')).toEqual(['before after'])
+      push('task-1', [{ partId: 'a', content: 'before after!' }])
+      expect(content('task-1')).toEqual(['before after!'])
+    })
+
+    it('task switch: ignores background deltas, then catches up when switching back', async () => {
+      server.write('task-1', [{ partId: 'a', content: 'one' }])
+      const release = useAgentStore.getState().bindTranscript('task-1')
+      await settle()
+      expect(content('task-1')).toEqual(['one'])
+      release()
+      getSyncMock.mockClear()
+
+      push('task-1', [{ partId: 'a', content: 'one two' }]) // while another task is shown
+      push('task-1', [{ partId: 'b', content: 'three' }])
+      expect(getSyncMock).not.toHaveBeenCalled()
+
+      const releaseAgain = useAgentStore.getState().bindTranscript('task-1')
+      await settle()
+      expect(fullSyncCalls()).toEqual([])
+      expect(content('task-1')).toEqual(['one two', 'three'])
+      push('task-1', [{ partId: 'b', content: 'three four' }])
+      expect(content('task-1')).toEqual(['one two', 'three four'])
+      releaseAgain()
+    })
+
+    it('an append that does not fit local content triggers a full resync', async () => {
+      await follow('task-1')
+      push('task-1', [{ partId: 'a', content: 'abc' }])
+      getSyncMock.mockClear()
+      // Corrupt the local copy behind the stream's back.
+      const event = server.write('task-1', [{ partId: 'a', content: 'abcd' }]) as TranscriptChangedEvent
+      const tampered = { ...event, ops: [{ ...event.ops[0], at: 99 }] } as TranscriptChangedEvent
+      transcriptCb!(tampered)
+      await settle()
+      expect(fullSyncCalls()).toEqual(['task-1'])
+      expect(content('task-1')).toEqual(['abcd'])
+    })
+  })
+
   describe('hydrateTranscript (snapshot bind)', () => {
     it('loads the full snapshot into messages', async () => {
-      getSnapshotMock.mockResolvedValue([
+      mockSnapshot([
         part({ partId: 'p1', role: 'user', content: 'q', createdAt: 100 }),
         part({ partId: 'p2', role: 'assistant', content: 'a', createdAt: 200 })
       ])
@@ -267,20 +423,20 @@ describe('useAgentStore', () => {
     })
 
     it('empty snapshot leaves no session', async () => {
-      getSnapshotMock.mockResolvedValue([])
+      mockSnapshot([])
       await useAgentStore.getState().hydrateTranscript('task-x')
       expect(useAgentStore.getState().sessions.has('task-x')).toBe(false)
     })
 
     it('a delta after hydrate appends, keeping earlier messages', async () => {
-      getSnapshotMock.mockResolvedValue([part({ partId: 'p1', content: 'one', createdAt: 100, rev: 1 })])
+      mockSnapshot([part({ partId: 'p1', content: 'one', createdAt: 100, rev: 1 })])
       await useAgentStore.getState().hydrateTranscript('task-1')
       fireDelta('task-1', [part({ partId: 'p2', content: 'two', createdAt: 200, rev: 2 })])
       expect(useAgentStore.getState().sessions.get('task-1')!.messages.map((m) => m.id)).toEqual(['p1', 'p2'])
     })
 
     it('releases an unmounted transcript and ignores background deltas until rebound', async () => {
-      getSnapshotMock.mockResolvedValue([part({ partId: 'p1', content: 'large history', rev: 1 })])
+      mockSnapshot([part({ partId: 'p1', content: 'large history', rev: 1 })])
       const release = useAgentStore.getState().bindTranscript('task-1')
       await vi.waitFor(() => {
         expect(useAgentStore.getState().sessions.get('task-1')?.messages).toHaveLength(1)
@@ -294,7 +450,7 @@ describe('useAgentStore', () => {
     })
 
     it('keeps the projection until the final mounted consumer releases it', async () => {
-      getSnapshotMock.mockResolvedValue([part({ partId: 'p1', content: 'shared history' })])
+      mockSnapshot([part({ partId: 'p1', content: 'shared history' })])
       const releaseFirst = useAgentStore.getState().bindTranscript('task-1')
       const releaseSecond = useAgentStore.getState().bindTranscript('task-1')
       await vi.waitFor(() => {
@@ -308,7 +464,7 @@ describe('useAgentStore', () => {
     })
 
     it('catches a released transcript up on background output when it mounts again', async () => {
-      getSnapshotMock.mockResolvedValueOnce([part({ partId: 'p1', content: 'first view', rev: 1 })])
+      mockSnapshotOnce([part({ partId: 'p1', content: 'first view', rev: 1 })])
       const release = useAgentStore.getState().bindTranscript('task-1')
       await vi.waitFor(() => {
         expect(useAgentStore.getState().sessions.get('task-1')?.messages).toHaveLength(1)
@@ -316,10 +472,7 @@ describe('useAgentStore', () => {
       release()
 
       // Output produced while the view was unmounted is only in the durable projection.
-      getDeltaMock.mockResolvedValueOnce({
-        parts: [part({ partId: 'p2', content: 'background output', rev: 2 })],
-        maxRev: 2
-      })
+      mockSnapshotOnce([part({ partId: 'p2', content: 'background output', rev: 2 })], false)
       const releaseAgain = useAgentStore.getState().bindTranscript('task-1')
       await vi.waitFor(() => {
         expect(useAgentStore.getState().sessions.get('task-1')?.messages.map((message) => message.id)).toEqual([
@@ -331,32 +484,34 @@ describe('useAgentStore', () => {
     })
 
     it('switching back to a recently viewed task renders without re-downloading its snapshot', async () => {
-      getSnapshotMock.mockResolvedValueOnce([part({ partId: 'p1', content: 'task one', rev: 1 })])
+      mockSnapshotOnce([part({ partId: 'p1', content: 'task one', rev: 1 })])
       const releaseFirst = useAgentStore.getState().bindTranscript('task-1')
       await vi.waitFor(() => {
         expect(useAgentStore.getState().sessions.get('task-1')?.messages).toHaveLength(1)
       })
       releaseFirst()
 
-      getSnapshotMock.mockClear()
-      getSnapshotMock.mockResolvedValueOnce([part({ partId: 'other', content: 'task two', rev: 2 })])
+      getSyncMock.mockClear()
+      mockSnapshotOnce([part({ partId: 'other', content: 'task two', rev: 2 })])
       const releaseOther = useAgentStore.getState().bindTranscript('task-2')
       await vi.waitFor(() => {
         expect(useAgentStore.getState().sessions.get('task-2')?.messages).toHaveLength(1)
       })
       releaseOther()
 
-      getSnapshotMock.mockClear()
+      getSyncMock.mockClear()
       const releaseBack = useAgentStore.getState().bindTranscript('task-1')
       // Rendered synchronously from the retained projection, before any IPC resolves.
       expect(useAgentStore.getState().sessions.get('task-1')?.messages.map((m) => m.id)).toEqual(['p1'])
-      expect(getSnapshotMock).not.toHaveBeenCalled()
+      // Only a catch-up since its rev, never the whole transcript again.
+      expect(fullSyncCalls()).toEqual([])
+      expect(getSyncMock).toHaveBeenCalledWith('task-1', 1)
       releaseBack()
     })
 
     it('does not retain more than the most recent transcripts after release', async () => {
       for (const taskId of ['t-a', 't-b', 't-c', 't-d']) {
-        getSnapshotMock.mockResolvedValueOnce([part({ partId: `${taskId}-p`, content: taskId, rev: 1 })])
+        mockSnapshotOnce([part({ partId: `${taskId}-p`, content: taskId, rev: 1 })])
         const release = useAgentStore.getState().bindTranscript(taskId)
         await vi.waitFor(() => {
           expect(useAgentStore.getState().sessions.get(taskId)?.messages).toHaveLength(1)
@@ -365,10 +520,10 @@ describe('useAgentStore', () => {
       }
 
       // Oldest released transcript (t-a) was evicted, so it must be re-downloaded.
-      getSnapshotMock.mockClear()
-      getSnapshotMock.mockResolvedValueOnce([part({ partId: 't-a-p', content: 't-a', rev: 1 })])
+      getSyncMock.mockClear()
+      mockSnapshotOnce([part({ partId: 't-a-p', content: 't-a', rev: 1 })])
       const releaseA = useAgentStore.getState().bindTranscript('t-a')
-      expect(getSnapshotMock.mock.calls.map((call) => call[0])).toEqual(['t-a'])
+      expect(fullSyncCalls()).toEqual(['t-a'])
       await vi.waitFor(() => {
         expect(useAgentStore.getState().sessions.get('t-a')?.messages).toHaveLength(1)
       })
@@ -404,6 +559,17 @@ describe('useAgentStore', () => {
       }))
       statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.IDLE })
       expect(useAgentStore.getState().sessions.get('task-1')!.pendingApproval).toBeNull()
+    })
+
+    it('keeps the sessions Map when a push repeats the current state', () => {
+      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+      statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.WORKING })
+      const sessions = useAgentStore.getState().sessions
+      statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.WORKING })
+      expect(useAgentStore.getState().sessions).toBe(sessions)
+      statusCallback!({ sessionId: 'sess-1', agentId: 'agent-1', taskId: 'task-1', status: SessionStatus.IDLE })
+      expect(useAgentStore.getState().sessions).not.toBe(sessions)
+      expect(useAgentStore.getState().sessions.get('task-1')!.status).toBe(SessionStatus.IDLE)
     })
   })
 
@@ -443,7 +609,7 @@ describe('useAgentStore', () => {
       const history = Array.from({ length: 200 }, (_, i) =>
         part({ partId: `h${i}`, role: i % 2 ? 'assistant' : 'user', content: `m${i}`, createdAt: 1000 + i, rev: i + 1 })
       )
-      getSnapshotMock.mockResolvedValue(history)
+      mockSnapshot(history)
       await useAgentStore.getState().hydrateTranscript('task-1')
       expect(useAgentStore.getState().sessions.get('task-1')!.messages).toHaveLength(200)
 
@@ -462,8 +628,8 @@ describe('useAgentStore', () => {
   })
 
   describe('clearMessageDedup (no-op in projection model)', () => {
-    it('does not throw and does not wipe the projection', () => {
-      useAgentStore.getState().initSession('task-1', 'sess-1', 'agent-1')
+    it('does not throw and does not wipe the projection', async () => {
+      await follow('task-1')
       fireDelta('task-1', [part({ partId: 'p1', content: 'x' })])
       useAgentStore.getState().clearMessageDedup('task-1')
       expect(useAgentStore.getState().sessions.get('task-1')!.messages).toHaveLength(1)
