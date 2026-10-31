@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       actions: write
+      issues: read # Required to list PRs through the issues API.
       pull-requests: write
     steps:
       - name: Mark and close inactive pull requests
