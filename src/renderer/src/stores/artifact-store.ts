@@ -232,6 +232,8 @@ function fromFileEntry(taskId: string, entry: ArtifactFileEntry): Omit<Artifact,
     path,
     workpieceKey: entry.workpieceKey,
     files: entry.files,
+    inline: entry.inline,
+    heightHint: entry.heightHint,
     updatedAt: entry.updatedAt
   }
 }
@@ -269,6 +271,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         && previous.url === candidate.url
         && previous.workpieceKey === candidate.workpieceKey
         && JSON.stringify(previous.files) === JSON.stringify(candidate.files)
+        && previous.inline === candidate.inline
+        && previous.heightHint === candidate.heightHint
         && previous.updatedAt === candidate.updatedAt
         && (!shouldFollow || (currentUI.open && currentUI.activeTabId === id))
       ) {
@@ -398,6 +402,8 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
           && previous.url === candidate.url
           && previous.workpieceKey === candidate.workpieceKey
           && JSON.stringify(previous.files) === JSON.stringify(candidate.files)
+          && previous.inline === candidate.inline
+          && previous.heightHint === candidate.heightHint
           && previous.updatedAt === candidate.updatedAt
         ) continue
 

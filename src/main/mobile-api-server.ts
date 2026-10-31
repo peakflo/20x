@@ -1236,6 +1236,8 @@ function artifactFromFileEntry(taskId: string, entry: ArtifactFileEntry): Artifa
     path: entry.path,
     workpieceKey: entry.workpieceKey,
     files: entry.files,
+    inline: entry.inline,
+    heightHint: entry.heightHint,
     updatedAt: entry.updatedAt,
     reloadTrigger: Math.floor(entry.updatedAt)
   }
