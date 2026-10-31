@@ -103,6 +103,13 @@ function clipboardStagingDir(): string {
 
 const desktopBackdropStates = new WeakMap<BrowserWindow, { enabled: boolean }>()
 
+// Set by registerIpcHandlers; lets the main process drop the cached deps:check
+// result (e.g. after the real shell PATH is resolved late) so the next check is fresh.
+let resetDepsCheckCache: () => void = () => {}
+export function clearDepsCheckCache(): void {
+  resetDepsCheckCache()
+}
+
 export function registerIpcHandlers(
   db: DatabaseManager,
   agentManager: AgentManager,
@@ -1046,6 +1053,7 @@ export function registerIpcHandlers(
   // Dependency check handler — delegates to the shared detectInstalledAgents()
   // which returns Record<string, { installed: boolean; version: string | null }>
   let depsCheckCache: Record<string, { installed: boolean; version: string | null }> | null = null
+  resetDepsCheckCache = () => { depsCheckCache = null }
 
   ipcMain.handle('deps:check', async () => {
     if (depsCheckCache) {
