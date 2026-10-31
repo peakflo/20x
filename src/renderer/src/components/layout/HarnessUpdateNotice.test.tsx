@@ -18,6 +18,7 @@ vi.mock('@/lib/ipc-client', () => ({
 import { HarnessUpdateNotice } from './HarnessUpdateNotice'
 import { useHarnessMaintenanceStore } from '@/stores/harness-maintenance-store'
 import { useUIStore } from '@/stores/ui-store'
+import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { SettingsTab } from '@/types'
 
 const now = '2026-03-01T12:00:00.000Z'
@@ -45,6 +46,7 @@ beforeEach(() => {
   useUIStore.setState({ activeModal: null, settingsTab: SettingsTab.GENERAL } as Partial<ReturnType<typeof useUIStore.getState>>)
   get.mockReset().mockResolvedValue([])
   update.mockReset()
+  useProgressToastStore.setState({ toasts: new Map() })
 })
 
 describe('HarnessUpdateNotice', () => {
@@ -83,7 +85,7 @@ describe('HarnessUpdateNotice', () => {
     expect(screen.queryByTestId('harness-update-notice')).toBeNull()
   })
 
-  it('updates a harness from the notice and shows the result', async () => {
+  it('updates a harness from the notice and shows the standard success toast', async () => {
     get.mockResolvedValue([statusFor({})])
     update.mockResolvedValue({
       harness: 'codex',
@@ -94,12 +96,60 @@ describe('HarnessUpdateNotice', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Update now' }))
 
-    await waitFor(() => expect(screen.getByTestId('harness-update-notice').textContent).toContain('Updated to 0.162.1.'))
+    await waitFor(() => expect(screen.queryByTestId('harness-update-notice')).toBeNull())
     expect(update).toHaveBeenCalledTimes(1)
     expect(update).toHaveBeenCalledWith('codex')
-    expect(screen.getByTestId('harness-update-notice').textContent).toContain('Harness update complete')
-    expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull()
+    const toast = useProgressToastStore.getState().toasts.get('harness-update')
+    expect(toast?.status).toBe('done')
+    expect(toast?.message).toContain('Updated to 0.162.1.')
     expect(useUIStore.getState().activeModal).toBeNull()
+  })
+
+  it('can be hidden while updating; progress moves to a toast and success replaces it', async () => {
+    get.mockResolvedValue([statusFor({})])
+    let resolveUpdate: (value: unknown) => void = () => {}
+    update.mockReturnValue(new Promise((resolve) => { resolveUpdate = resolve }))
+    await act(async () => { render(<HarnessUpdateNotice />) })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update now' }))
+    await waitFor(() => expect(screen.getByTestId('harness-update-notice').textContent).toContain('Updating harness'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
+    expect(screen.queryByTestId('harness-update-notice')).toBeNull()
+    expect(useProgressToastStore.getState().toasts.get('harness-update')?.status).toBe('running')
+
+    await act(async () => {
+      resolveUpdate({
+        harness: 'codex',
+        run: { harness: 'codex', status: 'succeeded', message: 'Updated.', startedAt: now },
+        newStatus: statusFor({ version: '0.162.1', latestVersion: '0.162.1', status: 'up_to_date' })
+      })
+    })
+
+    await waitFor(() => expect(useProgressToastStore.getState().toasts.get('harness-update')?.status).toBe('done'))
+    expect(screen.queryByTestId('harness-update-notice')).toBeNull()
+  })
+
+  it('brings a hidden notice back when the update fails', async () => {
+    get.mockResolvedValue([statusFor({})])
+    let resolveUpdate: (value: unknown) => void = () => {}
+    update.mockReturnValue(new Promise((resolve) => { resolveUpdate = resolve }))
+    await act(async () => { render(<HarnessUpdateNotice />) })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Update now' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Hide' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Hide' }))
+
+    await act(async () => {
+      resolveUpdate({
+        harness: 'codex',
+        run: { harness: 'codex', status: 'failed', message: 'Update command failed.', startedAt: now },
+        newStatus: statusFor({})
+      })
+    })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy())
+    expect(useProgressToastStore.getState().toasts.has('harness-update')).toBe(false)
   })
 
   it('shows a failed update and allows a retry from the notice', async () => {
@@ -134,9 +184,12 @@ describe('HarnessUpdateNotice', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Update all' }))
 
-    await waitFor(() => expect(screen.getByTestId('harness-update-notice').textContent).toContain('Harness update complete'))
+    await waitFor(() => expect(useProgressToastStore.getState().toasts.get('harness-update')?.status).toBe('done'))
     expect(update.mock.calls.map(([harness]) => harness)).toEqual(['codex', 'opencode'])
-    expect(screen.getByTestId('harness-update-notice').textContent).toContain('Pi')
+    // The manual-update harness stays in the notice; the updated ones are gone.
+    const notice = screen.getByTestId('harness-update-notice')
+    expect(notice.textContent).toContain('Pi')
+    expect(notice.textContent).not.toContain('Codex')
   })
 
   it('keeps Review for installs that need a manual update', async () => {
