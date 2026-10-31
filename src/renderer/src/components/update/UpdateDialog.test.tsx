@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { act } from '@testing-library/react'
 import { UpdateDialog } from './UpdateDialog'
+import { useProgressToastStore } from '@/stores/progress-toast-store'
 
 // Access the mock electronAPI from setup-renderer.ts — cast to Mock for vi helpers
 const mockUpdater = window.electronAPI.updater as unknown as {
@@ -17,6 +19,7 @@ describe('UpdateDialog', () => {
     vi.clearAllMocks()
     mockUpdater.check.mockResolvedValue({ success: true })
     mockUpdater.getVersion.mockResolvedValue('0.0.31')
+    useProgressToastStore.setState({ toasts: new Map() })
   })
 
   it('should show checking state when opened', () => {
@@ -157,5 +160,48 @@ describe('UpdateDialog', () => {
     })
     // check is called once on open (idle→checking) and once on button click
     expect(mockUpdater.check).toHaveBeenCalledTimes(2)
+  })
+
+  it('lets the user hide the dialog while downloading', async () => {
+    let statusCallback: ((data: Record<string, unknown>) => void) | null = null
+    mockUpdater.onStatus.mockImplementation((cb: (data: Record<string, unknown>) => void) => {
+      statusCallback = cb
+      return vi.fn()
+    })
+    const onClose = vi.fn()
+    render(<UpdateDialog open={true} onClose={onClose} />)
+
+    act(() => { statusCallback!({ status: 'downloading', version: '1.0.0', percent: 40 }) })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Hide' }))
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('shows the auto-dismissing success toast when a hidden download finishes', async () => {
+    let statusCallback: ((data: Record<string, unknown>) => void) | null = null
+    mockUpdater.onStatus.mockImplementation((cb: (data: Record<string, unknown>) => void) => {
+      statusCallback = cb
+      return vi.fn()
+    })
+    render(<UpdateDialog open={false} onClose={vi.fn()} />)
+
+    act(() => { statusCallback!({ status: 'downloaded', version: '1.0.0' }) })
+
+    const toast = useProgressToastStore.getState().toasts.get('app-update')
+    expect(toast?.status).toBe('done')
+    expect(toast?.message).toContain('v1.0.0')
+  })
+
+  it('does not toast when the download finishes with the dialog open', () => {
+    let statusCallback: ((data: Record<string, unknown>) => void) | null = null
+    mockUpdater.onStatus.mockImplementation((cb: (data: Record<string, unknown>) => void) => {
+      statusCallback = cb
+      return vi.fn()
+    })
+    render(<UpdateDialog open={true} onClose={vi.fn()} />)
+
+    act(() => { statusCallback!({ status: 'downloaded', version: '1.0.0' }) })
+
+    expect(useProgressToastStore.getState().toasts.has('app-update')).toBe(false)
   })
 })

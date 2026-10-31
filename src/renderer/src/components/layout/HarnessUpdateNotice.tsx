@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useHarnessMaintenanceStore } from '@/stores/harness-maintenance-store'
+import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { useUIStore } from '@/stores/ui-store'
 import { SettingsTab } from '@/types'
 import { harnessDisplayLabel, statusNeedsAttention, type HarnessMaintenanceStatus } from '@shared/harness-maintenance'
 
 const NOTIFIED_KEY = '20x:harness-update-notified'
+const PROGRESS_TOAST_ID = 'harness-update'
 
 /** harness -> the version we last showed a notice for, so a dismissed/reviewed version never pops again. */
 function loadNotified(): Record<string, string> {
@@ -55,6 +57,13 @@ export function HarnessUpdateNotice() {
   const [pending, setPending] = useState<HarnessMaintenanceStatus[]>([])
   const [updating, setUpdating] = useState(false)
   const [attempted, setAttempted] = useState(false)
+  /** User hid the notice while an update runs — progress moves to a toast. */
+  const [hidden, setHidden] = useState(false)
+  const hiddenRef = useRef(false)
+  const setHiddenState = (value: boolean): void => {
+    hiddenRef.current = value
+    setHidden(value)
+  }
 
   useEffect(() => init(), [init])
 
@@ -65,11 +74,11 @@ export function HarnessUpdateNotice() {
     setPending(unseen)
   }, [statuses, updating, attempted])
 
-  const markNotified = (): void => {
+  const markNotified = (toMark: HarnessMaintenanceStatus[] = pending): void => {
     const notified = loadNotified()
-    for (const status of pending) notified[status.harness] = noticeVersionKey(status)
+    for (const status of toMark) notified[status.harness] = noticeVersionKey(status)
     saveNotified(notified)
-    setPending([])
+    setPending((current) => current.filter((s) => !toMark.some((done) => done.harness === s.harness)))
     setAttempted(false)
   }
 
@@ -80,18 +89,46 @@ export function HarnessUpdateNotice() {
 
   const handleUpdate = async (): Promise<void> => {
     if (updating || updateTargets.length === 0) return
+    const targets = updateTargets
     setUpdating(true)
     try {
       // The maintenance service applies installer locks. Run each selected
       // harness in order so the notice reports a result for every one.
-      for (const status of updateTargets) await update(status.harness)
+      for (const status of targets) await update(status.harness)
     } finally {
-      setAttempted(true)
       setUpdating(false)
+      const results = useHarnessMaintenanceStore.getState().updates
+      const allSucceeded = targets.every((status) => results[status.harness]?.run?.status === 'succeeded')
+      if (!allSucceeded) {
+        // Bring the notice back so a failed/unchanged result (and "Try again") is visible.
+        useProgressToastStore.getState().remove(PROGRESS_TOAST_ID)
+        setAttempted(true)
+        setHiddenState(false)
+      } else {
+        // Success: just the standard auto-dismissing success toast. Harnesses
+        // that need a manual update stay in the notice unless it was hidden.
+        const toasts = useProgressToastStore.getState()
+        toasts.show(PROGRESS_TOAST_ID, 'Harness updated')
+        toasts.finish(
+          PROGRESS_TOAST_ID,
+          targets.map((s) => `${harnessDisplayLabel(s.harness)}: ${results[s.harness]?.run?.message ?? 'Updated.'}`).join(' ')
+        )
+        markNotified(hiddenRef.current ? pending : targets)
+        setHiddenState(false)
+      }
     }
   }
 
-  if (pending.length === 0) return null
+  const hideWhileUpdating = (): void => {
+    setHiddenState(true)
+    useProgressToastStore.getState().show(
+      PROGRESS_TOAST_ID,
+      'Updating harness…',
+      updateTargets.map((s) => harnessDisplayLabel(s.harness)).join(', ')
+    )
+  }
+
+  if (pending.length === 0 || hidden) return null
 
   const title = updating
     ? 'Updating harness…'
@@ -122,16 +159,17 @@ export function HarnessUpdateNotice() {
           </p>
         </div>
         <button
-          onClick={markNotified}
-          disabled={updating}
-          aria-label="Dismiss notice"
+          onClick={() => (updating ? hideWhileUpdating() : markNotified())}
+          aria-label={updating ? 'Hide notice' : 'Dismiss notice'}
           className="shrink-0 text-muted-foreground hover:text-foreground"
         >
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
       <div className="flex justify-end gap-2">
-        <Button size="sm" variant="ghost" onClick={markNotified} disabled={updating}>Dismiss</Button>
+        <Button size="sm" variant="ghost" onClick={() => (updating ? hideWhileUpdating() : markNotified())}>
+          {updating ? 'Hide' : 'Dismiss'}
+        </Button>
         <Button
           size="sm"
           variant={updateTargets.length > 0 ? 'outline' : 'default'}
