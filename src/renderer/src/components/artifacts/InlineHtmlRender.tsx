@@ -6,6 +6,7 @@ import { handleArtifactMcpMessage } from '@shared/artifact-mcp-host'
 import { useArtifactContent } from './viewers/use-artifact-content'
 import { ArtifactViewState } from './viewers/ArtifactViewState'
 import { ArtifactHtmlFrame } from './viewers/ArtifactHtmlFrame'
+import type { InlineHtmlChoice } from '@shared/inline-html-choice'
 
 /**
  * Height cache, keyed by artifact id, surviving a remount of this component
@@ -28,11 +29,13 @@ function initialHeight(artifact: Artifact): number {
  * themed to match the app. Artifact actions remain in the artifact panel.
  */
 export function InlineHtmlRender({
-  artifact, artifactApi, onLinkClick
+  artifact, artifactApi, onLinkClick, onChoice, sourceMessageId
 }: {
   artifact: Artifact
   artifactApi: ArtifactApi
   onLinkClick?: (href: string) => boolean
+  onChoice?: (text: string, choice: InlineHtmlChoice) => void | Promise<unknown>
+  sourceMessageId?: string
 }) {
   const state = useArtifactContent(artifact, artifactApi)
   const html = state.content?.kind === ArtifactContentKind.TEXT ? state.content.content : null
@@ -59,6 +62,9 @@ export function InlineHtmlRender({
             files={artifact.files || (artifact.path ? [artifact.path] : [])}
             readFile={artifactApi.read}
             onLinkClick={onLinkClick}
+            onChoice={onChoice && sourceMessageId ? (choice) => onChoice(choice.text, {
+              sourceMessageId, action: choice.action, data: choice.data
+            }) : undefined}
             fill={false}
             height={height}
             onContentHeight={handleContentHeight}

@@ -331,6 +331,16 @@ export interface WorkfloTask {
   server_cron?: string | null
   server_space_name?: string | null
   server_triage_reason?: string | null
+  server_flow_uses?: Array<{
+    id: string
+    executionId: string | null
+    versionId: string
+    version: number
+    status: string | null
+    runStatus: string | null
+    outcome: string | null
+    judgeDecisions: Array<{ questionId: string; verdict: string; score: number | null; judgeVersion: string }>
+  }>
   server_sync_pending?: boolean
   server_sync_error?: string
   id: string
@@ -519,8 +529,19 @@ export interface Skill {
   uses: number
   last_used: string | null
   tags: string[]
+  enterprise_scope?: 'tenant' | 'system'
+  enterprise_auto_attach?: boolean
   created_at: string
   updated_at: string
+}
+
+export interface SkillEditDraft {
+  name: string
+  skillId: string | null
+  data: CreateSkillDTO
+  status: 'held' | 'ready_for_review'
+  guardCodes: string[]
+  createdAt: string
 }
 
 export interface CreateSkillDTO {

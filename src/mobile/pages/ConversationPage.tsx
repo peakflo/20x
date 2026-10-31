@@ -87,6 +87,7 @@ const TranscriptRow = memo(function TranscriptRow({
   activeQuestionId,
   normalizedSearchQuery,
   onAnswer,
+  onInlineChoice,
   artifacts,
   onOpenArtifact
 }: {
@@ -94,11 +95,12 @@ const TranscriptRow = memo(function TranscriptRow({
   activeQuestionId: string | null
   normalizedSearchQuery: string
   onAnswer: (answer: string) => void
+  onInlineChoice?: (text: string, choice: import('@shared/inline-html-choice').InlineHtmlChoice) => void | Promise<unknown>
   artifacts: Artifact[]
   onOpenArtifact: (artifact: Artifact) => void
 }) {
   if (item.type === 'activity') {
-    return <MessageActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} artifacts={artifacts} onOpenArtifact={onOpenArtifact} />
+    return <MessageActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} artifacts={artifacts} onOpenArtifact={onOpenArtifact} onInlineChoice={onInlineChoice} />
   }
 
   return (
@@ -256,12 +258,12 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
 
   // Smart send handler — mirrors desktop TaskWorkspace.handleSend logic
   const handleSend = useCallback(
-    async (message: string, options?: { attachments?: ChatInputAttachment[] }) => {
+    async (message: string, options?: { attachments?: ChatInputAttachment[]; inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice }) => {
       // Get latest session from store, not from closure, to avoid stale closure bug
       const currentSession = useAgentStore.getState().sessions.get(taskId)
       if (!currentSession?.sessionId) return
       try {
-        if (isQuestion) {
+        if (isQuestion && !options?.inlineChoice) {
           const activeQuestion = currentSession.messages.find((item) => item.id === activeQuestionId)
           const responseType = activeQuestion?.tool?.name === 'permission' ? 'permission' : 'question'
           await api.sessions.approve(currentSession.sessionId, true, message, responseType, activeQuestion?.tool?.requestId)
@@ -283,7 +285,8 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
             message,
             taskId,
             currentSession.agentId,
-            options?.attachments
+            options?.attachments,
+            options?.inlineChoice
           )
           if (result.newSessionId && taskId) {
             initSession(taskId, result.newSessionId, currentSession.agentId)
@@ -759,6 +762,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                         activeQuestionId={activeQuestionId}
                         normalizedSearchQuery={normalizedSearchQuery}
                         onAnswer={handleAnswer}
+                        onInlineChoice={(text, choice) => handleSend(text, { inlineChoice: choice })}
                         artifacts={artifacts}
                         onOpenArtifact={openArtifact}
                       />

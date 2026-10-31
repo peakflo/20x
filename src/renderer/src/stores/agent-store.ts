@@ -26,6 +26,7 @@ export interface AgentMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice
   timestamp: Date
   partType?: string
   stepMeta?: StepMeta
@@ -170,11 +171,12 @@ const messageProjectionCache = new WeakMap<TranscriptPartRecord, AgentMessage>()
 function toAgentMessage(p: TranscriptPartRecord): AgentMessage {
   const cached = messageProjectionCache.get(p)
   if (cached) return cached
-  const payload = (p.payload || {}) as { taskProgress?: unknown }
+  const payload = (p.payload || {}) as { taskProgress?: unknown; inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice }
   const message: AgentMessage = {
     id: p.partId,
     role: p.role === 'user' ? 'user' : p.role === 'assistant' ? 'assistant' : 'system',
     content: p.content,
+    inlineChoice: payload.inlineChoice,
     timestamp: new Date(p.createdAt),
     partType: p.partType,
     // `tool` already carries nested questions/todos as persisted by write-through.

@@ -10,6 +10,7 @@ import {
   type HtmlRenderTheme
 } from '@shared/html-render'
 import { prepareArtifactHtml } from '../artifact-resources'
+import { parseInlineHtmlChoice, type InlineHtmlChoice } from '@shared/inline-html-choice'
 import { useHtmlRenderTheme } from './useHtmlRenderTheme'
 
 /** Posts the frame's content height to the host, clamped on the host side
@@ -44,8 +45,15 @@ const THEME_LISTENER_SCRIPT = `<script>window.addEventListener('message',functio
   document.documentElement.classList.toggle('dark',vars.appearance==='dark');
 });</script>`
 
-function interactiveScripts(): string {
-  return `<script>window.open=function(){return null};document.addEventListener('click',function(event){var a=event.target.closest&&event.target.closest('a[href]');if(!a)return;var href=a.getAttribute('href');if(!href||href.charAt(0)==='#')return;event.preventDefault();window.parent.postMessage({type:'artifact:open-file',href:href},'*')},true);</script>${SIZE_BOOTSTRAP_SCRIPT}${THEME_LISTENER_SCRIPT}${ARTIFACT_MCP_SHIM}`
+const CHAT_CHOICE_SHIM = `<script>(function(){
+  var channel=new MessageChannel();parent.postMessage({type:'workflo-inline-connect'},'*',[channel.port2]);
+  var active=false,used=false,answered=false;
+  document.addEventListener('click',function(event){var button=event.target&&event.target.closest&&event.target.closest('button');if(!event.isTrusted||!button||button.disabled||answered)return;active=true;used=false;setTimeout(function(){active=false},0)},true);
+  Object.defineProperty(window,'workflo',{value:Object.freeze({sendMessage:function(text,options){if(!active||used||answered)return false;used=true;answered=true;channel.port1.postMessage({type:'workflo-inline-send',text:text,options:options});document.querySelectorAll('button').forEach(function(button){button.disabled=true});return true}}),configurable:false});
+})();</script>`
+
+function interactiveScripts(inline = false): string {
+  return `<script>window.open=function(){return null};document.addEventListener('click',function(event){var a=event.target.closest&&event.target.closest('a[href]');if(!a)return;var href=a.getAttribute('href');if(!href||href.charAt(0)==='#')return;event.preventDefault();window.parent.postMessage({type:'artifact:open-file',href:href},'*')},true);</script>${SIZE_BOOTSTRAP_SCRIPT}${THEME_LISTENER_SCRIPT}${ARTIFACT_MCP_SHIM}${inline ? CHAT_CHOICE_SHIM : ''}`
 }
 
 const EMPTY_DOCUMENT = '<!doctype html><html><head></head><body></body></html>'
@@ -63,7 +71,7 @@ const EMPTY_DOCUMENT = '<!doctype html><html><head></head><body></body></html>'
  * theme changes are pushed over `postMessage` by the caller instead of
  * calling this again — changing srcDoc would reload the document.
  */
-export function hardenArtifactHtml(source: string, theme?: HtmlRenderTheme, inline = false): string {
+export function hardenArtifactHtml(source: string, theme?: HtmlRenderTheme, inline = false, allowChatChoice = false): string {
   const shelled = applyHtmlRenderShell(source, theme)
   // Insert the interactive scripts right after the shell `applyHtmlRenderShell`
   // just added (CSP meta + base + theme style), still before any artifact
@@ -72,7 +80,7 @@ export function hardenArtifactHtml(source: string, theme?: HtmlRenderTheme, inli
   // The browser paints a default canvas color when color-scheme is dark.
   // Set the inline canvas to the exact chat background theme variable.
   const inlineBackground = inline ? '<style>html{background:var(--background)}</style>' : ''
-  return `${shelled.slice(0, shellEnd)}${inlineBackground}${interactiveScripts()}${shelled.slice(shellEnd)}`
+  return `${shelled.slice(0, shellEnd)}${inlineBackground}${interactiveScripts(inline && allowChatChoice)}${shelled.slice(shellEnd)}`
 }
 
 type Reply = (message: Record<string, unknown>) => void
@@ -92,7 +100,7 @@ type Reply = (message: Record<string, unknown>) => void
  * document, so new content gets a new element and a new handshake.
  */
 export function ArtifactHtmlFrame({
-  html, title, taskId, path, files, readFile, onLinkClick, onMessage,
+  html, title, taskId, path, files, readFile, onLinkClick, onMessage, onChoice,
   fill = true, height, onContentHeight
 }: {
   html: string
@@ -103,6 +111,7 @@ export function ArtifactHtmlFrame({
   readFile: (taskId: string, path: string) => Promise<ArtifactContent | null>
   onLinkClick?: (href: string) => boolean
   onMessage?: (data: unknown, reply: Reply) => void
+  onChoice?: (choice: Omit<InlineHtmlChoice, 'sourceMessageId'> & { text: string }) => void | Promise<unknown>
   /** Default true: fills its container (the artifact panel/tab). Set false
    * for an inline render that auto-sizes to `height` instead. */
   fill?: boolean
@@ -135,8 +144,8 @@ export function ArtifactHtmlFrame({
   const bakedThemeRef = useRef<HtmlRenderTheme | undefined>(undefined)
   const srcDoc = useMemo(() => {
     bakedThemeRef.current = themeRef.current
-    return hardenArtifactHtml(prepared || EMPTY_DOCUMENT, themeRef.current, !fill)
-  }, [prepared, fill])
+    return hardenArtifactHtml(prepared || EMPTY_DOCUMENT, themeRef.current, !fill, Boolean(onChoice))
+  }, [prepared, fill, Boolean(onChoice)])
 
   useEffect(() => {
     if (bakedThemeRef.current === theme) return
@@ -148,12 +157,17 @@ export function ArtifactHtmlFrame({
   // effect, because a re-run would forget the accepted port.
   const onLinkClickRef = useRef(onLinkClick)
   const onMessageRef = useRef(onMessage)
+  const onChoiceRef = useRef(onChoice)
   const onContentHeightRef = useRef(onContentHeight)
   onLinkClickRef.current = onLinkClick
   onMessageRef.current = onMessage
+  onChoiceRef.current = onChoice
   onContentHeightRef.current = onContentHeight
   useLayoutEffect(() => {
     let port: MessagePort | null = null
+    let chatPort: MessagePort | null = null
+    let answered = false
+    let lastSend = 0
     const listener = (event: MessageEvent) => {
       if (event.origin !== 'null' || !frameRef.current?.contentWindow || event.source !== frameRef.current.contentWindow) return
       if (event.data?.type === 'artifact:open-file' && typeof event.data.href === 'string') {
@@ -162,6 +176,18 @@ export function ArtifactHtmlFrame({
       }
       if (isHtmlRenderSizeMessage(event.data)) {
         onContentHeightRef.current?.(clampHtmlRenderHeight(event.data.height))
+        return
+      }
+      if (!fill && !chatPort && onChoiceRef.current && event.data?.type === 'workflo-inline-connect' && event.ports?.length === 1) {
+        chatPort = event.ports[0]
+        chatPort.onmessage = (received) => {
+          const choice = parseInlineHtmlChoice(received.data)
+          const now = Date.now()
+          if (!choice || answered || now - lastSend < 500 || !onChoiceRef.current) return
+          answered = true
+          lastSend = now
+          void onChoiceRef.current(choice)
+        }
         return
       }
       if (port || event.data?.type !== ARTIFACT_BRIDGE_HANDSHAKE || event.ports?.length !== 1) return
@@ -175,6 +201,7 @@ export function ArtifactHtmlFrame({
     return () => {
       window.removeEventListener('message', listener)
       port?.close()
+      chatPort?.close()
     }
   }, [srcDoc])
   return (

@@ -15,6 +15,7 @@ import type {
   CreateMcpServerDTO,
   UpdateMcpServerDTO,
   Skill,
+  SkillEditDraft,
   CreateSkillDTO,
   UpdateSkillDTO,
   Secret,
@@ -318,8 +319,8 @@ interface ElectronAPI {
     abort: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stop: (sessionId: string) => Promise<AgentSessionSuccessResult>
     stopByTaskId: (taskId: string) => Promise<AgentSessionSuccessResult & { sessionId: string | null }>
-    send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[]) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
-    sendByTaskId: (taskId: string, message: string, attachments?: AgentMessageAttachment[]) => Promise<AgentSessionSuccessResult & { sessionId: string | null; newSessionId?: string }>
+    send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[], inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice) => Promise<AgentSessionSuccessResult & { newSessionId?: string }>
+    sendByTaskId: (taskId: string, message: string, attachments?: AgentMessageAttachment[], inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice) => Promise<AgentSessionSuccessResult & { sessionId: string | null; newSessionId?: string }>
     approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string) => Promise<AgentSessionSuccessResult>
     syncSkills: (sessionId: string) => Promise<SkillSyncResult>
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
@@ -410,6 +411,9 @@ interface ElectronAPI {
   skills: {
     getAll: () => Promise<Skill[]>
     get: (id: string) => Promise<Skill | undefined>
+    getDrafts: () => Promise<SkillEditDraft[]>
+    getDraft: (name: string) => Promise<SkillEditDraft | null>
+    reviewDraft: (name: string, decision: 'approve' | 'reject') => Promise<Skill | null>
     create: (data: CreateSkillDTO) => Promise<Skill>
     update: (id: string, data: UpdateSkillDTO) => Promise<Skill | undefined>
     delete: (id: string) => Promise<boolean>
@@ -516,6 +520,7 @@ interface ElectronAPI {
     refreshToken: () => Promise<{ token: string }>
     syncResources: () => Promise<{ agents: { created: number; updated: number }; skills: { created: number; updated: number; pushed: number }; mcpServers: { created: number; updated: number }; taskSources: { created: number; updated: number }; errors: string[] } | null>
     apiRequest: (method: string, path: string, body?: unknown) => Promise<unknown>
+    rateFlowUse: (taskId: string, flowUseId: string, rating: number) => Promise<void>
     getApiUrl: () => Promise<string>
     getJwt: () => Promise<string>
     getAuthTokens: () => Promise<{ accessToken: string; refreshToken: string; tenantId: string | null }>

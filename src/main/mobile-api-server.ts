@@ -1101,15 +1101,16 @@ async function routePost(pathname: string, params: Record<string, unknown>, req?
   const sendMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/send$/)
   if (sendMatch) {
     const sessionId = sendMatch[1]
-    const { message, taskId, agentId: aid, attachments } = params as {
+    const { message, taskId, agentId: aid, attachments, inlineChoice } = params as {
       message: string
       taskId?: string
       agentId?: string
       attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>
+      inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice
     }
     if (!message) throw Object.assign(new Error('message is required'), { status: 400 })
     agent.noteUserTaskActivity(taskId, sessionId)
-    const result = await agent.sendMessage(sessionId, message, taskId, aid, attachments)
+    const result = await agent.sendMessage(sessionId, message, taskId, aid, attachments, inlineChoice)
     return { success: true, ...result }
   }
 
@@ -1235,6 +1236,8 @@ function artifactFromFileEntry(taskId: string, entry: ArtifactFileEntry): Artifa
     path: entry.path,
     workpieceKey: entry.workpieceKey,
     files: entry.files,
+    inline: entry.inline,
+    heightHint: entry.heightHint,
     updatedAt: entry.updatedAt,
     reloadTrigger: Math.floor(entry.updatedAt)
   }

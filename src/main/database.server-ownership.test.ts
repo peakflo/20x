@@ -18,7 +18,8 @@ describe('server ownership decoration', () => {
     const otherPlugin = db.createTask({ title: 'other plugin', source_id: other.id, external_id: 'l-1' })!
     const uploading = db.createTask({ title: 'uploading' })!
 
-    db.setSetting(`workflo-task:${linked.id}`, JSON.stringify({ cron: '0 9 * * *', executionMode: 'agent', spaceName: 'Ops', metadata: { triage: { reason: 'urgent' } } }))
+    const flowUse = { id: 'flow-use-1', versionId: 'version-1', version: 2, status: 'trial', judgeDecisions: [] }
+    db.setSetting(`workflo-task:${linked.id}`, JSON.stringify({ cron: '0 9 * * *', executionMode: 'agent', spaceName: 'Ops', metadata: { triage: { reason: 'urgent' } }, flowUses: [flowUse] }))
     db.setSetting(`workflo-task:${linkedPending.id}`, JSON.stringify({ executionMode: 'human' }))
     db.setSetting(`workflo-update:${linkedPending.id}`, JSON.stringify({ fields: { title: 'renamed' } }))
     db.setSetting(`workflo-update:${linkedPending.id}:error`, 'conflict')
@@ -41,7 +42,7 @@ describe('server ownership decoration', () => {
     const byId = new Map(db.getOpenTasks().map((t) => [t.id, t]))
     expect(byId.get(plain.id)).not.toHaveProperty('server_managed')
     expect(byId.get(otherPlugin.id)).not.toHaveProperty('server_managed')
-    expect(byId.get(linked.id)).toMatchObject({ server_managed: true, server_cron: '0 9 * * *', server_execution_mode: 'agent', server_space_name: 'Ops', server_triage_reason: 'urgent', server_sync_pending: false })
+    expect(byId.get(linked.id)).toMatchObject({ server_managed: true, server_cron: '0 9 * * *', server_execution_mode: 'agent', server_space_name: 'Ops', server_triage_reason: 'urgent', server_flow_uses: [flowUse], server_sync_pending: false })
     expect(byId.get(linkedPending.id)).toMatchObject({ server_pending_edits: { title: 'renamed' }, server_sync_pending: true, server_sync_error: 'conflict' })
     expect(byId.get(linkedNoSnapshot.id)).toMatchObject({ server_execution_mode: 'human', server_sync_pending: true, server_sync_error: 'offline' })
     expect(byId.get(uploading.id)).toMatchObject({ server_managed: true, server_sync_pending: true, server_sync_error: 'quota', server_pending_edits: { priority: 'high' } })

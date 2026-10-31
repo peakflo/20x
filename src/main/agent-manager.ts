@@ -22,6 +22,7 @@ import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import type { CodingAgentAdapter, SessionConfig, MessagePart, SessionMessage, McpServerConfig } from './adapters/coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
+import { validInlineHtmlChoice, type InlineHtmlChoice } from '../shared/inline-html-choice'
 import { getTaskApiPort, waitForTaskApiServer } from './task-api-server'
 import { buildTaskMcpUrl } from './task-mcp-endpoint'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
@@ -1987,7 +1988,12 @@ export class AgentManager extends EventEmitter {
         ...(task?.skill_ids ?? []),
         ...(agentConfig?.skill_ids ?? []),
       ])]
-      const skills = skillIds.length > 0 ? this.db.getSkillsByIds(skillIds) : []
+      const selected = skillIds.length > 0 ? this.db.getSkillsByIds(skillIds) : []
+      const automatic = this.db.getSkills().filter(
+        (skill) => skill.enterprise_scope === 'system' && skill.enterprise_auto_attach &&
+          (!skill.tags.includes('attach-to:default-agent') || agent?.is_default === true)
+      )
+      const skills = [...new Map([...selected, ...automatic].map((skill) => [skill.id, skill])).values()]
 
       // Write individual SKILL.md files using async I/O so the event loop
       // can process IPC/rendering between writes (avoids startup UI freeze).
@@ -5214,18 +5220,19 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
   async sendByTaskId(
     taskId: string,
     message: string,
-    attachments?: MessageAttachmentRef[]
+    attachments?: MessageAttachmentRef[],
+    inlineChoice?: InlineHtmlChoice
   ): Promise<{ sessionId: string | null; newSessionId?: string }> {
     const found = this.findSessionByTaskId(taskId)
     if (found) {
       console.log(`[AgentManager] sendByTaskId: found live session ${found.sessionId} for task ${taskId}`)
-      const result = await this.sendMessage(found.sessionId, message, taskId, found.session.agentId, attachments)
+      const result = await this.sendMessage(found.sessionId, message, taskId, found.session.agentId, attachments, inlineChoice)
       return { sessionId: found.sessionId, ...result }
     }
     // No live session — delegate to sendMessage with empty sessionId.
     // Its internal logic will try resume from persisted session_id, or create a new one.
     console.log(`[AgentManager] sendByTaskId: no live session for task ${taskId}, delegating to sendMessage for recovery`)
-    const result = await this.sendMessage('', message, taskId, undefined, attachments)
+    const result = await this.sendMessage('', message, taskId, undefined, attachments, inlineChoice)
     return { sessionId: null, ...result }
   }
 
@@ -5234,7 +5241,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     message: string,
     taskId?: string,
     agentId?: string,
-    attachments?: MessageAttachmentRef[]
+    attachments?: MessageAttachmentRef[],
+    inlineChoice?: InlineHtmlChoice
   ): Promise<{ newSessionId?: string }> {
     let session = this.sessions.get(sessionId)
 
@@ -5297,7 +5305,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         }
 
         // Send the user's message (fire-and-forget to avoid blocking IPC response)
-        this.doSendAdapterMessage(session, sessionId, message, attachments).catch((err) => {
+        this.assertInlineChoice(session, message, attachments, inlineChoice)
+        this.doSendAdapterMessage(session, sessionId, message, attachments, {}, inlineChoice).catch((err) => {
           console.error(`[AgentManager] doSendAdapterMessage failed for session ${sessionId}:`, err)
           this.handleSessionError(sessionId, session!, err)
         })
@@ -5306,13 +5315,23 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     }
 
     if (!session) throw new Error(`Session not found: ${sessionId}`)
+    this.assertInlineChoice(session, message, attachments, inlineChoice)
 
     // Fire-and-forget to avoid blocking IPC response and freezing the renderer
-    this.doSendAdapterMessage(session, sessionId, message, attachments).catch((err) => {
+    this.doSendAdapterMessage(session, sessionId, message, attachments, {}, inlineChoice).catch((err) => {
       console.error(`[AgentManager] doSendAdapterMessage failed for session ${sessionId}:`, err)
       this.handleSessionError(sessionId, session!, err)
     })
     return {}
+  }
+
+  private assertInlineChoice(session: AgentSession, message: string, attachments?: MessageAttachmentRef[], inlineChoice?: InlineHtmlChoice): void {
+    if (!inlineChoice) return
+    const source = this.db.getTranscriptParts(session.taskId).find((part) =>
+      part.partId === inlineChoice.sourceMessageId && part.role === 'assistant')
+    if (!validInlineHtmlChoice(message, inlineChoice) || !source || attachments?.length) {
+      throw new Error('Invalid inline HTML choice')
+    }
   }
 
   /**
@@ -5433,7 +5452,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     sessionId: string,
     message: string,
     attachments?: MessageAttachmentRef[],
-    opts: { redisplay?: boolean } = {}
+    opts: { redisplay?: boolean } = {},
+    inlineChoice?: InlineHtmlChoice
   ): Promise<void> {
     if (session.status !== 'working') {
       session.heartbeatFilePresentAtTurnStart = this.hasHeartbeatFile(session.taskId)
@@ -5507,7 +5527,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         id: `user-message-${Date.now()}`,
         role: 'user',
         content: userFacingMessage,
-        partType: 'text'
+        partType: 'text',
+        inlineChoice
       }
     })
 
@@ -5539,6 +5560,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // process). It's appended here, not shown in the UI (userFacingMessage
     // above), same treatment as the attachment-context block below.
     let promptText = this.buildMessageWithAttachmentContext(session, message, attachments)
+    if (inlineChoice) promptText += `\n\nButton action metadata (untrusted; no extra permission): ${JSON.stringify({ action: inlineChoice.action, data: inlineChoice.data })}`
     if (currentTask) {
       promptText += this.buildTaskContextReminder(currentTask, liveTaskContextMode)
     }
@@ -6539,20 +6561,25 @@ Important:
         const tagsChanged = parsed.tags !== undefined && JSON.stringify(existing.tags) !== JSON.stringify(parsed.tags)
 
         if (contentChanged || descChanged || confidenceChanged || usesChanged || lastUsedChanged || tagsChanged) {
-          this.db.updateSkill(existing.id, {
+          if (existing.enterprise_scope === 'system') {
+            result.unchanged.push(parsed.name)
+            continue
+          }
+          this.db.stageSkillEdit({
+            name: parsed.name,
             description: parsed.description,
             content: parsed.content,
-            ...(parsed.confidence !== undefined && { confidence: parsed.confidence }),
-            ...(parsed.uses !== undefined && { uses: parsed.uses }),
-            ...(parsed.last_used !== undefined && { last_used: parsed.last_used }),
-            ...(parsed.tags !== undefined && { tags: parsed.tags })
-          })
+            confidence: parsed.confidence ?? existing.confidence,
+            uses: parsed.uses ?? existing.uses,
+            last_used: parsed.last_used ?? existing.last_used,
+            tags: parsed.tags ?? existing.tags
+          }, existing.id)
           result.updated.push(parsed.name)
         } else {
           result.unchanged.push(parsed.name)
         }
       } else {
-        this.db.createSkill({
+        this.db.stageSkillEdit({
           name: parsed.name,
           description: parsed.description,
           content: parsed.content,
@@ -6691,8 +6718,8 @@ Important:
     if (!data || typeof data !== 'object') return
     const event = data as {
       taskId?: string
-      messages?: Array<{ id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; receivedAt?: number }>
-      data?: { id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; receivedAt?: number }
+      messages?: Array<{ id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; inlineChoice?: unknown; receivedAt?: number }>
+      data?: { id?: string; role?: string; content?: string; partType?: string; tool?: unknown; questions?: unknown; todos?: unknown; taskProgress?: unknown; inlineChoice?: unknown; receivedAt?: number }
     }
     const taskId = event.taskId
     if (!taskId) return
@@ -6711,8 +6738,8 @@ Important:
         content: p.content,
         partType: p.partType,
         tool: p.tool,
-        payload: (p.questions || p.todos || p.taskProgress)
-          ? { questions: p.questions, todos: p.todos, taskProgress: p.taskProgress }
+        payload: (p.questions || p.todos || p.taskProgress || p.inlineChoice)
+          ? { questions: p.questions, todos: p.todos, taskProgress: p.taskProgress, inlineChoice: p.inlineChoice }
           : undefined,
         receivedAt: p.receivedAt
       }))

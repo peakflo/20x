@@ -178,10 +178,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('agentSession:stop', sessionId),
     stopByTaskId: (taskId: string): Promise<{ success: boolean; sessionId: string | null }> =>
       ipcRenderer.invoke('agentSession:stopByTaskId', taskId),
-    send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>): Promise<{ success: boolean; newSessionId?: string }> =>
-      ipcRenderer.invoke('agentSession:send', sessionId, message, taskId, agentId, attachments),
-    sendByTaskId: (taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>): Promise<{ success: boolean; sessionId: string | null; newSessionId?: string }> =>
-      ipcRenderer.invoke('agentSession:sendByTaskId', taskId, message, attachments),
+    send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>, inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice): Promise<{ success: boolean; newSessionId?: string }> =>
+      ipcRenderer.invoke('agentSession:send', sessionId, message, taskId, agentId, attachments, inlineChoice),
+    sendByTaskId: (taskId: string, message: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>, inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice): Promise<{ success: boolean; sessionId: string | null; newSessionId?: string }> =>
+      ipcRenderer.invoke('agentSession:sendByTaskId', taskId, message, attachments, inlineChoice),
     approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string): Promise<{ success: boolean }> =>
       requestId
         ? ipcRenderer.invoke('agentSession:approve', sessionId, approved, message, responseType, requestId)
@@ -386,6 +386,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   skills: {
     getAll: (): Promise<unknown[]> => ipcRenderer.invoke('skills:getAll'),
     get: (id: string): Promise<unknown> => ipcRenderer.invoke('skills:get', id),
+    getDraft: (name: string): Promise<unknown> => ipcRenderer.invoke('skills:getDraft', name),
+    getDrafts: (): Promise<unknown> => ipcRenderer.invoke('skills:getDrafts'),
+    reviewDraft: (name: string, decision: 'approve' | 'reject'): Promise<unknown> =>
+      ipcRenderer.invoke('skills:reviewDraft', name, decision),
     create: (data: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('skills:create', data),
     update: (id: string, data: Record<string, unknown>): Promise<unknown> =>
@@ -579,6 +583,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('enterprise:syncResources'),
     apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> =>
       ipcRenderer.invoke('enterprise:apiRequest', method, path, body),
+    rateFlowUse: (taskId: string, flowUseId: string, rating: number): Promise<void> =>
+      ipcRenderer.invoke('enterprise:rateFlowUse', taskId, flowUseId, rating),
     getApiUrl: (): Promise<string> =>
       ipcRenderer.invoke('enterprise:getApiUrl'),
     getJwt: (): Promise<string> =>

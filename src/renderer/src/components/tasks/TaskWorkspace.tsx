@@ -27,7 +27,7 @@ import { useSettingsStore, type GitProvider } from '@/stores/settings-store'
 import { useTaskStore } from '@/stores/task-store'
 import { useShallow } from 'zustand/react/shallow'
 import { useProgressToastStore } from '@/stores/progress-toast-store'
-import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi } from '@/lib/ipc-client'
+import { taskApi, worktreeApi, taskSourceApi, onAgentIncompatibleSession, onWorktreeProgress, attachmentApi, enterpriseApi } from '@/lib/ipc-client'
 import { subscribe } from '@/lib/shared-ipc-listeners'
 import { memo, useEffect, useLayoutEffect, useCallback, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { TaskStatus } from '@/types'
@@ -593,7 +593,7 @@ function TaskWorkspaceComponent({
   }, [fetchTasks, resume, start, task?.agent_id, task?.id, task?.session_id])
 
   const handleSend = useCallback(
-    async (message: string, options?: { attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }> }) => {
+    async (message: string, options?: { attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>; inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice }) => {
       // Read messages from the store at call time instead of closing over the
       // render-time array: depending on `session.messages` gives this callback
       // a new identity on every streamed delta, which defeats React.memo on
@@ -609,7 +609,7 @@ function TaskWorkspaceComponent({
       }
       const hasActiveQuestion = questionIndex >= 0
         && !messages.slice(questionIndex + 1).some((m) => m.role === 'user')
-      if (hasActiveQuestion) {
+      if (hasActiveQuestion && !options?.inlineChoice) {
         const question = messages[questionIndex]
         const questionKey = question.tool?.requestId || question.id
         if (submittedQuestionIdsRef.current.has(questionKey)) return
@@ -712,6 +712,17 @@ function TaskWorkspaceComponent({
       return
     }
     console.log('[TaskWorkspace] Task status set to AgentLearning, verified:', updatedTask?.status)
+
+    const ratedUse = task.server_flow_uses?.at(-1)
+    if (task.server_managed && task.external_id && ratedUse?.executionId) {
+      try {
+        await enterpriseApi.rateFlowUse(task.external_id, ratedUse.id, rating)
+      } catch (error) {
+        const toastId = `flow-rating-${task.id}`
+        showProgressToast(toastId, 'Flow rating not saved')
+        failProgressToast(toastId, error instanceof Error ? error.message : String(error))
+      }
+    }
 
     // Build feedback prompt
     const commentPart = comment ? ` Comment: "${comment}".` : ''

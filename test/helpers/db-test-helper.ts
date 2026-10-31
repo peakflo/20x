@@ -183,6 +183,8 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
       tags TEXT NOT NULL DEFAULT '[]',
       is_deleted INTEGER NOT NULL DEFAULT 0,
       enterprise_skill_id TEXT DEFAULT NULL,
+      enterprise_scope TEXT NOT NULL DEFAULT 'tenant',
+      enterprise_auto_attach INTEGER NOT NULL DEFAULT 0,
       uses_at_last_sync INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL

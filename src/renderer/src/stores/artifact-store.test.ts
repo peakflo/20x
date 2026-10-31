@@ -152,6 +152,22 @@ describe('useArtifactStore', () => {
     expect(useArtifactStore.getState().hydratedTasks['task-1']).toBe(true)
   })
 
+  it('restores inline HTML flags from the registry after a transcript projection', async () => {
+    const store = useArtifactStore.getState()
+    store.upsertArtifact({ taskId: 'task-1', type: ArtifactType.HTML, title: 'Choices',
+      path: 'artifacts/artifact_choices/index.html', workpieceKey: 'artifact_choices', updatedAt: 5 })
+    const api: ArtifactApi = {
+      scan: vi.fn().mockResolvedValue([{ path: 'artifacts/artifact_choices/index.html',
+        files: ['artifacts/artifact_choices/index.html'], workpieceKey: 'artifact_choices',
+        title: 'Choices', type: ArtifactType.HTML, updatedAt: 5, size: 0,
+        inline: true, heightHint: 190 }]),
+      read: vi.fn()
+    }
+    await store.hydrate('task-1', api)
+    expect(useArtifactStore.getState().getArtifacts('task-1')[0]).toEqual(
+      expect.objectContaining({ inline: true, heightHint: 190 }))
+  })
+
   it('hydrates large workspaces atomically and deduplicates StrictMode calls', async () => {
     const entries = Array.from({ length: 500 }, (_, index) => ({
       path: `repo/file-${index}.ts`,

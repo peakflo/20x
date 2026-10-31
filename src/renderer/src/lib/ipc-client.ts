@@ -268,12 +268,16 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.stopByTaskId(taskId)
   },
 
-  send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[]): Promise<{ success: boolean; newSessionId?: string }> => {
-    return window.electronAPI.agentSession.send(sessionId, message, taskId, agentId, attachments)
+  send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: AgentMessageAttachment[], inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice): Promise<{ success: boolean; newSessionId?: string }> => {
+    return inlineChoice
+      ? window.electronAPI.agentSession.send(sessionId, message, taskId, agentId, attachments, inlineChoice)
+      : window.electronAPI.agentSession.send(sessionId, message, taskId, agentId, attachments)
   },
 
-  sendByTaskId: (taskId: string, message: string, attachments?: AgentMessageAttachment[]): Promise<{ success: boolean; sessionId: string | null; newSessionId?: string }> => {
-    return window.electronAPI.agentSession.sendByTaskId(taskId, message, attachments)
+  sendByTaskId: (taskId: string, message: string, attachments?: AgentMessageAttachment[], inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice): Promise<{ success: boolean; sessionId: string | null; newSessionId?: string }> => {
+    return inlineChoice
+      ? window.electronAPI.agentSession.sendByTaskId(taskId, message, attachments, inlineChoice)
+      : window.electronAPI.agentSession.sendByTaskId(taskId, message, attachments)
   },
 
   approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string): Promise<{ success: boolean }> => {
@@ -636,6 +640,9 @@ export const taskSourceApi = {
 }
 
 export const skillApi = {
+  getDrafts: (): Promise<import('@/types').SkillEditDraft[]> => window.electronAPI.skills.getDrafts(),
+  reviewDraft: (name: string, decision: 'approve' | 'reject'): Promise<Skill | null> =>
+    window.electronAPI.skills.reviewDraft(name, decision),
   getAll: (): Promise<Skill[]> => {
     return window.electronAPI.skills.getAll()
   },
@@ -843,6 +850,8 @@ export const enterpriseApi = {
   apiRequest: (method: string, path: string, body?: unknown): Promise<unknown> => {
     return window.electronAPI.enterprise.apiRequest(method, path, body)
   },
+  rateFlowUse: (taskId: string, flowUseId: string, rating: number): Promise<void> =>
+    window.electronAPI.enterprise.rateFlowUse(taskId, flowUseId, rating),
 
   getApiUrl: (): Promise<string> => {
     return window.electronAPI.enterprise.getApiUrl()

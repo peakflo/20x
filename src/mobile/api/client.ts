@@ -163,8 +163,8 @@ export const api = {
       post<{ sessionId: string }>('/api/sessions/start', { agentId, taskId, skipInitialPrompt }),
     resume: (sessionId: string, agentId: string, taskId: string) =>
       post<{ sessionId: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/resume`, { agentId, taskId }),
-    send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>) =>
-      post<{ success: boolean; newSessionId?: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/send`, { message, taskId, agentId, attachments }),
+    send: (sessionId: string, message: string, taskId?: string, agentId?: string, attachments?: Array<{ id: string; filename: string; size: number; mime_type: string }>, inlineChoice?: import('@shared/inline-html-choice').InlineHtmlChoice) =>
+      post<{ success: boolean; newSessionId?: string }>(`/api/sessions/${encodeURIComponent(sessionId)}/send`, { message, taskId, agentId, attachments, inlineChoice }),
     approve: (sessionId: string, approved: boolean, message?: string, responseType?: 'permission' | 'question', requestId?: string) =>
       post<{ success: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/approve`, { approved, message, responseType, requestId }),
     sync: (sessionId: string) =>

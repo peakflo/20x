@@ -522,6 +522,7 @@ export interface TaskRecord {
   server_cron?: string | null
   server_space_name?: string | null
   server_triage_reason?: string | null
+  server_flow_uses?: import('./workflo-api-client').WorkfloTask['flowUses']
   server_sync_pending?: boolean
   server_sync_error?: string
   id: string
@@ -868,6 +869,8 @@ export interface SkillRow {
   tags: string
   is_deleted: number
   enterprise_skill_id: string | null
+  enterprise_scope: string
+  enterprise_auto_attach: number
   uses_at_last_sync: number
   created_at: string
   updated_at: string
@@ -884,6 +887,8 @@ export interface SkillRecord {
   last_used: string | null
   tags: string[]
   enterprise_skill_id: string | null
+  enterprise_scope: 'tenant' | 'system'
+  enterprise_auto_attach: boolean
   uses_at_last_sync: number
   created_at: string
   updated_at: string
@@ -898,6 +903,8 @@ export interface CreateSkillData {
   last_used?: string | null
   tags?: string[]
   enterprise_skill_id?: string | null
+  enterprise_scope?: 'tenant' | 'system'
+  enterprise_auto_attach?: boolean
 }
 
 export interface UpdateSkillData {
@@ -909,7 +916,29 @@ export interface UpdateSkillData {
   last_used?: string | null
   tags?: string[]
   enterprise_skill_id?: string | null
+  enterprise_scope?: 'tenant' | 'system'
+  enterprise_auto_attach?: boolean
   uses_at_last_sync?: number
+}
+
+export interface SkillEditDraft {
+  name: string
+  skillId: string | null
+  data: CreateSkillData
+  status: 'held' | 'ready_for_review'
+  guardCodes: string[]
+  createdAt: string
+}
+
+/** Keep unreviewed workspace text out of the active skill table and sync. */
+export function guardSkillEdit(data: CreateSkillData): string[] {
+  const text = `${data.name}\n${data.description}\n${data.content}`
+  const codes: string[] = []
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(data.name)) codes.push('invalid_name')
+  if (!data.description.trim() || !data.content.trim() || data.content.length > 500_000) codes.push('invalid_content')
+  if (/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,})\b/i.test(text)) codes.push('secret')
+  if (/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i.test(text)) codes.push('email_address')
+  return codes
 }
 
 // ── Secret types ─────────────────────────────────────────────
@@ -1123,6 +1152,8 @@ function deserializeSkill(row: SkillRow): SkillRecord {
     last_used: row.last_used,
     tags,
     enterprise_skill_id: row.enterprise_skill_id ?? null,
+    enterprise_scope: row.enterprise_scope === 'system' ? 'system' : 'tenant',
+    enterprise_auto_attach: row.enterprise_auto_attach === 1,
     uses_at_last_sync: row.uses_at_last_sync ?? 0,
     created_at: row.created_at,
     updated_at: row.updated_at
@@ -1233,8 +1264,9 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  *   The per-column `if (!columnNames.has(...))` checks in
  *   migrateReviewSeenColumns() are idempotent, so bumping this is safe for
  *   everyone else — it's a no-op where the columns already exist.
+ * 12 → 13: enterprise skill scope and automatic attachment flags.
  */
-const SCHEMA_VERSION = 12
+const SCHEMA_VERSION = 13
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -1521,6 +1553,8 @@ export class DatabaseManager {
         tags TEXT NOT NULL DEFAULT '[]',
         is_deleted INTEGER NOT NULL DEFAULT 0,
         enterprise_skill_id TEXT DEFAULT NULL,
+        enterprise_scope TEXT NOT NULL DEFAULT 'tenant',
+        enterprise_auto_attach INTEGER NOT NULL DEFAULT 0,
         uses_at_last_sync INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -2184,6 +2218,12 @@ export class DatabaseManager {
     if (!skillColumnNames.has('enterprise_skill_id')) {
       this.db.exec(`ALTER TABLE skills ADD COLUMN enterprise_skill_id TEXT DEFAULT NULL`)
     }
+    if (!skillColumnNames.has('enterprise_scope')) {
+      this.db.exec(`ALTER TABLE skills ADD COLUMN enterprise_scope TEXT NOT NULL DEFAULT 'tenant'`)
+    }
+    if (!skillColumnNames.has('enterprise_auto_attach')) {
+      this.db.exec(`ALTER TABLE skills ADD COLUMN enterprise_auto_attach INTEGER NOT NULL DEFAULT 0`)
+    }
 
     if (!skillColumnNames.has('uses_at_last_sync')) {
       this.db.exec(`ALTER TABLE skills ADD COLUMN uses_at_last_sync INTEGER NOT NULL DEFAULT 0`)
@@ -2648,7 +2688,7 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (!lookup.isLinked(task)) return task
     const snapshot = getSetting(`workflo-task:${task.id}`)
     const remote = snapshot ? JSON.parse(snapshot) as import('./workflo-api-client').WorkfloTask : undefined
-    return { ...task, server_pending_edits: JSON.parse(getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_cron: remote?.cron ?? null, server_execution_mode: remote?.executionMode ?? 'human', server_space_name: remote?.spaceName ?? null, server_triage_reason: remote?.metadata?.triage?.reason ?? null, server_sync_pending: !!getSetting(`workflo-update:${task.id}`) || !!getSetting(`workflo-completion:${task.id}`), server_sync_error: getSetting(`workflo-update:${task.id}:error`) ?? getSetting(`workflo-completion:${task.id}:error`) }
+    return { ...task, server_pending_edits: JSON.parse(getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_cron: remote?.cron ?? null, server_execution_mode: remote?.executionMode ?? 'human', server_space_name: remote?.spaceName ?? null, server_triage_reason: remote?.metadata?.triage?.reason ?? null, server_flow_uses: remote?.flowUses ?? [], server_sync_pending: !!getSetting(`workflo-update:${task.id}`) || !!getSetting(`workflo-completion:${task.id}`), server_sync_error: getSetting(`workflo-update:${task.id}:error`) ?? getSetting(`workflo-completion:${task.id}:error`) }
   }
 
   private singleTaskOwnershipLookup(): ServerOwnershipLookup {
@@ -4086,6 +4126,45 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return rows.map(deserializeSkill)
   }
 
+  stageSkillEdit(data: CreateSkillData, skillId: string | null = null): SkillEditDraft {
+    const guardCodes = guardSkillEdit(data)
+    const draft: SkillEditDraft = {
+      name: data.name,
+      skillId,
+      data,
+      status: guardCodes.length ? 'held' : 'ready_for_review',
+      guardCodes,
+      createdAt: new Date().toISOString()
+    }
+    this.setSetting(`skill-edit-draft:${data.name}`, JSON.stringify(draft))
+    return draft
+  }
+
+  getSkillEditDraft(name: string): SkillEditDraft | null {
+    const value = this.getSetting(`skill-edit-draft:${name}`)
+    return value ? JSON.parse(value) as SkillEditDraft : null
+  }
+
+  getSkillEditDrafts(): SkillEditDraft[] {
+    const rows = this.db.prepare("SELECT value FROM settings WHERE key LIKE 'skill-edit-draft:%' ORDER BY key").all() as Array<{ value: string }>
+    return rows.map((row) => JSON.parse(row.value) as SkillEditDraft)
+  }
+
+  reviewSkillEdit(name: string, decision: 'approve' | 'reject'): SkillRecord | null {
+    const draft = this.getSkillEditDraft(name)
+    if (!draft) return null
+    if (decision === 'approve' && draft.status !== 'ready_for_review') {
+      throw new Error('The skill guard held this draft')
+    }
+    const result = decision === 'approve'
+      ? draft.skillId
+        ? this.updateSkill(draft.skillId, draft.data)
+        : this.createSkill(draft.data)
+      : null
+    this.db.prepare('DELETE FROM settings WHERE key = ?').run(`skill-edit-draft:${name}`)
+    return result ?? null
+  }
+
   getSkill(id: string): SkillRecord | undefined {
     const row = this.db.prepare(
       'SELECT * FROM skills WHERE id = ? AND is_deleted = 0'
@@ -4111,9 +4190,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const tags = JSON.stringify(data.tags ?? [])
     const enterpriseSkillId = data.enterprise_skill_id ?? null
     this.db.prepare(`
-      INSERT INTO skills (id, name, description, content, version, confidence, uses, last_used, tags, is_deleted, enterprise_skill_id, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 0, ?, ?, ?)
-    `).run(id, data.name, data.description, data.content, confidence, uses, lastUsed, tags, enterpriseSkillId, now, now)
+      INSERT INTO skills (id, name, description, content, version, confidence, uses, last_used, tags, is_deleted, enterprise_skill_id, enterprise_scope, enterprise_auto_attach, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+    `).run(id, data.name, data.description, data.content, confidence, uses, lastUsed, tags, enterpriseSkillId, data.enterprise_scope ?? 'tenant', data.enterprise_auto_attach ? 1 : 0, now, now)
     return this.getSkill(id)
   }
 
@@ -4132,6 +4211,8 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     if (data.last_used !== undefined) { setClauses.push('last_used = ?'); values.push(data.last_used) }
     if (data.tags !== undefined) { setClauses.push('tags = ?'); values.push(JSON.stringify(data.tags)) }
     if (data.enterprise_skill_id !== undefined) { setClauses.push('enterprise_skill_id = ?'); values.push(data.enterprise_skill_id) }
+    if (data.enterprise_scope !== undefined) { setClauses.push('enterprise_scope = ?'); values.push(data.enterprise_scope) }
+    if (data.enterprise_auto_attach !== undefined) { setClauses.push('enterprise_auto_attach = ?'); values.push(data.enterprise_auto_attach ? 1 : 0) }
     if (data.uses_at_last_sync !== undefined) { setClauses.push('uses_at_last_sync = ?'); values.push(data.uses_at_last_sync) }
 
     if (setClauses.length === 0) return existing

@@ -49,9 +49,46 @@ describe('hardenArtifactHtml CSP', () => {
     expect(srcDoc).toContain(HTML_RENDER_SIZE_MESSAGE_TYPE)
     expect(srcDoc).toContain(HTML_RENDER_THEME_MESSAGE_TYPE)
   })
+
+  it('opens the chat bridge only for inline assistant output', () => {
+    const plain = hardenArtifactHtml('<button>Choose</button>')
+    const choice = hardenArtifactHtml('<button>Choose</button>', undefined, true, true)
+    expect(plain).not.toContain('workflo-inline-connect')
+    expect(choice).toContain('event.isTrusted')
+    expect(choice).toContain('setTimeout(function(){active=false},0)')
+    expect(choice).toContain("connect-src 'none'")
+  })
 })
 
 describe('ArtifactHtmlFrame auto-height (fill=false)', () => {
+  it('accepts one choice from the current inline frame and rejects another frame', async () => {
+    const onChoice = vi.fn()
+    render(<ArtifactHtmlFrame html="<button>Explore systems</button>" title="Choice" taskId="task-1"
+      path="index.html" files={[]} readFile={readFile} fill={false} onChoice={onChoice} />)
+    await waitFor(() => expect(screen.getByTitle('Choice').getAttribute('srcdoc')).toContain('workflo-inline-connect'))
+    const frame = screen.getByTitle('Choice') as HTMLIFrameElement
+    const port = { onmessage: null as null | ((event: { data: unknown }) => void), close: vi.fn() }
+    const handshake = (source: unknown, origin = 'null') => {
+      const event = new Event('message')
+      Object.defineProperty(event, 'origin', { value: origin })
+      Object.defineProperty(event, 'source', { value: source })
+      Object.defineProperty(event, 'data', { value: { type: 'workflo-inline-connect' } })
+      Object.defineProperty(event, 'ports', { value: [port] })
+      act(() => window.dispatchEvent(event))
+    }
+    handshake(window)
+    handshake(frame.contentWindow, 'https://example.invalid')
+    expect(port.onmessage).toBeNull()
+    handshake(frame.contentWindow)
+    expect(port.onmessage).not.toBeNull()
+    act(() => {
+      port.onmessage?.({ data: { type: 'workflo-inline-send', text: 'Explore my systems', options: { action: 'explore.start' } } })
+      port.onmessage?.({ data: { type: 'workflo-inline-send', text: 'Send again' } })
+    })
+    expect(onChoice).toHaveBeenCalledTimes(1)
+    expect(onChoice).toHaveBeenCalledWith({ text: 'Explore my systems', action: 'explore.start' })
+  })
+
   it('sizes the iframe from the height prop and has no hard-coded white background', async () => {
     render(
       <ArtifactHtmlFrame
