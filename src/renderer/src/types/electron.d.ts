@@ -222,6 +222,12 @@ export interface ToolStatus {
   version: string | null
   supported?: boolean
   reason?: string | null
+  /** Resolved executable path, when known. */
+  path?: string
+  /** Set when the executable exists but `--version` failed (stderr snippet). */
+  error?: string
+  /** Node binary used to run an `env node` script when PATH's node failed. */
+  via?: string
 }
 
 export interface DepsStatus {
@@ -235,6 +241,8 @@ export interface DepsStatus {
   opencode: ToolStatus
   codex: ToolStatus
   cursor: ToolStatus
+  gemini?: ToolStatus
+  amp?: ToolStatus
   pi: ToolStatus
 }
 

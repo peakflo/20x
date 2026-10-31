@@ -1,4 +1,4 @@
-import { execFile, execSync } from 'child_process'
+import { execSync } from 'child_process'
 import { readdirSync } from 'fs'
 import { app, BrowserWindow, dialog, net, protocol, session, shell, Tray, Menu, nativeImage } from 'electron'
 import { join } from 'path'
@@ -19,7 +19,9 @@ import { HubSpotPlugin } from './plugins/hubspot-plugin'
 import { GitHubIssuesPlugin } from './plugins/github-issues-plugin'
 import { NotionPlugin } from './plugins/notion-plugin'
 import { YouTrackPlugin } from './plugins/youtrack-plugin'
-import { registerIpcHandlers } from './ipc-handlers'
+import { registerIpcHandlers, clearDepsCheckCache } from './ipc-handlers'
+import { clearRunnerCache } from './acp-registry/registry-client'
+import { applyShellEnv, buildFallbackPath, readShellEnv } from './shell-env'
 import { onBrandSpacesChanged, setSelectedCompanyBrand } from './brand'
 import { panelBrowserBroker } from './panel-browser-broker'
 import { getAgentBrowserSession } from './agent-browser-session'
@@ -812,12 +814,12 @@ app.on('open-url', (event, url) => {
   }
 })
 
-// Load shell environment for GUI apps (async to avoid blocking startup)
-// macOS GUI apps (launched from /Applications) do NOT inherit the user's shell
-// environment, so CLI tools like codex, claude, gh etc. cannot be found and
-// auth env vars like CODEX_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY are
-// missing. We read the values from a login shell and apply them to process.env.
-function loadPlatformShellEnv(): Promise<void> {
+// Load shell environment for GUI apps (async to avoid blocking startup).
+// See ./shell-env for why we read PATH/auth vars from an interactive login
+// shell ('-ilc', then '-lc') and how the fallback PATH is built.
+let shellEnvUsedFallback = false
+
+async function loadPlatformShellEnv(): Promise<void> {
   if (process.platform === 'win32') {
     // On Windows, GUI apps can miss PATH updates from installers. Rehydrate the
     // usual runtime locations, including the python.org user install path used
@@ -826,134 +828,57 @@ function loadPlatformShellEnv(): Promise<void> {
       process.env.PATH || '',
       getWindowsPathEntries(process.env)
     )
-    return Promise.resolve()
+    return
   }
-  if (process.platform !== 'darwin') return Promise.resolve()
+  if (process.platform !== 'darwin') return
 
-  // We need the interactive shell (`-i`) because tools like NVM, pnpm, bun,
-  // etc. add their paths in `.zshrc` / `.bashrc` (interactive config), NOT in
-  // `.zprofile` / `.bash_profile` (login-only config).
-  //
-  // Problem: interactive mode also causes shell init scripts (oh-my-zsh,
-  // powerlevel10k, gitstatus, etc.) to emit escape codes, error messages,
-  // and prompt strings that corrupt the output.
-  //
-  // Solution: use unique markers around the PATH value so we can reliably
-  // extract it from the noisy output.
-  const PATH_START = '__20X_PATH_START__'
-  const PATH_END = '__20X_PATH_END__'
-  const OPENAI_API_KEY_START = '__20X_OPENAI_API_KEY_START__'
-  const OPENAI_API_KEY_END = '__20X_OPENAI_API_KEY_END__'
-  const CODEX_API_KEY_START = '__20X_CODEX_API_KEY_START__'
-  const CODEX_API_KEY_END = '__20X_CODEX_API_KEY_END__'
-  const ANTHROPIC_API_KEY_START = '__20X_ANTHROPIC_API_KEY_START__'
-  const ANTHROPIC_API_KEY_END = '__20X_ANTHROPIC_API_KEY_END__'
-  // CODEX_HOME: if the user's terminal `codex` uses a custom CODEX_HOME (e.g. a
-  // work profile / a different ChatGPT account than ~/.codex), 20x must read the
-  // SAME one — otherwise codex-acp authenticates as whatever account lives in the
-  // default ~/.codex, which may be a free/over-limit account ("Upgrade to Plus")
-  // while the terminal subscription works fine.
-  const CODEX_HOME_START = '__20X_CODEX_HOME_START__'
-  const CODEX_HOME_END = '__20X_CODEX_HOME_END__'
-
-  const command = [
-    `printf '%s%s%s\\n' "${PATH_START}" "$PATH" "${PATH_END}"`,
-    `printf '%s%s%s\\n' "${OPENAI_API_KEY_START}" "$OPENAI_API_KEY" "${OPENAI_API_KEY_END}"`,
-    `printf '%s%s%s\\n' "${CODEX_API_KEY_START}" "$CODEX_API_KEY" "${CODEX_API_KEY_END}"`,
-    `printf '%s%s%s\\n' "${ANTHROPIC_API_KEY_START}" "$ANTHROPIC_API_KEY" "${ANTHROPIC_API_KEY_END}"`,
-    `printf '%s%s%s\\n' "${CODEX_HOME_START}" "$CODEX_HOME" "${CODEX_HOME_END}"`
-  ].join('; ')
-
-  const extractMarkedValue = (stdout: string, start: string, end: string): string | undefined => {
-    const match = stdout.match(new RegExp(`${start}([\\s\\S]*?)${end}`))
-    return match?.[1] || undefined
+  const result = await readShellEnv()
+  if (result.ok) {
+    applyShellEnv(result.values)
+    shellEnvUsedFallback = false
+    console.log(`[Main] PATH from shell (${process.env.SHELL || '/bin/zsh'} ${result.flags}) in ${result.durationMs}ms${result.warning ? ` (shell reported: ${result.warning})` : ''}: ${process.env.PATH}`)
+    if (result.values.CODEX_HOME) console.log('[Main] Inherited CODEX_HOME from shell:', result.values.CODEX_HOME)
+    return
   }
 
-  return new Promise((resolve) => {
-    const userShell = process.env.SHELL || '/bin/zsh'
-    execFile(
-      userShell,
-      ['-ilc', command],
-      { timeout: 5000, encoding: 'utf8' },
-      (err, stdout) => {
-        if (!err && stdout) {
-          const pathFromShell = extractMarkedValue(stdout, PATH_START, PATH_END)
-          if (pathFromShell) {
-            console.log('[Main] Setting PATH from shell:', userShell)
-            process.env.PATH = pathFromShell
-          } else {
-            console.error('[Main] Failed to read shell PATH, using fallback')
-            process.env.PATH = buildFallbackPath()
-          }
-
-          const openAiApiKey = extractMarkedValue(stdout, OPENAI_API_KEY_START, OPENAI_API_KEY_END)
-          if (openAiApiKey) process.env.OPENAI_API_KEY = openAiApiKey
-
-          const codexApiKey = extractMarkedValue(stdout, CODEX_API_KEY_START, CODEX_API_KEY_END)
-          if (codexApiKey) process.env.CODEX_API_KEY = codexApiKey
-
-          const anthropicApiKey = extractMarkedValue(stdout, ANTHROPIC_API_KEY_START, ANTHROPIC_API_KEY_END)
-          if (anthropicApiKey) process.env.ANTHROPIC_API_KEY = anthropicApiKey
-
-          // Inherit a custom CODEX_HOME so codex-acp authenticates as the SAME
-          // ChatGPT account the user's terminal `codex` uses.
-          const codexHome = extractMarkedValue(stdout, CODEX_HOME_START, CODEX_HOME_END)
-          if (codexHome) {
-            process.env.CODEX_HOME = codexHome
-            console.log('[Main] Inherited CODEX_HOME from shell:', codexHome)
-          }
-
-          resolve()
-          return
-        }
-
-        console.error('[Main] Failed to read shell PATH, using fallback:', err?.message)
-        process.env.PATH = buildFallbackPath()
-        resolve()
-      }
-    )
-  })
+  process.env.PATH = buildFallbackPath()
+  shellEnvUsedFallback = true
+  console.error(`[Main] Failed to read shell env after ${result.durationMs}ms (${result.reason}); using fallback PATH: ${process.env.PATH}`)
 }
 
 /**
- * Build a comprehensive fallback PATH when the shell invocation fails.
- * Covers Homebrew, system bins, npm/pnpm/volta globals, and NVM.
+ * If startup fell back to a guessed PATH (shell too slow on a busy boot),
+ * re-resolve once in the background. On success, apply the real env, drop the
+ * cached CLI detection results, and push fresh harness statuses to the renderer.
  */
-function buildFallbackPath(): string {
-  const home = process.env.HOME || ''
-  const commonPaths = [
-    '/opt/homebrew/bin',
-    '/opt/homebrew/sbin',
-    '/usr/local/bin',
-    '/usr/bin',
-    '/bin',
-    '/usr/sbin',
-    '/sbin',
-    `${home}/.local/bin`,
-    `${home}/.npm-global/bin`,
-    `${home}/Library/pnpm`,
-    `${home}/.volta/bin`,
-  ]
-
-  // Dynamically detect NVM current version path instead of hardcoding
-  if (home) {
-    try {
-      const nvmVersionsDir = join(home, '.nvm', 'versions', 'node')
-      const versions = readdirSync(nvmVersionsDir) as string[]
-      if (versions.length > 0) {
-        // Sort descending to pick the latest installed version
-        versions.sort((a: string, b: string) => b.localeCompare(a, undefined, { numeric: true }))
-        commonPaths.push(join(nvmVersionsDir, versions[0], 'bin'))
+function scheduleShellEnvReResolve(delayMs = 30_000): void {
+  if (!shellEnvUsedFallback || process.platform !== 'darwin') return
+  setTimeout(() => {
+    void (async () => {
+      const result = await readShellEnv({ timeoutMs: 30_000 })
+      if (!result.ok) {
+        console.warn(`[Main] Background shell env re-resolve failed after ${result.durationMs}ms: ${result.reason}`)
+        return
       }
-    } catch {
-      // NVM not installed — skip
-    }
-  }
-
-  const existingPath = process.env.PATH || ''
-  return [...new Set([...commonPaths, ...existingPath.split(':')])]
-    .filter(Boolean)
-    .join(':')
+      applyShellEnv(result.values)
+      shellEnvUsedFallback = false
+      console.log(`[Main] Background shell env re-resolve succeeded (${result.flags}, ${result.durationMs}ms): ${process.env.PATH}`)
+      clearDepsCheckCache()
+      clearRunnerCache()
+      if (db) {
+        try {
+          const { refreshHarnessStatuses } = await import('./harness-maintenance/maintenance-service')
+          const { HARNESS_MAINTENANCE_UPDATED_CHANNEL } = await import('../shared/harness-maintenance')
+          const hasActiveSession = (harness: string): boolean => agentManager?.hasActiveSessionForCodingAgent(harness) ?? false
+          const statuses = await refreshHarnessStatuses(db, { hasActiveSession })
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(HARNESS_MAINTENANCE_UPDATED_CHANNEL, statuses)
+          broadcastToMobileClients(HARNESS_MAINTENANCE_UPDATED_CHANNEL, statuses)
+        } catch (err) {
+          console.warn('[Main] Harness re-detect after shell env re-resolve failed:', err)
+        }
+      }
+    })()
+  }, delayMs).unref?.()
 }
 
 // Register app-attachment:// as a privileged scheme before app is ready.
@@ -1115,6 +1040,7 @@ app.whenReady().then(async () => {
 
   // Ensure PATH is ready before creating managers that may spawn child processes
   await pathFixPromise
+  scheduleShellEnvReResolve()
   const sharedPnpmStore = await configureSharedPnpmStore(app.getPath('userData'))
   if (sharedPnpmStore) console.log(`[Main] Agent-launched pnpm installs use shared store: ${sharedPnpmStore}`)
 
