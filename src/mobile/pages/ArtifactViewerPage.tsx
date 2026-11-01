@@ -12,6 +12,7 @@ import {
   PullRequestCheckState,
   PullRequestReviewDecision,
   PullRequestState,
+  workflowPanelRefFromUrl,
   type ArtifactContent,
   type PullRequestDetails
 } from '@shared/artifacts'
@@ -139,7 +140,10 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
     if (remoteUrl) return remoteUrl
     return content?.kind === ArtifactContentKind.DATA_URL ? content.content : null
   }, [artifact?.type, artifact?.url, content])
-  const externalUrl = safeExternalUrl(artifact?.url)
+  // A workflow link follows the shared Spaces link rule (http or https).
+  const externalUrl = artifact?.type === ArtifactType.WORKFLOW
+    ? workflowPanelRefFromUrl(artifact.url)?.url ?? null
+    : safeExternalUrl(artifact?.url)
 
   const handleBack = () => {
     if (history.length > 1) history.back()
