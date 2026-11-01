@@ -9,7 +9,7 @@ import { serializeTranscriptForDebug, type RawTranscriptMessage } from '@/lib/se
 import { agentSessionApi, artifactApi, voiceApi } from '@/lib/ipc-client'
 import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
-import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
+import { ArtifactContentKind, ArtifactType, extractWorkflowPanelLinks, type Artifact } from '@shared/artifacts'
 import { findChatScadArtifact } from '@shared/scad-chat'
 import { InlineScadPreview } from '@/components/artifacts/viewers/InlineScadPreview'
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
@@ -19,7 +19,7 @@ import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
 import { useClipboardAttachmentPaste } from '@/hooks/use-clipboard-attachment-paste'
 import { InlineHtmlRender } from '@/components/artifacts/InlineHtmlRender'
 import { findMessageArtifact } from '@/components/artifacts/find-message-artifact'
-import { markdownLinkLabel, openWorkflowLink } from '@/components/artifacts/open-workflow-link'
+import { markdownLinkLabel, openWorkflowLink, workflowCardArtifact } from '@/components/artifacts/open-workflow-link'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -720,6 +720,10 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
   const isError = message.partType === 'error' || message.partType === 'retry'
   // Markdown passes only the href; add the link label from this message.
   const messageLinkClick = onLinkClick ? (href: string) => onLinkClick(href, markdownLinkLabel(message.content, href)) : undefined
+  // A workflow summary link in the agent's text shows as a workflow card
+  // under the text, the same as the tool-output card. A click opens the tab.
+  const workflowLinks = onLinkClick && !isUser && !isSystem && !isError ? extractWorkflowPanelLinks(message.content) : null
+  const text = workflowLinks?.links.length ? workflowLinks.text : message.content
   const scadArtifact = !isSystem && !isError && onOpenArtifact ? findChatScadArtifact(message, artifacts) : undefined
 
   return (
@@ -740,7 +744,14 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
             <AlertTriangle className="h-3 w-3" /> Error
           </span>
         )}
-        <Markdown size="sm" highlightQuery={searchQuery} onLinkClick={messageLinkClick}>{message.content}</Markdown>
+        {text && <Markdown size="sm" highlightQuery={searchQuery} onLinkClick={messageLinkClick}>{text}</Markdown>}
+        {workflowLinks?.links.map((link) => (
+          <ArtifactTranscriptCard
+            key={link.workflowId}
+            artifact={workflowCardArtifact(link, artifacts)}
+            onOpen={() => { onLinkClick?.(link.url, link.name) }}
+          />
+        ))}
         {scadArtifact && artifactApi.renderScad && <InlineScadPreview artifact={scadArtifact} renderModel={artifactApi.renderScad} onOpen={() => onOpenArtifact?.(scadArtifact)} />}
         <div className={`flex items-center gap-2 mt-1 ${!isUser ? 'opacity-70' : ''}`}>
           <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>

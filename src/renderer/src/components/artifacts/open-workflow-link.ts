@@ -1,4 +1,4 @@
-import { ArtifactType, workflowArtifactId, workflowPanelRefFromUrl } from '@shared/artifacts'
+import { ArtifactType, workflowArtifactId, workflowPanelRefFromUrl, type Artifact, type WorkflowPanelCardRef } from '@shared/artifacts'
 import { useArtifactStore } from '@/stores/artifact-store'
 
 /**
@@ -31,4 +31,20 @@ export function openWorkflowLink(taskId: string, href: string, text?: string): b
 export function markdownLinkLabel(markdown: string, href: string): string | undefined {
   const escaped = href.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   return markdown.match(new RegExp(`\\[([^\\]]+)\\]\\(<?${escaped}>?(?:\\s+"[^"]*")?\\)`))?.[1]?.trim() || undefined
+}
+
+/** The artifact a chat workflow card shows: the task's workflow artifact for
+ * this workflow when it exists (its title wins), else one made from the link. */
+export function workflowCardArtifact(link: WorkflowPanelCardRef, artifacts: Artifact[]): Artifact {
+  const existing = artifacts.find((artifact) => artifact.type === ArtifactType.WORKFLOW
+    && workflowPanelRefFromUrl(artifact.url)?.workflowId === link.workflowId)
+  return existing || {
+    id: `workflow-link:${link.workflowId}`,
+    taskId: '',
+    type: ArtifactType.WORKFLOW,
+    title: link.name,
+    url: link.url,
+    updatedAt: 0,
+    reloadTrigger: 0
+  }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ArtifactType, artifactWorkpieceForPath, isArtifactDeliverablePath, workflowArtifactId, workflowPanelFromTool, workflowPanelRefFromUrl, workflowPanelUrlFromTool } from './artifacts'
+import { ArtifactType, artifactWorkpieceForPath, isArtifactDeliverablePath, extractWorkflowPanelLinks, workflowArtifactId, workflowPanelFromTool, workflowPanelRefFromUrl, workflowPanelUrlFromTool } from './artifacts'
 
 describe('artifact deliverable boundary', () => {
   it('keeps repository source and documentation out of artifact tabs', () => {
@@ -73,3 +73,27 @@ describe('Spaces workflow summary links', () => {
     expect(workflowArtifactId('task-1', 'wf 1')).toBe('task-1:workflow:wf%201')
   })
 })
+
+describe('extractWorkflowPanelLinks', () => {
+  const url = 'https://app.workflo.example/flow?workflowId=wf-1&tenantId=t-1&view=summary'
+
+  it('removes a link alone on its line, also as a list item or a bare URL', () => {
+    expect(extractWorkflowPanelLinks(`Done.\n\n[Daily bills](${url})`)).toEqual({ text: 'Done.', links: [{ workflowId: 'wf-1', name: 'Daily bills', url }] })
+    expect(extractWorkflowPanelLinks(`Done.\n- [Daily bills](${url}).`).text).toBe('Done.')
+    expect(extractWorkflowPanelLinks(`Done.\n${url}`)).toEqual({ text: 'Done.', links: [{ workflowId: 'wf-1', name: 'Workflow', url }] })
+  })
+
+  it('keeps the words of a link inside a sentence and adds one card for each workflow', () => {
+    const result = extractWorkflowPanelLinks(`I built [Daily bills](${url}). Open [it](${url}) now.`)
+    expect(result.text).toBe('I built Daily bills. Open it now.')
+    expect(result.links).toEqual([{ workflowId: 'wf-1', name: 'Daily bills', url }])
+  })
+
+  it('does not change code fences or other links', () => {
+    const fenced = '```\n[x](' + url + ')\n```'
+    expect(extractWorkflowPanelLinks(fenced)).toEqual({ text: fenced, links: [] })
+    const other = '[Editor](https://app.workflo.example/flow?workflowId=wf-1&view=graph)'
+    expect(extractWorkflowPanelLinks(other)).toEqual({ text: other, links: [] })
+  })
+})
+

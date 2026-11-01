@@ -336,6 +336,79 @@ export function workflowPanelUrlFromTool(value: unknown): string | undefined {
   return workflowPanelFromTool(value)?.url
 }
 
+export interface WorkflowPanelCardRef {
+  workflowId: string
+  /** The link text: the workflow name the agent wrote. */
+  name: string
+  /** The URL as written. */
+  url: string
+}
+
+const MARKDOWN_LINK = /\[([^\]\n]*)\]\(<?([^)\s>]+)>?\)/g
+const LIST_MARKER = /^\s*(?:[-*+]|\d+[.)])\s+/
+
+/**
+ * Take Spaces workflow summary links out of the agent's Markdown, so the chat
+ * can show them as workflow cards and not as text links. The same rules as
+ * Spaces `extractWorkflowPanelLinks` (workflow-builder
+ * packages/ui/lib/coding-agents/workflow-panel-link.ts), with the 20x link
+ * rule (`workflowPanelRefFromUrl`: absolute URL, any origin).
+ *
+ * - A link alone on its line (also a list item or a bare URL): the line is
+ *   removed. The card goes below the text.
+ * - A link inside a sentence: the link text stays as plain words. The card
+ *   goes below the text.
+ * - Code fences and other links do not change.
+ *
+ * Cards are unique by workflow id, in the order of the text.
+ */
+export function extractWorkflowPanelLinks(markdown: string): { text: string; links: WorkflowPanelCardRef[] } {
+  if (!markdown.includes('view=summary')) return { text: markdown, links: [] }
+  const links: WorkflowPanelCardRef[] = []
+  const add = (workflowId: string, name: string, url: string) => {
+    if (!links.some((link) => link.workflowId === workflowId)) links.push({ workflowId, name: name.trim() || 'Workflow', url })
+  }
+  let inFence = false
+  const out: string[] = []
+  for (const line of markdown.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence
+      out.push(line)
+      continue
+    }
+    if (inFence) {
+      out.push(line)
+      continue
+    }
+    const bare = line.trim().replace(LIST_MARKER, '').replace(/^<|>$/g, '')
+    const bareRef = /^\S+$/.test(bare) ? workflowPanelRefFromUrl(bare) : undefined
+    if (bareRef) {
+      add(bareRef.workflowId, 'Workflow', bareRef.url)
+      continue
+    }
+    let matchedAny = false
+    const replaced = line.replace(MARKDOWN_LINK, (whole, label: string, href: string) => {
+      const ref = workflowPanelRefFromUrl(href)
+      if (!ref) return whole
+      matchedAny = true
+      add(ref.workflowId, label, ref.url)
+      return label
+    })
+    if (!matchedAny) {
+      out.push(line)
+      continue
+    }
+    // Only link(s) and punctuation left on the line: drop the line.
+    const rest = line
+      .replace(MARKDOWN_LINK, (whole, _label: string, href: string) => workflowPanelRefFromUrl(href) ? '' : whole)
+      .replace(LIST_MARKER, '')
+      .replace(/[\s.:,;·—-]/g, '')
+    if (rest === '') continue
+    out.push(replaced)
+  }
+  return { text: out.join('\n').replace(/\n{3,}/g, '\n\n').trim(), links }
+}
+
 /** Directories that form an explicit deliverable boundary. Files elsewhere in
  * a repository are code and belong in Changes, not in the artifact picker. */
 export const ARTIFACT_OUTPUT_DIRECTORIES: ReadonlySet<string> = new Set([
