@@ -17,11 +17,18 @@ import { useHtmlRenderTheme } from './useHtmlRenderTheme'
  * two animation frames, and on every ResizeObserver tick of `<html>`. */
 const SIZE_BOOTSTRAP_SCRIPT = `<script>(function(){
   var last=-1;
+  var lastViewportHeight=-1,lastViewportWidth=-1,lastOverflow=-1;
   function send(){
     var r=document.documentElement;
-    var h=Math.round(r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height);
+    var overflow=r.scrollHeight-r.clientHeight;
+    var viewportHeight=r.clientHeight,viewportWidth=r.clientWidth;
+    // A page with 100vh plus margins grows when its iframe grows. That is
+    // not new content: reporting it again creates an endless resize loop.
+    var followsViewport=lastViewportHeight!==-1&&viewportHeight!==lastViewportHeight&&viewportWidth===lastViewportWidth&&overflow===lastOverflow;
+    if(followsViewport)return;
+    var h=Math.round(overflow>0?r.scrollHeight:r.getBoundingClientRect().height);
     if(h===last)return;
-    last=h;
+    last=h;lastViewportHeight=viewportHeight;lastViewportWidth=viewportWidth;lastOverflow=overflow;
     window.parent.postMessage({type:'${HTML_RENDER_SIZE_MESSAGE_TYPE}',height:h},'*');
   }
   if(window.ResizeObserver)new ResizeObserver(send).observe(document.documentElement);

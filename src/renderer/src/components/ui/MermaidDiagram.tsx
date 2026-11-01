@@ -6,7 +6,7 @@
  * actually present. Falls back to the raw source code when parsing fails.
  */
 
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import type { Mermaid } from 'mermaid'
 import { cn } from '@/lib/utils'
 
@@ -32,8 +32,8 @@ function getSystemTheme(): 'dark' | 'default' {
 let diagramIdCounter = 0
 
 export const MermaidDiagram = memo(function MermaidDiagram({ code, className }: MermaidDiagramProps) {
-  const containerRef = useRef<HTMLDivElement>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [rendered, setRendered] = useState<{ code: string; svg: string } | null>(null)
+  const [failedCode, setFailedCode] = useState<string | null>(null)
   const [theme, setTheme] = useState(getSystemTheme)
 
   // Re-render when the app theme toggles (.dark class on <html>)
@@ -49,8 +49,6 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code, className }: 
   useEffect(() => {
     let cancelled = false
     const diagramId = `mermaid-diagram-${++diagramIdCounter}`
-    setError(null)
-
     loadMermaid()
       .then(mermaid => {
         if (cancelled) return null
@@ -62,12 +60,13 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code, className }: 
         return mermaid.render(diagramId, code)
       })
       .then(result => {
-        if (cancelled || !result || !containerRef.current) return
-        containerRef.current.innerHTML = result.svg
+        if (cancelled || !result) return
+        setRendered({ code, svg: result.svg })
+        setFailedCode(null)
       })
-      .catch((err: unknown) => {
+      .catch(() => {
         if (cancelled) return
-        setError(err instanceof Error ? err.message : 'Failed to render diagram')
+        setFailedCode(code)
       })
 
     return () => {
@@ -75,7 +74,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code, className }: 
     }
   }, [code, theme])
 
-  if (error) {
+  if (failedCode === code) {
     return (
       <div className={cn('bg-muted rounded', className)}>
         <pre className="overflow-x-auto p-3 font-mono text-xs whitespace-pre text-foreground">{code}</pre>
@@ -83,12 +82,22 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code, className }: 
     )
   }
 
+  // Keep the fenced source visible while Mermaid loads. Replacing the code
+  // block with an empty div makes every line below it jump up and then down.
+  if (rendered?.code !== code) {
+    return (
+      <div className={cn('bg-muted rounded', className)}>
+        <pre className="overflow-x-auto font-mono text-xs whitespace-pre text-foreground">{code}</pre>
+      </div>
+    )
+  }
+
   return (
     <div
-      ref={containerRef}
       role="img"
       aria-label="Mermaid diagram"
       className={cn('mermaid-diagram flex justify-center overflow-x-auto rounded bg-muted', className)}
+      dangerouslySetInnerHTML={{ __html: rendered.svg }}
     />
   )
 })
