@@ -221,4 +221,17 @@ describe('ArtifactsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open artifact in a separate panel' }))
     expect(onOpenArtifactInWindow).toHaveBeenCalledWith(artifact)
   })
+
+  it('shows a workflow artifact as the embedded Spaces summary with an open-in-browser fallback', () => {
+    const openExternal = vi.fn()
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { shell: { openExternal } } })
+    const url = 'https://app.workflo.example/flow?workflowId=wf-1&tenantId=t-1&view=summary'
+    const artifact: Artifact = { id: 'task-1:workflow:wf-1', taskId: 'task-1', title: 'Daily invoice PDF', type: ArtifactType.WORKFLOW, url, updatedAt: 1, reloadTrigger: 0 }
+    const { container } = render(<ArtifactsPanel taskId="task-1" artifacts={[artifact]} ui={{ ...baseUi, activeTabId: artifact.id }} artifactApi={artifactApi} hasChanges={false} hasOutput={false} onSelectTab={vi.fn()} onCloseTab={vi.fn()} onToggleOpen={vi.fn()} onToggleRail={vi.fn()} details={null} changes={null} output={null} />)
+    expect(container.querySelector('[data-workflow-artifact="wf-1"]')).not.toBeNull()
+    expect(screen.getAllByText('Daily invoice PDF').length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole('button', { name: /Open in browser/ }))
+    expect(openExternal).toHaveBeenCalledWith(url)
+    Reflect.deleteProperty(window, 'electronAPI')
+  })
 })

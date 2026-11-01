@@ -154,7 +154,7 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
         </button>
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{artifact?.title || 'Artifact'}</span>
         {artifact && <ArtifactCopyActions key={`${artifact.id}:${artifact.path}`} artifact={artifact} content={content} />}
-        {artifact?.type === ArtifactType.PR && externalUrl && (
+        {(artifact?.type === ArtifactType.PR || artifact?.type === ArtifactType.WORKFLOW) && externalUrl && (
           <a href={externalUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-primary">Open ↗</a>
         )}
       </div>
@@ -188,10 +188,27 @@ export function ArtifactViewerPage({ taskId, artifactId, onNavigate }: { taskId:
               ? <audio controls src={content.content} className="w-full" />
               : <pre className="min-h-full whitespace-pre-wrap break-words p-4 font-mono text-xs text-foreground/80">{content.kind === ArtifactContentKind.TEXT ? content.content : 'Binary file preview is not available.'}</pre>
         )}
+        {!loading && !error && artifact?.type === ArtifactType.WORKFLOW && (
+          <MobileWorkflowDetails title={artifact.title} url={externalUrl} />
+        )}
         {!loading && !error && artifact?.type === ArtifactType.PR && pullRequest && (
           <MobilePullRequestDetails details={pullRequest} />
         )}
       </div>
+    </div>
+  )
+}
+
+/** A phone cannot embed the Spaces page with the user's sign-in, so the
+ * workflow opens in the browser, where Spaces shows the full summary. */
+function MobileWorkflowDetails({ title, url }: { title: string; url: string | null }) {
+  return (
+    <div className="mx-auto flex max-w-md flex-col items-center gap-3 p-6 text-center" data-testid="mobile-workflow-details">
+      <p className="text-base font-medium text-foreground">{title}</p>
+      <p className="text-sm text-muted-foreground">See the schedule, status, last run and files in Spaces.</p>
+      {url
+        ? <a href={url} target="_blank" rel="noopener noreferrer" className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">Open workflow</a>
+        : <p className="text-sm text-red-400">This workflow link is not valid.</p>}
     </div>
   )
 }

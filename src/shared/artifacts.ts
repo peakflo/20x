@@ -3,7 +3,9 @@ export enum ArtifactType {
   IMAGE = 'image',
   HTML = 'html',
   PR = 'pr',
-  FILE = 'file'
+  FILE = 'file',
+  /** A Spaces workflow. Its `url` is the Spaces summary page (`panelUrl`). */
+  WORKFLOW = 'workflow'
 }
 
 export enum ArtifactContentKind {
@@ -235,6 +237,103 @@ export function pullRequestUrlFromTool(value: unknown): string | undefined {
     : typeof parsedOutput?.stdout === 'string' ? parsedOutput.stdout : ''
   const standalone = text.match(/(?:^|\n)\s*(?:created\s+(?:pull request\s+)?)?(https?:\/\/[^\s)\]>'"]+\/(?:pull|merge_requests)\/\d+(?:\b|\/))\s*(?:\n|$)/i)
   return standalone?.[1]
+}
+
+/** Spaces MCP tools that return a workflow summary link as `panelUrl`. */
+const WORKFLOW_PANEL_TOOL_PATTERN = /(?:^|[_.:-])workflow_(?:editor_link|test_run|save_version|evidence_report)$/
+
+export interface WorkflowPanelRef {
+  url: string
+  workflowId: string
+  tenantId?: string
+}
+
+/**
+ * Parse a Spaces workflow summary link.
+ *
+ * Rule: an absolute http(s) URL with the path `/flow`, a non-empty
+ * `workflowId` query value and `view=summary`. Any origin is accepted, because
+ * 20x is a desktop app and each Spaces environment (local, stage, production)
+ * has its own origin. Other URLs, also other `/flow` views, return undefined.
+ */
+export function workflowPanelRefFromUrl(href: unknown): WorkflowPanelRef | undefined {
+  if (typeof href !== 'string' || !/^https?:\/\//i.test(href.trim())) return undefined
+  let url: URL
+  try {
+    url = new URL(href.trim())
+  } catch {
+    return undefined
+  }
+  if (url.pathname.replace(/\/+$/, '') !== '/flow') return undefined
+  const workflowId = url.searchParams.get('workflowId')?.trim()
+  if (!workflowId || url.searchParams.get('view') !== 'summary') return undefined
+  const tenantId = url.searchParams.get('tenantId')?.trim() || undefined
+  // Keep the original text so the transcript card can match it in tool output.
+  return { url: href.trim(), workflowId, ...(tenantId ? { tenantId } : {}) }
+}
+
+/** Stable artifact id for a workflow: one tab for each workflow in a task. */
+export function workflowArtifactId(taskId: string, workflowId: string): string {
+  return `${taskId}:${ArtifactType.WORKFLOW}:${encodeURIComponent(workflowId)}`
+}
+
+const PANEL_URL_TEXT_PATTERN = /["']?panelUrl["']?\s*[:=]\s*["']?(https?:\/\/[^\s"'<>)\]]+)/i
+const WORKFLOW_NAME_KEYS = ['workflowName', 'workflow_name', 'name', 'title']
+
+function workflowPanelIn(value: unknown, depth = 0): { ref: WorkflowPanelRef; name?: string } | undefined {
+  if (depth > 6) return undefined
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        const found = workflowPanelIn(JSON.parse(trimmed), depth + 1)
+        if (found) return found
+      } catch { /* not JSON; try the text pattern */ }
+    }
+    const ref = workflowPanelRefFromUrl(trimmed.match(PANEL_URL_TEXT_PATTERN)?.[1])
+    return ref ? { ref } : undefined
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = workflowPanelIn(item, depth + 1)
+      if (found) return found
+    }
+    return undefined
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const ref = workflowPanelRefFromUrl(record.panelUrl)
+    if (ref) {
+      const name = WORKFLOW_NAME_KEYS.map((key) => record[key]).find((item): item is string => typeof item === 'string' && !!item.trim())
+      const nested = record.workflow && typeof record.workflow === 'object' ? (record.workflow as Record<string, unknown>).name : undefined
+      return { ref, name: name?.trim() || (typeof nested === 'string' && nested.trim() ? nested.trim() : undefined) }
+    }
+    for (const item of Object.values(record)) {
+      const found = workflowPanelIn(item, depth + 1)
+      if (found) return found
+    }
+  }
+  return undefined
+}
+
+/** Extract the Spaces workflow summary link (`panelUrl`) from a completed
+ * Spaces workflow tool. Tool names may carry an MCP prefix, for example
+ * `mcp__workflo__workflow_test_run`. Other tools never create the artifact. */
+export function workflowPanelFromTool(value: unknown): { url: string; workflowId: string; title: string } | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const tool = value as Record<string, unknown>
+  const status = typeof tool.status === 'string' ? tool.status.toLowerCase() : ''
+  if (!['success', 'succeeded', 'complete', 'completed'].includes(status)) return undefined
+  const name = typeof tool.name === 'string' ? tool.name.toLowerCase() : ''
+  if (!WORKFLOW_PANEL_TOOL_PATTERN.test(name)) return undefined
+  const found = workflowPanelIn(tool.output)
+  if (!found) return undefined
+  return { url: found.ref.url, workflowId: found.ref.workflowId, title: found.name || 'Workflow' }
+}
+
+/** Convenience: only the URL, the same shape as `pullRequestUrlFromTool`. */
+export function workflowPanelUrlFromTool(value: unknown): string | undefined {
+  return workflowPanelFromTool(value)?.url
 }
 
 /** Directories that form an explicit deliverable boundary. Files elsewhere in

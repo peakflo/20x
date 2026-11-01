@@ -258,6 +258,7 @@ export async function createRegisteredTaskArtifact(
   const title = input.title.trim()
   if (!title) throw new Error('Artifact title is required')
   if (input.type === ArtifactType.PR) throw new Error('PR artifacts are created from pull request URLs')
+  if (input.type === ArtifactType.WORKFLOW) throw new Error('Workflow artifacts are created from Spaces workflow links')
   const now = Date.now()
   const artifactId = `artifact_${slugifyArtifactTitle(title)}_${randomUUID().replace(/-/g, '').slice(0, 8)}`
   return updateArtifactRegistry(workspaceDir, async (registry) => {

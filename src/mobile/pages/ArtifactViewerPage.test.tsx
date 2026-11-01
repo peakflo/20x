@@ -118,6 +118,30 @@ describe('ArtifactViewerPage', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('# Review notes'))
   })
 
+  it('shows a workflow artifact with an Open workflow link', async () => {
+    vi.mocked(api.artifacts.content).mockClear()
+    const url = 'https://app.workflo.example/flow?workflowId=wf-1&tenantId=t-1&view=summary'
+    useArtifactStore.setState({
+      artifactsByTask: new Map([['task-1', [{
+        id: 'task-1:workflow:wf-1',
+        taskId: 'task-1',
+        type: ArtifactType.WORKFLOW,
+        title: 'Daily invoice PDF',
+        url,
+        updatedAt: 1,
+        reloadTrigger: 0
+      }]]])
+    })
+
+    const { findByTestId, getByRole } = render(
+      <ArtifactViewerPage taskId="task-1" artifactId="task-1:workflow:wf-1" onNavigate={vi.fn()} />
+    )
+
+    await findByTestId('mobile-workflow-details')
+    expect(getByRole('link', { name: 'Open workflow' }).getAttribute('href')).toBe(url)
+    expect(api.artifacts.content).not.toHaveBeenCalled()
+  })
+
   it('copies the pull request link when the artifact has no file', async () => {
     useArtifactStore.setState({
       artifactsByTask: new Map([['task-1', [{

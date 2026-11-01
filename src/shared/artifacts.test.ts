@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ArtifactType, artifactWorkpieceForPath, isArtifactDeliverablePath } from './artifacts'
+import { ArtifactType, artifactWorkpieceForPath, isArtifactDeliverablePath, workflowArtifactId, workflowPanelFromTool, workflowPanelRefFromUrl, workflowPanelUrlFromTool } from './artifacts'
 
 describe('artifact deliverable boundary', () => {
   it('keeps repository source and documentation out of artifact tabs', () => {
@@ -31,5 +31,45 @@ describe('artifact deliverable boundary', () => {
       title: 'dashboard',
       grouped: true
     })
+  })
+})
+
+describe('Spaces workflow summary links', () => {
+  const panelUrl = 'https://app.workflo.example/flow?workflowId=wf-1&tenantId=t-1&view=summary'
+
+  it('accepts /flow links with workflowId and view=summary from any http(s) origin', () => {
+    expect(workflowPanelRefFromUrl(panelUrl)).toEqual({ url: panelUrl, workflowId: 'wf-1', tenantId: 't-1' })
+    expect(workflowPanelRefFromUrl('http://localhost:3000/flow/?view=summary&workflowId=wf-2')).toEqual(expect.objectContaining({ workflowId: 'wf-2' }))
+  })
+
+  it('ignores other links', () => {
+    expect(workflowPanelRefFromUrl('https://app.workflo.example/flow?workflowId=wf-1')).toBeUndefined()
+    expect(workflowPanelRefFromUrl('https://app.workflo.example/flow?workflowId=wf-1&view=graph')).toBeUndefined()
+    expect(workflowPanelRefFromUrl('https://app.workflo.example/flows?workflowId=wf-1&view=summary')).toBeUndefined()
+    expect(workflowPanelRefFromUrl('https://app.workflo.example/flow?view=summary')).toBeUndefined()
+    expect(workflowPanelRefFromUrl('/flow?workflowId=wf-1&view=summary')).toBeUndefined()
+    expect(workflowPanelRefFromUrl('javascript:alert(1)//flow?workflowId=1&view=summary')).toBeUndefined()
+  })
+
+  it('reads panelUrl from prefixed Spaces workflow tools only', () => {
+    const output = JSON.stringify({ workflowId: 'wf-1', name: 'Daily invoice PDF', panelUrl })
+    for (const name of ['workflow_test_run', 'mcp__workflo__workflow_save_version', 'mcp__workflo-stage__workflow_editor_link', 'workflo.workflow_evidence_report']) {
+      expect(workflowPanelFromTool({ name, status: 'completed', output })).toEqual({ url: panelUrl, workflowId: 'wf-1', title: 'Daily invoice PDF' })
+    }
+    expect(workflowPanelUrlFromTool({ name: 'mcp__workflo__workflow_test_run', status: 'completed', output })).toBe(panelUrl)
+    expect(workflowPanelFromTool({ name: 'mcp__workflo__workflow_get', status: 'completed', output })).toBeUndefined()
+    expect(workflowPanelFromTool({ name: 'Read', status: 'completed', output })).toBeUndefined()
+    expect(workflowPanelFromTool({ name: 'workflow_test_run', status: 'error', output })).toBeUndefined()
+  })
+
+  it('reads panelUrl from MCP content blocks and plain text', () => {
+    const blocks = [{ type: 'text', text: JSON.stringify({ result: { panelUrl, workflow: { name: 'Nested name' } } }) }]
+    expect(workflowPanelFromTool({ name: 'workflow_test_run', status: 'success', output: blocks })).toEqual({ url: panelUrl, workflowId: 'wf-1', title: 'Nested name' })
+    expect(workflowPanelFromTool({ name: 'workflow_test_run', status: 'success', output: `Run passed.\npanelUrl: ${panelUrl}\n` })).toEqual({ url: panelUrl, workflowId: 'wf-1', title: 'Workflow' })
+    expect(workflowPanelFromTool({ name: 'workflow_test_run', status: 'success', output: { panelUrl: 'https://app.workflo.example/flow?workflowId=wf-1' } })).toBeUndefined()
+  })
+
+  it('gives one artifact id for each workflow in a task', () => {
+    expect(workflowArtifactId('task-1', 'wf 1')).toBe('task-1:workflow:wf%201')
   })
 })
