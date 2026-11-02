@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="resources/icon.png" alt="20x Logo" width="120" />
+  <img src="resources/logo/banner-dark.svg" alt="20x" width="100%" />
 </p>
-
-# 20x
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Version](https://img.shields.io/github/package-json/v/peakflo/20x)](./package.json)
