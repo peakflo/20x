@@ -2248,6 +2248,10 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     toolCallId: string
     question: string
     options: Array<{ optionId: string; name: string; kind: string }>
+    /** OpenCode's own permission type (e.g. `bash`, `edit`, `external_directory`, `webfetch`) — independent of the human-readable `question` text. */
+    permission: string
+    /** The raw pattern(s) this permission is asking about — for `bash` this IS the command; for path-ish permissions it's the path/glob. */
+    patterns: string[]
   } | null {
     const queue = this.pendingPermissions.get(sessionId)
     if (!queue || queue.length === 0) return null
@@ -2264,7 +2268,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         { optionId: 'allow', name: 'Yes', kind: 'option' },
         { optionId: 'allow-always', name: 'Always', kind: 'option' },
         { optionId: 'deny', name: 'No', kind: 'option' }
-      ]
+      ],
+      permission: pending.permission,
+      patterns: pending.patterns
     }
   }
 
