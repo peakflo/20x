@@ -213,6 +213,10 @@ interface AcpSession {
   autonomousNeedsBoundary: boolean
   /** Child sessions a v2 agent currently reports as running / requiring action (`subagent_update.state`). */
   workInProgress: Set<string>
+  /** Last root-session `state_update` state; null when the agent never sends one (timer fallback applies). */
+  rootState: 'running' | 'requires_action' | 'idle' | null
+  /** Token usage for the current turn was already reported (via `state_update` or the prompt response). */
+  usageReportedForTurn: boolean
   /** Timestamp of the last update seen while `loading` (replay activity), or null. */
   lastLoadActivityAt: number | null
   autonomousIdleTimer?: ReturnType<typeof setTimeout>
@@ -519,6 +523,8 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       autonomousTurn: false,
       autonomousNeedsBoundary: false,
       workInProgress: new Set(),
+      rootState: null,
+      usageReportedForTurn: false,
       lastLoadActivityAt: null,
       currentUserTurnId: 0,
       lastChunkTime: null,
@@ -637,6 +643,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     } as unknown as JsonRpcNotification)
 
     this.endAutonomousTurn(session, false)
+    session.usageReportedForTurn = false
     session.status = SessionStatusType.BUSY
     session.lastError = null
     session.usageLimit = null
@@ -1143,7 +1150,10 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         const result = response.result as Record<string, unknown> | undefined
         if (result?.stopReason) {
           console.log(`[AcpAgentAdapter] Prompt completed with stopReason: ${result.stopReason}`)
-          this.reportPromptUsage(session, result)
+          // Usage may already have arrived on the root `state_update` idle: never count it twice.
+          this.reportPromptUsage(session, session.usageReportedForTurn ? { ...result, usage: undefined } : result)
+          if (result.usage) session.usageReportedForTurn = true
+          session.rootState = null
           session.status = SessionStatusType.IDLE
           session.activeTurnId = null
         }
@@ -1223,6 +1233,10 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       }
       const kind = update?.sessionUpdate as string | undefined
       if (session.loading) session.lastLoadActivityAt = Date.now()
+      if (kind === 'state_update') {
+        if (!session.loading) this.handleRootStateUpdate(session, update as Record<string, unknown>)
+        return
+      }
       if (kind === 'subagent_update') {
         this.handleSubagentWorkState(session, update as Record<string, unknown>)
         return
@@ -1814,7 +1828,8 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
    * immediately. Agents that never send it keep the quiet-timer fallback.
    */
   private handleSubagentWorkState(session: AcpSession, update: Record<string, unknown>): void {
-    if (session.generation !== 'v2') return
+    // Secondary signal: the root session's own `state_update` wins whenever the agent sends it.
+    if (session.generation !== 'v2' || session.rootState !== null) return
     const childId = typeof update.sessionId === 'string' ? update.sessionId : undefined
     if (!childId || !('state' in update)) return
     const state = (update.state as { state?: string } | null | undefined)?.state
@@ -1829,10 +1844,75 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     }
   }
 
+  /**
+   * ACP v2 root-session work state (`session/update` `state_update`; not yet in the SDK typings, so it
+   * is read from the raw notification). `running` / `requires_action` keep the session busy with no
+   * quiet-gap idle; `idle` ends the turn and may carry `stopReason`, `usage` and `error`.
+   */
+  private handleRootStateUpdate(session: AcpSession, update: Record<string, unknown>): void {
+    if (typeof update.sessionId === 'string' && session.acpSessionId && update.sessionId !== session.acpSessionId) return
+    const raw = update.state
+    const state = typeof raw === 'string' ? raw : (raw as { state?: string } | null | undefined)?.state
+    const detail = (raw && typeof raw === 'object' ? { ...(raw as Record<string, unknown>), ...update } : update) as Record<string, unknown>
+
+    if (state === 'running' || state === 'requires_action') {
+      session.rootState = state
+      if (session.activeTurnId === null) {
+        session.usageReportedForTurn = false
+        this.beginAutonomousTurn(session)
+      }
+      if (session.autonomousIdleTimer) { clearTimeout(session.autonomousIdleTimer); session.autonomousIdleTimer = undefined }
+      session.status = state === 'requires_action' && session.pendingApproval
+        ? SessionStatusType.WAITING_APPROVAL
+        : SessionStatusType.BUSY
+      this.onDataAvailable?.(session.sessionId)
+      return
+    }
+    if (state !== 'idle') return
+
+    session.rootState = 'idle'
+    if (detail.usage && !session.usageReportedForTurn) {
+      session.usageReportedForTurn = true
+      this.reportPromptUsage(session, { usage: detail.usage })
+    }
+    const stopReason = typeof detail.stopReason === 'string' ? detail.stopReason : undefined
+    const errorMessage = this.extractStateError(detail.error) ?? (stopReason === 'error' ? 'The agent stopped with an error' : undefined)
+
+    if (session.autonomousIdleTimer) { clearTimeout(session.autonomousIdleTimer); session.autonomousIdleTimer = undefined }
+    session.autonomousTurn = false
+    session.autonomousNeedsBoundary = false
+    session.activeTurnId = null
+    session.workInProgress.clear()
+    session.pendingApproval = null
+    if (errorMessage) {
+      if (!this.handlePossibleProviderError(session, { code: -32000, message: errorMessage })) {
+        session.status = SessionStatusType.ERROR
+        session.lastError = errorMessage
+        const errorEvent = { _isError: true, message: errorMessage, data: null }
+        session.messageBuffer.push(errorEvent)
+        this.addToPermanentMessages(session, errorEvent)
+      }
+    } else {
+      session.status = SessionStatusType.IDLE
+    }
+    this.onDataAvailable?.(session.sessionId)
+  }
+
+  private extractStateError(error: unknown): string | undefined {
+    if (!error) return undefined
+    if (typeof error === 'string') return error
+    if (typeof error === 'object') {
+      const message = (error as { message?: unknown }).message
+      if (typeof message === 'string' && message) return message
+      return JSON.stringify(error).slice(0, 500)
+    }
+    return String(error)
+  }
+
   private armAutonomousIdleTimer(session: AcpSession): void {
     if (session.autonomousIdleTimer) clearTimeout(session.autonomousIdleTimer)
     session.autonomousIdleTimer = undefined
-    if (session.workInProgress.size > 0) return
+    if (session.workInProgress.size > 0 || session.rootState === 'running' || session.rootState === 'requires_action') return
     session.autonomousIdleTimer = setTimeout(() => this.endAutonomousTurn(session, true), AcpAgentAdapter.AUTONOMOUS_IDLE_MS)
     session.autonomousIdleTimer.unref?.()
   }

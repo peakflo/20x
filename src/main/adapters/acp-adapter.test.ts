@@ -63,6 +63,8 @@ interface AcpSessionForTest {
   autonomousTurn: boolean
   autonomousNeedsBoundary: boolean
   workInProgress: Set<string>
+  rootState: 'running' | 'requires_action' | 'idle' | null
+  usageReportedForTurn: boolean
   lastLoadActivityAt: number | null
   autonomousIdleTimer?: ReturnType<typeof setTimeout>
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
@@ -135,6 +137,8 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     autonomousTurn: false,
     autonomousNeedsBoundary: false,
     workInProgress: new Set(),
+    rootState: null,
+    usageReportedForTurn: false,
     lastLoadActivityAt: null,
     toolCallMetadata: new Map(),
     lastError: null,
@@ -1108,6 +1112,113 @@ describe('AcpAgentAdapter - verbatim streaming and explicit replay handling', ()
       priv.handleAgentNotification(session, subagent('c', 'running'))
       priv.handleAgentNotification(session, msg('same'))
       expect(await historyTexts(adapter)).toEqual(['same', 'same'])
+    })
+  })
+
+  describe('ACP v2 root-session state_update', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+    const state = (st: string, extra: Record<string, unknown> = {}) => note({ sessionUpdate: 'state_update', state: st, ...extra })
+
+    it('running starts an out-of-turn turn BUSY and idle ends it', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('running'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      expect(session.autonomousTurn).toBe(true)
+      priv.handleAgentNotification(session, state('idle', { stopReason: 'end_turn' }))
+      expect(session.status).toBe(SessionStatusType.IDLE)
+      expect(session.autonomousTurn).toBe(false)
+      expect(session.activeTurnId).toBeNull()
+      expect(session.permanentMessages).toHaveLength(0)
+    })
+
+    it('running with a long quiet gap stays BUSY, even after output', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('running'))
+      priv.handleAgentNotification(session, msg('working'))
+      vi.advanceTimersByTime(10 * 60_000)
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      priv.handleAgentNotification(session, state('idle'))
+      expect(session.status).toBe(SessionStatusType.IDLE)
+    })
+
+    it('does not open a second turn when a prompt is already running', () => {
+      const { priv, session } = setup()
+      session.activeTurnId = 4
+      session.currentTurnId = 4
+      priv.handleAgentNotification(session, state('running'))
+      expect(session.autonomousTurn).toBe(false)
+      expect(session.activeTurnId).toBe(4)
+    })
+
+    it('idle with stopReason error becomes an error', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('running'))
+      priv.handleAgentNotification(session, state('idle', { stopReason: 'error' }))
+      expect(session.status).toBe(SessionStatusType.ERROR)
+      expect(session.lastError).toMatch(/error/i)
+      expect(session.permanentMessages.some((m) => (m as { _isError?: boolean })._isError)).toBe(true)
+    })
+
+    it('idle carrying an error object reports its message and classifies usage limits', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('idle', { error: { message: 'Usage limit reached for this plan' } }))
+      expect(session.status).toBe(SessionStatusType.ERROR)
+      expect(session.usageLimit).toBeTruthy()
+    })
+
+    it('idle usage feeds usage tracking once, not again from the prompt response', () => {
+      const { adapter, priv, session } = setup()
+      const onUsage = vi.fn()
+      ;(adapter as unknown as { onUsage: unknown }).onUsage = onUsage
+      session.generation = 'v2'
+      session.config = { model: 'm', taskId: 't', agentId: 'a' } as typeof session.config
+      session.promptRequestId = 9
+      session.activeTurnId = 1
+      priv.handleAgentNotification(session, state('idle', { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }))
+      priv.handleRpcMessage(session, { jsonrpc: '2.0', id: 9, result: { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } } })
+      expect(onUsage).toHaveBeenCalledTimes(1)
+    })
+
+    it('requires_action maps to waiting for approval when a request is pending, else stays busy', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('requires_action'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      session.pendingApproval = { requestId: 1, toolCallId: 't', question: 'ok?', options: [] }
+      priv.handleAgentNotification(session, state('requires_action'))
+      expect(session.status).toBe(SessionStatusType.WAITING_APPROVAL)
+      vi.advanceTimersByTime(60_000)
+      expect(session.status).toBe(SessionStatusType.WAITING_APPROVAL)
+      priv.handleAgentNotification(session, state('running'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+    })
+
+    it('ignores a state_update for another session', () => {
+      const { priv, session } = setup()
+      priv.handleAgentNotification(session, note({ sessionUpdate: 'state_update', state: 'running' }, { sessionId: 'child-1' }))
+      expect(session.autonomousTurn).toBe(false)
+    })
+
+    it('root state wins over subagent_update', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('running'))
+      priv.handleAgentNotification(session, note({ sessionUpdate: 'subagent_update', sessionId: 'c', state: { state: 'idle' } }))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      expect(session.autonomousTurn).toBe(true)
+    })
+
+    it('a v1 agent that sends no state_update uses the quiet timer', () => {
+      const { priv, session } = setup()
+      priv.handleAgentNotification(session, msg('background'))
+      expect(session.rootState).toBeNull()
+      vi.advanceTimersByTime(3500)
+      expect(session.status).toBe(SessionStatusType.IDLE)
     })
   })
 
