@@ -1178,8 +1178,8 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         if (this.debugRpcLogs) console.debug(`[AcpAgentAdapter] Ignoring replayed ${String(update?.sessionUpdate)} update`)
         return
       }
-      if (this.isAssistantStreamUpdateType(update?.sessionUpdate as string | undefined) && !session.assistantUpdatesOpen) {
-        console.debug(`[AcpAgentAdapter] Dropping ${String(update?.sessionUpdate)} while no prompt is active (load/resume replay or late chunk)`)
+      if ((this.isAssistantStreamUpdateType(update?.sessionUpdate as string | undefined) || update?.sessionUpdate === 'user_message_chunk' || update?.sessionUpdate === 'human_message_chunk') && !session.assistantUpdatesOpen) {
+        console.debug(`[AcpAgentAdapter] Dropping ${String(update?.sessionUpdate)} while no prompt is active (load/resume replay or late chunk; the stored transcript is the source of truth)`)
         return
       }
       if (update?.sessionUpdate === 'usage_update') {

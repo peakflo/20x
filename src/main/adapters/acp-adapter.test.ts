@@ -1006,8 +1006,8 @@ describe('AcpAgentAdapter - verbatim streaming and explicit replay handling', ()
 
       const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [] })
       const messages = await adapter.resumeSession('resumed-1', { agentId: 'a', taskId: 't', workspaceDir: '/tmp' } as SessionConfig)
-      const assistantText = messages.flatMap((m) => m.parts).filter((p) => p.role === 'assistant').map((p) => p.text)
-      expect(assistantText).toEqual([])
+      // Neither the replayed assistant/thought text nor the replayed user text is kept.
+      expect(messages.flatMap((m) => m.parts)).toEqual([])
 
       // A new turn after the load streams normally and is not mixed with the replay.
       const priv = adapter as unknown as { sessions: Map<string, AcpSessionForTest>; handleAgentNotification(s: AcpSessionForTest, n: unknown): void }
