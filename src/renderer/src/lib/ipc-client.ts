@@ -12,6 +12,7 @@ import type {
   LocalCommandValidationResult,
   UpdateAcpAgentInstanceDTO
 } from '@shared/acp-registry'
+import type { CursorAuthStatus, CursorLoginCompleteEvent, CursorLoginUrlResult } from '@shared/cursor-auth'
 import type {
   HarnessKey,
   HarnessMaintenanceStatus,
@@ -222,6 +223,28 @@ export const harnessMaintenanceApi = {
 
   onProgress: (callback: (data: { harness: HarnessKey; chunk: string }) => void): (() => void) => {
     return window.electronAPI.harnessMaintenance.onProgress(callback)
+  }
+}
+
+export const cursorAuthApi = {
+  status: (): Promise<CursorAuthStatus> => {
+    return window.electronAPI.cursor.authStatus()
+  },
+
+  startBrowserLogin: (): Promise<CursorLoginUrlResult> => {
+    return window.electronAPI.cursor.startBrowserLogin()
+  },
+
+  cancelBrowserLogin: (): Promise<void> => {
+    return window.electronAPI.cursor.cancelBrowserLogin()
+  },
+
+  logout: (): Promise<void> => {
+    return window.electronAPI.cursor.logout()
+  },
+
+  onLoginComplete: (callback: (event: CursorLoginCompleteEvent) => void): (() => void) => {
+    return window.electronAPI.cursor.onLoginComplete(callback)
   }
 }
 

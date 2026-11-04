@@ -193,4 +193,30 @@ describe('DatabaseManager migrations on an existing install', () => {
     expect(second.getMobilePushSubscriptions()[0].endpoint).toBe('https://fcm.googleapis.com/fcm/send/same')
     second.close?.()
   })
+
+  it('clears Cursor ACP session ids and marks those tasks for a context handoff', () => {
+    const first = new DatabaseManager()
+    first.initialize()
+    const cursor = first.createAgent({ name: 'Cursor', server_url: '', config: { coding_agent: 'cursor' } })!
+    const claude = first.createAgent({ name: 'Claude', server_url: '', config: { coding_agent: 'claude-code' } })!
+    const cursorTask = first.createTask({ title: 'Cursor task' })!
+    const claudeTask = first.createTask({ title: 'Claude task' })!
+    first.close?.()
+
+    const raw = openRaw()
+    raw.prepare('UPDATE tasks SET session_id = ?, agent_id = ? WHERE id = ?').run('acp-session', cursor.id, cursorTask.id)
+    raw.prepare('UPDATE tasks SET session_id = ?, agent_id = ? WHERE id = ?').run('claude-session', claude.id, claudeTask.id)
+    raw.prepare("UPDATE settings SET value = ? WHERE key = '__schema_version'").run('12')
+    raw.close()
+
+    const second = new DatabaseManager()
+    second.initialize()
+    expect(second.getTask(cursorTask.id)!.session_id).toBeNull()
+    expect(second.getSetting(`context-handoff:${cursorTask.id}`)).toBeTruthy()
+    expect(second.getTask(claudeTask.id)!.session_id).toBe('claude-session')
+    expect(second.getSetting(`context-handoff:${claudeTask.id}`)).toBeFalsy()
+    // Agents keep their harness; no user action needed.
+    expect(second.getAgent(cursor.id)!.config.coding_agent).toBe('cursor')
+    second.close?.()
+  })
 })

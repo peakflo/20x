@@ -1233,8 +1233,11 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  *   The per-column `if (!columnNames.has(...))` checks in
  *   migrateReviewSeenColumns() are idempotent, so bumping this is safe for
  *   everyone else — it's a no-op where the columns already exist.
+ * 12 → 13: Cursor moves from `cursor-agent acp` to the native `@cursor/sdk`
+ *   adapter. Cursor task sessions created through ACP cannot be resumed by it,
+ *   so their session id is cleared and a handoff marker carries the history.
  */
-const SCHEMA_VERSION = 12
+const SCHEMA_VERSION = 13
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -1946,6 +1949,9 @@ export class DatabaseManager {
     // Free-text account_home on agents → harness instances
     this.migrateAccountHomesToHarnessInstances()
 
+    // Cursor ACP sessions are not resumable by the native SDK adapter
+    this.migrateCursorAcpSessionsToHandoff()
+
     // Migrate task_sources: add plugin_id + config columns
     const tsColumns = this.db.pragma('table_info(task_sources)') as { name: string }[]
     const tsColumnNames = new Set(tsColumns.map((c) => c.name))
@@ -2554,6 +2560,31 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
           SET config = ?, updated_at = ?
           WHERE id = ?
         `).run(JSON.stringify(config), now, defaultAgent.id)
+      }
+    }
+  }
+
+  /**
+   * Before the native `@cursor/sdk` adapter, `coding_agent: 'cursor'` ran
+   * through ACP, so every stored Cursor session id is an ACP session the SDK
+   * cannot resume. Clear them and mark the task for a context handoff, so the
+   * stored transcript is carried into the next session. Agents keep
+   * `coding_agent: 'cursor'` and switch adapters with no user action.
+   */
+  private migrateCursorAcpSessionsToHandoff(): void {
+    const agents = this.db.prepare('SELECT id, config FROM agents').all() as { id: string; config: string }[]
+    const cursorAgentIds = agents.filter((a) => {
+      try { return (JSON.parse(a.config) as { coding_agent?: string })?.coding_agent === 'cursor' } catch { return false }
+    }).map((a) => a.id)
+    for (const agentId of cursorAgentIds) {
+      const tasks = this.db.prepare(
+        "SELECT id FROM tasks WHERE agent_id = ? AND session_id IS NOT NULL AND session_id != ''"
+      ).all(agentId) as { id: string }[]
+      for (const task of tasks) {
+        // Marker first: markContextHandoff skips tasks with neither transcript nor session.
+        // fromAgentId is null (not the agent itself) so the handoff is not treated as a no-op.
+        this.markContextHandoff(task.id, null)
+        this.db.prepare('UPDATE tasks SET session_id = NULL WHERE id = ?').run(task.id)
       }
     }
   }

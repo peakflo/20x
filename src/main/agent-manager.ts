@@ -16,6 +16,7 @@ import type { GitLabManager } from './gitlab-manager'
 import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAgentAdapter } from './adapters/acp-adapter'
+import { CursorSdkAdapter } from './adapters/cursor-sdk-adapter'
 import { getAcpInstallManager, getAcpRegistryClient } from './acp-registry/runtime'
 import { resolveAcpInstanceCommand } from './acp-registry/resolve-instance'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
@@ -35,7 +36,7 @@ import { createRateResolver } from './usage/usage-pricing'
 import { listCustomModelPrices, setCustomModelPrice, resetCustomModelPrice } from './usage/usage-custom-prices'
 import { agentInstanceId, harnessInstanceDisplayName, harnessTypeLabel, harnessTypeOf, defaultHarnessInstanceId, isDefaultHarnessInstanceId, isHarnessType, type HarnessInstanceView, type HarnessType } from '../shared/harness-instances'
 import { instanceHomeError, instanceHomeFor, linkSharedHistory, normalizeHomePath, realHomeFor } from './harness-instances'
-import { CURSOR_KEYCHAIN_ACCESS_SETTING, probeCursorUsageLimits } from './usage/cursor-limits'
+import { CURSOR_KEYCHAIN_ACCESS_SETTING } from './usage/cursor-limits'
 import { UsageLimitRecoveryScheduler, UsageLimitRecoveryStore } from './usage/usage-limit-recovery'
 import {
   AUTO_RESUME_LIMITED_TASKS_SETTING,
@@ -370,6 +371,16 @@ function hasWorkfloMcpDevServer(entries: DocumentedMcpServer[]): boolean {
     if (injected?.type !== 'http' && injected?.type !== 'sse') return false
     return isWorkfloMcpDevServerUrl(injected.url)
   })
+}
+
+/**
+ * Secret ids to inject for an agent. The native Cursor SDK adapter has no
+ * environment or shell hook to receive them through, so it gets none: it must
+ * never see secret values, only its own credential (apiKeys.cursor / CURSOR_API_KEY).
+ */
+function secretIdsForAgent(agent: { config?: { coding_agent?: string; secret_ids?: string[] } } | undefined | null): string[] | undefined {
+  if (agent?.config?.coding_agent === 'cursor') return undefined
+  return agent?.config?.secret_ids
 }
 
 export class AgentManager extends EventEmitter {
@@ -966,10 +977,9 @@ export class AgentManager extends EventEmitter {
         adapter = new CodexAppServerAdapter({ harnessHome: instance?.home })
         break
       case CodingAgentType.CURSOR: {
-        console.log('[AgentManager] Creating new AcpAgentAdapter for Cursor')
-        // TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR; this shim keeps it on the generic ACP client until then.
-        const cursorAdapter = new AcpAgentAdapter({ command: 'cursor-agent', args: ['acp'] })
-        this.wireCursorPlanLimits(cursorAdapter)
+        console.log('[AgentManager] Creating new CursorSdkAdapter')
+        const cursorAdapter = new CursorSdkAdapter({ db: this.db })
+        this.wireCursorLoginEvents(cursorAdapter)
         adapter = cursorAdapter
         break
       }
@@ -1246,27 +1256,6 @@ export class AgentManager extends EventEmitter {
     }
     adapter.onUsageLimits = (event) => {
       this.getUsageTracker()?.applyLimitsEvent({ ...event, instanceId })
-    }
-  }
-
-  /**
-   * TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR. Until
-   * then it runs on the generic AcpAgentAdapter, which has no Cursor-shaped
-   * fields (the generic client's `probeUsageLimits` always resolves to
-   * null). This overrides that one instance's `probeUsageLimits` with
-   * Cursor's own CLI/Keychain-based plan-limit probe, reading the user's
-   * Keychain-access consent live (not captured once at creation time) so
-   * toggling `setCursorKeychainAccess` takes effect on the next probe.
-   */
-  private wireCursorPlanLimits(adapter: AcpAgentAdapter): void {
-    let inFlight: Promise<ProviderUsageLimits | null> | null = null
-    adapter.probeUsageLimits = () => {
-      if (inFlight) return inFlight
-      const pending = probeCursorUsageLimits({
-        allowKeychain: this.db.getSetting(CURSOR_KEYCHAIN_ACCESS_SETTING) === 'true'
-      }).finally(() => { inFlight = null })
-      inFlight = pending
-      return pending
     }
   }
 
@@ -1733,7 +1722,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Populate secret env vars and system prompt awareness
-    const secretIds = agent.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     // secretIds checked for agent config
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
@@ -1930,7 +1919,7 @@ export class AgentManager extends EventEmitter {
    */
   private setupSecretSession(agentId: string): string | undefined {
     const agent = this.db.getAgent(agentId)
-    const secretIds = agent?.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     if (!secretIds || secretIds.length === 0) return undefined
 
     const brokerPort = getSecretBrokerPort()
@@ -2183,7 +2172,7 @@ export class AgentManager extends EventEmitter {
     // Add secrets section — name and description only, never the value
     if (agentId) {
       const agent2 = this.db.getAgent(agentId)
-      const secretIds = agent2?.config?.secret_ids
+      const secretIds = secretIdsForAgent(agent2)
       if (secretIds && secretIds.length > 0) {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
@@ -2277,7 +2266,7 @@ export class AgentManager extends EventEmitter {
     // Add secrets section — name and description only, never the value
     if (agentId) {
       const agentForSecrets = this.db.getAgent(agentId)
-      const secretIds = agentForSecrets?.config?.secret_ids
+      const secretIds = secretIdsForAgent(agentForSecrets)
       if (secretIds && secretIds.length > 0) {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
@@ -2406,7 +2395,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Populate secret env vars + system prompt awareness
-    const secretIds = agent.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
       const secretsWithValues = this.db.getSecretsWithValues(secretIds)
@@ -3782,7 +3771,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     }
 
     // Populate secret env vars + system prompt awareness
-    const secretIds = agent.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
       const secretsWithValues = this.db.getSecretsWithValues(secretIds)
@@ -6086,8 +6075,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       return (defaultAgent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
     })()
 
-    // OpenCode and Pi expose configurable providers/models.
-    if (resolvedBackend !== CodingAgentType.OPENCODE && resolvedBackend !== CodingAgentType.PI) {
+    // OpenCode, Pi and Cursor expose configurable providers/models.
+    if (resolvedBackend !== CodingAgentType.OPENCODE && resolvedBackend !== CodingAgentType.PI && resolvedBackend !== CodingAgentType.CURSOR) {
       console.log(`[AgentManager] Backend "${resolvedBackend}" does not support provider listing, skipping`)
       return null
     }
@@ -6151,6 +6140,12 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       case CodingAgentType.PI:
         adapter = new PiAdapter(this.db)
         break
+      case CodingAgentType.CURSOR: {
+        const cursorAdapter = new CursorSdkAdapter({ db: this.db })
+        this.wireCursorLoginEvents(cursorAdapter)
+        adapter = cursorAdapter
+        break
+      }
     }
 
     if (adapter) {
@@ -6158,6 +6153,41 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       this.adapters.set(cacheKey, adapter)
     }
     return adapter
+  }
+
+  /** Forwards a Cursor SDK adapter's browser-login outcome to the renderer (Settings → Agents card). */
+  private wireCursorLoginEvents(adapter: CursorSdkAdapter): void {
+    adapter.onLoginComplete = (result) => {
+      this.sendToRenderer('cursor:loginComplete', result)
+    }
+  }
+
+  private getCursorAdapter(): CursorSdkAdapter | null {
+    return this.getAdapterByType(CodingAgentType.CURSOR) as CursorSdkAdapter | null
+  }
+
+  /** "Am I signed in, as whom" for the Settings → Agents Cursor card. Always live, never cached. */
+  async cursorAuthStatus(): Promise<{ authenticated: boolean; email?: string; reason?: string }> {
+    const adapter = this.getCursorAdapter()
+    if (!adapter) return { authenticated: false, reason: 'Cursor adapter unavailable' }
+    return adapter.whoAmI()
+  }
+
+  /** Starts a Cursor browser sign-in; resolves with the URL to show (with explicit consent) before opening it. */
+  async startCursorBrowserLogin(): Promise<{ url: string }> {
+    const adapter = this.getCursorAdapter()
+    if (!adapter) throw new Error('Cursor adapter unavailable')
+    return adapter.startBrowserLogin()
+  }
+
+  /** Cancels an in-flight Cursor browser sign-in. */
+  cancelCursorBrowserLogin(): void {
+    this.getCursorAdapter()?.cancelBrowserLogin()
+  }
+
+  /** Forgets the stored Cursor browser-login credential. */
+  async cursorLogout(): Promise<void> {
+    await this.getCursorAdapter()?.logout()
   }
 
   /**

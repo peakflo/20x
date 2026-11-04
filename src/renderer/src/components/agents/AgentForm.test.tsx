@@ -31,6 +31,9 @@ vi.mock('@/stores/secret-store', () =>
 vi.mock('@/lib/ipc-client', () => ({
   agentConfigApi: { getProviders: vi.fn().mockResolvedValue({ providers: [] }) }
 }))
+vi.mock('@/components/settings/tabs/CursorSettingsCard', () => ({
+  CursorSettingsCard: () => null
+}))
 vi.mock('@/components/skills/SkillSelectorDialog', () => ({
   SkillSelectorDialog: () => null
 }))
@@ -139,6 +142,14 @@ describe('AgentForm server URL', () => {
       selectCodingAgent(harness)
       expect(screen.queryByLabelText('Server URL')).toBeNull()
     }
+  })
+
+  it('hides the Secrets selector for Cursor agents, which never receive secrets', () => {
+    render(<AgentForm onSubmit={vi.fn()} onCancel={vi.fn()} />)
+    selectCodingAgent('claude-code')
+    expect(screen.queryByText('Secrets')).not.toBeNull()
+    selectCodingAgent('cursor')
+    expect(screen.queryByText('Secrets')).toBeNull()
   })
 
   it('no longer shows the "runs locally via CLI" notes', () => {
