@@ -61,6 +61,10 @@ interface AcpSessionForTest {
   pendingAssistantTurnSplit: boolean
   loading: boolean
   autonomousTurn: boolean
+  autonomousNeedsBoundary: boolean
+  workInProgress: Set<string>
+  lastLoadActivityAt: number | null
+  autonomousIdleTimer?: ReturnType<typeof setTimeout>
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
   lastError: string | null
   createdInApp: boolean
@@ -129,6 +133,9 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     pendingAssistantTurnSplit: false,
     loading: false,
     autonomousTurn: false,
+    autonomousNeedsBoundary: false,
+    workInProgress: new Set(),
+    lastLoadActivityAt: null,
     toolCallMetadata: new Map(),
     lastError: null,
     createdInApp: true,
@@ -1038,6 +1045,190 @@ describe('AcpAgentAdapter - verbatim streaming and explicit replay handling', ()
       const { priv, session } = setup()
       priv.handleAgentNotification(session, note({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'old' } }, { _meta: { isReplay: true } }))
       expect(session.permanentMessages).toHaveLength(0)
+    })
+  })
+
+  describe('ACP v2 work-state (subagent_update.state)', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+    const subagent = (id: string, state: string | null) => note({ sessionUpdate: 'subagent_update', sessionId: id, state: state ? { state } : null })
+
+    it('starts an out-of-turn turn BUSY on running and ends it IDLE on idle; quiet gaps stay BUSY meanwhile', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      const changed = vi.fn()
+      ;(priv as unknown as { onDataAvailable: () => void }).onDataAvailable = changed
+      priv.handleAgentNotification(session, subagent('child-1', 'running'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      expect(session.autonomousTurn).toBe(true)
+      priv.handleAgentNotification(session, msg('progress'))
+      vi.advanceTimersByTime(60_000) // far beyond the 3s quiet fallback
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      priv.handleAgentNotification(session, subagent('child-1', 'idle'))
+      expect(session.status).toBe(SessionStatusType.IDLE)
+      expect(session.autonomousTurn).toBe(false)
+      expect(changed).toHaveBeenCalled()
+    })
+
+    it('stays BUSY while any of several children is still running, and requires_action counts as work', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, subagent('a', 'running'))
+      priv.handleAgentNotification(session, subagent('b', 'requires_action'))
+      priv.handleAgentNotification(session, subagent('a', 'idle'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      priv.handleAgentNotification(session, subagent('b', null))
+      expect(session.status).toBe(SessionStatusType.IDLE)
+    })
+
+    it('uses the quiet timer for a v2 agent that sends no work state', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, msg('background'))
+      vi.advanceTimersByTime(3500)
+      expect(session.status).toBe(SessionStatusType.IDLE)
+    })
+
+    it('ignores work-state from v1 agents and keeps using the timer', () => {
+      const { priv, session } = setup()
+      expect(session.generation).toBe('v1')
+      priv.handleAgentNotification(session, subagent('child-1', 'running'))
+      expect(session.autonomousTurn).toBe(false)
+      priv.handleAgentNotification(session, msg('background'))
+      vi.advanceTimersByTime(3500)
+      expect(session.status).toBe(SessionStatusType.IDLE)
+    })
+
+    it('does not merge a work-started turn into the previous message', async () => {
+      const { adapter, priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, msg('same'))
+      priv.handleAgentNotification(session, subagent('c', 'idle'))
+      vi.advanceTimersByTime(3500)
+      priv.handleAgentNotification(session, subagent('c', 'running'))
+      priv.handleAgentNotification(session, msg('same'))
+      expect(await historyTexts(adapter)).toEqual(['same', 'same'])
+    })
+  })
+
+  describe('autonomous turn lifecycle', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('a prompt sent during an autonomous turn takes over and clears the idle timer', async () => {
+      const { adapter, priv, session } = setup()
+      const write = vi.fn()
+      session.process = { stdin: { write } } as unknown as ChildProcess
+      priv.handleAgentNotification(session, msg('background'))
+      expect(session.autonomousTurn).toBe(true)
+      expect(session.autonomousIdleTimer).toBeDefined()
+      await adapter.sendPrompt('s1', [{ type: MessagePartType.TEXT, text: 'hello' } as MessagePart], {} as SessionConfig)
+      expect(session.autonomousTurn).toBe(false)
+      expect(session.autonomousIdleTimer).toBeUndefined()
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      expect(session.activeTurnId).not.toBeNull()
+      vi.advanceTimersByTime(10_000)
+      expect(session.status).toBe(SessionStatusType.BUSY) // the old timer must not flip it idle mid-prompt
+    })
+
+    it('destroySession clears the idle timer', async () => {
+      const { adapter, priv, session } = setup()
+      session.process = { kill: vi.fn(), killed: true, stdin: { write: vi.fn() } } as unknown as ChildProcess
+      const changed = vi.fn()
+      ;(adapter as unknown as { onDataAvailable: () => void }).onDataAvailable = changed
+      priv.handleAgentNotification(session, msg('background'))
+      changed.mockClear()
+      await adapter.destroySession('s1', {} as SessionConfig)
+      expect(session.autonomousIdleTimer).toBeUndefined()
+      vi.advanceTimersByTime(10_000)
+      expect(changed).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('load without a response / load errors', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+
+    async function startLoad(onLoad: (send: (n: unknown) => void, id: number) => void) {
+      const cp = await import('child_process')
+      const spawnMock = cp.spawn as unknown as ReturnType<typeof vi.fn>
+      const { proc, stdout } = createFakeProcess({ initialize: () => v1InitResponse })
+      const send = (n: unknown) => stdout.emit('data', Buffer.from(JSON.stringify(n) + '\n'))
+      const origWrite = (proc as unknown as { stdin: { write: (d: string, cb?: () => void) => void } }).stdin.write
+      ;(proc as unknown as { stdin: { write: unknown } }).stdin.write = (data: string, cb?: () => void) => {
+        const m = JSON.parse(data.trim())
+        if (m.method === 'session/load') { onLoad(send, m.id); cb?.(); return }
+        origWrite(data, cb)
+      }
+      spawnMock.mockReturnValue(proc)
+      const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [] })
+      const outcome: { value?: unknown; error?: unknown; done: boolean } = { done: false }
+      const promise = adapter.resumeSession('r-1', { agentId: 'a', taskId: 't', workspaceDir: '/tmp' } as SessionConfig)
+        .then((v) => { outcome.value = v; outcome.done = true }, (e) => { outcome.error = e; outcome.done = true })
+      const priv = adapter as unknown as { sessions: Map<string, AcpSessionForTest> }
+      return { adapter, priv, promise, outcome, send }
+    }
+
+    it('clears the gate after the replay goes quiet when the agent never answers', async () => {
+      const t = await startLoad((send) => {
+        send(note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'old' } }, { sessionId: 'r-1' }))
+      })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(t.outcome.done).toBe(false)
+      expect(t.priv.sessions.get('r-1')!.loading).toBe(true)
+      await vi.advanceTimersByTimeAsync(3000)
+      await t.promise
+      expect(t.outcome.error).toBeUndefined()
+      expect(t.priv.sessions.get('r-1')!.loading).toBe(false)
+      expect((t.outcome.value as unknown[]).length).toBe(0)
+    })
+
+    it('falls back to the overall timeout when nothing is replayed and nothing answers', async () => {
+      const t = await startLoad(() => { /* silence */ })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(t.outcome.done).toBe(false)
+      await vi.advanceTimersByTimeAsync(20_000)
+      await t.promise
+      expect(t.outcome.error).toBeUndefined()
+      expect(t.priv.sessions.get('r-1')!.loading).toBe(false)
+    })
+
+    it('a late real response after the fallback is not handled twice', async () => {
+      let loadId = 0
+      const t = await startLoad((send, id) => {
+        loadId = id
+        send(note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'old' } }, { sessionId: 'r-1' }))
+      })
+      await vi.advanceTimersByTimeAsync(4000)
+      await t.promise
+      const session = t.priv.sessions.get('r-1')!
+      const before = session.permanentMessages.length
+      t.send({ jsonrpc: '2.0', id: loadId, result: {} })
+      await vi.advanceTimersByTimeAsync(100)
+      expect(session.loading).toBe(false)
+      expect(session.permanentMessages.length).toBe(before)
+      expect(t.outcome.error).toBeUndefined()
+    })
+
+    it('a real response before the quiet period finishes the load normally', async () => {
+      const t = await startLoad((send, id) => {
+        send(note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'old' } }, { sessionId: 'r-1' }))
+        send({ jsonrpc: '2.0', id, result: {} })
+      })
+      await vi.advanceTimersByTimeAsync(300)
+      await t.promise
+      expect(t.priv.sessions.get('r-1')!.loading).toBe(false)
+      expect(t.outcome.error).toBeUndefined()
+    })
+
+    it('clears the gate when the load fails', async () => {
+      const t = await startLoad((send, id) => {
+        send({ jsonrpc: '2.0', id, error: { code: -32000, message: 'boom' } })
+      })
+      await vi.advanceTimersByTimeAsync(300)
+      await t.promise
+      expect((t.outcome.error as Error).message).toBe('boom')
+      expect(t.priv.sessions.get('r-1')!.loading).toBe(false)
     })
   })
 

@@ -209,6 +209,12 @@ interface AcpSession {
   loading: boolean
   /** True while output that arrived outside any `session/prompt` is being shown as its own turn. */
   autonomousTurn: boolean
+  /** Next assistant chunk starts an autonomous turn and must not merge into the previous message. */
+  autonomousNeedsBoundary: boolean
+  /** Child sessions a v2 agent currently reports as running / requiring action (`subagent_update.state`). */
+  workInProgress: Set<string>
+  /** Timestamp of the last update seen while `loading` (replay activity), or null. */
+  lastLoadActivityAt: number | null
   autonomousIdleTimer?: ReturnType<typeof setTimeout>
   lastError: string | null
   createdInApp: boolean
@@ -239,6 +245,10 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
   private processConfig: AcpAgentProcessConfig
   private wrapperHooks: AcpWrapperHooks
   private static readonly AUTONOMOUS_IDLE_MS = 3000
+  /** Load fallback: no replayed update for this long (after at least one) => treat the load as finished. */
+  private static LOAD_QUIET_MS = 1800
+  /** Load fallback: overall wait for a load/resume response before treating it as finished. */
+  private static LOAD_OVERALL_MS = 28000
   private enableFs: boolean
   private enableTerminal: boolean
   private sessions = new Map<string, AcpSession>()
@@ -367,20 +377,20 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     try {
       const mcpServers = this.convertMcpServers(config.mcpServers, session)
       session.loading = true
-      if (session.generation === 'v2') {
-        await this.sendRpcRequest(session, 'session/resume', {
+      session.lastLoadActivityAt = null
+      const loadRequest = session.generation === 'v2'
+        ? this.sendRpcRequest(session, 'session/resume', {
           sessionId,
           cwd: config.workspaceDir,
           mcpServers,
           replayFrom: { type: 'start' }
         })
-      } else {
-        await this.sendRpcRequest(session, 'session/load', {
+        : this.sendRpcRequest(session, 'session/load', {
           sessionId,
           cwd: config.workspaceDir,
           mcpServers
         })
-      }
+      await this.awaitLoadOrFallback(session, loadRequest)
 
       session.loading = false
       console.log(`[AcpAgentAdapter] Session loaded successfully: ${sessionId}`)
@@ -397,6 +407,32 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       }
       throw error
     }
+  }
+
+  /**
+   * Waits for the load/resume response. Some agents replay history and then never answer, which
+   * would leave the gate closed forever; so once replay activity has gone quiet (or the overall
+   * timeout passes) the load is treated as finished. A late real response is then ignored.
+   */
+  private awaitLoadOrFallback(session: AcpSession, request: Promise<unknown>): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const startedAt = Date.now()
+      let settled = false
+      const finish = (error?: unknown, fallback?: string) => {
+        if (settled) return
+        settled = true
+        clearInterval(poll)
+        if (fallback) console.warn(`[AcpAgentAdapter] session load/resume had no response (${fallback}); treating it as finished (fallback)`)
+        if (error) reject(error)
+        else resolve()
+      }
+      const poll = setInterval(() => {
+        const now = Date.now()
+        if (session.lastLoadActivityAt !== null && now - session.lastLoadActivityAt >= AcpAgentAdapter.LOAD_QUIET_MS) finish(undefined, 'replay went quiet')
+        else if (now - startedAt >= AcpAgentAdapter.LOAD_OVERALL_MS) finish(undefined, 'overall timeout')
+      }, 250)
+      request.then(() => finish(), (error) => finish(error))
+    })
   }
 
   private buildEnv(config: SessionConfig): Record<string, string | undefined> {
@@ -481,6 +517,9 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       responseCounter: 0,
       loading: false,
       autonomousTurn: false,
+      autonomousNeedsBoundary: false,
+      workInProgress: new Set(),
+      lastLoadActivityAt: null,
       currentUserTurnId: 0,
       lastChunkTime: null,
       currentTurnId: 0,
@@ -1183,6 +1222,11 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         return
       }
       const kind = update?.sessionUpdate as string | undefined
+      if (session.loading) session.lastLoadActivityAt = Date.now()
+      if (kind === 'subagent_update') {
+        this.handleSubagentWorkState(session, update as Record<string, unknown>)
+        return
+      }
       if (session.loading && this.isHistoryBearingUpdateType(kind)) {
         if (this.debugRpcLogs) console.debug(`[AcpAgentAdapter] Dropping ${String(kind)} replayed during session load/resume`)
         return
@@ -1191,6 +1235,9 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       // own turn: new part ids, session busy, idle again once the updates stop.
       if (this.isAssistantStreamUpdateType(kind) && session.activeTurnId === null && !session.loading) {
         this.beginAutonomousTurn(session)
+      }
+      if (this.isAssistantStreamUpdateType(kind) && session.autonomousNeedsBoundary) {
+        session.autonomousNeedsBoundary = false
         ;(notification as unknown as Record<string, unknown>)._turnBoundary = true
       }
       if (session.autonomousTurn) this.armAutonomousIdleTimer(session)
@@ -1757,10 +1804,35 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     session.currentTurnId += 1
     session.activeTurnId = session.currentTurnId
     session.pendingAssistantTurnSplit = true
+    session.autonomousNeedsBoundary = true
+  }
+
+  /**
+   * ACP v2 work-state: `subagent_update.state` is `running` / `requires_action` while a child
+   * reports foreground work, `idle` (or cleared) when it stops. While any child works, an
+   * out-of-turn turn stays BUSY regardless of quiet gaps; when the last one stops it ends
+   * immediately. Agents that never send it keep the quiet-timer fallback.
+   */
+  private handleSubagentWorkState(session: AcpSession, update: Record<string, unknown>): void {
+    if (session.generation !== 'v2') return
+    const childId = typeof update.sessionId === 'string' ? update.sessionId : undefined
+    if (!childId || !('state' in update)) return
+    const state = (update.state as { state?: string } | null | undefined)?.state
+    if (state === 'running' || state === 'requires_action') {
+      session.workInProgress.add(childId)
+      if (session.activeTurnId === null && !session.loading) this.beginAutonomousTurn(session)
+      if (session.autonomousIdleTimer) { clearTimeout(session.autonomousIdleTimer); session.autonomousIdleTimer = undefined }
+      this.onDataAvailable?.(session.sessionId)
+    } else {
+      session.workInProgress.delete(childId)
+      if (session.workInProgress.size === 0 && session.autonomousTurn) this.endAutonomousTurn(session, true)
+    }
   }
 
   private armAutonomousIdleTimer(session: AcpSession): void {
     if (session.autonomousIdleTimer) clearTimeout(session.autonomousIdleTimer)
+    session.autonomousIdleTimer = undefined
+    if (session.workInProgress.size > 0) return
     session.autonomousIdleTimer = setTimeout(() => this.endAutonomousTurn(session, true), AcpAgentAdapter.AUTONOMOUS_IDLE_MS)
     session.autonomousIdleTimer.unref?.()
   }
@@ -1770,6 +1842,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     session.autonomousIdleTimer = undefined
     if (!session.autonomousTurn) return
     session.autonomousTurn = false
+    session.autonomousNeedsBoundary = false
     session.activeTurnId = null
     if (session.status === SessionStatusType.BUSY) session.status = SessionStatusType.IDLE
     if (notify) this.onDataAvailable?.(session.sessionId)
