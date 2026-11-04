@@ -59,7 +59,8 @@ interface AcpSessionForTest {
   lastSessionUpdateType: string | null
   activeTurnId: number | null
   pendingAssistantTurnSplit: boolean
-  assistantUpdatesOpen: boolean
+  loading: boolean
+  autonomousTurn: boolean
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
   lastError: string | null
   createdInApp: boolean
@@ -126,7 +127,8 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     lastSessionUpdateType: null,
     activeTurnId: null,
     pendingAssistantTurnSplit: false,
-    assistantUpdatesOpen: true,
+    loading: false,
+    autonomousTurn: false,
     toolCallMetadata: new Map(),
     lastError: null,
     createdInApp: true,
@@ -953,28 +955,37 @@ describe('AcpAgentAdapter - verbatim streaming and explicit replay handling', ()
     expect(await historyTexts(adapter)).toEqual(['root text'])
   })
 
-  it('drops late chunks after the prompt response and reopens on the next prompt', async () => {
-    const { priv, session } = setup()
+  it('shows output after a completed prompt as a new autonomous turn, not appended to the previous message', async () => {
+    const { adapter, priv, session } = setup()
     session.promptRequestId = 7
+    session.activeTurnId = 1
+    session.currentTurnId = 1
     priv.handleAgentNotification(session, msg('Answer'))
     priv.handleRpcMessage(session, { jsonrpc: '2.0', id: 7, result: { stopReason: 'end_turn' } })
-    expect(session.assistantUpdatesOpen).toBe(false)
+    expect(session.activeTurnId).toBeNull()
+    // e.g. a background agent finishing after the prompt returned
     priv.handleAgentNotification(session, msg('Answer'))
-    priv.handleAgentNotification(session, thought('late thought'))
-    expect(liveTexts(priv, session)).toEqual(['Answer'])
-    expect(session.permanentMessages).toHaveLength(1)
-    // The next prompt records the user turn and reopens the gate.
-    priv.addToPermanentMessages(session, note({ sessionUpdate: 'user_message', content: { type: 'text', text: 'again' } }))
-    session.assistantUpdatesOpen = true
-    priv.handleAgentNotification(session, msg('Answer'))
-    expect(session.permanentMessages).toHaveLength(3)
+    priv.handleAgentNotification(session, msg(' (background)'))
+    expect(session.status).toBe(SessionStatusType.BUSY)
+    expect(session.autonomousTurn).toBe(true)
+    expect(liveTexts(priv, session)).toEqual(['Answer', 'Answer (background)'])
+    expect(await historyTexts(adapter)).toEqual(['Answer', 'Answer (background)'])
+    expect(session.permanentMessages).toHaveLength(2)
   })
 
-  it('also closes the gate when the prompt request fails', () => {
-    const { priv, session } = setup()
-    session.promptRequestId = 8
-    priv.handleRpcMessage(session, { jsonrpc: '2.0', id: 8, error: { code: -32000, message: 'boom' } })
-    expect(session.assistantUpdatesOpen).toBe(false)
+  it('returns to idle once autonomous output stops', () => {
+    vi.useFakeTimers()
+    try {
+      const { priv, session } = setup()
+      priv.handleAgentNotification(session, msg('background result'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      vi.advanceTimersByTime(3500)
+      expect(session.status).toBe(SessionStatusType.IDLE)
+      expect(session.autonomousTurn).toBe(false)
+      expect(session.activeTurnId).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   describe('session load / resume', () => {
@@ -996,6 +1007,10 @@ describe('AcpAgentAdapter - verbatim streaming and explicit replay handling', ()
           send(note({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'hi' } }, { sessionId: 'resumed-1' }))
           send(note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Earlier answer' } }, { sessionId: 'resumed-1' }))
           send(note({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Earlier thought' } }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'tool_call', toolCallId: 'old-tool', title: 'Run', kind: 'execute', status: 'pending' }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'tool_call_update', toolCallId: 'old-tool', status: 'completed' }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'plan', entries: [] }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'current_mode_update', currentModeId: 'plan' }, { sessionId: 'resumed-1' }))
           send({ jsonrpc: '2.0', id: m.id, result: {} })
           cb?.()
           return
@@ -1006,14 +1021,14 @@ describe('AcpAgentAdapter - verbatim streaming and explicit replay handling', ()
 
       const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [] })
       const messages = await adapter.resumeSession('resumed-1', { agentId: 'a', taskId: 't', workspaceDir: '/tmp' } as SessionConfig)
-      // Neither the replayed assistant/thought text nor the replayed user text is kept.
+      // No replayed user, assistant, thought, tool or plan content is kept; mode updates still apply.
       expect(messages.flatMap((m) => m.parts)).toEqual([])
 
       // A new turn after the load streams normally and is not mixed with the replay.
       const priv = adapter as unknown as { sessions: Map<string, AcpSessionForTest>; handleAgentNotification(s: AcpSessionForTest, n: unknown): void }
       const session = priv.sessions.get('resumed-1')!
-      expect(session.assistantUpdatesOpen).toBe(false)
-      session.assistantUpdatesOpen = true
+      expect(session.loading).toBe(false)
+      expect(session.currentModeId).toBe('plan')
       priv.handleAgentNotification(session, note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Fresh' } }, { sessionId: 'resumed-1' }))
       const after = await adapter.getAllMessages('resumed-1', {} as SessionConfig)
       expect(after.flatMap((m) => m.parts).filter((p) => p.role === 'assistant').map((p) => p.text)).toEqual(['Fresh'])

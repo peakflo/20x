@@ -203,12 +203,13 @@ interface AcpSession {
   pendingAssistantTurnSplit: boolean
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
   /**
-   * Whether assistant message/thought updates are accepted. Closed until a prompt is
-   * sent (so `session/load` / `session/resume` history replays and late chunks after a
-   * turn can't duplicate the stored transcript), reopened by `session/prompt`, closed
-   * again when the prompt response arrives.
+   * True from the `session/load` / `session/resume` request until its response. History the
+   * agent replays in that window is dropped: 20x's stored transcript is the source of truth.
    */
-  assistantUpdatesOpen: boolean
+  loading: boolean
+  /** True while output that arrived outside any `session/prompt` is being shown as its own turn. */
+  autonomousTurn: boolean
+  autonomousIdleTimer?: ReturnType<typeof setTimeout>
   lastError: string | null
   createdInApp: boolean
   usageLimit?: UsageLimitStop | null
@@ -237,6 +238,7 @@ interface AcpSession {
 export class AcpAgentAdapter implements CodingAgentAdapter {
   private processConfig: AcpAgentProcessConfig
   private wrapperHooks: AcpWrapperHooks
+  private static readonly AUTONOMOUS_IDLE_MS = 3000
   private enableFs: boolean
   private enableTerminal: boolean
   private sessions = new Map<string, AcpSession>()
@@ -364,6 +366,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
 
     try {
       const mcpServers = this.convertMcpServers(config.mcpServers, session)
+      session.loading = true
       if (session.generation === 'v2') {
         await this.sendRpcRequest(session, 'session/resume', {
           sessionId,
@@ -379,11 +382,13 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         })
       }
 
+      session.loading = false
       console.log(`[AcpAgentAdapter] Session loaded successfully: ${sessionId}`)
       const messages = await this.getAllMessages(sessionId, config)
       session.messageBuffer = []
       return messages
     } catch (error: unknown) {
+      session.loading = false
       const message = errMsg(error)
       if (message.includes('not found') || message.includes('does not exist')) {
         acpProcess.kill('SIGTERM')
@@ -474,7 +479,8 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       config,
       promptRequestId: null,
       responseCounter: 0,
-      assistantUpdatesOpen: false,
+      loading: false,
+      autonomousTurn: false,
       currentUserTurnId: 0,
       lastChunkTime: null,
       currentTurnId: 0,
@@ -591,7 +597,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       }
     } as unknown as JsonRpcNotification)
 
-    session.assistantUpdatesOpen = true
+    this.endAutonomousTurn(session, false)
     session.status = SessionStatusType.BUSY
     session.lastError = null
     session.usageLimit = null
@@ -666,6 +672,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     const session = this.sessions.get(sessionId)
     if (!session) return
     console.log(`[AcpAgentAdapter] Destroying session ${sessionId}`)
+    this.endAutonomousTurn(session, false)
     session.process.kill('SIGTERM')
     setTimeout(() => {
       if (!session.process.killed) session.process.kill('SIGKILL')
@@ -1071,9 +1078,6 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     if ('id' in message && message.id !== undefined && !('method' in message)) {
       const pending = session.pendingRequests.get(message.id)
       const response = message as JsonRpcResponse | JsonRpcError
-      // The turn is over (success, cancel or error): close the assistant gate so late
-      // chunks can't leak into the next turn's text.
-      if (session.promptRequestId === message.id) session.assistantUpdatesOpen = false
 
       if (pending) {
         session.pendingRequests.delete(message.id)
@@ -1178,10 +1182,18 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         if (this.debugRpcLogs) console.debug(`[AcpAgentAdapter] Ignoring replayed ${String(update?.sessionUpdate)} update`)
         return
       }
-      if ((this.isAssistantStreamUpdateType(update?.sessionUpdate as string | undefined) || update?.sessionUpdate === 'user_message_chunk' || update?.sessionUpdate === 'human_message_chunk') && !session.assistantUpdatesOpen) {
-        console.debug(`[AcpAgentAdapter] Dropping ${String(update?.sessionUpdate)} while no prompt is active (load/resume replay or late chunk; the stored transcript is the source of truth)`)
+      const kind = update?.sessionUpdate as string | undefined
+      if (session.loading && this.isHistoryBearingUpdateType(kind)) {
+        if (this.debugRpcLogs) console.debug(`[AcpAgentAdapter] Dropping ${String(kind)} replayed during session load/resume`)
         return
       }
+      // Assistant output with no prompt in flight (e.g. a background agent finishing) is its
+      // own turn: new part ids, session busy, idle again once the updates stop.
+      if (this.isAssistantStreamUpdateType(kind) && session.activeTurnId === null && !session.loading) {
+        this.beginAutonomousTurn(session)
+        ;(notification as unknown as Record<string, unknown>)._turnBoundary = true
+      }
+      if (session.autonomousTurn) this.armAutonomousIdleTimer(session)
       if (update?.sessionUpdate === 'usage_update') {
         const cost = acpUsageUpdateCostUsd(update)
         if (cost !== null) session.usageCostUsd = cost
@@ -1663,6 +1675,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         && lastUpdate.sessionUpdate === nextUpdate.sessionUpdate
         && this.isAssistantChunkUpdateType(nextUpdate.sessionUpdate)
         && (lastUpdate.messageId ?? null) === (nextUpdate.messageId ?? null)
+        && !(notification as unknown as Record<string, unknown>)._turnBoundary
         && typeof lastUpdate.content === 'object' && lastUpdate.content !== null
       ) {
         const lastText = this.extractTextFromUpdateContent(lastUpdate.content)
@@ -1730,6 +1743,36 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       return chunk
     }
     return currentText + chunk
+  }
+
+  /** Updates that carry transcript content (replayed by agents on load); mode/config/command updates are not. */
+  private isHistoryBearingUpdateType(sessionUpdate?: string | null): boolean {
+    return this.isAssistantStreamUpdateType(sessionUpdate) || this.isUserUpdateType(sessionUpdate)
+      || this.isToolingUpdateType(sessionUpdate) || sessionUpdate === 'plan' || sessionUpdate === 'usage_update'
+  }
+
+  private beginAutonomousTurn(session: AcpSession): void {
+    session.autonomousTurn = true
+    session.status = SessionStatusType.BUSY
+    session.currentTurnId += 1
+    session.activeTurnId = session.currentTurnId
+    session.pendingAssistantTurnSplit = true
+  }
+
+  private armAutonomousIdleTimer(session: AcpSession): void {
+    if (session.autonomousIdleTimer) clearTimeout(session.autonomousIdleTimer)
+    session.autonomousIdleTimer = setTimeout(() => this.endAutonomousTurn(session, true), AcpAgentAdapter.AUTONOMOUS_IDLE_MS)
+    session.autonomousIdleTimer.unref?.()
+  }
+
+  private endAutonomousTurn(session: AcpSession, notify: boolean): void {
+    if (session.autonomousIdleTimer) clearTimeout(session.autonomousIdleTimer)
+    session.autonomousIdleTimer = undefined
+    if (!session.autonomousTurn) return
+    session.autonomousTurn = false
+    session.activeTurnId = null
+    if (session.status === SessionStatusType.BUSY) session.status = SessionStatusType.IDLE
+    if (notify) this.onDataAvailable?.(session.sessionId)
   }
 
   /** Streamed or whole assistant text/thought updates (the ones gated outside a turn). */
@@ -1916,6 +1959,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         })
       }
     } else if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'assistant_message_chunk') {
+      if (session && (notification as unknown as Record<string, unknown>)._turnBoundary) session.pendingAssistantTurnSplit = true
       const turnId = session ? this.getAssistantTurnId(session) : 0
       const messageId = update.messageId
         ? `agent-response-${turnId}-${update.messageId}`
@@ -1929,6 +1973,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         seenPartIds.add(messageId)
       }
     } else if (update.sessionUpdate === 'agent_thought_chunk') {
+      if (session && (notification as unknown as Record<string, unknown>)._turnBoundary) session.pendingAssistantTurnSplit = true
       const turnId = session ? this.getAssistantTurnId(session) : 0
       const thinkingId = update.messageId
         ? `agent-thinking-${turnId}-${update.messageId}`
