@@ -210,6 +210,164 @@ describe('CursorSdkAdapter session lifecycle', () => {
   })
 })
 
+describe('CursorSdkAdapter secrets and environment', () => {
+  const SECRET_VALUE = 'agent-secret-value-abcdef123456'
+  const BROKER_SECRET = 'broker-secret-value-abcdef123456'
+  const CURSOR_KEY = 'cursor-key-value-abcdef123456'
+  const AMBIENT_KEYS = ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GH_TOKEN', 'AWS_SECRET_ACCESS_KEY'] as const
+
+  function withAmbientCredentials<T>(fn: () => Promise<T>): Promise<T> {
+    const prev: Record<string, string | undefined> = {}
+    for (const k of AMBIENT_KEYS) {
+      prev[k] = process.env[k]
+      process.env[k] = `ambient-${k.toLowerCase()}-value-123456`
+    }
+    return fn().finally(() => {
+      for (const k of AMBIENT_KEYS) {
+        if (prev[k] === undefined) delete process.env[k]
+        else process.env[k] = prev[k]
+      }
+    })
+  }
+
+  // The SDK's local agent runs in-process, so the ONLY channel from the
+  // adapter into it is the options object — assert on everything it gets.
+  it('hands the SDK only its own credential: no secret values, broker delivery, or other providers\' keys', async () => {
+    const adapter = new CursorSdkAdapter({ db: makeMockDb() })
+    sdkMocks.AgentCreateMock.mockResolvedValue(makeFakeAgent('a1'))
+
+    await withAmbientCredentials(() =>
+      adapter.createSession(baseConfig({
+        apiKeys: { cursor: CURSOR_KEY, openai: 'openai-key-value-123456', anthropic: 'anthropic-key-value-123456' },
+        secretEnvVars: { MY_SECRET: SECRET_VALUE },
+        secretsForScrubbing: { BROKER_SECRET },
+        secretBrokerPort: 4321,
+        secretLoaderPath: '/tmp/secret-loader.sh',
+        secretTokenFilePath: '/tmp/secret-tokens/x.token'
+      }))
+    )
+
+    const options = sdkMocks.AgentCreateMock.mock.calls[0][0]
+    expect(options.apiKey).toBe(CURSOR_KEY)
+    const serialized = JSON.stringify(options)
+    for (const leaked of [SECRET_VALUE, BROKER_SECRET, 'openai-key-value', 'anthropic-key-value', 'ambient-', '/tmp/secret-tokens', 'secret-loader']) {
+      expect(serialized, `options must not contain ${leaked}`).not.toContain(leaked)
+    }
+    // No env-shaped option exists on the local agent for secrets to ride in on.
+    expect(options.local).not.toHaveProperty('env')
+    expect(options).not.toHaveProperty('env')
+  })
+
+  it('does not forward secret values on resume or send either', async () => {
+    const adapter = new CursorSdkAdapter({ db: makeMockDb() })
+    const fakeAgent = makeFakeAgent('a1')
+    sdkMocks.AgentResumeMock.mockResolvedValue(fakeAgent)
+
+    await adapter.resumeSession('a1', baseConfig({
+      apiKeys: { cursor: CURSOR_KEY },
+      secretEnvVars: { MY_SECRET: SECRET_VALUE },
+      secretsForScrubbing: { BROKER_SECRET }
+    }))
+
+    const resumeOptions = sdkMocks.AgentResumeMock.mock.calls[0][1]
+    expect(resumeOptions.apiKey).toBe(CURSOR_KEY)
+    const serialized = JSON.stringify(resumeOptions)
+    expect(serialized).not.toContain(SECRET_VALUE)
+    expect(serialized).not.toContain(BROKER_SECRET)
+  })
+
+  it('registers the credential it authenticates with — explicit key — with the live scrubber', async () => {
+    const adapter = new CursorSdkAdapter({ db: makeMockDb() })
+    sdkMocks.AgentCreateMock.mockResolvedValue(makeFakeAgent('a1'))
+    const addEntries = vi.fn()
+
+    await adapter.createSession(baseConfig({
+      apiKeys: { cursor: CURSOR_KEY },
+      getLiveScrubber: () => ({ addEntries }) as never
+    }))
+
+    expect(addEntries).toHaveBeenCalledWith([{ name: 'CURSOR_API_KEY', value: CURSOR_KEY }])
+  })
+
+  it('registers a CURSOR_API_KEY taken from the ambient environment with the live scrubber too', async () => {
+    const adapter = new CursorSdkAdapter({ db: makeMockDb() })
+    sdkMocks.AgentResumeMock.mockResolvedValue(makeFakeAgent('a1'))
+    const addEntries = vi.fn()
+    const prev = process.env.CURSOR_API_KEY
+    process.env.CURSOR_API_KEY = 'ambient-cursor-key-value-123456'
+    try {
+      // Ambient CURSOR_API_KEY is only consulted in api_key mode (see
+      // resolveCursorApiKey) — in subscription mode it is deliberately ignored.
+      await adapter.resumeSession('a1', baseConfig({
+        authMethod: 'api_key',
+        getLiveScrubber: () => ({ addEntries }) as never
+      }))
+    } finally {
+      if (prev === undefined) delete process.env.CURSOR_API_KEY
+      else process.env.CURSOR_API_KEY = prev
+    }
+
+    expect(addEntries).toHaveBeenCalledWith([{ name: 'CURSOR_API_KEY', value: 'ambient-cursor-key-value-123456' }])
+  })
+
+  it('registers the stored browser-login key (subscription mode) with the live scrubber, and ignores an ambient CURSOR_API_KEY there', async () => {
+    const db = makeMockDb()
+    db.setSetting('cursor-sdk-credentials', Buffer.from(JSON.stringify({
+      version: 1,
+      backendUrl: 'x',
+      apiKey: 'stored-login-key-value-123456',
+      createdAtMs: 1
+    })).toString('base64'))
+    const adapter = new CursorSdkAdapter({ db })
+    sdkMocks.AgentCreateMock.mockResolvedValue(makeFakeAgent('a1'))
+    const addEntries = vi.fn()
+    const prev = process.env.CURSOR_API_KEY
+    process.env.CURSOR_API_KEY = 'ambient-cursor-key-value-123456'
+    try {
+      await adapter.createSession(baseConfig({
+        authMethod: 'subscription',
+        getLiveScrubber: () => ({ addEntries }) as never
+      }))
+    } finally {
+      if (prev === undefined) delete process.env.CURSOR_API_KEY
+      else process.env.CURSOR_API_KEY = prev
+    }
+
+    expect(addEntries).toHaveBeenCalledWith([{ name: 'CURSOR_API_KEY', value: 'stored-login-key-value-123456' }])
+    expect(addEntries).not.toHaveBeenCalledWith([{ name: 'CURSOR_API_KEY', value: 'ambient-cursor-key-value-123456' }])
+  })
+
+  it('registers nothing (and does not throw) when there is no live scrubber or no credential', async () => {
+    const adapter = new CursorSdkAdapter({ db: makeMockDb() })
+    sdkMocks.AgentCreateMock.mockResolvedValue(makeFakeAgent('a1'))
+    await expect(adapter.createSession(baseConfig({ apiKeys: { cursor: CURSOR_KEY } }))).resolves.toBe('a1')
+  })
+
+  it('the harness-env denylist covers Cursor credentials, so no harness hands them to another one', async () => {
+    const { buildHarnessBaseEnv, isKnownProviderCredentialVar } = await import('./harness-env')
+    expect(isKnownProviderCredentialVar('CURSOR_API_KEY')).toBe(true)
+    expect(isKnownProviderCredentialVar('CURSOR_AUTH_TOKEN')).toBe(true)
+    const env = buildHarnessBaseEnv({ CURSOR_API_KEY: 'k-123456', CURSOR_AUTH_TOKEN: 't-123456', PATH: '/usr/bin' })
+    expect(env.CURSOR_API_KEY).toBeUndefined()
+    expect(env.CURSOR_AUTH_TOKEN).toBeUndefined()
+    expect(env.PATH).toBe('/usr/bin')
+  })
+
+  it('secret-entries registers apiKeys.cursor and an ambient CURSOR_API_KEY for scrubbing', async () => {
+    const { buildSecretEntriesFromSessionConfig } = await import('../secret-entries')
+    const prev = process.env.CURSOR_API_KEY
+    process.env.CURSOR_API_KEY = 'ambient-cursor-key-value-123456'
+    try {
+      const entries = buildSecretEntriesFromSessionConfig({ apiKeys: { cursor: CURSOR_KEY } })
+      expect(entries).toContainEqual({ name: 'CURSOR_AUTH_TOKEN', value: CURSOR_KEY })
+      expect(entries).toContainEqual({ name: 'CURSOR_API_KEY', value: 'ambient-cursor-key-value-123456' })
+    } finally {
+      if (prev === undefined) delete process.env.CURSOR_API_KEY
+      else process.env.CURSOR_API_KEY = prev
+    }
+  })
+})
+
 describe('CursorSdkAdapter stuck-run recovery', () => {
   it('retries exactly once after cancelling a stuck run on a RESUMED session that hits AgentBusyError', async () => {
     const db = makeMockDb()

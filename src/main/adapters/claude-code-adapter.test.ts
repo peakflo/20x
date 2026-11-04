@@ -16,6 +16,7 @@ vi.mock('fs', () => ({ existsSync: vi.fn(() => false) }))
 import { ClaudeCodeAdapter, ClaudeSystemSubtype } from './claude-code-adapter'
 import { MessagePartType } from './coding-agent-adapter'
 import { query } from '@anthropic-ai/claude-agent-sdk'
+import { SecretScrubber } from '../secret-scrubber'
 
 /**
  * Helper: creates an adapter with a pre-populated session so we can test
@@ -1411,5 +1412,513 @@ describe('ClaudeCodeAdapter abort classification (regression)', () => {
 
     expect(session.status).toBe('error')
     expect(session.lastError).toBe('socket hang up')
+  })
+})
+
+describe('ClaudeCodeAdapter secret scrubbing and env allowlisting', () => {
+  const SECRET_VALUE = 'sk-super-secret-leak-value-123456'
+
+  async function sendAndCaptureOptions(config: Record<string, unknown>) {
+    const { adapter, session } = createAdapterWithSession('s1', [])
+    await adapter.initialize()
+    ;(adapter as any).findClaudeExecutable = vi.fn().mockResolvedValue('/usr/local/bin/claude')
+    vi.mocked(query).mockImplementation(() => (async function* () {})() as any)
+
+    await adapter.sendPrompt('s1', [{ type: MessagePartType.TEXT, text: 'hello' }], {
+      agentId: 'a1', taskId: 't1', workspaceDir: '/tmp/workspace', ...config
+    } as any)
+    await session.streamTask
+    return vi.mocked(query).mock.lastCall?.[0].options as any
+  }
+
+  it('never puts a provider API key in env for a subscription session, even if the login shell has one', async () => {
+    const prevKey = process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-ambient-should-not-leak'
+    try {
+      const options = await sendAndCaptureOptions({ authMethod: 'subscription' })
+      expect(options.env.ANTHROPIC_API_KEY).toBeUndefined()
+    } finally {
+      if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = prevKey
+    }
+  })
+
+  it('passes ANTHROPIC_API_KEY for an explicit api_key session', async () => {
+    const options = await sendAndCaptureOptions({ authMethod: 'api_key', apiKeys: { anthropic: 'sk-ant-explicit-key' } })
+    expect(options.env.ANTHROPIC_API_KEY).toBe('sk-ant-explicit-key')
+  })
+
+  it('still passes ambient ANTHROPIC_API_KEY through for legacy agents with no saved auth_method', async () => {
+    // Pre-allowlist behavior spread `process.env` wholesale, so an agent
+    // created before auth_method existed (or with it left unset) got the
+    // shell's ambient key for free. `authMethod: undefined` must keep doing
+    // that — only an explicit 'subscription' should suppress it (mirrors
+    // Codex's own undefined/legacy handling in buildEnvironment()).
+    const prevKey = process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-ambient-legacy-key'
+    try {
+      const options = await sendAndCaptureOptions({ authMethod: undefined })
+      expect(options.env.ANTHROPIC_API_KEY).toBe('sk-ant-ambient-legacy-key')
+    } finally {
+      if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = prevKey
+    }
+  })
+
+  it('prefers the agent’s own saved key over the ambient one when auth_method is unset', async () => {
+    const prevKey = process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-ambient-should-lose'
+    try {
+      const options = await sendAndCaptureOptions({ authMethod: undefined, apiKeys: { anthropic: 'sk-ant-saved-should-win' } })
+      expect(options.env.ANTHROPIC_API_KEY).toBe('sk-ant-saved-should-win')
+    } finally {
+      if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = prevKey
+    }
+  })
+
+  // Major finding, re-review (M8): the generic provider-credential denylist
+  // also strips Claude Code's OWN alternate auth modes — setup-token,
+  // custom gateway, and Bedrock — with no re-add, breaking agents that rely
+  // on any of them.
+  describe('Claude Code\'s own alternate auth modes are re-added ambiently', () => {
+    // `gate`, when set, is an ambient env var that must ALSO be present for
+    // the re-add to happen — re-review (round 3, Medium): the AWS triad and
+    // ANTHROPIC_AUTH_TOKEN used to be re-added unconditionally, so an agent
+    // that never uses Bedrock or a custom gateway still got whatever
+    // AWS/gateway credentials happened to sit in the ambient shell env.
+    // CLAUDE_CODE_OAUTH_TOKEN has no such flag — its own presence is the
+    // signal, same as before.
+    const CASES: Array<{ name: string; value: string; gate?: string }> = [
+      { name: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'setup-token-value-123456' },
+      { name: 'ANTHROPIC_AUTH_TOKEN', value: 'gateway-auth-token-123456', gate: 'ANTHROPIC_BASE_URL' },
+      { name: 'AWS_BEARER_TOKEN_BEDROCK', value: 'bedrock-bearer-token-123456', gate: 'CLAUDE_CODE_USE_BEDROCK' },
+      { name: 'AWS_ACCESS_KEY_ID', value: 'AKIAEXAMPLE123456', gate: 'CLAUDE_CODE_USE_BEDROCK' },
+      { name: 'AWS_SECRET_ACCESS_KEY', value: 'aws-secret-access-key-123456', gate: 'CLAUDE_CODE_USE_BEDROCK' },
+      { name: 'AWS_SESSION_TOKEN', value: 'aws-session-token-123456', gate: 'CLAUDE_CODE_USE_BEDROCK' }
+    ]
+
+    for (const { name, value, gate } of CASES) {
+      it(`re-adds ambient ${name} and registers it with the scrubber${gate ? ` (when ${gate} is set)` : ''}`, async () => {
+        const prev = process.env[name]
+        const prevGate = gate ? process.env[gate] : undefined
+        process.env[name] = value
+        if (gate) process.env[gate] = '1'
+        try {
+          const options = await sendAndCaptureOptions({})
+          expect(options.env[name]).toBe(value)
+          // Registered with the scrubber too — confirmed via the PostToolUse
+          // hook, which only exists when there's something to scrub.
+          const postToolUse = options.hooks?.PostToolUse?.[0]?.hooks?.[0]
+          expect(postToolUse).toBeDefined()
+          const result = await postToolUse({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {}, tool_use_id: 'x', tool_response: { stdout: `leaked: ${value}`, stderr: '' } })
+          expect(result.hookSpecificOutput.updatedToolOutput.stdout).toBe(`leaked: «$${name}»`)
+        } finally {
+          if (prev === undefined) delete process.env[name]
+          else process.env[name] = prev
+          if (gate) {
+            if (prevGate === undefined) delete process.env[gate]
+            else process.env[gate] = prevGate
+          }
+        }
+      })
+    }
+
+    const GATED_CASES = CASES.filter((c) => c.gate)
+    for (const { name, value, gate } of GATED_CASES) {
+      it(`does NOT re-add ambient ${name} when ${gate} is not set`, async () => {
+        const prev = process.env[name]
+        const prevGate = process.env[gate!]
+        // Explicitly absent — simulates the common case where the ambient
+        // shell has leftover AWS/gateway credentials for an unrelated
+        // purpose, and this agent never turned on Bedrock/gateway mode.
+        delete process.env[gate!]
+        process.env[name] = value
+        try {
+          const options = await sendAndCaptureOptions({})
+          expect(options.env[name]).toBeUndefined()
+        } finally {
+          if (prev === undefined) delete process.env[name]
+          else process.env[name] = prev
+          if (prevGate === undefined) delete process.env[gate!]
+          else process.env[gate!] = prevGate
+        }
+      })
+    }
+  })
+
+  describe('per-agent "pass shell credentials" opt-in', () => {
+    it('does NOT pass ambient GH_TOKEN through by default', async () => {
+      const prev = process.env.GH_TOKEN
+      process.env.GH_TOKEN = 'gh-token-should-not-leak-123456'
+      try {
+        const options = await sendAndCaptureOptions({})
+        expect(options.env.GH_TOKEN).toBeUndefined()
+      } finally {
+        if (prev === undefined) delete process.env.GH_TOKEN
+        else process.env.GH_TOKEN = prev
+      }
+    })
+
+    it('passes ambient GH_TOKEN through, and registers it with the scrubber, when the agent opted in', async () => {
+      const prev = process.env.GH_TOKEN
+      process.env.GH_TOKEN = 'gh-token-opted-in-123456'
+      try {
+        const options = await sendAndCaptureOptions({ allowShellCredentials: true })
+        expect(options.env.GH_TOKEN).toBe('gh-token-opted-in-123456')
+        const postToolUse = options.hooks?.PostToolUse?.[0]?.hooks?.[0]
+        const result = await postToolUse({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {}, tool_use_id: 'x', tool_response: { stdout: 'leaked: gh-token-opted-in-123456', stderr: '' } })
+        expect(result.hookSpecificOutput.updatedToolOutput.stdout).toBe('leaked: «$GH_TOKEN»')
+      } finally {
+        if (prev === undefined) delete process.env.GH_TOKEN
+        else process.env.GH_TOKEN = prev
+      }
+    })
+  })
+
+  it('registers a PostToolUse hook that scrubs tool_response and leaves non-matching output untouched', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    const postToolUse = options.hooks?.PostToolUse?.[0]?.hooks?.[0]
+    expect(postToolUse).toBeDefined()
+
+    const scrubbed = await postToolUse({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+      tool_response: `the value is ${SECRET_VALUE}`,
+      tool_use_id: 'x'
+    })
+    expect(scrubbed.hookSpecificOutput.hookEventName).toBe('PostToolUse')
+    expect(scrubbed.hookSpecificOutput.updatedToolOutput).not.toContain(SECRET_VALUE)
+    expect(scrubbed.hookSpecificOutput.updatedToolOutput).toContain('«$MY_SECRET»')
+
+    const unchanged = await postToolUse({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+      tool_response: 'nothing secret here',
+      tool_use_id: 'y'
+    })
+    // No rewrite when nothing changed — avoids a needless identity-rewrite
+    // competing last-write-wins with another hook's rewrite.
+    expect(unchanged).toEqual({})
+  })
+
+  it('does not register a PostToolUse scrub hook when the session has nothing to scrub', async () => {
+    const options = await sendAndCaptureOptions({})
+    expect(options.hooks?.PostToolUse).toBeUndefined()
+  })
+
+  it('keeps the broker-loader PreToolUse hook alongside the new PostToolUse scrub hook', async () => {
+    const options = await sendAndCaptureOptions({
+      secretBrokerPort: 5555,
+      secretTokenFilePath: '/fake/secret-tokens/session-token-abc.token',
+      secretLoaderPath: '/fake/secret-loader.sh',
+      secretsForScrubbing: { MY_SECRET: SECRET_VALUE }
+    })
+    expect(options.hooks?.PreToolUse?.[0]?.matcher).toBe('Bash')
+    expect(options.hooks?.PostToolUse?.[0]?.hooks?.[0]).toBeTypeOf('function')
+  })
+
+  // A non-zero exit routes to PostToolUseFailure instead of PostToolUse —
+  // confirmed by actually running `echo $SECRET ; false` through the real
+  // pinned SDK: the literal value came back in PostToolUseFailure's `error`
+  // field, which has no output-rewrite capability. wrapCommandForScrubbableFailure
+  // forces the wrapped command's own exit status to 0 so it always routes
+  // through the one hook event that CAN be rewritten.
+  it('PreToolUse wraps the command so a failing exit status still routes through the scrubbable PostToolUse event', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    const result = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi; false' }
+    })
+    const wrapped = result.hookSpecificOutput.updatedInput.command as string
+    expect(wrapped).toContain('echo hi; false')
+    expect(wrapped).toMatch(/\ntrue\s*$/)
+    expect(wrapped).not.toMatch(/\nexit 0\s*$/) // see cwd-persistence test below for why
+    expect(wrapped).toMatch(/__20x_ec=\$\?/)
+  })
+
+  // Blocker, found in review: the pinned SDK runs the WHOLE wrapped command
+  // text as `eval <cmd> && pwd -P >| <cwdfile>`. `eval` runs in the CURRENT
+  // shell, so a literal `exit 0` as the wrapper's last line (the original
+  // fix) terminates that shell immediately and `&& pwd -P >| <cwdfile>`
+  // never runs — silently breaking `cd`-persistence across Bash calls in
+  // the same session for almost every session (the wrapper applies whenever
+  // the scrubber is non-empty). Reproduced against the real SDK before
+  // fixing; this test reproduces it at the shell level, which is faster and
+  // doesn't need network/auth.
+  it('ends with "true", not "exit", so the SDK\'s own cwd-tracking "&& pwd -P >| <cwdfile>" still runs after the wrapper', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    const result = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'cd subdir' }
+    })
+    const wrapped = result.hookSpecificOutput.updatedInput.command as string
+
+    const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync } = await vi.importActual<typeof import('fs')>('fs')
+    const { tmpdir } = await import('os')
+    const { join } = await import('path')
+    const { execFileSync } = await vi.importActual<typeof import('child_process')>('child_process')
+
+    // realpathSync: on macOS, tmpdir() is under /var, a symlink to
+    // /private/var — `pwd -P` (physical, symlink-resolved) returns the
+    // /private/... form, so compare against the resolved path too.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'cwd-persist-')))
+    mkdirSync(join(dir, 'subdir'))
+    const cwdFile = join(dir, '.cwdfile')
+    // Write the wrapped script to a file and `source` it, instead of
+    // interpolating it as a quoted string into another shell command —
+    // the latter is exactly the kind of multi-line-script-through-a-
+    // template-literal escaping bug this suite is trying to avoid writing
+    // more of. `source`, like the SDK's own `eval`, runs in the CURRENT
+    // shell, so `cd` inside the wrapped script still carries over.
+    const scriptFile = join(dir, 'wrapped.sh')
+    writeFileSync(scriptFile, wrapped, 'utf-8')
+    // Exactly what the SDK itself does with the wrapped command text (`eval`
+    // substituted for `source` — equivalent here, both run in-shell).
+    execFileSync('bash', ['-c', `cd "$1" && source "$2" && pwd -P >| "$3"`, 'bash', dir, scriptFile, cwdFile])
+    expect(existsSync(cwdFile)).toBe(true)
+    expect(readFileSync(cwdFile, 'utf-8').trim()).toBe(join(dir, 'subdir'))
+  })
+
+  // Major, found in review: a literal `exit N` or a `set -e` failure inside
+  // the AGENT's OWN command must not escape the wrapper either — otherwise
+  // the Bash tool's overall exit status goes non-zero again, right back to
+  // the un-rewritable PostToolUseFailure path this wrapper exists to avoid.
+  it('contains a literal "exit N" inside the agent\'s own command to the subshell — the wrapper itself still exits 0 and reports the real status', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    const result = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo before; exit 3; echo SHOULD_NOT_PRINT' }
+    })
+    const wrapped = result.hookSpecificOutput.updatedInput.command as string
+
+    const { mkdtempSync, writeFileSync } = await vi.importActual<typeof import('fs')>('fs')
+    const { tmpdir } = await import('os')
+    const { join } = await import('path')
+    const { execFileSync } = await vi.importActual<typeof import('child_process')>('child_process')
+    const dir = mkdtempSync(join(tmpdir(), 'exit-contain-'))
+    const scriptFile = join(dir, 'wrapped.sh')
+    writeFileSync(scriptFile, wrapped, 'utf-8')
+    const stdout = execFileSync('bash', ['-c', `source "$1" 2>&1; echo OUTER_EC=$?`, 'bash', scriptFile], { encoding: 'utf-8' })
+    expect(stdout).toContain('before')
+    expect(stdout).not.toContain('SHOULD_NOT_PRINT')
+    expect(stdout).toContain('[20x] command exited with status 3')
+    expect(stdout).toContain('OUTER_EC=0')
+  })
+
+  it('contains "set -e" inside the agent\'s own command to the subshell too', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    const result = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'set -e; echo before; false; echo SHOULD_NOT_PRINT' }
+    })
+    const wrapped = result.hookSpecificOutput.updatedInput.command as string
+
+    const { mkdtempSync, writeFileSync } = await vi.importActual<typeof import('fs')>('fs')
+    const { tmpdir } = await import('os')
+    const { join } = await import('path')
+    const { execFileSync } = await vi.importActual<typeof import('child_process')>('child_process')
+    const dir = mkdtempSync(join(tmpdir(), 'sete-contain-'))
+    const scriptFile = join(dir, 'wrapped.sh')
+    writeFileSync(scriptFile, wrapped, 'utf-8')
+    const stdout = execFileSync('bash', ['-c', `source "$1" 2>&1; echo OUTER_EC=$?`, 'bash', scriptFile], { encoding: 'utf-8' })
+    expect(stdout).toContain('before')
+    expect(stdout).not.toContain('SHOULD_NOT_PRINT')
+    expect(stdout).toContain('OUTER_EC=0')
+  })
+
+  // Nit, re-review (round 3): a predictable fallback path
+  // (`/tmp/.20x-cwd-$$`, guessable by PID in a shared, world-writable
+  // directory) used to be used when `mktemp` itself was unavailable. Fails
+  // closed now instead: no predictable path is ever used, and the wrapper's
+  // actual security-relevant job (exit-status reporting, so the command
+  // still routes through the rewritable PostToolUse hook) keeps working
+  // regardless of whether `mktemp` succeeds.
+  it('fails closed (no predictable fallback tmp path) and still reports the real exit status when mktemp is unavailable', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    const result = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo before; exit 3; echo SHOULD_NOT_PRINT' }
+    })
+    const wrapped = result.hookSpecificOutput.updatedInput.command as string
+    expect(wrapped).not.toContain('/tmp/.20x-cwd-')
+
+    const { mkdtempSync, writeFileSync } = await vi.importActual<typeof import('fs')>('fs')
+    const { tmpdir } = await import('os')
+    const { join } = await import('path')
+    const { execFileSync } = await vi.importActual<typeof import('child_process')>('child_process')
+    const dir = mkdtempSync(join(tmpdir(), 'mktemp-fail-'))
+    // A fake `mktemp` that always fails, shadowing the real one for this
+    // shell only — simulates mktemp being unavailable/broken.
+    const scriptFile = join(dir, 'wrapped.sh')
+    writeFileSync(scriptFile, `mktemp() { return 1; }\n${wrapped}`, 'utf-8')
+    const stdout = execFileSync('bash', ['-c', `source "$1" 2>&1; echo OUTER_EC=$?`, 'bash', scriptFile], { encoding: 'utf-8' })
+    expect(stdout).toContain('before')
+    expect(stdout).not.toContain('SHOULD_NOT_PRINT')
+    expect(stdout).toContain('[20x] command exited with status 3')
+    expect(stdout).toContain('OUTER_EC=0')
+
+    const { readdirSync } = await vi.importActual<typeof import('fs')>('fs')
+    expect(readdirSync('/tmp').some((f) => f.startsWith('.20x-cwd-'))).toBe(false)
+  })
+
+  it('does not wrap the command (no PreToolUse rewrite at all) when the session has nothing to scrub and no broker session', async () => {
+    const options = await sendAndCaptureOptions({})
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    const passthrough = await preToolUse({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'echo hi' } })
+    expect(passthrough).toEqual({})
+  })
+
+  it('registers a PostToolUseFailure hook (best-effort — cannot rewrite output, only warns the model) when there is something to scrub', async () => {
+    const options = await sendAndCaptureOptions({ secretEnvVars: { MY_SECRET: SECRET_VALUE } })
+    const failureHook = options.hooks?.PostToolUseFailure?.[0]?.hooks?.[0]
+    expect(failureHook).toBeDefined()
+    const result = await failureHook({ hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: {}, tool_use_id: 'x', error: 'boom' })
+    expect(result.hookSpecificOutput.hookEventName).toBe('PostToolUseFailure')
+    expect(result.hookSpecificOutput.additionalContext).toContain('secret')
+  })
+
+  it('does not register a PostToolUseFailure hook when there is nothing to scrub', async () => {
+    const options = await sendAndCaptureOptions({})
+    expect(options.hooks?.PostToolUseFailure).toBeUndefined()
+  })
+
+  // Major, found in review (M7): PreToolUse/PostToolUse/PostToolUseFailure
+  // hooks are built ONCE per underlying `claude` process, not re-built on
+  // every prompt (confirmed by reading createSession/sendPrompt above — a
+  // live session reuses the same hooks for every follow-up turn). A
+  // snapshot scrubber captured at hook-build time can never see a secret
+  // discovered afterwards (an MCP OAuth token obtained mid-session, a
+  // secret added via settings). These hooks must consult
+  // `config.getLiveScrubber()` FRESH on every invocation instead.
+  describe('live scrubber getter (secrets discovered mid-session)', () => {
+    it('PostToolUse scrubs a value added to the live scrubber AFTER the hook was built, not just what was known at build time', async () => {
+      const liveScrubber = new SecretScrubber([]) // empty when hooks are built — same as a session with nothing configured yet
+      const options = await sendAndCaptureOptions({ getLiveScrubber: () => liveScrubber })
+      // Nothing to scrub yet — PostToolUse still needs to be registered
+      // (there's a live getter that could start returning something), but
+      // let's confirm it's a no-op for now.
+      const postToolUse = options.hooks?.PostToolUse?.[0]?.hooks?.[0]
+      expect(postToolUse).toBeDefined()
+      const beforeAdd = await postToolUse({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {}, tool_use_id: 'x', tool_response: { stdout: 'a-later-mcp-token-value', stderr: '' } })
+      expect(beforeAdd).toEqual({})
+
+      // Simulates agent-manager.ts's buildSessionConfig calling
+      // `session.scrubber.addEntries(...)` on a later turn — mutating the
+      // SAME object the getter already captured, not replacing it.
+      liveScrubber.addEntries([{ name: 'LATE_MCP_TOKEN', value: 'a-later-mcp-token-value' }])
+
+      const afterAdd = await postToolUse({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {}, tool_use_id: 'y', tool_response: { stdout: 'a-later-mcp-token-value', stderr: '' } })
+      expect(afterAdd.hookSpecificOutput.updatedToolOutput.stdout).toBe('«$LATE_MCP_TOKEN»')
+    })
+
+    it('PreToolUse wraps a failing command once the live scrubber gains something to protect, even though it was empty when hooks were built', async () => {
+      const liveScrubber = new SecretScrubber([])
+      const options = await sendAndCaptureOptions({ getLiveScrubber: () => liveScrubber })
+      const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+      expect(preToolUse).toBeDefined()
+
+      const before = await preToolUse({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'echo hi; false' } })
+      expect(before).toEqual({}) // nothing to scrub yet, command untouched
+
+      liveScrubber.addEntries([{ name: 'LATE_SECRET', value: 'late-secret-value-123456' }])
+
+      const after = await preToolUse({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'echo hi; false' } })
+      expect(after.hookSpecificOutput.updatedInput.command).toMatch(/__20x_ec=\$\?/)
+    })
+
+    it('without a live getter, falls back to the one-time snapshot scrubber for PostToolUse/PostToolUseFailure (unchanged pre-fix behavior for callers that never provide one)', async () => {
+      const options = await sendAndCaptureOptions({}) // no getLiveScrubber, nothing configured
+      expect(options.hooks?.PostToolUse).toBeUndefined()
+      expect(options.hooks?.PostToolUseFailure).toBeUndefined()
+      // PreToolUse is the one exception: buildSecretHooks ALWAYS registers it
+      // now (PR B) so the second-line dump guard applies even to a
+      // secret-free session — see the "still registers the PreToolUse hook
+      // (guard-only)" test below for that behavior specifically.
+      expect(options.hooks?.PreToolUse).toBeDefined()
+    })
+  })
+
+  // buildSecretHooks ALWAYS registers the PreToolUse hook now (PR B) — the
+  // dump guard applies even to a secret-free session — but it should still
+  // be a true no-op passthrough for an ordinary command with nothing to
+  // wrap/rewrite/deny.
+  it('still registers the PreToolUse hook (guard-only) when there is no broker session — a secret-free agent still gets the dump guard', async () => {
+    const options = await sendAndCaptureOptions({})
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    expect(preToolUse).toBeDefined()
+
+    // No broker info, no scrubber entries → no rewrite for an ordinary command.
+    const passthrough = await preToolUse({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'echo hi' } })
+    expect(passthrough).toEqual({})
+
+    // The guard itself still applies even with no secrets configured.
+    const denied = await preToolUse({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'env' } })
+    expect(denied.hookSpecificOutput.permissionDecision).toBe('deny')
+  })
+
+  it('PreToolUse rewrites the command to a loader invocation — no secretEnvVars literal-export path remains', async () => {
+    const options = await sendAndCaptureOptions({
+      secretBrokerPort: 5555,
+      secretTokenFilePath: '/fake/secret-tokens/session-token-abc.token',
+      secretLoaderPath: '/fake/secret-loader.sh'
+    })
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    expect(preToolUse).toBeDefined()
+
+    const result = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' }
+    })
+    const rewritten = result.hookSpecificOutput.updatedInput.command as string
+    // The loader invocation (loader path, port, the broker TOKEN FILE PATH
+    // — never the token value itself) may appear — no literal `export
+    // KEY=` secret-value line.
+    expect(rewritten).toContain('/fake/secret-loader.sh')
+    expect(rewritten).toContain('5555')
+    expect(rewritten).toContain('/fake/secret-tokens/session-token-abc.token')
+    expect(rewritten).not.toMatch(/export\s+\w+=/)
+    expect(rewritten).toContain('echo hi')
+  })
+
+  it('combines the loader invocation AND the exit-0 scrubbable-failure wrapping when both a broker session and scrubbable secrets exist', async () => {
+    const options = await sendAndCaptureOptions({
+      secretEnvVars: { MY_SECRET: SECRET_VALUE },
+      secretBrokerPort: 5555,
+      secretTokenFilePath: '/fake/secret-tokens/session-token-abc.token',
+      secretLoaderPath: '/fake/secret-loader.sh'
+    })
+    const preToolUse = options.hooks?.PreToolUse?.[0]?.hooks?.[0]
+    const result = await preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi; false' }
+    })
+    const rewritten = result.hookSpecificOutput.updatedInput.command as string
+    expect(rewritten).toContain('/fake/secret-loader.sh')
+    expect(rewritten).toContain('echo hi; false')
+    // Ends with "true", not a literal "exit 0" — see
+    // wrapCommandForScrubbableFailure's own docstring: an "exit" here would
+    // terminate the SDK's `eval <cmd> && pwd -P >| <cwdfile>` shell before
+    // the cwd-tracking half ever ran.
+    expect(rewritten).toMatch(/\ntrue\s*$/)
+    expect(rewritten).toMatch(/__20x_ec=\$\?/)
+    expect(rewritten).not.toMatch(/export\s+\w+=/)
+    // The loader invocation must come BEFORE the wrapped block so the
+    // broker-provided env is available to the command it wraps.
+    expect(rewritten.indexOf('/fake/secret-loader.sh')).toBeLessThan(rewritten.indexOf('echo hi; false'))
   })
 })

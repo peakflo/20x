@@ -18,6 +18,7 @@ import type {
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 import type { AdapterUsageLimitsEvent, AdapterUsageReport } from './coding-agent-adapter'
+import { buildGuardFunctionSource } from '../secret-guard'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
@@ -1837,7 +1838,9 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     mkdirSync(openCodeDir, { recursive: true })
 
     // Remove files created by older 20x versions so a retry can recover an
-    // already-stuck workspace. Leave user-owned plugins in the directory.
+    // already-stuck workspace, and so a pre-broker install's plaintext
+    // secrets file (and the plugin that read it) never lingers once this app
+    // version runs. Leave user-owned plugins in the directory.
     const legacyPluginsDir = join(openCodeDir, 'plugins')
     for (const fileName of ['20x-tilldone.js', '20x-secret-injector.js']) {
       const legacyPluginPath = join(legacyPluginsDir, fileName)
@@ -1849,45 +1852,53 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         unlinkSync(generatedPluginPath)
       }
     }
+    const legacySecretsPath = join(openCodeDir, '.20x-secrets')
+    if (existsSync(legacySecretsPath)) {
+      unlinkSync(legacySecretsPath)
+      console.log(`[OpencodeAdapter] Removed legacy plaintext secrets file: ${legacySecretsPath}`)
+    }
 
     if (config.tillDone !== false) {
       mkdirSync(pluginsDir, { recursive: true })
       this.writeTillDonePlugin(openCodeDir, pluginsDir, true)
     }
 
-    if (config.secretEnvVars && Object.keys(config.secretEnvVars).length > 0) {
-      mkdirSync(pluginsDir, { recursive: true })
-    }
-    this.writeSecretPlugin(config, openCodeDir, pluginsDir)
+    mkdirSync(pluginsDir, { recursive: true })
+    this.writeSecretPlugin(config, pluginsDir)
   }
 
-  private writeSecretPlugin(config: SessionConfig, openCodeDir: string, pluginsDir: string): void {
-    const secretCount = config.secretEnvVars ? Object.keys(config.secretEnvVars).length : 0
-    console.log(`[OpencodeAdapter] writeSecretFiles: workspaceDir=${config.workspaceDir}, secretCount=${secretCount}`)
-    if (!config.secretEnvVars || secretCount === 0) {
-      console.log(`[OpencodeAdapter] writeSecretFiles: skipping — no secrets or no workspaceDir`)
-      return
-    }
-
-    // 1. Write pre-formatted export commands to a secrets file.
-    //    The plugin reads this file on every bash invocation so updates take effect immediately.
-    const exportLines = Object.entries(config.secretEnvVars)
-      .map(([k, v]) => 'export ' + k + "='" + v.replace(/'/g, "'\\''" ) + "'")
-      .join('\n')
-
-    const secretsPath = join(openCodeDir, '.20x-secrets')
-    writeFileSync(secretsPath, exportLines, 'utf-8')
-    this.runtimeSupportFilePaths.push(secretsPath)
-
-    // 2. Write the plugin JS that reads the secrets file and prepends exports to bash commands.
-    //    Uses tool.execute.before hook (same pattern as Claude Code PreToolUse).
+  /**
+   * Writes the plugin that gives every Bash tool call access to this agent's
+   * secrets — via the broker, never a literal value — and, independent of
+   * whether any secrets are configured, the second-line-of-defence guard
+   * (secret-guard.ts) against obvious env/secret-dump commands.
+   *
+   * No secrets file is written to the workspace (or anywhere) for this: when
+   * there IS a broker session, the plugin only prepends
+   * `eval "$(<loader> <port> <tokenFilePath>)"` to the command, same
+   * mechanism as Claude Code's PreToolUse hook (claude-code-adapter.ts) —
+   * a FILE PATH, never the token value itself (P1, re-review: baking the
+   * token as a literal into this generated plugin file, which lives
+   * INSIDE the workspace, put it somewhere a `git add .` or any other
+   * filesystem access to the repo could find it). The loader fetches and
+   * exports inside that one command's own subshell — the literal values
+   * never pass through `output.args.command`, so they never get persisted
+   * back into OpenCode's own `state.input`/transcript either.
+   */
+  private writeSecretPlugin(config: SessionConfig, pluginsDir: string): void {
+    const { secretBrokerPort, secretTokenFilePath, secretLoaderPath, secretsForScrubbing } = config
     const pluginPath = join(pluginsDir, '20x-secret-injector.js')
-    const pluginCode = this.buildSecretInjectorPluginCode(secretsPath)
+    const pluginCode = this.buildSecretInjectorPluginCode(
+      secretLoaderPath,
+      secretBrokerPort,
+      secretTokenFilePath,
+      Object.keys(secretsForScrubbing || {})
+    )
 
     writeFileSync(pluginPath, pluginCode, 'utf-8')
     this.pluginFilePaths.push(pluginPath)
 
-    console.log(`[OpencodeAdapter] Wrote secret files: plugin=${pluginPath}, secrets=${secretsPath} (${Object.keys(config.secretEnvVars).length} secret(s))`)
+    console.log(`[OpencodeAdapter] Wrote secret-injector plugin: ${pluginPath}`)
   }
 
   private writeTillDonePlugin(openCodeDir: string, pluginsDir: string, enabled: boolean): void {
@@ -1973,22 +1984,46 @@ export class OpencodeAdapter implements CodingAgentAdapter {
     this.writeTillDoneConfig({ ...config, sessions })
   }
 
-  private buildSecretInjectorPluginCode(secretsPath: string): string {
+  private buildSecretInjectorPluginCode(
+    loaderPath: string | undefined,
+    port: number | undefined,
+    tokenFilePath: string | undefined,
+    knownSecretVarNames: string[] = []
+  ): string {
+    // Only the loader path, port, and the broker TOKEN FILE PATH are
+    // embedded as literals below — never a secret value, and (P1,
+    // re-review) never the token itself either: this file is written
+    // INSIDE the workspace, so a literal token here would sit somewhere a
+    // `git add .` or any other filesystem access to the repo could find
+    // it. The loader invocation is what ends up in output.args.command;
+    // the broker's export lines are applied inside that command's own
+    // subshell by `eval`, never passed through this plugin or persisted
+    // into OpenCode's state.
+    const hasLoader = !!(loaderPath && port && tokenFilePath)
     return [
       '// Auto-generated by 20x — do not edit. Removed on session destroy.',
-      'import { readFileSync } from "fs";',
       '',
-      'var SECRETS_PATH = ' + JSON.stringify(secretsPath) + ';',
+      'var LOADER = ' + JSON.stringify(loaderPath || '') + ';',
+      'var PORT = ' + JSON.stringify(port ? String(port) : '') + ';',
+      'var TOKEN_FILE = ' + JSON.stringify(tokenFilePath || '') + ';',
+      'var HAS_LOADER = ' + JSON.stringify(hasLoader) + ';',
+      'var SECRET_VAR_NAMES = ' + JSON.stringify(knownSecretVarNames) + ';',
+      '',
+      'function shQuote(s) { return "\'" + String(s).replace(/\'/g, "\'\\\\\'\'") + "\'"; }',
+      '',
+      // Second line of defence — same rule table as claude-code-adapter.ts's
+      // PreToolUse hook (secret-guard.ts), kept in sync via secret-guard.test.ts.
+      buildGuardFunctionSource(),
       '',
       'export var SecretInjector = async function() {',
       '  return {',
       '    "tool.execute.before": async function(input, output) {',
-      '      if (input.tool === "bash") {',
-      '        try {',
-      '          var exports = readFileSync(SECRETS_PATH, "utf-8").trim();',
-      '          if (exports) output.args.command = exports + "\\n" + output.args.command;',
-      '        } catch(e) {}',
-      '      }',
+      '      if (input.tool !== "bash") return;',
+      '      var guard = checkSecretDumpGuard(output.args.command, SECRET_VAR_NAMES, LOADER, TOKEN_FILE);',
+      '      if (guard.blocked) throw new Error(guard.reason);',
+      '      if (!HAS_LOADER) return;',
+      '      var loaderCall = "eval \\"$(" + shQuote(LOADER) + " " + PORT + " " + shQuote(TOKEN_FILE) + ")\\"";',
+      '      output.args.command = loaderCall + "\\n" + output.args.command;',
       '    }',
       '  };',
       '};',

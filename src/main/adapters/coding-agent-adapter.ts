@@ -8,6 +8,7 @@ import type { SpeedMode } from '../../shared/ultrafast'
 import type { ProviderUsageLimits, ProviderUsageLimitsUpdate, UsageProvider } from '../../shared/usage'
 import type { UsageBucket } from '../usage/usage-normalize'
 import type { DiscreteUsageItem } from '../usage/usage-store'
+import type { SecretScrubber } from '../secret-scrubber'
 
 export enum SessionStatusType {
   IDLE = 'idle',
@@ -71,17 +72,80 @@ export interface SessionConfig {
     anthropic?: string
     cursor?: string
   }
-  /** Port of the local secret broker HTTP server */
+  /** Port of the local secret broker HTTP server. */
   secretBrokerPort?: number
-  /** Per-session token for authenticating with the secret broker */
+  /**
+   * Per-session token for authenticating with the secret broker. Not a user
+   * secret — an ephemeral, loopback-only, revoked-on-session-end capability
+   * token. Kept here for cleanup (`unregisterSecretSession`) and guard
+   * checks — NOT for building the loader invocation. P1, re-review: putting
+   * even this non-secret capability token directly in a command's loader
+   * line meant it sat in the rewritten command TEXT (visible in the
+   * transcript via `updatedInput`/OpenCode's persisted `args.command`) and
+   * in the loader subprocess's own argv (`ps -ef`/`ps eww`, or reading
+   * /proc/PID/cmdline directly).
+   * `secretTokenFilePath` below is what the invocation is actually built
+   * from now — a 0600 file path, never the token value itself.
+   */
   secretSessionToken?: string
-  /** Absolute path to the secret-shell.sh wrapper script */
-  secretShellPath?: string
-  /** Decrypted secret env vars to inject directly into the agent process env.
-   *  Used when the agent runtime doesn't respect $SHELL (e.g. Claude Code). */
+  /** Absolute path to the shared secret-loader script (secret-broker.ts's `writeSecretLoaderScript()`). */
+  secretLoaderPath?: string
+  /**
+   * Absolute path to a 0600 file (outside the workspace) holding this
+   * session's broker token — what the loader invocation actually embeds in
+   * the command text and passes as an argv entry, instead of the token
+   * value itself (see `secretSessionToken`'s docstring for why). The loader
+   * script reads the token FROM this file and forwards it to the broker
+   * via `curl -H @-` (stdin), so the token never appears in the loader's OR
+   * curl's own argv either.
+   */
+  secretTokenFilePath?: string
+  /**
+   * Decrypted secret env vars. Only read by harnesses with no command-scoped
+   * exec hook to route through the broker instead (Codex, ACP, Pi — see each
+   * adapter's buildEnv/processEnv). Claude Code and OpenCode get secrets
+   * exclusively through the broker+loader (secretBrokerPort/secretSessionToken/
+   * secretLoaderPath above) and never read this field.
+   */
   secretEnvVars?: Record<string, string>
+  /**
+   * Every secret this agent is configured with, independent of how they
+   * reach the harness. Used ONLY to build this session's SecretScrubber
+   * (secret-entries.ts) — a value delivered through the broker+loader still
+   * needs scrubbing from command output (`echo $VAR`, a verbose curl, a
+   * script that logs its own config) exactly like one delivered via
+   * secretEnvVars. No adapter should read this for injection; that would
+   * reintroduce the plaintext-in-env problem this field is deliberately
+   * kept separate from.
+   */
+  secretsForScrubbing?: Record<string, string>
+  /**
+   * Explicit per-agent acknowledgement that this harness places secrets in
+   * its own full process environment (Codex/ACP/Pi — no command-scoped hook
+   * exists to route them through the broker instead). **Off by default**
+   * (re-reviewed: was "defaults to true") — a harness with no command-scoped
+   * delivery hands a configured secret to every tool and subprocess it
+   * spawns, with nothing to scrub what happens to it there, so an agent
+   * must explicitly set this to true to receive its secrets through this
+   * path. Ignored by Claude Code/OpenCode, which never need it.
+   */
+  allowSecretsInEnv?: boolean
   /** Whether the OpenCode tillDone runtime plugin should enforce todo completion for this session. */
   tillDone?: boolean
+  /** Agent's `pass_shell_credentials` opt-in — see `AgentConfigRecord` for the full explanation. Off (undefined/false) is the default, safer posture. */
+  allowShellCredentials?: boolean
+  /**
+   * Returns the LIVE agent-manager session scrubber — the same object
+   * `agent-manager.ts`'s `AgentSession.scrubber` keeps extending via
+   * `addEntries()` as the session runs (an MCP token obtained after the
+   * underlying process started, a secret added mid-session, a rotated
+   * OAuth token). A harness whose hooks are built once per underlying
+   * process (not re-built on every prompt) must call this INSIDE each hook
+   * invocation, not close over a one-time scrubber snapshot taken from this
+   * `SessionConfig` object at process-start time — that snapshot can never
+   * see anything learned after the process started.
+   */
+  getLiveScrubber?: () => SecretScrubber | undefined
 }
 
 /**
