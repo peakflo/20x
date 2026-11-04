@@ -5,6 +5,7 @@ import { filterSubtasks, SUBTASK_FILTERS, type SubtaskFilter } from '@shared/sub
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 import { harnessInstanceDisplayName, type HarnessInstanceView } from '@shared/harness-instances'
 import { CollapsibleDescription } from '../components/CollapsibleDescription'
+import { ChildQuestionsNotice } from '../components/ChildQuestionsNotice'
 import { useTaskStore, type Task, type TaskAttachment } from '../stores/task-store'
 import { ScadAttachmentEditor } from '@/components/artifacts/viewers/ScadAttachmentEditor'
 import { useAgentStore, SessionStatus } from '../stores/agent-store'
@@ -451,6 +452,9 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         {parentTask && (
           <ParentTaskContextMobile parentTask={parentTask} onNavigate={onNavigate} />
         )}
+
+        {/* Children's questions routed to this task, and this task's own question to its parent, if any. */}
+        <ChildQuestionsNotice taskId={task.id} />
 
         {/* Priority and type stay in the details; status stays in the pinned header. */}
         <div className="flex items-center gap-2.5 px-4 py-3 border-b border-border flex-wrap">
