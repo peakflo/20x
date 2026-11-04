@@ -28,6 +28,9 @@ export const KNOWN_PROVIDER_CREDENTIAL_ENV_VARS = [
   'CODEX_API_KEY',
   'OPENCODE_API_KEY',
   'CURSOR_AUTH_TOKEN',
+  // Cursor SDK's documented API-key var; also caught by the *_API_KEY suffix
+  // pattern, listed so the scrubber (secret-entries.ts) registers an ambient value too.
+  'CURSOR_API_KEY',
   'PEAKFLO_AI_GATEWAY_API_KEY',
   'GEMINI_API_KEY',
   'GOOGLE_API_KEY',

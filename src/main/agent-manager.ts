@@ -2222,7 +2222,11 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    const secretIds = agent.config?.secret_ids
+    // Via secretIdsForAgent, not agent.config.secret_ids directly: the native
+    // Cursor SDK adapter must never see secret values (only its own
+    // credential), even for an agent with legacy secret_ids still stored or
+    // allow_secrets_in_env set.
+    const secretIds = secretIdsForAgent(agent)
     if (!secretIds || secretIds.length === 0) return
     const secretRecords = this.db.getSecretsByIds(secretIds)
     if (secretRecords.length === 0) return
@@ -2773,7 +2777,11 @@ export class AgentManager extends EventEmitter {
       sandboxMode: agent.config?.sandbox_mode,
       apiKeys: agent.config?.api_keys,
       tillDone: this.shouldEnableTillDone(taskId, task),
-      allowShellCredentials: agent.config?.pass_shell_credentials
+      allowShellCredentials: agent.config?.pass_shell_credentials,
+      // The scrubber created above for this not-yet-stored session — lets an
+      // adapter that resolves its own credential at create/resume time (the
+      // Cursor SDK's stored browser-login key) register it for scrubbing.
+      getLiveScrubber: () => scrubber
     }
 
     // Setup secret delivery if agent has secrets
@@ -4141,7 +4149,11 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       sandboxMode: agent.config?.sandbox_mode,
       apiKeys: agent.config?.api_keys,
       tillDone: this.shouldEnableTillDone(taskId, task),
-      allowShellCredentials: agent.config?.pass_shell_credentials
+      allowShellCredentials: agent.config?.pass_shell_credentials,
+      // The scrubber created above for this not-yet-stored session — lets an
+      // adapter that resolves its own credential at create/resume time (the
+      // Cursor SDK's stored browser-login key) register it for scrubbing.
+      getLiveScrubber: () => scrubber
     }
 
     // Setup secret delivery if agent has secrets

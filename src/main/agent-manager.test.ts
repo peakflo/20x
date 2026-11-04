@@ -6186,12 +6186,16 @@ describe('AgentManager sendToRenderer — secret scrubbing choke point', () => {
       }
     })
 
-    // Desktop renderer never sees the value.
-    expect(JSON.stringify(sent[0].data)).not.toContain(SECRET_VALUE)
-    expect(JSON.stringify(sent[0].data)).toContain('«$MY_SECRET»')
+    // Desktop renderer never sees the value — and, since the renderer now
+    // renders only the persisted `transcript:changed` projection (raw
+    // agent:output* is no longer sent to it at all), nothing sent to the
+    // window carries it either.
+    expect(sent.some((m) => m.channel === 'agent:output')).toBe(false)
+    expect(JSON.stringify(sent)).not.toContain(SECRET_VALUE)
 
-    // Mobile broadcast never sees the value either.
+    // Mobile broadcast never sees the value either, and does carry the placeholder.
     expect(JSON.stringify(broadcast[0].data)).not.toContain(SECRET_VALUE)
+    expect(JSON.stringify(broadcast[0].data)).toContain('«$MY_SECRET»')
 
     // Nor does what gets persisted to transcript_parts.
     const persistedParts = db.upsertTranscriptParts.mock.calls[0][1] as Array<{ content?: string; tool?: unknown }>
@@ -6204,8 +6208,8 @@ describe('AgentManager sendToRenderer — secret scrubbing choke point', () => {
     const mgr = new AgentManager(db) as any
     const noopScrubber = new SecretScrubber([])
     mgr.sessions.set('session-1', { agentId: 'agent-1', taskId: 'task-1', scrubber: noopScrubber })
-    const sent: Array<{ channel: string; data: unknown }> = []
-    mgr.mainWindow = { isDestroyed: () => false, webContents: { send: (channel: string, data: unknown) => sent.push({ channel, data }) } }
+    const broadcast: Array<{ channel: string; data: unknown }> = []
+    mgr.externalListeners.push((channel: string, data: unknown) => broadcast.push({ channel, data }))
 
     mgr.sendToRenderer('agent:output', {
       sessionId: 'session-1',
@@ -6213,11 +6217,11 @@ describe('AgentManager sendToRenderer — secret scrubbing choke point', () => {
       data: { id: 'part-1', role: 'assistant', partType: 'text', content: 'ordinary output, nothing secret' }
     })
 
-    expect((sent[0].data as { data: { content: string } }).data.content).toBe('ordinary output, nothing secret')
+    expect((broadcast[0].data as { data: { content: string } }).data.content).toBe('ordinary output, nothing secret')
   })
 
   it('falls back to a taskId scan when sessionId is missing from the payload', () => {
-    const { mgr, sent } = setupScrubbingManager()
+    const { mgr, broadcast, db } = setupScrubbingManager()
 
     mgr.sendToRenderer('agent:output', {
       // no sessionId — only taskId
@@ -6225,7 +6229,8 @@ describe('AgentManager sendToRenderer — secret scrubbing choke point', () => {
       data: { id: 'part-1', role: 'assistant', partType: 'text', content: `leaked: ${SECRET_VALUE}` }
     })
 
-    expect(JSON.stringify(sent[0].data)).not.toContain(SECRET_VALUE)
+    expect(JSON.stringify(broadcast[0].data)).not.toContain(SECRET_VALUE)
+    expect(JSON.stringify(db.upsertTranscriptParts.mock.calls[0][1])).not.toContain(SECRET_VALUE)
   })
 })
 
@@ -6265,6 +6270,28 @@ describe('populateSecretDelivery — allow_secrets_in_env defaults to OFF', () =
 
     expect(config.secretEnvVars).toEqual({ MY_SECRET: 'leaked-secret-value-123456' })
     expect(config.allowSecretsInEnv).toBe(true)
+  })
+
+  // Native Cursor SDK adapter: runs in-process with no env/shell hook to
+  // receive secrets through, so it must get none — not via env, not via the
+  // broker, not via scrubbing-only delivery — even with legacy secret_ids
+  // stored on the agent and even with allow_secrets_in_env opted in.
+  it.each([
+    ['no opt-in', undefined],
+    ['allow_secrets_in_env: true', true]
+  ])('gives a Cursor agent NO secret delivery at all, even with secret_ids stored (%s)', (_label, optIn) => {
+    const mgr = makeManagerForProvider()
+    const agent = { id: 'agent-1', name: 'Agent', config: { coding_agent: 'cursor', secret_ids: ['secret-1'], allow_secrets_in_env: optIn } }
+    const config: Record<string, unknown> = { systemPrompt: '' }
+
+    ;(mgr as any).populateSecretDelivery(config, agent, 'some-broker-token')
+
+    expect(config.secretEnvVars).toBeUndefined()
+    expect(config.secretsForScrubbing).toBeUndefined()
+    expect(config.secretBrokerPort).toBeUndefined()
+    expect(config.secretTokenFilePath).toBeUndefined()
+    expect(config.systemPrompt).toBe('')
+    expect(JSON.stringify(config)).not.toContain('leaked-secret-value-123456')
   })
 
   it('still withholds when allow_secrets_in_env is explicitly false (unchanged — not a behavior regression for users who already set it)', () => {
