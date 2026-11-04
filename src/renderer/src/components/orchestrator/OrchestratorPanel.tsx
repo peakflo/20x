@@ -1,16 +1,46 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Bot, X } from 'lucide-react'
+import { Bot, X, BrainCircuit, Eraser } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { AgentHoverCard } from '@/components/usage/AgentHoverCard'
 import { ProviderLogo } from '@/components/usage/ProviderLogo'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useAgentSession } from '@/hooks/use-agent-session'
-import { agentApi, settingsApi } from '@/lib/ipc-client'
+import { agentApi, agentSessionApi, settingsApi, memoryApi, onMastermindMemoryContext, onMastermindMemorySaved } from '@/lib/ipc-client'
 import { isUsageProvider } from '@shared/usage'
-import type { Agent } from '@/types'
+import { MASTERMIND_SAVE_WHAT_I_LEARNED_SETTING, MASTERMIND_SAVE_WHAT_I_LEARNED_PROMPT } from '@shared/mastermind-memory'
+import type { Agent, MastermindMemory } from '@/types'
 
 const MASTERMIND_SESSION_ID = 'mastermind-session'
+
+/** How long the "saved a memory" toast stays up before it auto-dismisses. */
+const MEMORY_SAVED_TOAST_MS = 6000
+
+interface MemorySavedToastState {
+  memory: MastermindMemory
+  deduped: boolean
+  updated: boolean
+  previous?: MastermindMemory
+}
+
+/**
+ * Who actually wrote a memory, for the save toast — `source` is always
+ * derived server-side now (task-api-server.ts), so it's a real identity:
+ * `agent:<id>` (Mastermind's own session, or any other trusted agent with
+ * no task), `agent:<id>/task:<id>` (a trusted task agent), `user-stated`
+ * (Settings UI) or `imported`. The toast used to just say "Mastermind
+ * saved…" regardless of which of those actually wrote it.
+ */
+function describeMemorySource(source: string, agents: Agent[]): string {
+  if (source === 'user-stated') return 'You'
+  if (source === 'imported') return 'An import'
+  const match = /^agent:([^/]+)/.exec(source)
+  if (match) {
+    const agent = agents.find((a) => a.id === match[1])
+    return agent?.name ?? 'An agent'
+  }
+  return 'Mastermind'
+}
 
 /** Start the agent at app start, so the first sentence does not wait for it. */
 export const MASTERMIND_PREWARM_SETTING = 'mastermind_prewarm'
@@ -30,6 +60,17 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
   const selectedAgentIdRef = useRef<string | null>(null)
   selectedAgentIdRef.current = selectedAgentId
   const [prewarm, setPrewarm] = useState(false)
+  // "Remembering N things" indicator — set once per session when the
+  // "what you remember" block is injected into the first prompt (see
+  // AgentManager.buildMastermindMemoryInjection).
+  const [rememberingCount, setRememberingCount] = useState<number | null>(null)
+  // A burst of saves (e.g. "Save what I learned" proposing several memories
+  // in a row) accumulates here instead of each new one replacing the last —
+  // otherwise only the final save in a burst stayed undoable.
+  const [savedToasts, setSavedToasts] = useState<MemorySavedToastState[]>([])
+  const savedToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** True once "Save what I learned" has been asked for this conversation and a second click actually clears. */
+  const [pendingClearAfterLearn, setPendingClearAfterLearn] = useState(false)
 
   // Read the preference before warming anything: a user who switched this off
   // must not get an agent process on every launch.
@@ -47,6 +88,111 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       cancelled = true
     }
   }, [])
+
+  // "Remembering N things" — fired once per session, right as the first
+  // prompt goes out (fresh start or native resume).
+  useEffect(() => {
+    return onMastermindMemoryContext(({ count }) => setRememberingCount(count))
+  }, [])
+
+  // "Saved a memory" toast, with Undo. Dedup/update also reaches this path
+  // (see buildMastermindMemoryInjection's sibling route handlers in
+  // task-api-server.ts /remember) — `previous` is only set then, and Undo
+  // uses it to put the exact prior content back instead of just deleting.
+  // A burst of saves (e.g. "Save what I learned" proposing several at once)
+  // accumulates into the same toast instead of each one replacing the
+  // last — the whole burst stays undoable, not just whichever came last.
+  useEffect(() => {
+    return onMastermindMemorySaved((event) => {
+      setSavedToasts((prev) => [...prev, event])
+      if (savedToastTimerRef.current) clearTimeout(savedToastTimerRef.current)
+      savedToastTimerRef.current = setTimeout(() => setSavedToasts([]), MEMORY_SAVED_TOAST_MS)
+    })
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      if (savedToastTimerRef.current) clearTimeout(savedToastTimerRef.current)
+    }
+  }, [])
+
+  /** Reverts one save: restores the exact previous content (and its own source) on an update, or deletes a new memory. */
+  const undoOneMemorySave = useCallback(async (toast: MemorySavedToastState) => {
+    if (toast.previous) {
+      await memoryApi.update(toast.memory.id, {
+        content: toast.previous.content,
+        kind: toast.previous.kind,
+        scope: toast.previous.scope,
+        importance: toast.previous.importance,
+        pinned: toast.previous.pinned,
+        source: toast.previous.source
+      })
+    } else {
+      await memoryApi.delete(toast.memory.id)
+    }
+  }, [])
+
+  const handleUndoMemorySave = useCallback(async () => {
+    if (savedToasts.length !== 1) return
+    await undoOneMemorySave(savedToasts[0])
+    if (savedToastTimerRef.current) clearTimeout(savedToastTimerRef.current)
+    setSavedToasts([])
+  }, [savedToasts, undoOneMemorySave])
+
+  /** Undoes every save in the current burst, most recent first. */
+  const handleUndoAllMemorySaves = useCallback(async () => {
+    const toUndo = [...savedToasts].reverse()
+    if (savedToastTimerRef.current) clearTimeout(savedToastTimerRef.current)
+    setSavedToasts([])
+    for (const toast of toUndo) {
+      await undoOneMemorySave(toast)
+    }
+  }, [savedToasts, undoOneMemorySave])
+
+  const handleDismissMemorySaveToast = useCallback(() => {
+    if (savedToastTimerRef.current) clearTimeout(savedToastTimerRef.current)
+    setSavedToasts([])
+  }, [])
+
+  /**
+   * "Clear conversation", with the optional "Save what I learned" offer
+   * (off by default — see Settings → Memory). When the setting is on and
+   * there is a live conversation, the first click only asks Mastermind to
+   * propose memories (each proposal still goes through the normal save
+   * toast + Undo above) — it does not clear yet, so nothing is lost while
+   * the agent is still replying, and so it doesn't need its own
+   * confirmation. The button becomes "Clear conversation now" until the
+   * second click, which — like the direct-clear path below — actually
+   * discards the conversation and is confirmed first.
+   *
+   * Clearing goes through agentSessionApi.clearMastermind(), not the plain
+   * stop() used elsewhere: stop() only destroys the live backend session —
+   * it never clears the persisted resume anchor (mastermind:harness-session-id),
+   * so the *next* start would otherwise still try to resume this same
+   * conversation. clearMastermind() is what actually drops that anchor.
+   */
+  const handleClearConversation = useCallback(async () => {
+    if (pendingClearAfterLearn) {
+      if (!confirm('Clear this conversation now? Mastermind starts fresh next time — this cannot be undone.')) return
+      await agentSessionApi.clearMastermind()
+      removeSession(MASTERMIND_SESSION_ID)
+      setRememberingCount(null)
+      setPendingClearAfterLearn(false)
+      return
+    }
+
+    const offerLearn = (await settingsApi.get(MASTERMIND_SAVE_WHAT_I_LEARNED_SETTING)) === 'true'
+    if (offerLearn && currentSession?.sessionId) {
+      await sendMessage(MASTERMIND_SAVE_WHAT_I_LEARNED_PROMPT)
+      setPendingClearAfterLearn(true)
+      return
+    }
+
+    if (!confirm('Clear this conversation? Mastermind starts fresh next time — this cannot be undone.')) return
+    await agentSessionApi.clearMastermind()
+    removeSession(MASTERMIND_SESSION_ID)
+    setRememberingCount(null)
+  }, [pendingClearAfterLearn, currentSession?.sessionId, sendMessage, removeSession])
 
   // Load agents on mount
   useEffect(() => {
@@ -79,6 +225,8 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       startingRef.current = (async () => {
         // Clean up any old session data first
         removeSession(MASTERMIND_SESSION_ID)
+        setRememberingCount(null)
+        setPendingClearAfterLearn(false)
         // skipInitialPrompt keeps the agent quiet until the user speaks.
         await start(agentId, MASTERMIND_SESSION_ID, undefined, true)
         // Small delay to ensure session is fully initialized
@@ -161,23 +309,98 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       </span>
     </AgentHoverCard>
   )
+  // "Remembering N things" — only shown once this session has actually
+  // injected a non-empty memory block (see onMastermindMemoryContext above).
+  const memoryBadge = rememberingCount !== null && rememberingCount > 0 ? (
+    <span
+      className="inline-flex h-[24px] items-center gap-1 rounded-full border border-border/50 bg-card px-2 text-[11px] text-muted-foreground"
+      title="Memories injected into this session's first prompt"
+    >
+      <BrainCircuit className="h-3 w-3" />
+      Remembering {rememberingCount} thing{rememberingCount === 1 ? '' : 's'}
+    </span>
+  ) : null
+  const headerLeading = (
+    <div className="flex items-center gap-1.5">
+      {agentBadge}
+      {memoryBadge}
+    </div>
+  )
+  const clearButton = currentSession?.sessionId ? (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={handleClearConversation}
+      aria-label={pendingClearAfterLearn ? 'Clear conversation now' : 'Clear conversation'}
+      title={pendingClearAfterLearn ? 'Clear conversation now' : 'Clear conversation'}
+    >
+      <Eraser className="h-4 w-4" />
+    </Button>
+  ) : null
   const closeButton = (
     <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close Mastermind den">
       <X className="h-4 w-4" />
     </Button>
+  )
+  const headerTrailing = (
+    <div className="flex items-center gap-0.5">
+      {clearButton}
+      {closeButton}
+    </div>
   )
 
   return (
     // Floats as a card, like the workspace and the sidebar: same radius,
     // hairline, fill and shadow. It was the one panel still sitting flush and
     // square against the work.
-    <div className="native-backdrop-panel flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-card">
+    <div className="native-backdrop-panel relative flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-card">
+      {/* "<source> saved a memory" toast, with Undo — groups into a single
+          "Undo all" once a burst (e.g. "Save what I learned") lands more
+          than one at a time. */}
+      {savedToasts.length === 1 && (
+        <div className="absolute bottom-3 left-3 right-3 z-10 flex items-center justify-between gap-3 rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-lg">
+          <span className="truncate text-popover-foreground">
+            <BrainCircuit className="mr-1.5 inline h-3.5 w-3.5 text-muted-foreground" />
+            {describeMemorySource(savedToasts[0].memory.source, agents)}{' '}
+            {savedToasts[0].updated
+              ? 'updated a memory: '
+              : savedToasts[0].deduped
+                ? 'merged a near-identical memory: '
+                : 'saved a memory: '}
+            <span className="text-muted-foreground">{savedToasts[0].memory.content}</span>
+          </span>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={handleUndoMemorySave} className="h-6 px-2 text-xs">
+              Undo
+            </Button>
+            <Button variant="ghost" size="icon" onClick={handleDismissMemorySaveToast} aria-label="Dismiss" className="h-6 w-6">
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      )}
+      {savedToasts.length > 1 && (
+        <div className="absolute bottom-3 left-3 right-3 z-10 flex items-center justify-between gap-3 rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-lg">
+          <span className="truncate text-popover-foreground">
+            <BrainCircuit className="mr-1.5 inline h-3.5 w-3.5 text-muted-foreground" />
+            Saved {savedToasts.length} memories
+          </span>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button variant="ghost" size="sm" onClick={handleUndoAllMemorySaves} className="h-6 px-2 text-xs">
+              Undo all
+            </Button>
+            <Button variant="ghost" size="icon" onClick={handleDismissMemorySaveToast} aria-label="Dismiss" className="h-6 w-6">
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+        </div>
+      )}
       {/* Chat interface */}
       {selectedAgentId && (
         <AgentTranscriptPanel
           title="Mastermind den"
-          headerLeading={agentBadge}
-          headerTrailing={closeButton}
+          headerLeading={headerLeading}
+          headerTrailing={headerTrailing}
           messages={currentSession?.messages || []}
           status={currentSession?.status || SessionStatus.IDLE}
           systemStatus={currentSession?.systemStatus}
@@ -194,7 +417,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="glass-bar glass-task-detail-bar flex h-[36px] shrink-0 items-center justify-between gap-2 px-3">
             <span className="text-sm font-medium">Mastermind den</span>
-            <div className="flex items-center gap-2">{agentBadge}{closeButton}</div>
+            <div className="flex items-center gap-2">{headerLeading}{headerTrailing}</div>
           </div>
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
             No agent selected
