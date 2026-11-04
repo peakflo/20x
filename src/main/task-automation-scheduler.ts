@@ -189,8 +189,11 @@ export class TaskAutomationScheduler {
       }
     }
 
+    if (candidateIds.length === 0) return []
+    // One statement for every candidate, not one per task.
+    const startAttempts = this.dbManager.getAutomationRetryCounts('start')
     return candidateIds
-      .filter((id) => this.dbManager.getAutomationRetryCount(id, 'start') < this.MAX_START_ATTEMPTS)
+      .filter((id) => (startAttempts.get(id) ?? 0) < this.MAX_START_ATTEMPTS)
       .map((id) => this.dbManager.getTask(id))
       .filter((task): task is TaskRecord => !!task && !isWorkfloLinkedTask(this.dbManager, task))
   }
@@ -280,8 +283,10 @@ export class TaskAutomationScheduler {
       ORDER BY updated_at ASC
     `).all(TaskStatus.ReadyForReview) as Array<Pick<TaskRecord, 'id' | 'external_id' | 'source_id'>>
 
+    if (rows.length === 0) return
+    const completeAttempts = this.dbManager.getAutomationRetryCounts('complete')
     const candidates = rows.filter(
-      (row) => this.dbManager.getAutomationRetryCount(row.id, 'complete') < this.MAX_COMPLETE_ATTEMPTS
+      (row) => (completeAttempts.get(row.id) ?? 0) < this.MAX_COMPLETE_ATTEMPTS
     )
     if (candidates.length === 0) return
 

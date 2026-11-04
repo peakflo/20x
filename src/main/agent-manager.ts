@@ -5022,7 +5022,15 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // when 20x owns the task. A source-linked task still goes to review: the
     // source system must confirm completion first (see #521), and
     // completeTaskWithoutReview refuses it anyway.
-    if (task.auto_complete_without_review && !task.source_id) {
+    //
+    // How the run actually ended is decided first: auto-complete only applies
+    // to a genuine completion. A run that stopped early, errored, or is
+    // waiting on an answer must not be auto-completed — it falls through to
+    // the honest end-reason handling below.
+    // (run-finalization.ts classifies; see classifyIdleEnd.)
+    const endReason = classifyIdleEnd({ lastPartRole: session.lastPartRole, lastPartType: session.lastPartType })
+    const closedRun = this.db.closeTaskRun(sessionId, Date.now(), endReason)
+    if (endReason === 'completed' && task.auto_complete_without_review && !task.source_id) {
       console.log(`[AgentManager] Task ${session.taskId} completes without review`)
       const completed = await this.completeTaskWithoutReview(session.taskId, task)
       if (completed) this.autoEnableHeartbeat(session)
@@ -5042,9 +5050,6 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // (e.g. idle right after a tool call) is "stopped_early" and needs
     // attention instead of looking identical to a finished run. See
     // run-finalization.ts.
-    const endReason = classifyIdleEnd({ lastPartRole: session.lastPartRole, lastPartType: session.lastPartType })
-    const closedRun = this.db.closeTaskRun(sessionId, Date.now(), endReason)
-
     // Update task status (only if task exists)
     if (task) {
       const nextStatus = statusForEndReason(endReason)

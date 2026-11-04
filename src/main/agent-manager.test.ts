@@ -1845,6 +1845,27 @@ describe('AgentManager transitionToIdle — completing without review', () => {
     })
   })
 
+  it('does not auto-complete a run that stopped early — auto-complete needs a genuine completion', async () => {
+    const mockDb = makeDb({ auto_complete_without_review: true })
+    const mgr = new AgentManager(mockDb)
+    vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+    vi.spyOn(mgr as any, 'extractOutputValues').mockResolvedValue(undefined)
+    const completeSpy = vi.spyOn(mgr, 'completeTaskWithoutReview')
+    const session = {
+      id: 'session-1', agentId: 'agent-1', taskId: 'task-1', status: 'working', createdAt: new Date(),
+      seenMessageIds: new Set<string>(), seenPartIds: new Set<string>(), partContentLengths: new Map<string, string>(),
+      // Idle with no final answer.
+      lastPartRole: undefined as string | undefined, lastPartType: undefined as string | undefined,
+    }
+    ;(mgr as any).sessions.set('session-1', session)
+
+    await (mgr as any).transitionToIdle('session-1', session)
+
+    expect(completeSpy).not.toHaveBeenCalled()
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ModelError })
+  })
+
   it('a turn ending on a question is awaiting_input — status untouched, no completion wake-up to the parent', async () => {
     const mockDb = makeDb({ parent_task_id: 'parent-1' })
     const mgr = new AgentManager(mockDb)

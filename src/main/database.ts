@@ -3497,6 +3497,15 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     return row?.attempts ?? 0
   }
 
+  /** Every task's retry count for one kind, in a single statement — the scheduler checks every candidate each pass, so per-task lookups would cost one statement per task. */
+  getAutomationRetryCounts(kind: string): Map<string, number> {
+    const counts = new Map<string, number>()
+    if (!this.ensureDbOpen()) return counts
+    const rows = this.db.prepare(`SELECT task_id, attempts FROM automation_retry_counts WHERE kind = ?`).all(kind) as Array<{ task_id: string; attempts: number }>
+    for (const row of rows) counts.set(row.task_id, row.attempts)
+    return counts
+  }
+
   bumpAutomationRetryCount(taskId: string, kind: string, nowMs: number): number {
     if (!this.ensureDbOpen()) return 0
     this.db.prepare(`
