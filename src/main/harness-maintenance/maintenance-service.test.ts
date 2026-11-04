@@ -126,14 +126,15 @@ describe('computeHarnessStatus', () => {
     expect(fetchImpl).toHaveBeenCalled()
   })
 
-  it('treats Cursor as bundled/manual-only (no network, no update)', async () => {
+  it('treats Cursor as bundled with 20x, even without the CLI installed (no network, no update)', async () => {
     resolveBinaryPathMock.mockResolvedValue('/usr/local/bin/cursor-agent')
     const fetchImpl = fakeFetch('9.9.9')
-    const status = await computeHarnessStatus('cursor', { installed: true, version: '1.0.0' }, {
+    const status = await computeHarnessStatus('cursor', { installed: false, version: null }, {
       checksEnabled: true,
       cache: new (await import('./npm-registry')).NpmLatestVersionCache(),
       fetchImpl
     })
+    expect(status.installed).toBe(true)
     expect(status.installer).toBe('bundled')
     expect(status.canUpdate).toBe(false)
     expect(fetchImpl).not.toHaveBeenCalled()

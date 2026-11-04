@@ -110,6 +110,24 @@ export async function computeHarnessStatus(
   const checkedAt = new Date().toISOString()
   const hasActiveSession = opts.hasActiveSession?.(harness)
 
+  if (harness === 'cursor') {
+    // Cursor runs on @cursor/sdk, pinned in 20x's own package.json, so it
+    // updates with 20x — there is no CLI to update here.
+    return {
+      harness,
+      installed: true,
+      binaryPath: null,
+      version: null,
+      latestVersion: null,
+      status: 'up_to_date',
+      installer: 'bundled',
+      canUpdate: false,
+      updateCommand: null,
+      checkedAt,
+      hasActiveSession
+    }
+  }
+
   if (!detected.installed) {
     return {
       harness,
@@ -127,27 +145,6 @@ export async function computeHarnessStatus(
   }
 
   const version = detected.version
-
-  if (harness === 'cursor') {
-    // Another subtask moves Cursor onto @cursor/sdk, pinned in 20x's own
-    // package.json — Cursor then updates with 20x, not here. Until that
-    // lands, the standalone `cursor-agent` CLI is what actually runs, so
-    // there is no one-click update for it (manual-only, shown as bundled).
-    const binaryPath = await resolveBinaryPath(CLI_COMMAND.cursor)
-    return {
-      harness,
-      installed: true,
-      binaryPath,
-      version,
-      latestVersion: null,
-      status: 'up_to_date',
-      installer: 'bundled',
-      canUpdate: false,
-      updateCommand: null,
-      checkedAt,
-      hasActiveSession
-    }
-  }
 
   const binaryPath = await resolveHarnessBinaryPath(harness)
   const npmPackage = resolveNpmPackageName(harness, version)

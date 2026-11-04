@@ -31,6 +31,9 @@ vi.mock('@/stores/secret-store', () =>
 vi.mock('@/lib/ipc-client', () => ({
   agentConfigApi: { getProviders: vi.fn().mockResolvedValue({ providers: [] }) }
 }))
+vi.mock('@/components/settings/tabs/CursorSettingsCard', () => ({
+  CursorSettingsCard: () => null
+}))
 vi.mock('@/components/skills/SkillSelectorDialog', () => ({
   SkillSelectorDialog: () => null
 }))

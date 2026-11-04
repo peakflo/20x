@@ -373,6 +373,16 @@ function hasWorkfloMcpDevServer(entries: DocumentedMcpServer[]): boolean {
   })
 }
 
+/**
+ * Secret ids to inject for an agent. The native Cursor SDK adapter has no
+ * environment or shell hook to receive them through, so it gets none: it must
+ * never see secret values, only its own credential (apiKeys.cursor / CURSOR_API_KEY).
+ */
+function secretIdsForAgent(agent: { config?: { coding_agent?: string; secret_ids?: string[] } } | undefined | null): string[] | undefined {
+  if (agent?.config?.coding_agent === 'cursor') return undefined
+  return agent?.config?.secret_ids
+}
+
 export class AgentManager extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map()
   /** Maps old (temp) session IDs to their re-keyed (real) IDs so that
@@ -1712,7 +1722,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Populate secret env vars and system prompt awareness
-    const secretIds = agent.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     // secretIds checked for agent config
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
@@ -1909,7 +1919,7 @@ export class AgentManager extends EventEmitter {
    */
   private setupSecretSession(agentId: string): string | undefined {
     const agent = this.db.getAgent(agentId)
-    const secretIds = agent?.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     if (!secretIds || secretIds.length === 0) return undefined
 
     const brokerPort = getSecretBrokerPort()
@@ -2162,7 +2172,7 @@ export class AgentManager extends EventEmitter {
     // Add secrets section — name and description only, never the value
     if (agentId) {
       const agent2 = this.db.getAgent(agentId)
-      const secretIds = agent2?.config?.secret_ids
+      const secretIds = secretIdsForAgent(agent2)
       if (secretIds && secretIds.length > 0) {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
@@ -2256,7 +2266,7 @@ export class AgentManager extends EventEmitter {
     // Add secrets section — name and description only, never the value
     if (agentId) {
       const agentForSecrets = this.db.getAgent(agentId)
-      const secretIds = agentForSecrets?.config?.secret_ids
+      const secretIds = secretIdsForAgent(agentForSecrets)
       if (secretIds && secretIds.length > 0) {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
@@ -2385,7 +2395,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Populate secret env vars + system prompt awareness
-    const secretIds = agent.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
       const secretsWithValues = this.db.getSecretsWithValues(secretIds)
@@ -3761,7 +3771,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     }
 
     // Populate secret env vars + system prompt awareness
-    const secretIds = agent.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
       const secretsWithValues = this.db.getSecretsWithValues(secretIds)
