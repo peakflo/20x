@@ -89,6 +89,7 @@ interface AcpAgentAdapterPrivate {
     partContentLengths: Map<string, string>,
     session?: AcpSessionForTest
   ): MessagePart[]
+  mergeStreamingText(currentText: string, incomingChunk: string): string
   handlePermissionRequest(session: AcpSessionForTest, request: JsonRpcRequestForTest): void
   sendRpcResponse(session: AcpSessionForTest, id: string | number, result: unknown): void
   updateSessionStatus(session: AcpSessionForTest, notification: unknown): void
@@ -837,5 +838,68 @@ describe('AcpAgentAdapter spawn failures', () => {
     proc.emit('error', missing)
     await expect(result).rejects.toThrow(/working directory does not exist/)
     await expect(result).rejects.not.toThrow(/CURSOR_CLI_MISSING/)
+  })
+})
+
+describe('AcpAgentAdapter - streaming PR number preservation', () => {
+  let adapter: AcpAgentAdapter
+  beforeEach(() => {
+    adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [] })
+  })
+
+  it('appends a trailing digit that matches the current suffix (#997 + 7 → #9977)', () => {
+    // Regression: endsWith(chunk) treated the final "7" of #9977 as a duplicate of
+    // the "7" already present in #997, so chat showed / linked #997 instead of #9977.
+    const priv = adapterPrivate(adapter)
+    expect(priv.mergeStreamingText('#997', '7')).toBe('#9977')
+    expect(priv.mergeStreamingText('https://github.com/peakflo/peakflo-web/pull/997', '7'))
+      .toBe('https://github.com/peakflo/peakflo-web/pull/9977')
+  })
+
+  it('preserves full PR numbers when streamed digit-by-digit through message chunks', () => {
+    const priv = adapterPrivate(adapter)
+    const session = createMockSession('pr-stream')
+    const seenPartIds = new Set<string>()
+    const contentLengths = new Map<string, string>()
+
+    const stream = (text: string): string => {
+      const parts = priv.convertAcpEventToMessageParts(
+        {
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } }
+        },
+        new Set(),
+        seenPartIds,
+        contentLengths,
+        session
+      )
+      return parts[0]?.text ?? contentLengths.get('agent-response-1') ?? ''
+    }
+
+    let text = ''
+    for (const chunk of [
+      'See ',
+      '#997',
+      '7',
+      ' / ',
+      'https://github.com/peakflo/peakflo-web/pull/997',
+      '7'
+    ]) {
+      text = stream(chunk)
+    }
+
+    expect(text).toContain('#9977')
+    expect(text).not.toMatch(/#997(?!\d)/)
+    expect(text).toContain('https://github.com/peakflo/peakflo-web/pull/9977')
+    expect(text).not.toMatch(/\/pull\/997(?!\d)/)
+  })
+
+  it('still drops a long duplicate trailing replay', () => {
+    const priv = adapterPrivate(adapter)
+    const base = 'Check https://github.com/peakflo/peakflo-web/pull/9977 for review'
+    const replay = 'peakflo-web/pull/9977 for review'
+    expect(replay.length).toBeGreaterThanOrEqual(8)
+    expect(priv.mergeStreamingText(base, replay)).toBe(base)
   })
 })

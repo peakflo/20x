@@ -280,6 +280,29 @@ Second paragraph.`
       expect(links[0]).toHaveTextContent('Link 1')
       expect(links[1]).toHaveTextContent('Link 2')
     })
+
+    it('preserves full GitHub pull request numbers in autolinked URLs', () => {
+      const markdown = 'See https://github.com/peakflo/peakflo-web/pull/9977 and https://github.com/peakflo/peakflo-web/pull/997'
+      const { container } = render(<Markdown>{markdown}</Markdown>)
+
+      const links = container.querySelectorAll('a')
+      expect(links).toHaveLength(2)
+      expect(links[0]).toHaveAttribute('href', 'https://github.com/peakflo/peakflo-web/pull/9977')
+      expect(links[0]).toHaveTextContent('https://github.com/peakflo/peakflo-web/pull/9977')
+      expect(links[1]).toHaveAttribute('href', 'https://github.com/peakflo/peakflo-web/pull/997')
+      expect(links[1]).toHaveTextContent('https://github.com/peakflo/peakflo-web/pull/997')
+    })
+
+    it('does not collapse #9977 text to #997', () => {
+      const { container } = render(<Markdown>Cherry-pick is #9977</Markdown>)
+      expect(container).toHaveTextContent('#9977')
+      expect(container.textContent).toContain('#9977')
+      // Must not strip the trailing digit into a shorter #997 reference.
+      expect(container.textContent?.includes('#9977')).toBe(true)
+      expect(container.textContent?.replace('#9977', '')).not.toContain('#997')
+      // Bare #NNNN is plain text today (remark-gfm does not autolink it).
+      expect(container.querySelectorAll('a')).toHaveLength(0)
+    })
   })
 
   describe('Blockquotes', () => {
