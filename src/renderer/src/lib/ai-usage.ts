@@ -59,7 +59,8 @@ export function parseAiUsage(payload: unknown): AiUsage | null {
     if (used === null || limit === null || limit <= 0) return null
     percent = (used / limit) * 100
   }
-  const reset = pick(src, ['resetAt', 'resetsAt', 'budgetResetAt', 'currentPeriodEnd'])
+  // currentPeriodEnd is the billing period end, not necessarily the usage reset.
+  const reset = pick(src, ['resetAt', 'resetsAt', 'budgetResetAt'])
   return {
     percent: Math.min(100, Math.max(0, Math.round(percent))),
     used,
