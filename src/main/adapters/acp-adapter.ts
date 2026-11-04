@@ -1689,9 +1689,16 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     if (!currentText) return incomingChunk
     if (!incomingChunk) return currentText
     if (incomingChunk.startsWith(currentText)) return incomingChunk
-    if (currentText.endsWith(incomingChunk)) return currentText
 
+    // Only treat a trailing match as a duplicate replay when the chunk is long
+    // enough. A short chunk that equals the current suffix is often a real
+    // continuation — e.g. ".../pull/997" + "7" must become ".../pull/9977",
+    // not stay truncated at the shorter PR number (#9977 → #997).
     const MIN_OVERLAP_CHARS = 8
+    if (incomingChunk.length >= MIN_OVERLAP_CHARS && currentText.endsWith(incomingChunk)) {
+      return currentText
+    }
+
     const maxSkippedPrefix = Math.min(32, currentText.length - MIN_OVERLAP_CHARS)
     for (let skipped = 1; skipped <= maxSkippedPrefix; skipped++) {
       const replayedText = currentText.slice(skipped)
