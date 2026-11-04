@@ -202,6 +202,13 @@ interface AcpSession {
   activeTurnId: number | null
   pendingAssistantTurnSplit: boolean
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
+  /**
+   * Whether assistant message/thought updates are accepted. Closed until a prompt is
+   * sent (so `session/load` / `session/resume` history replays and late chunks after a
+   * turn can't duplicate the stored transcript), reopened by `session/prompt`, closed
+   * again when the prompt response arrives.
+   */
+  assistantUpdatesOpen: boolean
   lastError: string | null
   createdInApp: boolean
   usageLimit?: UsageLimitStop | null
@@ -467,6 +474,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       config,
       promptRequestId: null,
       responseCounter: 0,
+      assistantUpdatesOpen: false,
       currentUserTurnId: 0,
       lastChunkTime: null,
       currentTurnId: 0,
@@ -583,6 +591,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       }
     } as unknown as JsonRpcNotification)
 
+    session.assistantUpdatesOpen = true
     session.status = SessionStatusType.BUSY
     session.lastError = null
     session.usageLimit = null
@@ -1062,6 +1071,9 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     if ('id' in message && message.id !== undefined && !('method' in message)) {
       const pending = session.pendingRequests.get(message.id)
       const response = message as JsonRpcResponse | JsonRpcError
+      // The turn is over (success, cancel or error): close the assistant gate so late
+      // chunks can't leak into the next turn's text.
+      if (session.promptRequestId === message.id) session.assistantUpdatesOpen = false
 
       if (pending) {
         session.pendingRequests.delete(message.id)
@@ -1156,7 +1168,20 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     }
 
     if (notification.method === 'session/update') {
-      const update = (notification.params as { update?: Record<string, unknown> } | undefined)?.update
+      const params = notification.params as { sessionId?: string; _meta?: { isReplay?: unknown }; update?: Record<string, unknown> } | undefined
+      const update = params?.update
+      if (params?.sessionId && session.acpSessionId && params.sessionId !== session.acpSessionId) {
+        if (this.debugRpcLogs) console.debug(`[AcpAgentAdapter] Ignoring update for other session ${params.sessionId}`)
+        return
+      }
+      if (params?._meta?.isReplay === true || (update?._meta as { isReplay?: unknown } | undefined)?.isReplay === true) {
+        if (this.debugRpcLogs) console.debug(`[AcpAgentAdapter] Ignoring replayed ${String(update?.sessionUpdate)} update`)
+        return
+      }
+      if (this.isAssistantStreamUpdateType(update?.sessionUpdate as string | undefined) && !session.assistantUpdatesOpen) {
+        console.debug(`[AcpAgentAdapter] Dropping ${String(update?.sessionUpdate)} while no prompt is active (load/resume replay or late chunk)`)
+        return
+      }
       if (update?.sessionUpdate === 'usage_update') {
         const cost = acpUsageUpdateCostUsd(update)
         if (cost !== null) session.usageCostUsd = cost
@@ -1632,13 +1657,18 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       const nextParams = notification.params as { update?: SessionUpdate } | undefined
       const lastUpdate = lastParams?.update
       const nextUpdate = nextParams?.update
-      if (lastUpdate && nextUpdate && lastUpdate.sessionUpdate === nextUpdate.sessionUpdate && this.isAssistantChunkUpdateType(nextUpdate.sessionUpdate)) {
+      // Merge only consecutive chunks of the same kind that belong to the same message.
+      if (
+        lastUpdate && nextUpdate
+        && lastUpdate.sessionUpdate === nextUpdate.sessionUpdate
+        && this.isAssistantChunkUpdateType(nextUpdate.sessionUpdate)
+        && (lastUpdate.messageId ?? null) === (nextUpdate.messageId ?? null)
+        && typeof lastUpdate.content === 'object' && lastUpdate.content !== null
+      ) {
         const lastText = this.extractTextFromUpdateContent(lastUpdate.content)
         const nextText = this.extractTextFromUpdateContent(nextUpdate.content)
-        if (typeof lastUpdate.content === 'object' && lastUpdate.content !== null) {
-          (lastUpdate.content as Record<string, unknown>).text = this.mergeStreamingText(lastText, nextText)
-          consolidated = true
-        }
+        ;(lastUpdate.content as Record<string, unknown>).text = this.appendChunk(lastText, nextText, nextUpdate.sessionUpdate)
+        consolidated = true
       }
     }
 
@@ -1685,26 +1715,26 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     return ''
   }
 
-  private mergeStreamingText(currentText: string, incomingChunk: string): string {
-    if (!currentText) return incomingChunk
-    if (!incomingChunk) return currentText
-    if (incomingChunk.startsWith(currentText)) return incomingChunk
-    if (currentText.endsWith(incomingChunk)) return currentText
-
-    const MIN_OVERLAP_CHARS = 8
-    const maxSkippedPrefix = Math.min(32, currentText.length - MIN_OVERLAP_CHARS)
-    for (let skipped = 1; skipped <= maxSkippedPrefix; skipped++) {
-      const replayedText = currentText.slice(skipped)
-      if (incomingChunk.startsWith(replayedText)) return currentText.slice(0, skipped) + incomingChunk
+  /**
+   * Streaming text is appended verbatim: a chunk is never compared with the text
+   * before it, because legitimate continuations often repeat it (`#997` + `7`,
+   * `--------` + `--------`). Duplicates are handled by explicit signals instead
+   * (`_meta.isReplay`, the load/turn gate, `messageId`, session id).
+   *
+   * The only exception is an agent that opts into `cumulativeChunks`, which re-sends
+   * the whole text so far: there a chunk starting with the current text replaces it.
+   */
+  private appendChunk(currentText: string, chunk: string, sessionUpdate?: string): string {
+    if (this.wrapperHooks.cumulativeChunks && sessionUpdate !== 'user_message_chunk' && sessionUpdate !== 'human_message_chunk'
+      && currentText && chunk.startsWith(currentText)) {
+      return chunk
     }
+    return currentText + chunk
+  }
 
-    const maxOverlap = Math.min(currentText.length, incomingChunk.length)
-    for (let length = maxOverlap; length > 0; length--) {
-      if (length >= MIN_OVERLAP_CHARS && currentText.endsWith(incomingChunk.slice(0, length))) {
-        return currentText + incomingChunk.slice(length)
-      }
-    }
-    return currentText + incomingChunk
+  /** Streamed or whole assistant text/thought updates (the ones gated outside a turn). */
+  private isAssistantStreamUpdateType(sessionUpdate?: string | null): boolean {
+    return this.isAssistantChunkUpdateType(sessionUpdate) || sessionUpdate === 'agent_message' || sessionUpdate === 'assistant_message'
   }
 
   private isUserUpdateType(sessionUpdate?: string | null): boolean {
@@ -1887,22 +1917,26 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       }
     } else if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'assistant_message_chunk') {
       const turnId = session ? this.getAssistantTurnId(session) : 0
-      const messageId = turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
+      const messageId = update.messageId
+        ? `agent-response-${turnId}-${update.messageId}`
+        : turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
       const chunk = this.extractTextFromUpdateContent(update.content)
       if (chunk) {
         const currentText = partContentLengths.get(messageId) || ''
-        const newText = this.mergeStreamingText(currentText, chunk)
+        const newText = this.appendChunk(currentText, chunk, update.sessionUpdate)
         partContentLengths.set(messageId, newText)
         parts.push({ id: messageId, type: MessagePartType.TEXT, text: newText, role: 'assistant', update: seenPartIds.has(messageId) })
         seenPartIds.add(messageId)
       }
     } else if (update.sessionUpdate === 'agent_thought_chunk') {
       const turnId = session ? this.getAssistantTurnId(session) : 0
-      const thinkingId = turnId > 0 ? `agent-thinking-${turnId}` : 'agent-thinking'
+      const thinkingId = update.messageId
+        ? `agent-thinking-${turnId}-${update.messageId}`
+        : turnId > 0 ? `agent-thinking-${turnId}` : 'agent-thinking'
       const chunk = this.extractTextFromUpdateContent(update.content)
       if (chunk) {
         const currentText = partContentLengths.get(thinkingId) || ''
-        const newText = this.mergeStreamingText(currentText, chunk)
+        const newText = this.appendChunk(currentText, chunk, update.sessionUpdate)
         partContentLengths.set(thinkingId, newText)
         parts.push({ id: thinkingId, type: MessagePartType.REASONING, text: newText, role: 'assistant', update: seenPartIds.has(thinkingId) })
         seenPartIds.add(thinkingId)
@@ -1913,7 +1947,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       const chunk = this.extractTextFromUpdateContent(update.content)
       if (chunk) {
         const currentText = partContentLengths.get(userId) || ''
-        const newText = this.mergeStreamingText(currentText, chunk)
+        const newText = currentText + chunk
         partContentLengths.set(userId, newText)
         parts.push({ id: userId, type: MessagePartType.TEXT, text: newText, role: 'user', update: seenPartIds.has(userId) })
         seenPartIds.add(userId)

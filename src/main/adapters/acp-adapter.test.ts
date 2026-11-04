@@ -59,6 +59,7 @@ interface AcpSessionForTest {
   lastSessionUpdateType: string | null
   activeTurnId: number | null
   pendingAssistantTurnSplit: boolean
+  assistantUpdatesOpen: boolean
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
   lastError: string | null
   createdInApp: boolean
@@ -125,6 +126,7 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     lastSessionUpdateType: null,
     activeTurnId: null,
     pendingAssistantTurnSplit: false,
+    assistantUpdatesOpen: true,
     toolCallMetadata: new Map(),
     lastError: null,
     createdInApp: true,
@@ -837,5 +839,207 @@ describe('AcpAgentAdapter spawn failures', () => {
     proc.emit('error', missing)
     await expect(result).rejects.toThrow(/working directory does not exist/)
     await expect(result).rejects.not.toThrow(/CURSOR_CLI_MISSING/)
+  })
+})
+
+describe('AcpAgentAdapter - verbatim streaming and explicit replay handling', () => {
+  const ACP_ID = 'acp-1'
+
+  function setup(registryAgentId?: string) {
+    const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [], registryAgentId })
+    const priv = adapter as unknown as AcpAgentAdapterPrivate & {
+      sessions: Map<string, AcpSessionForTest>
+      handleAgentNotification(session: AcpSessionForTest, n: unknown): void
+      addToPermanentMessages(session: AcpSessionForTest, e: unknown): void
+    }
+    const session = createMockSession('s1')
+    session.acpSessionId = ACP_ID
+    priv.sessions.set('s1', session)
+    return { adapter, priv, session }
+  }
+
+  const note = (update: Record<string, unknown>, params: Record<string, unknown> = {}) => ({
+    jsonrpc: '2.0',
+    method: 'session/update',
+    params: { sessionId: ACP_ID, ...params, update }
+  })
+  const msg = (text: string, extra: Record<string, unknown> = {}) => note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text }, ...extra })
+  const thought = (text: string, extra: Record<string, unknown> = {}) => note({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text }, ...extra })
+  const tool = (id: string, status: string) => note({ sessionUpdate: 'tool_call', toolCallId: id, title: 'Run', kind: 'execute', status })
+
+  /** Text of every assistant text part, built from the live buffer exactly as polling does. */
+  function liveTexts(priv: ReturnType<typeof setup>['priv'], session: AcpSessionForTest, type = MessagePartType.TEXT) {
+    const seen = new Set<string>()
+    const lengths = new Map<string, string>()
+    const byId = new Map<string, string>()
+    for (const event of session.messageBuffer) {
+      for (const part of priv.convertAcpEventToMessageParts(event, new Set(), seen, lengths, session)) {
+        if (part.type === type && part.role === 'assistant') byId.set(part.id!, part.text!)
+      }
+    }
+    return [...byId.values()]
+  }
+
+  async function historyTexts(adapter: AcpAgentAdapter) {
+    const messages = await adapter.getAllMessages('s1', {} as SessionConfig)
+    return messages.flatMap((m) => m.parts).filter((p) => p.type === MessagePartType.TEXT && p.role === 'assistant').map((p) => p.text)
+  }
+
+  /** Feeds chunks and asserts live output and permanent history agree. */
+  async function stream(chunks: string[], registryAgentId?: string) {
+    const { adapter, priv, session } = setup(registryAgentId)
+    for (const c of chunks) priv.handleAgentNotification(session, msg(c))
+    const live = liveTexts(priv, session)
+    expect(await historyTexts(adapter)).toEqual(live)
+    return live
+  }
+
+  it.each([
+    ['PR number', ['#997', '7'], '#9977'],
+    ['PR url', ['https://github.com/o/r/pull/997', '7'], 'https://github.com/o/r/pull/9977'],
+    ['suffix chunk of 8+ chars', ['--------', '--------'], '----------------'],
+    ['repeated code line', ['const a = 1;\n', 'const a = 1;\n'], 'const a = 1;\nconst a = 1;\n'],
+    ['repeated words', ['test test ', 'test '], 'test test test '],
+    ['repeated table rows', ['| a | 1 |\n', '| a | 1 |\n', '| a | 1 |\n'], '| a | 1 |\n| a | 1 |\n| a | 1 |\n'],
+    ['chunk equal to prior text', ['hello world', 'hello world'], 'hello worldhello world'],
+    ['prefix overlap of 8+ chars', ['The matching UI', 'matching UI looks'], 'The matching UImatching UI looks']
+  ])('appends %s verbatim (live and history agree)', async (_name, chunks, expected) => {
+    expect(await stream(chunks)).toEqual([expected])
+  })
+
+  it('applies the same rule to thought chunks', async () => {
+    const { adapter, priv, session } = setup()
+    priv.handleAgentNotification(session, thought('--------'))
+    priv.handleAgentNotification(session, thought('--------'))
+    expect(liveTexts(priv, session, MessagePartType.REASONING)).toEqual(['----------------'])
+    const parts = (await adapter.getAllMessages('s1', {} as SessionConfig)).flatMap((m) => m.parts)
+    expect(parts.find((p) => p.type === MessagePartType.REASONING)?.text).toBe('----------------')
+  })
+
+  it('ignores updates flagged _meta.isReplay for live output and history', async () => {
+    const { adapter, priv, session } = setup()
+    priv.handleAgentNotification(session, msg('Hello'))
+    priv.handleAgentNotification(session, note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hello' } }, { _meta: { isReplay: true } }))
+    priv.handleAgentNotification(session, msg(' there'))
+    expect(liveTexts(priv, session)).toEqual(['Hello there'])
+    expect(await historyTexts(adapter)).toEqual(['Hello there'])
+    expect(session.permanentMessages).toHaveLength(1)
+  })
+
+  it('starts a new part for a different messageId and keeps the same messageId together', async () => {
+    const { adapter, priv, session } = setup()
+    priv.handleAgentNotification(session, msg('One', { messageId: 'm1' }))
+    priv.handleAgentNotification(session, msg(' more', { messageId: 'm1' }))
+    priv.handleAgentNotification(session, msg('Two', { messageId: 'm2' }))
+    expect(liveTexts(priv, session)).toEqual(['One more', 'Two'])
+    expect(await historyTexts(adapter)).toEqual(['One more', 'Two'])
+  })
+
+  it('splits parts around a tool call, even with the same messageId', async () => {
+    const { adapter, priv, session } = setup()
+    priv.handleAgentNotification(session, msg('Before', { messageId: 'm1' }))
+    priv.handleAgentNotification(session, tool('t1', 'completed'))
+    priv.handleAgentNotification(session, msg('Before', { messageId: 'm1' }))
+    expect(liveTexts(priv, session)).toEqual(['Before', 'Before'])
+    expect(await historyTexts(adapter)).toEqual(['Before', 'Before'])
+  })
+
+  it('ignores updates for another (child) session id', async () => {
+    const { adapter, priv, session } = setup()
+    priv.handleAgentNotification(session, msg('root'))
+    priv.handleAgentNotification(session, note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'CHILD' } }, { sessionId: 'child-9' }))
+    priv.handleAgentNotification(session, msg(' text'))
+    expect(liveTexts(priv, session)).toEqual(['root text'])
+    expect(await historyTexts(adapter)).toEqual(['root text'])
+  })
+
+  it('drops late chunks after the prompt response and reopens on the next prompt', async () => {
+    const { priv, session } = setup()
+    session.promptRequestId = 7
+    priv.handleAgentNotification(session, msg('Answer'))
+    priv.handleRpcMessage(session, { jsonrpc: '2.0', id: 7, result: { stopReason: 'end_turn' } })
+    expect(session.assistantUpdatesOpen).toBe(false)
+    priv.handleAgentNotification(session, msg('Answer'))
+    priv.handleAgentNotification(session, thought('late thought'))
+    expect(liveTexts(priv, session)).toEqual(['Answer'])
+    expect(session.permanentMessages).toHaveLength(1)
+    // The next prompt records the user turn and reopens the gate.
+    priv.addToPermanentMessages(session, note({ sessionUpdate: 'user_message', content: { type: 'text', text: 'again' } }))
+    session.assistantUpdatesOpen = true
+    priv.handleAgentNotification(session, msg('Answer'))
+    expect(session.permanentMessages).toHaveLength(3)
+  })
+
+  it('also closes the gate when the prompt request fails', () => {
+    const { priv, session } = setup()
+    session.promptRequestId = 8
+    priv.handleRpcMessage(session, { jsonrpc: '2.0', id: 8, error: { code: -32000, message: 'boom' } })
+    expect(session.assistantUpdatesOpen).toBe(false)
+  })
+
+  describe('session load / resume', () => {
+    it('does not duplicate earlier assistant text when the agent replays history without isReplay', async () => {
+      const cp = await import('child_process')
+      const spawnMock = cp.spawn as unknown as ReturnType<typeof vi.fn>
+      const emit: { stdout?: EventEmitter } = {}
+      const send = (n: unknown) => emit.stdout!.emit('data', Buffer.from(JSON.stringify(n) + '\n'))
+      const { proc, stdout } = createFakeProcess({
+        initialize: () => v1InitResponse,
+        'session/load': () => 'unused'
+      })
+      emit.stdout = stdout
+      // Replace the load handler so history is streamed before the response.
+      const origWrite = (proc as unknown as { stdin: { write: (d: string, cb?: () => void) => void } }).stdin.write
+      ;(proc as unknown as { stdin: { write: unknown } }).stdin.write = (data: string, cb?: () => void) => {
+        const m = JSON.parse(data.trim())
+        if (m.method === 'session/load') {
+          send(note({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'hi' } }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Earlier answer' } }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Earlier thought' } }, { sessionId: 'resumed-1' }))
+          send({ jsonrpc: '2.0', id: m.id, result: {} })
+          cb?.()
+          return
+        }
+        origWrite(data, cb)
+      }
+      spawnMock.mockReturnValue(proc)
+
+      const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [] })
+      const messages = await adapter.resumeSession('resumed-1', { agentId: 'a', taskId: 't', workspaceDir: '/tmp' } as SessionConfig)
+      const assistantText = messages.flatMap((m) => m.parts).filter((p) => p.role === 'assistant').map((p) => p.text)
+      expect(assistantText).toEqual([])
+
+      // A new turn after the load streams normally and is not mixed with the replay.
+      const priv = adapter as unknown as { sessions: Map<string, AcpSessionForTest>; handleAgentNotification(s: AcpSessionForTest, n: unknown): void }
+      const session = priv.sessions.get('resumed-1')!
+      expect(session.assistantUpdatesOpen).toBe(false)
+      session.assistantUpdatesOpen = true
+      priv.handleAgentNotification(session, note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Fresh' } }, { sessionId: 'resumed-1' }))
+      const after = await adapter.getAllMessages('resumed-1', {} as SessionConfig)
+      expect(after.flatMap((m) => m.parts).filter((p) => p.role === 'assistant').map((p) => p.text)).toEqual(['Fresh'])
+    })
+
+    it('drops explicit isReplay updates during load too', async () => {
+      const { priv, session } = setup()
+      priv.handleAgentNotification(session, note({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'old' } }, { _meta: { isReplay: true } }))
+      expect(session.permanentMessages).toHaveLength(0)
+    })
+  })
+
+  describe('cumulativeChunks wrapper hook', () => {
+    afterEach(() => { unregisterWrapperHooksForTests('fake-cumulative-agent') })
+
+    it('replaces the text only when the chunk starts with the current text', async () => {
+      registerWrapperHooksForTests('fake-cumulative-agent', { cumulativeChunks: true })
+      expect(await stream(['Error: streaming', 'Error: streaming failed', 'Error: streaming failed after'], 'fake-cumulative-agent'))
+        .toEqual(['Error: streaming failed after'])
+      // Anything that is not an extension of the current text is appended, never trimmed.
+      expect(await stream(['The matching UI', 'matching UI looks'], 'fake-cumulative-agent'))
+        .toEqual(['The matching UImatching UI looks'])
+    })
+
+    it('is off by default', async () => {
+      expect(await stream(['abc', 'abcd'])).toEqual(['abcabcd'])
+    })
   })
 })
