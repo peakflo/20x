@@ -534,6 +534,75 @@ describe('/start_task', () => {
     expect(result.sessionId).toBe('session-123')
     expect((result.task as Record<string, unknown>).id).toBe(task.id)
   })
+
+  it('resets the auto-start retry count — an explicit start is a fresh attempt, not another scheduler retry', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
+    const task = db.createTask(makeTask({ title: 'Exhausted task' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now())
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now())
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now()) // exhausted (cap is 3)
+    expect(db.getAutomationRetryCount(task.id, 'start')).toBe(3)
+
+    setTaskApiAgentController({ startTask: vi.fn(async () => ({ action: 'task_started' as const, sessionId: 's-1', startedTaskId: task.id, agentId: agent.id })) } as any)
+    const port = await startTaskApiServer(db)
+    await fetch(`http://127.0.0.1:${port}/start_task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: task.id })
+    })
+
+    expect(db.getAutomationRetryCount(task.id, 'start')).toBe(0)
+  })
+})
+
+describe('/update_task resets automation retry counts on an explicit edit', () => {
+  it('clears both start and complete retry counts when agent_id is reassigned', async () => {
+    const task = db.createTask(makeTask({ title: 'Reassigned task' }))!
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now())
+    db.bumpAutomationRetryCount(task.id, 'complete', Date.now())
+    const agent = db.createAgent(makeAgent({ name: 'New Agent' }))!
+    const port = await startTaskApiServer(db)
+
+    await fetch(`http://127.0.0.1:${port}/update_task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: task.id, agent_id: agent.id })
+    })
+
+    expect(db.getAutomationRetryCount(task.id, 'start')).toBe(0)
+    expect(db.getAutomationRetryCount(task.id, 'complete')).toBe(0)
+  })
+
+  it('clears both retry counts when status is explicitly changed', async () => {
+    const task = db.createTask(makeTask({ title: 'Status-edited task' }))!
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now())
+    db.bumpAutomationRetryCount(task.id, 'complete', Date.now())
+    const port = await startTaskApiServer(db)
+
+    await fetch(`http://127.0.0.1:${port}/update_task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: task.id, status: 'not_started' })
+    })
+
+    expect(db.getAutomationRetryCount(task.id, 'start')).toBe(0)
+    expect(db.getAutomationRetryCount(task.id, 'complete')).toBe(0)
+  })
+
+  it('does not touch retry counts for an unrelated field edit (e.g. description)', async () => {
+    const task = db.createTask(makeTask({ title: 'Unrelated edit' }))!
+    db.bumpAutomationRetryCount(task.id, 'start', Date.now())
+    const port = await startTaskApiServer(db)
+
+    await fetch(`http://127.0.0.1:${port}/update_task`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: task.id, description: 'just a note' })
+    })
+
+    expect(db.getAutomationRetryCount(task.id, 'start')).toBe(1)
+  })
 })
 
 describe('/wait_for_subtasks', () => {
@@ -584,6 +653,55 @@ describe('/wait_for_subtasks', () => {
     expect(result.timed_out).toBe(false)
     expect(result.terminal_statuses).toContain(TaskStatus.ModelError)
     expect((result.subtasks as Array<Record<string, unknown>>)[0].status).toBe(TaskStatus.ModelError)
+  })
+
+  it('consumes a pending wake-up for a subtask it just observed as terminal, so it is not ALSO delivered as a redundant message later', async () => {
+    // This route is MCP-tool-only (never the renderer/mobile), so returning
+    // a terminal child here unambiguously means the calling coordinator
+    // just read that result directly.
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const subtask = db.createTask(makeTask({
+      title: 'Done subtask',
+      parent_task_id: parent.id,
+      status: TaskStatus.ReadyForReview
+    }))!
+
+    rawDb.exec(`
+      CREATE TABLE IF NOT EXISTS task_wakeups (
+        id TEXT PRIMARY KEY, parent_task_id TEXT NOT NULL, child_task_id TEXT NOT NULL,
+        reason TEXT NOT NULL, delivery_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL DEFAULT '{}',
+        created_at INTEGER NOT NULL, delivered_at INTEGER, attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT, last_attempt_at INTEGER, given_up_at INTEGER
+      );
+    `)
+    rawDb.prepare(`
+      INSERT INTO task_wakeups (id, parent_task_id, child_task_id, reason, delivery_id, payload, created_at)
+      VALUES ('w1', ?, ?, 'child_ready', 'delivery-wait-test', '{}', ?)
+    `).run(parent.id, subtask.id, Date.now())
+
+    setTaskApiAgentController({
+      getTaskWakeupQueue: () => ({
+        markObserved: (parentTaskId: string, childTaskId: string) => {
+          const row = rawDb.prepare(
+            "SELECT id FROM task_wakeups WHERE parent_task_id = ? AND child_task_id = ? AND delivered_at IS NULL"
+          ).get(parentTaskId, childTaskId) as { id: string } | undefined
+          if (row) rawDb.prepare('UPDATE task_wakeups SET delivered_at = ? WHERE id = ?').run(Date.now(), row.id)
+          return row ? 1 : 0
+        }
+      })
+    } as any)
+
+    const port = await startTaskApiServer(db)
+    const response = await fetch(`http://127.0.0.1:${port}/wait_for_subtasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_task_id: parent.id, subtask_ids: [subtask.id], timeout_ms: 5_000 })
+    })
+    const result = await response.json() as Record<string, unknown>
+
+    expect(result.success).toBe(true)
+    const row = rawDb.prepare('SELECT delivered_at FROM task_wakeups WHERE id = ?').get('w1') as { delivered_at: number | null }
+    expect(row.delivered_at).not.toBeNull()
   })
 })
 
@@ -1109,5 +1227,170 @@ describe('/create_subtask automation inheritance', () => {
 
     expect(trigger).toHaveBeenCalled()
     setTaskAutomationTrigger(null)
+  })
+})
+
+describe('client_request_id idempotency', () => {
+  /**
+   * A coordinator agent that cannot tell whether an earlier create_task /
+   * create_subtask / start_task / send_message call actually landed retries
+   * with the SAME client_request_id. The retry must return the original
+   * result instead of creating a duplicate task, starting the task twice, or
+   * sending the message twice.
+   */
+  const post = async <T>(port: number, route: string, body: Record<string, unknown>): Promise<T> => {
+    const response = await fetch(`http://127.0.0.1:${port}${route}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    return (await response.json()) as T
+  }
+
+  const countTasks = (): number => (rawDb.prepare('SELECT COUNT(*) as n FROM tasks').get() as { n: number }).n
+
+  it('/create_task: a retried call with the same client_request_id returns the original task, no duplicate', async () => {
+    const port = await startTaskApiServer(db)
+    const before = countTasks()
+
+    const first = await post<{ task: { id: string } }>(port, '/create_task', {
+      title: 'Idempotent root task',
+      client_request_id: 'req-1'
+    })
+    const second = await post<{ task: { id: string } }>(port, '/create_task', {
+      title: 'Idempotent root task',
+      client_request_id: 'req-1'
+    })
+
+    expect(second.task.id).toBe(first.task.id)
+    expect(countTasks()).toBe(before + 1)
+  })
+
+  it('/create_task: a different client_request_id (or none) creates a separate task', async () => {
+    const port = await startTaskApiServer(db)
+    const before = countTasks()
+
+    await post(port, '/create_task', { title: 'A', client_request_id: 'req-a' })
+    await post(port, '/create_task', { title: 'B', client_request_id: 'req-b' })
+    await post(port, '/create_task', { title: 'C' })
+
+    expect(countTasks()).toBe(before + 3)
+  })
+
+  it('/create_subtask: a retried call with the same client_request_id returns the original subtask, no duplicate', async () => {
+    const parent = db.createTask(makeTask({ title: 'Parent' }))!
+    const port = await startTaskApiServer(db)
+    const before = countTasks()
+
+    const first = await post<{ task: { id: string } }>(port, '/create_subtask', {
+      parent_task_id: parent.id,
+      title: 'Idempotent child',
+      client_request_id: 'req-sub-1'
+    })
+    const second = await post<{ task: { id: string } }>(port, '/create_subtask', {
+      parent_task_id: parent.id,
+      title: 'Idempotent child',
+      client_request_id: 'req-sub-1'
+    })
+
+    expect(second.task.id).toBe(first.task.id)
+    expect(countTasks()).toBe(before + 1)
+  })
+
+  it('/create_subtask: the same client_request_id under a DIFFERENT parent (scope) is independent', async () => {
+    const parentA = db.createTask(makeTask({ title: 'Parent A' }))!
+    const parentB = db.createTask(makeTask({ title: 'Parent B' }))!
+    const port = await startTaskApiServer(db)
+    const before = countTasks()
+
+    const a = await post<{ task: { id: string } }>(port, '/create_subtask', {
+      parent_task_id: parentA.id,
+      title: 'Child',
+      client_request_id: 'shared-id'
+    })
+    const b = await post<{ task: { id: string } }>(port, '/create_subtask', {
+      parent_task_id: parentB.id,
+      title: 'Child',
+      client_request_id: 'shared-id'
+    })
+
+    expect(a.task.id).not.toBe(b.task.id)
+    expect(countTasks()).toBe(before + 2)
+  })
+
+  it('/start_task: a retried call with the same client_request_id starts the task only once', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
+    const task = db.createTask(makeTask({ title: 'Startable' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+    const startTask = vi.fn(async () => ({
+      action: 'task_started' as const,
+      sessionId: 'session-xyz',
+      startedTaskId: task.id,
+      agentId: agent.id
+    }))
+    setTaskApiAgentController({ startTask } as any)
+    const port = await startTaskApiServer(db)
+
+    await post(port, '/start_task', { task_id: task.id, client_request_id: 'start-once' })
+    await post(port, '/start_task', { task_id: task.id, client_request_id: 'start-once' })
+
+    expect(startTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('/send_message: a retried call with the same client_request_id sends only once', async () => {
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
+    const task = db.createTask(makeTask({ title: 'Messageable' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+    const sendByTaskId = vi.fn(async () => ({ sessionId: 'session-abc' }))
+    setTaskApiAgentController({ sendByTaskId, findSessionByTaskId: vi.fn(() => undefined) } as any)
+    const port = await startTaskApiServer(db)
+
+    await post(port, '/send_message', { task_id: task.id, text: 'hello', client_request_id: 'msg-once' })
+    await post(port, '/send_message', { task_id: task.id, text: 'hello', client_request_id: 'msg-once' })
+
+    expect(sendByTaskId).toHaveBeenCalledTimes(1)
+  })
+
+  it('the SAME client_request_id on the SAME task does not collide across different tools (start_task vs send_message)', async () => {
+    // Regression: scope used to be just `task:<id>`, shared across every
+    // tool — an agent reusing a short counter like "req-1" for both an
+    // start_task and a later send_message on the same task would otherwise
+    // get one tool's cached result back for the other.
+    const agent = db.createAgent(makeAgent({ name: 'Test Agent' }))!
+    const task = db.createTask(makeTask({ title: 'Shared id task' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+    const startTask = vi.fn(async () => ({ action: 'task_started' as const, sessionId: 's-1', startedTaskId: task.id, agentId: agent.id }))
+    const sendByTaskId = vi.fn(async () => ({ sessionId: 's-1' }))
+    setTaskApiAgentController({ startTask, sendByTaskId, findSessionByTaskId: vi.fn(() => undefined) } as any)
+    const port = await startTaskApiServer(db)
+
+    await post(port, '/start_task', { task_id: task.id, client_request_id: 'req-1' })
+    await post(port, '/send_message', { task_id: task.id, text: 'hi', client_request_id: 'req-1' })
+
+    expect(startTask).toHaveBeenCalledTimes(1)
+    expect(sendByTaskId).toHaveBeenCalledTimes(1)
+  })
+
+  it('/start_task: a "no_action" result is not cached — a retry after fixing the cause (assigning an agent) actually starts it', async () => {
+    const task = db.createTask(makeTask({ title: 'No agent yet' }))!
+    // No agent_id yet: AgentManager.startTask would report no_action.
+    const startTask = vi.fn(async (): Promise<{ action: string; startedTaskId: string; sessionId?: string; agentId?: string }> =>
+      ({ action: 'no_action', startedTaskId: task.id }))
+    setTaskApiAgentController({ startTask } as any)
+    const port = await startTaskApiServer(db)
+
+    const first = await post<{ success: boolean; action: string }>(port, '/start_task', { task_id: task.id, client_request_id: 'retry-after-fix' })
+    expect(first.success).toBe(false)
+    expect(first.action).toBe('no_action')
+
+    // Fix the actual cause, then retry with the SAME client_request_id.
+    const agent = db.createAgent(makeAgent({ name: 'Now Assigned' }))!
+    db.updateTask(task.id, { agent_id: agent.id })
+    startTask.mockResolvedValueOnce({ action: 'task_started' as const, sessionId: 's-2', startedTaskId: task.id, agentId: agent.id })
+
+    const second = await post<{ success: boolean; action: string }>(port, '/start_task', { task_id: task.id, client_request_id: 'retry-after-fix' })
+    expect(second.success).toBe(true)
+    expect(second.action).toBe('task_started')
+    expect(startTask).toHaveBeenCalledTimes(2)
   })
 })

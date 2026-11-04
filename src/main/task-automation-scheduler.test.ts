@@ -135,6 +135,26 @@ describe('TaskAutomationScheduler — auto-start', () => {
 
     expect((agentManager.startTask as ReturnType<typeof vi.fn>).mock.calls.length).toBe(3)
   })
+
+  it('persists the retry count across a restart (a new scheduler instance on the same db)', async () => {
+    db.createTask(makeTask({ auto_start_agent: true }))
+    const startTask = vi.fn().mockRejectedValue(new Error('adapter unavailable'))
+
+    // Two attempts, then the process "restarts" — a brand-new scheduler
+    // instance is constructed on the same db, with no in-memory history.
+    await new TaskAutomationScheduler(db, mockAgentManager({ startTask })).runNow()
+    await new TaskAutomationScheduler(db, mockAgentManager({ startTask })).runNow()
+    expect(startTask.mock.calls.length).toBe(2)
+
+    // The 3rd (capped) attempt happens on the restarted instance...
+    await new TaskAutomationScheduler(db, mockAgentManager({ startTask })).runNow()
+    expect(startTask.mock.calls.length).toBe(3)
+
+    // ...and a 4th instance respects the already-exhausted budget instead of
+    // granting 3 fresh attempts, which an in-memory counter would have done.
+    await new TaskAutomationScheduler(db, mockAgentManager({ startTask })).runNow()
+    expect(startTask.mock.calls.length).toBe(3)
+  })
 })
 
 // ── Auto-complete ───────────────────────────────────────────
