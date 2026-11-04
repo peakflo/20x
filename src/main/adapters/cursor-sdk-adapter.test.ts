@@ -516,6 +516,33 @@ describe('CursorSdkAdapter usage-limit mapping', () => {
   })
 })
 
+describe('CursorSdkAdapter usage-limit from a failed run result', () => {
+  async function runWithError(error: { message: string; code?: string }) {
+    const adapter = new CursorSdkAdapter({ db: makeMockDb() })
+    const run = makeFakeRun('run-err', { wait: vi.fn(async () => ({ id: 'run-err', status: 'error', error })) })
+    sdkMocks.AgentCreateMock.mockResolvedValue(makeFakeAgent('a2', { send: vi.fn().mockResolvedValue(run) }))
+    await adapter.createSession(baseConfig())
+    await adapter.sendPrompt('a2', [{ type: MessagePartType.TEXT, text: 'hi' }], baseConfig())
+    await vi.waitFor(async () => expect((await adapter.getStatus('a2', baseConfig())).type).toBe(SessionStatusType.ERROR))
+    return adapter.getStatus('a2', baseConfig())
+  }
+
+  it('sets usageLimit when the run result error describes a usage limit', async () => {
+    const status = await runWithError({ message: 'You have exceeded your usage limit for this plan' })
+    expect(status.usageLimit).toEqual({ resetAt: null })
+  })
+
+  it('sets usageLimit from an error code', async () => {
+    const status = await runWithError({ message: 'Run failed', code: 'usage_limit' })
+    expect(status.usageLimit).toEqual({ resetAt: null })
+  })
+
+  it('does not set usageLimit for an unrelated run failure', async () => {
+    const status = await runWithError({ message: 'Tool crashed' })
+    expect(status.usageLimit).toBeUndefined()
+  })
+})
+
 describe('CursorSdkAdapter model catalog', () => {
   it('fetches the live catalog and caches it on success for 30 minutes', async () => {
     const db = makeMockDb()

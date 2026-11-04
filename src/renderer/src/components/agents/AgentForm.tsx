@@ -323,7 +323,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         max_parallel_sessions: maxParallelSessions,
         mcp_servers: mcpServersConfig.length > 0 ? mcpServersConfig : undefined,
         skill_ids: skillIds,
-        secret_ids: secretIds.length > 0 ? secretIds : undefined,
+        secret_ids: codingAgent !== CodingAgentType.CURSOR && secretIds.length > 0 ? secretIds : undefined,
         api_keys: {
           // Only persist the OpenAI key when Codex is in api_key mode
           openai: (codingAgent === CodingAgentType.CODEX && authMethod === 'api_key')
@@ -908,13 +908,15 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </div>
       </div>
 
-      <div className="space-y-2">
-        <Label>Secrets</Label>
-        <p className="text-xs text-muted-foreground">
-          Select secrets to inject into the agent's shell environment
-        </p>
-        <SecretSelector selectedIds={secretIds} onChange={setSecretIds} />
-      </div>
+      {codingAgent !== CodingAgentType.CURSOR && (
+        <div className="space-y-2">
+          <Label>Secrets</Label>
+          <p className="text-xs text-muted-foreground">
+            Select secrets to inject into the agent's shell environment
+          </p>
+          <SecretSelector selectedIds={secretIds} onChange={setSecretIds} />
+        </div>
+      )}
 
       <div className="flex justify-end gap-2 pt-2">
         <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>

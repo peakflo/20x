@@ -280,6 +280,8 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       this.processConfig = await this.resolveProcessConfig()
       this.processConfigResolved = true
     }
+    // Legacy: Cursor now runs on the native SDK adapter (cursor-sdk-adapter.ts); this branch only
+    // applies to a user-defined ACP agent whose local command is `cursor-agent`.
     if (this.processConfig.command === 'cursor-agent') {
       const env = { ...process.env, ...this.processConfig.env }
       if (!this.commandExists('cursor-agent', process.cwd(), env)) {
@@ -427,6 +429,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     if (error.code !== 'ENOENT') return `Could not start ${command}: ${error.message}`
     if (!existsSync(cwd)) return `Could not start ${command}: working directory does not exist: ${cwd}`
     if (!this.commandExists(command, cwd, env)) {
+      // Legacy: see initialize(); only reachable for a user-defined `cursor-agent` ACP command.
       if (command === 'cursor-agent') {
         return 'CURSOR_CLI_MISSING: Cursor CLI (cursor-agent) is not installed or is not in 20x\'s PATH. Install it from https://cursor.com/docs/cli/installation, then retry.'
       }

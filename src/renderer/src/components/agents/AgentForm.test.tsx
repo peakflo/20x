@@ -144,6 +144,14 @@ describe('AgentForm server URL', () => {
     }
   })
 
+  it('hides the Secrets selector for Cursor agents, which never receive secrets', () => {
+    render(<AgentForm onSubmit={vi.fn()} onCancel={vi.fn()} />)
+    selectCodingAgent('claude-code')
+    expect(screen.queryByText('Secrets')).not.toBeNull()
+    selectCodingAgent('cursor')
+    expect(screen.queryByText('Secrets')).toBeNull()
+  })
+
   it('no longer shows the "runs locally via CLI" notes', () => {
     render(<AgentForm onSubmit={vi.fn()} onCancel={vi.fn()} />)
     selectCodingAgent('claude-code')

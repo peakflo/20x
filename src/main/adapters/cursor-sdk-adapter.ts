@@ -51,6 +51,11 @@ import type { DatabaseManager } from '../database'
 import { CURSOR_KEYCHAIN_ACCESS_SETTING, probeCursorUsageLimits } from '../usage/cursor-limits'
 import { DbSdkCredentialStore, resolveCursorApiKey } from './cursor-sdk-auth'
 
+/** True when an error message describes a plan, quota or usage-limit stop (not a transient failure). */
+export function isUsageLimitMessage(message: string): boolean {
+  return /usage limit|rate limit|quota|too many requests|limit (?:reached|exceeded)|out of (?:usage|credits)|exceeded your (?:plan|usage)/i.test(message)
+}
+
 type CursorSdkModule = typeof import('@cursor/sdk')
 
 // ── Lazy ESM-only SDK load (mirrors ClaudeCodeAdapter's `ensureSDKLoaded` house pattern) ──
@@ -432,7 +437,7 @@ export class CursorSdkAdapter implements CodingAgentAdapter {
     const message = error instanceof Error ? error.message : String(error)
     session.status = SessionStatusType.ERROR
     session.lastError = message
-    if (error instanceof sdk.RateLimitError) {
+    if (error instanceof sdk.RateLimitError || isUsageLimitMessage(message)) {
       session.usageLimit = { resetAt: null }
     }
     this.emitPart(session, { id: `error-${randomUUID()}`, type: MessagePartType.ERROR, role: 'assistant', text: message })
@@ -453,6 +458,11 @@ export class CursorSdkAdapter implements CodingAgentAdapter {
       const message = result.error?.message || 'Cursor run failed'
       session.status = SessionStatusType.ERROR
       session.lastError = message
+      // A plan/usage-limit failure can arrive as a failed run result instead of a thrown RateLimitError.
+      const code = (result.error as { code?: unknown } | undefined)?.code
+      if (code === 'rate_limit' || code === 'usage_limit' || isUsageLimitMessage(message)) {
+        session.usageLimit = { resetAt: null }
+      }
       this.emitPart(session, { id: `error-${randomUUID()}`, type: MessagePartType.ERROR, role: 'assistant', text: message })
     } else {
       session.status = SessionStatusType.IDLE
