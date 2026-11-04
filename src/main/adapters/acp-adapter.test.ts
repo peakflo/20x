@@ -59,6 +59,14 @@ interface AcpSessionForTest {
   lastSessionUpdateType: string | null
   activeTurnId: number | null
   pendingAssistantTurnSplit: boolean
+  loading: boolean
+  autonomousTurn: boolean
+  autonomousNeedsBoundary: boolean
+  workInProgress: Set<string>
+  rootState: 'running' | 'requires_action' | 'idle' | null
+  usageReportedForTurn: boolean
+  lastLoadActivityAt: number | null
+  autonomousIdleTimer?: ReturnType<typeof setTimeout>
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
   lastError: string | null
   createdInApp: boolean
@@ -125,6 +133,13 @@ function createMockSession(sessionId: string): AcpSessionForTest {
     lastSessionUpdateType: null,
     activeTurnId: null,
     pendingAssistantTurnSplit: false,
+    loading: false,
+    autonomousTurn: false,
+    autonomousNeedsBoundary: false,
+    workInProgress: new Set(),
+    rootState: null,
+    usageReportedForTurn: false,
+    lastLoadActivityAt: null,
     toolCallMetadata: new Map(),
     lastError: null,
     createdInApp: true,
@@ -837,5 +852,511 @@ describe('AcpAgentAdapter spawn failures', () => {
     proc.emit('error', missing)
     await expect(result).rejects.toThrow(/working directory does not exist/)
     await expect(result).rejects.not.toThrow(/CURSOR_CLI_MISSING/)
+  })
+})
+
+describe('AcpAgentAdapter - verbatim streaming and explicit replay handling', () => {
+  const ACP_ID = 'acp-1'
+
+  function setup(registryAgentId?: string) {
+    const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [], registryAgentId })
+    const priv = adapter as unknown as AcpAgentAdapterPrivate & {
+      sessions: Map<string, AcpSessionForTest>
+      handleAgentNotification(session: AcpSessionForTest, n: unknown): void
+      addToPermanentMessages(session: AcpSessionForTest, e: unknown): void
+    }
+    const session = createMockSession('s1')
+    session.acpSessionId = ACP_ID
+    priv.sessions.set('s1', session)
+    return { adapter, priv, session }
+  }
+
+  const note = (update: Record<string, unknown>, params: Record<string, unknown> = {}) => ({
+    jsonrpc: '2.0',
+    method: 'session/update',
+    params: { sessionId: ACP_ID, ...params, update }
+  })
+  const msg = (text: string, extra: Record<string, unknown> = {}) => note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text }, ...extra })
+  const thought = (text: string, extra: Record<string, unknown> = {}) => note({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text }, ...extra })
+  const tool = (id: string, status: string) => note({ sessionUpdate: 'tool_call', toolCallId: id, title: 'Run', kind: 'execute', status })
+
+  /** Text of every assistant text part, built from the live buffer exactly as polling does. */
+  function liveTexts(priv: ReturnType<typeof setup>['priv'], session: AcpSessionForTest, type = MessagePartType.TEXT) {
+    const seen = new Set<string>()
+    const lengths = new Map<string, string>()
+    const byId = new Map<string, string>()
+    for (const event of session.messageBuffer) {
+      for (const part of priv.convertAcpEventToMessageParts(event, new Set(), seen, lengths, session)) {
+        if (part.type === type && part.role === 'assistant') byId.set(part.id!, part.text!)
+      }
+    }
+    return [...byId.values()]
+  }
+
+  async function historyTexts(adapter: AcpAgentAdapter) {
+    const messages = await adapter.getAllMessages('s1', {} as SessionConfig)
+    return messages.flatMap((m) => m.parts).filter((p) => p.type === MessagePartType.TEXT && p.role === 'assistant').map((p) => p.text)
+  }
+
+  /** Feeds chunks and asserts live output and permanent history agree. */
+  async function stream(chunks: string[], registryAgentId?: string) {
+    const { adapter, priv, session } = setup(registryAgentId)
+    for (const c of chunks) priv.handleAgentNotification(session, msg(c))
+    const live = liveTexts(priv, session)
+    expect(await historyTexts(adapter)).toEqual(live)
+    return live
+  }
+
+  it.each([
+    ['PR number', ['#997', '7'], '#9977'],
+    ['PR url', ['https://github.com/o/r/pull/997', '7'], 'https://github.com/o/r/pull/9977'],
+    ['suffix chunk of 8+ chars', ['--------', '--------'], '----------------'],
+    ['repeated code line', ['const a = 1;\n', 'const a = 1;\n'], 'const a = 1;\nconst a = 1;\n'],
+    ['repeated words', ['test test ', 'test '], 'test test test '],
+    ['repeated table rows', ['| a | 1 |\n', '| a | 1 |\n', '| a | 1 |\n'], '| a | 1 |\n| a | 1 |\n| a | 1 |\n'],
+    ['chunk equal to prior text', ['hello world', 'hello world'], 'hello worldhello world'],
+    ['prefix overlap of 8+ chars', ['The matching UI', 'matching UI looks'], 'The matching UImatching UI looks']
+  ])('appends %s verbatim (live and history agree)', async (_name, chunks, expected) => {
+    expect(await stream(chunks)).toEqual([expected])
+  })
+
+  it('applies the same rule to thought chunks', async () => {
+    const { adapter, priv, session } = setup()
+    priv.handleAgentNotification(session, thought('--------'))
+    priv.handleAgentNotification(session, thought('--------'))
+    expect(liveTexts(priv, session, MessagePartType.REASONING)).toEqual(['----------------'])
+    const parts = (await adapter.getAllMessages('s1', {} as SessionConfig)).flatMap((m) => m.parts)
+    expect(parts.find((p) => p.type === MessagePartType.REASONING)?.text).toBe('----------------')
+  })
+
+  it('ignores updates flagged _meta.isReplay for live output and history', async () => {
+    const { adapter, priv, session } = setup()
+    priv.handleAgentNotification(session, msg('Hello'))
+    priv.handleAgentNotification(session, note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Hello' } }, { _meta: { isReplay: true } }))
+    priv.handleAgentNotification(session, msg(' there'))
+    expect(liveTexts(priv, session)).toEqual(['Hello there'])
+    expect(await historyTexts(adapter)).toEqual(['Hello there'])
+    expect(session.permanentMessages).toHaveLength(1)
+  })
+
+  it('starts a new part for a different messageId and keeps the same messageId together', async () => {
+    const { adapter, priv, session } = setup()
+    priv.handleAgentNotification(session, msg('One', { messageId: 'm1' }))
+    priv.handleAgentNotification(session, msg(' more', { messageId: 'm1' }))
+    priv.handleAgentNotification(session, msg('Two', { messageId: 'm2' }))
+    expect(liveTexts(priv, session)).toEqual(['One more', 'Two'])
+    expect(await historyTexts(adapter)).toEqual(['One more', 'Two'])
+  })
+
+  it('splits parts around a tool call, even with the same messageId', async () => {
+    const { adapter, priv, session } = setup()
+    priv.handleAgentNotification(session, msg('Before', { messageId: 'm1' }))
+    priv.handleAgentNotification(session, tool('t1', 'completed'))
+    priv.handleAgentNotification(session, msg('Before', { messageId: 'm1' }))
+    expect(liveTexts(priv, session)).toEqual(['Before', 'Before'])
+    expect(await historyTexts(adapter)).toEqual(['Before', 'Before'])
+  })
+
+  it('ignores updates for another (child) session id', async () => {
+    const { adapter, priv, session } = setup()
+    priv.handleAgentNotification(session, msg('root'))
+    priv.handleAgentNotification(session, note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'CHILD' } }, { sessionId: 'child-9' }))
+    priv.handleAgentNotification(session, msg(' text'))
+    expect(liveTexts(priv, session)).toEqual(['root text'])
+    expect(await historyTexts(adapter)).toEqual(['root text'])
+  })
+
+  it('shows output after a completed prompt as a new autonomous turn, not appended to the previous message', async () => {
+    const { adapter, priv, session } = setup()
+    session.promptRequestId = 7
+    session.activeTurnId = 1
+    session.currentTurnId = 1
+    priv.handleAgentNotification(session, msg('Answer'))
+    priv.handleRpcMessage(session, { jsonrpc: '2.0', id: 7, result: { stopReason: 'end_turn' } })
+    expect(session.activeTurnId).toBeNull()
+    // e.g. a background agent finishing after the prompt returned
+    priv.handleAgentNotification(session, msg('Answer'))
+    priv.handleAgentNotification(session, msg(' (background)'))
+    expect(session.status).toBe(SessionStatusType.BUSY)
+    expect(session.autonomousTurn).toBe(true)
+    expect(liveTexts(priv, session)).toEqual(['Answer', 'Answer (background)'])
+    expect(await historyTexts(adapter)).toEqual(['Answer', 'Answer (background)'])
+    expect(session.permanentMessages).toHaveLength(2)
+  })
+
+  it('returns to idle once autonomous output stops', () => {
+    vi.useFakeTimers()
+    try {
+      const { priv, session } = setup()
+      priv.handleAgentNotification(session, msg('background result'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      vi.advanceTimersByTime(3500)
+      expect(session.status).toBe(SessionStatusType.IDLE)
+      expect(session.autonomousTurn).toBe(false)
+      expect(session.activeTurnId).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  describe('session load / resume', () => {
+    it('does not duplicate earlier assistant text when the agent replays history without isReplay', async () => {
+      const cp = await import('child_process')
+      const spawnMock = cp.spawn as unknown as ReturnType<typeof vi.fn>
+      const emit: { stdout?: EventEmitter } = {}
+      const send = (n: unknown) => emit.stdout!.emit('data', Buffer.from(JSON.stringify(n) + '\n'))
+      const { proc, stdout } = createFakeProcess({
+        initialize: () => v1InitResponse,
+        'session/load': () => 'unused'
+      })
+      emit.stdout = stdout
+      // Replace the load handler so history is streamed before the response.
+      const origWrite = (proc as unknown as { stdin: { write: (d: string, cb?: () => void) => void } }).stdin.write
+      ;(proc as unknown as { stdin: { write: unknown } }).stdin.write = (data: string, cb?: () => void) => {
+        const m = JSON.parse(data.trim())
+        if (m.method === 'session/load') {
+          send(note({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'hi' } }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Earlier answer' } }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Earlier thought' } }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'tool_call', toolCallId: 'old-tool', title: 'Run', kind: 'execute', status: 'pending' }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'tool_call_update', toolCallId: 'old-tool', status: 'completed' }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'plan', entries: [] }, { sessionId: 'resumed-1' }))
+          send(note({ sessionUpdate: 'current_mode_update', currentModeId: 'plan' }, { sessionId: 'resumed-1' }))
+          send({ jsonrpc: '2.0', id: m.id, result: {} })
+          cb?.()
+          return
+        }
+        origWrite(data, cb)
+      }
+      spawnMock.mockReturnValue(proc)
+
+      const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [] })
+      const messages = await adapter.resumeSession('resumed-1', { agentId: 'a', taskId: 't', workspaceDir: '/tmp' } as SessionConfig)
+      // No replayed user, assistant, thought, tool or plan content is kept; mode updates still apply.
+      expect(messages.flatMap((m) => m.parts)).toEqual([])
+
+      // A new turn after the load streams normally and is not mixed with the replay.
+      const priv = adapter as unknown as { sessions: Map<string, AcpSessionForTest>; handleAgentNotification(s: AcpSessionForTest, n: unknown): void }
+      const session = priv.sessions.get('resumed-1')!
+      expect(session.loading).toBe(false)
+      expect(session.currentModeId).toBe('plan')
+      priv.handleAgentNotification(session, note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Fresh' } }, { sessionId: 'resumed-1' }))
+      const after = await adapter.getAllMessages('resumed-1', {} as SessionConfig)
+      expect(after.flatMap((m) => m.parts).filter((p) => p.role === 'assistant').map((p) => p.text)).toEqual(['Fresh'])
+    })
+
+    it('drops explicit isReplay updates during load too', async () => {
+      const { priv, session } = setup()
+      priv.handleAgentNotification(session, note({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'old' } }, { _meta: { isReplay: true } }))
+      expect(session.permanentMessages).toHaveLength(0)
+    })
+  })
+
+  describe('ACP v2 work-state (subagent_update.state)', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+    const subagent = (id: string, state: string | null) => note({ sessionUpdate: 'subagent_update', sessionId: id, state: state ? { state } : null })
+
+    it('starts an out-of-turn turn BUSY on running and ends it IDLE on idle; quiet gaps stay BUSY meanwhile', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      const changed = vi.fn()
+      ;(priv as unknown as { onDataAvailable: () => void }).onDataAvailable = changed
+      priv.handleAgentNotification(session, subagent('child-1', 'running'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      expect(session.autonomousTurn).toBe(true)
+      priv.handleAgentNotification(session, msg('progress'))
+      vi.advanceTimersByTime(60_000) // far beyond the 3s quiet fallback
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      priv.handleAgentNotification(session, subagent('child-1', 'idle'))
+      expect(session.status).toBe(SessionStatusType.IDLE)
+      expect(session.autonomousTurn).toBe(false)
+      expect(changed).toHaveBeenCalled()
+    })
+
+    it('stays BUSY while any of several children is still running, and requires_action counts as work', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, subagent('a', 'running'))
+      priv.handleAgentNotification(session, subagent('b', 'requires_action'))
+      priv.handleAgentNotification(session, subagent('a', 'idle'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      priv.handleAgentNotification(session, subagent('b', null))
+      expect(session.status).toBe(SessionStatusType.IDLE)
+    })
+
+    it('uses the quiet timer for a v2 agent that sends no work state', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, msg('background'))
+      vi.advanceTimersByTime(3500)
+      expect(session.status).toBe(SessionStatusType.IDLE)
+    })
+
+    it('ignores work-state from v1 agents and keeps using the timer', () => {
+      const { priv, session } = setup()
+      expect(session.generation).toBe('v1')
+      priv.handleAgentNotification(session, subagent('child-1', 'running'))
+      expect(session.autonomousTurn).toBe(false)
+      priv.handleAgentNotification(session, msg('background'))
+      vi.advanceTimersByTime(3500)
+      expect(session.status).toBe(SessionStatusType.IDLE)
+    })
+
+    it('does not merge a work-started turn into the previous message', async () => {
+      const { adapter, priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, msg('same'))
+      priv.handleAgentNotification(session, subagent('c', 'idle'))
+      vi.advanceTimersByTime(3500)
+      priv.handleAgentNotification(session, subagent('c', 'running'))
+      priv.handleAgentNotification(session, msg('same'))
+      expect(await historyTexts(adapter)).toEqual(['same', 'same'])
+    })
+  })
+
+  describe('ACP v2 root-session state_update', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+    const state = (st: string, extra: Record<string, unknown> = {}) => note({ sessionUpdate: 'state_update', state: st, ...extra })
+
+    it('running starts an out-of-turn turn BUSY and idle ends it', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('running'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      expect(session.autonomousTurn).toBe(true)
+      priv.handleAgentNotification(session, state('idle', { stopReason: 'end_turn' }))
+      expect(session.status).toBe(SessionStatusType.IDLE)
+      expect(session.autonomousTurn).toBe(false)
+      expect(session.activeTurnId).toBeNull()
+      expect(session.permanentMessages).toHaveLength(0)
+    })
+
+    it('running with a long quiet gap stays BUSY, even after output', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('running'))
+      priv.handleAgentNotification(session, msg('working'))
+      vi.advanceTimersByTime(10 * 60_000)
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      priv.handleAgentNotification(session, state('idle'))
+      expect(session.status).toBe(SessionStatusType.IDLE)
+    })
+
+    it('does not open a second turn when a prompt is already running', () => {
+      const { priv, session } = setup()
+      session.activeTurnId = 4
+      session.currentTurnId = 4
+      priv.handleAgentNotification(session, state('running'))
+      expect(session.autonomousTurn).toBe(false)
+      expect(session.activeTurnId).toBe(4)
+    })
+
+    it('idle with stopReason error becomes an error', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('running'))
+      priv.handleAgentNotification(session, state('idle', { stopReason: 'error' }))
+      expect(session.status).toBe(SessionStatusType.ERROR)
+      expect(session.lastError).toMatch(/error/i)
+      expect(session.permanentMessages.some((m) => (m as { _isError?: boolean })._isError)).toBe(true)
+    })
+
+    it('idle carrying an error object reports its message and classifies usage limits', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('idle', { error: { message: 'Usage limit reached for this plan' } }))
+      expect(session.status).toBe(SessionStatusType.ERROR)
+      expect(session.usageLimit).toBeTruthy()
+    })
+
+    it('idle usage feeds usage tracking once, not again from the prompt response', () => {
+      const { adapter, priv, session } = setup()
+      const onUsage = vi.fn()
+      ;(adapter as unknown as { onUsage: unknown }).onUsage = onUsage
+      session.generation = 'v2'
+      session.config = { model: 'm', taskId: 't', agentId: 'a' } as typeof session.config
+      session.promptRequestId = 9
+      session.activeTurnId = 1
+      priv.handleAgentNotification(session, state('idle', { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }))
+      priv.handleRpcMessage(session, { jsonrpc: '2.0', id: 9, result: { stopReason: 'end_turn', usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } } })
+      expect(onUsage).toHaveBeenCalledTimes(1)
+    })
+
+    it('requires_action maps to waiting for approval when a request is pending, else stays busy', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('requires_action'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      session.pendingApproval = { requestId: 1, toolCallId: 't', question: 'ok?', options: [] }
+      priv.handleAgentNotification(session, state('requires_action'))
+      expect(session.status).toBe(SessionStatusType.WAITING_APPROVAL)
+      vi.advanceTimersByTime(60_000)
+      expect(session.status).toBe(SessionStatusType.WAITING_APPROVAL)
+      priv.handleAgentNotification(session, state('running'))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+    })
+
+    it('ignores a state_update for another session', () => {
+      const { priv, session } = setup()
+      priv.handleAgentNotification(session, note({ sessionUpdate: 'state_update', state: 'running' }, { sessionId: 'child-1' }))
+      expect(session.autonomousTurn).toBe(false)
+    })
+
+    it('root state wins over subagent_update', () => {
+      const { priv, session } = setup()
+      session.generation = 'v2'
+      priv.handleAgentNotification(session, state('running'))
+      priv.handleAgentNotification(session, note({ sessionUpdate: 'subagent_update', sessionId: 'c', state: { state: 'idle' } }))
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      expect(session.autonomousTurn).toBe(true)
+    })
+
+    it('a v1 agent that sends no state_update uses the quiet timer', () => {
+      const { priv, session } = setup()
+      priv.handleAgentNotification(session, msg('background'))
+      expect(session.rootState).toBeNull()
+      vi.advanceTimersByTime(3500)
+      expect(session.status).toBe(SessionStatusType.IDLE)
+    })
+  })
+
+  describe('autonomous turn lifecycle', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('a prompt sent during an autonomous turn takes over and clears the idle timer', async () => {
+      const { adapter, priv, session } = setup()
+      const write = vi.fn()
+      session.process = { stdin: { write } } as unknown as ChildProcess
+      priv.handleAgentNotification(session, msg('background'))
+      expect(session.autonomousTurn).toBe(true)
+      expect(session.autonomousIdleTimer).toBeDefined()
+      await adapter.sendPrompt('s1', [{ type: MessagePartType.TEXT, text: 'hello' } as MessagePart], {} as SessionConfig)
+      expect(session.autonomousTurn).toBe(false)
+      expect(session.autonomousIdleTimer).toBeUndefined()
+      expect(session.status).toBe(SessionStatusType.BUSY)
+      expect(session.activeTurnId).not.toBeNull()
+      vi.advanceTimersByTime(10_000)
+      expect(session.status).toBe(SessionStatusType.BUSY) // the old timer must not flip it idle mid-prompt
+    })
+
+    it('destroySession clears the idle timer', async () => {
+      const { adapter, priv, session } = setup()
+      session.process = { kill: vi.fn(), killed: true, stdin: { write: vi.fn() } } as unknown as ChildProcess
+      const changed = vi.fn()
+      ;(adapter as unknown as { onDataAvailable: () => void }).onDataAvailable = changed
+      priv.handleAgentNotification(session, msg('background'))
+      changed.mockClear()
+      await adapter.destroySession('s1', {} as SessionConfig)
+      expect(session.autonomousIdleTimer).toBeUndefined()
+      vi.advanceTimersByTime(10_000)
+      expect(changed).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('load without a response / load errors', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+
+    async function startLoad(onLoad: (send: (n: unknown) => void, id: number) => void) {
+      const cp = await import('child_process')
+      const spawnMock = cp.spawn as unknown as ReturnType<typeof vi.fn>
+      const { proc, stdout } = createFakeProcess({ initialize: () => v1InitResponse })
+      const send = (n: unknown) => stdout.emit('data', Buffer.from(JSON.stringify(n) + '\n'))
+      const origWrite = (proc as unknown as { stdin: { write: (d: string, cb?: () => void) => void } }).stdin.write
+      ;(proc as unknown as { stdin: { write: unknown } }).stdin.write = (data: string, cb?: () => void) => {
+        const m = JSON.parse(data.trim())
+        if (m.method === 'session/load') { onLoad(send, m.id); cb?.(); return }
+        origWrite(data, cb)
+      }
+      spawnMock.mockReturnValue(proc)
+      const adapter = new AcpAgentAdapter({ command: 'fake-agent', args: [] })
+      const outcome: { value?: unknown; error?: unknown; done: boolean } = { done: false }
+      const promise = adapter.resumeSession('r-1', { agentId: 'a', taskId: 't', workspaceDir: '/tmp' } as SessionConfig)
+        .then((v) => { outcome.value = v; outcome.done = true }, (e) => { outcome.error = e; outcome.done = true })
+      const priv = adapter as unknown as { sessions: Map<string, AcpSessionForTest> }
+      return { adapter, priv, promise, outcome, send }
+    }
+
+    it('clears the gate after the replay goes quiet when the agent never answers', async () => {
+      const t = await startLoad((send) => {
+        send(note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'old' } }, { sessionId: 'r-1' }))
+      })
+      await vi.advanceTimersByTimeAsync(500)
+      expect(t.outcome.done).toBe(false)
+      expect(t.priv.sessions.get('r-1')!.loading).toBe(true)
+      await vi.advanceTimersByTimeAsync(3000)
+      await t.promise
+      expect(t.outcome.error).toBeUndefined()
+      expect(t.priv.sessions.get('r-1')!.loading).toBe(false)
+      expect((t.outcome.value as unknown[]).length).toBe(0)
+    })
+
+    it('falls back to the overall timeout when nothing is replayed and nothing answers', async () => {
+      const t = await startLoad(() => { /* silence */ })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(t.outcome.done).toBe(false)
+      await vi.advanceTimersByTimeAsync(20_000)
+      await t.promise
+      expect(t.outcome.error).toBeUndefined()
+      expect(t.priv.sessions.get('r-1')!.loading).toBe(false)
+    })
+
+    it('a late real response after the fallback is not handled twice', async () => {
+      let loadId = 0
+      const t = await startLoad((send, id) => {
+        loadId = id
+        send(note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'old' } }, { sessionId: 'r-1' }))
+      })
+      await vi.advanceTimersByTimeAsync(4000)
+      await t.promise
+      const session = t.priv.sessions.get('r-1')!
+      const before = session.permanentMessages.length
+      t.send({ jsonrpc: '2.0', id: loadId, result: {} })
+      await vi.advanceTimersByTimeAsync(100)
+      expect(session.loading).toBe(false)
+      expect(session.permanentMessages.length).toBe(before)
+      expect(t.outcome.error).toBeUndefined()
+    })
+
+    it('a real response before the quiet period finishes the load normally', async () => {
+      const t = await startLoad((send, id) => {
+        send(note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'old' } }, { sessionId: 'r-1' }))
+        send({ jsonrpc: '2.0', id, result: {} })
+      })
+      await vi.advanceTimersByTimeAsync(300)
+      await t.promise
+      expect(t.priv.sessions.get('r-1')!.loading).toBe(false)
+      expect(t.outcome.error).toBeUndefined()
+    })
+
+    it('clears the gate when the load fails', async () => {
+      const t = await startLoad((send, id) => {
+        send({ jsonrpc: '2.0', id, error: { code: -32000, message: 'boom' } })
+      })
+      await vi.advanceTimersByTimeAsync(300)
+      await t.promise
+      expect((t.outcome.error as Error).message).toBe('boom')
+      expect(t.priv.sessions.get('r-1')!.loading).toBe(false)
+    })
+  })
+
+  describe('cumulativeChunks wrapper hook', () => {
+    afterEach(() => { unregisterWrapperHooksForTests('fake-cumulative-agent') })
+
+    it('replaces the text only when the chunk starts with the current text', async () => {
+      registerWrapperHooksForTests('fake-cumulative-agent', { cumulativeChunks: true })
+      expect(await stream(['Error: streaming', 'Error: streaming failed', 'Error: streaming failed after'], 'fake-cumulative-agent'))
+        .toEqual(['Error: streaming failed after'])
+      // Anything that is not an extension of the current text is appended, never trimmed.
+      expect(await stream(['The matching UI', 'matching UI looks'], 'fake-cumulative-agent'))
+        .toEqual(['The matching UImatching UI looks'])
+    })
+
+    it('is off by default', async () => {
+      expect(await stream(['abc', 'abcd'])).toEqual(['abcabcd'])
+    })
   })
 })

@@ -202,6 +202,24 @@ interface AcpSession {
   activeTurnId: number | null
   pendingAssistantTurnSplit: boolean
   toolCallMetadata: Map<string, { name: string; input: string; title?: string }>
+  /**
+   * True from the `session/load` / `session/resume` request until its response. History the
+   * agent replays in that window is dropped: 20x's stored transcript is the source of truth.
+   */
+  loading: boolean
+  /** True while output that arrived outside any `session/prompt` is being shown as its own turn. */
+  autonomousTurn: boolean
+  /** Next assistant chunk starts an autonomous turn and must not merge into the previous message. */
+  autonomousNeedsBoundary: boolean
+  /** Child sessions a v2 agent currently reports as running / requiring action (`subagent_update.state`). */
+  workInProgress: Set<string>
+  /** Last root-session `state_update` state; null when the agent never sends one (timer fallback applies). */
+  rootState: 'running' | 'requires_action' | 'idle' | null
+  /** Token usage for the current turn was already reported (via `state_update` or the prompt response). */
+  usageReportedForTurn: boolean
+  /** Timestamp of the last update seen while `loading` (replay activity), or null. */
+  lastLoadActivityAt: number | null
+  autonomousIdleTimer?: ReturnType<typeof setTimeout>
   lastError: string | null
   createdInApp: boolean
   usageLimit?: UsageLimitStop | null
@@ -230,6 +248,11 @@ interface AcpSession {
 export class AcpAgentAdapter implements CodingAgentAdapter {
   private processConfig: AcpAgentProcessConfig
   private wrapperHooks: AcpWrapperHooks
+  private static readonly AUTONOMOUS_IDLE_MS = 3000
+  /** Load fallback: no replayed update for this long (after at least one) => treat the load as finished. */
+  private static LOAD_QUIET_MS = 1800
+  /** Load fallback: overall wait for a load/resume response before treating it as finished. */
+  private static LOAD_OVERALL_MS = 28000
   private enableFs: boolean
   private enableTerminal: boolean
   private sessions = new Map<string, AcpSession>()
@@ -357,26 +380,29 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
 
     try {
       const mcpServers = this.convertMcpServers(config.mcpServers, session)
-      if (session.generation === 'v2') {
-        await this.sendRpcRequest(session, 'session/resume', {
+      session.loading = true
+      session.lastLoadActivityAt = null
+      const loadRequest = session.generation === 'v2'
+        ? this.sendRpcRequest(session, 'session/resume', {
           sessionId,
           cwd: config.workspaceDir,
           mcpServers,
           replayFrom: { type: 'start' }
         })
-      } else {
-        await this.sendRpcRequest(session, 'session/load', {
+        : this.sendRpcRequest(session, 'session/load', {
           sessionId,
           cwd: config.workspaceDir,
           mcpServers
         })
-      }
+      await this.awaitLoadOrFallback(session, loadRequest)
 
+      session.loading = false
       console.log(`[AcpAgentAdapter] Session loaded successfully: ${sessionId}`)
       const messages = await this.getAllMessages(sessionId, config)
       session.messageBuffer = []
       return messages
     } catch (error: unknown) {
+      session.loading = false
       const message = errMsg(error)
       if (message.includes('not found') || message.includes('does not exist')) {
         acpProcess.kill('SIGTERM')
@@ -385,6 +411,32 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       }
       throw error
     }
+  }
+
+  /**
+   * Waits for the load/resume response. Some agents replay history and then never answer, which
+   * would leave the gate closed forever; so once replay activity has gone quiet (or the overall
+   * timeout passes) the load is treated as finished. A late real response is then ignored.
+   */
+  private awaitLoadOrFallback(session: AcpSession, request: Promise<unknown>): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const startedAt = Date.now()
+      let settled = false
+      const finish = (error?: unknown, fallback?: string) => {
+        if (settled) return
+        settled = true
+        clearInterval(poll)
+        if (fallback) console.warn(`[AcpAgentAdapter] session load/resume had no response (${fallback}); treating it as finished (fallback)`)
+        if (error) reject(error)
+        else resolve()
+      }
+      const poll = setInterval(() => {
+        const now = Date.now()
+        if (session.lastLoadActivityAt !== null && now - session.lastLoadActivityAt >= AcpAgentAdapter.LOAD_QUIET_MS) finish(undefined, 'replay went quiet')
+        else if (now - startedAt >= AcpAgentAdapter.LOAD_OVERALL_MS) finish(undefined, 'overall timeout')
+      }, 250)
+      request.then(() => finish(), (error) => finish(error))
+    })
   }
 
   private buildEnv(config: SessionConfig): Record<string, string | undefined> {
@@ -467,6 +519,13 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       config,
       promptRequestId: null,
       responseCounter: 0,
+      loading: false,
+      autonomousTurn: false,
+      autonomousNeedsBoundary: false,
+      workInProgress: new Set(),
+      rootState: null,
+      usageReportedForTurn: false,
+      lastLoadActivityAt: null,
       currentUserTurnId: 0,
       lastChunkTime: null,
       currentTurnId: 0,
@@ -583,6 +642,8 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       }
     } as unknown as JsonRpcNotification)
 
+    this.endAutonomousTurn(session, false)
+    session.usageReportedForTurn = false
     session.status = SessionStatusType.BUSY
     session.lastError = null
     session.usageLimit = null
@@ -657,6 +718,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     const session = this.sessions.get(sessionId)
     if (!session) return
     console.log(`[AcpAgentAdapter] Destroying session ${sessionId}`)
+    this.endAutonomousTurn(session, false)
     session.process.kill('SIGTERM')
     setTimeout(() => {
       if (!session.process.killed) session.process.kill('SIGKILL')
@@ -1088,7 +1150,10 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         const result = response.result as Record<string, unknown> | undefined
         if (result?.stopReason) {
           console.log(`[AcpAgentAdapter] Prompt completed with stopReason: ${result.stopReason}`)
-          this.reportPromptUsage(session, result)
+          // Usage may already have arrived on the root `state_update` idle: never count it twice.
+          this.reportPromptUsage(session, session.usageReportedForTurn ? { ...result, usage: undefined } : result)
+          if (result.usage) session.usageReportedForTurn = true
+          session.rootState = null
           session.status = SessionStatusType.IDLE
           session.activeTurnId = null
         }
@@ -1156,7 +1221,40 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     }
 
     if (notification.method === 'session/update') {
-      const update = (notification.params as { update?: Record<string, unknown> } | undefined)?.update
+      const params = notification.params as { sessionId?: string; _meta?: { isReplay?: unknown }; update?: Record<string, unknown> } | undefined
+      const update = params?.update
+      if (params?.sessionId && session.acpSessionId && params.sessionId !== session.acpSessionId) {
+        if (this.debugRpcLogs) console.debug(`[AcpAgentAdapter] Ignoring update for other session ${params.sessionId}`)
+        return
+      }
+      if (params?._meta?.isReplay === true || (update?._meta as { isReplay?: unknown } | undefined)?.isReplay === true) {
+        if (this.debugRpcLogs) console.debug(`[AcpAgentAdapter] Ignoring replayed ${String(update?.sessionUpdate)} update`)
+        return
+      }
+      const kind = update?.sessionUpdate as string | undefined
+      if (session.loading) session.lastLoadActivityAt = Date.now()
+      if (kind === 'state_update') {
+        if (!session.loading) this.handleRootStateUpdate(session, update as Record<string, unknown>)
+        return
+      }
+      if (kind === 'subagent_update') {
+        this.handleSubagentWorkState(session, update as Record<string, unknown>)
+        return
+      }
+      if (session.loading && this.isHistoryBearingUpdateType(kind)) {
+        if (this.debugRpcLogs) console.debug(`[AcpAgentAdapter] Dropping ${String(kind)} replayed during session load/resume`)
+        return
+      }
+      // Assistant output with no prompt in flight (e.g. a background agent finishing) is its
+      // own turn: new part ids, session busy, idle again once the updates stop.
+      if (this.isAssistantStreamUpdateType(kind) && session.activeTurnId === null && !session.loading) {
+        this.beginAutonomousTurn(session)
+      }
+      if (this.isAssistantStreamUpdateType(kind) && session.autonomousNeedsBoundary) {
+        session.autonomousNeedsBoundary = false
+        ;(notification as unknown as Record<string, unknown>)._turnBoundary = true
+      }
+      if (session.autonomousTurn) this.armAutonomousIdleTimer(session)
       if (update?.sessionUpdate === 'usage_update') {
         const cost = acpUsageUpdateCostUsd(update)
         if (cost !== null) session.usageCostUsd = cost
@@ -1632,13 +1730,19 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       const nextParams = notification.params as { update?: SessionUpdate } | undefined
       const lastUpdate = lastParams?.update
       const nextUpdate = nextParams?.update
-      if (lastUpdate && nextUpdate && lastUpdate.sessionUpdate === nextUpdate.sessionUpdate && this.isAssistantChunkUpdateType(nextUpdate.sessionUpdate)) {
+      // Merge only consecutive chunks of the same kind that belong to the same message.
+      if (
+        lastUpdate && nextUpdate
+        && lastUpdate.sessionUpdate === nextUpdate.sessionUpdate
+        && this.isAssistantChunkUpdateType(nextUpdate.sessionUpdate)
+        && (lastUpdate.messageId ?? null) === (nextUpdate.messageId ?? null)
+        && !(notification as unknown as Record<string, unknown>)._turnBoundary
+        && typeof lastUpdate.content === 'object' && lastUpdate.content !== null
+      ) {
         const lastText = this.extractTextFromUpdateContent(lastUpdate.content)
         const nextText = this.extractTextFromUpdateContent(nextUpdate.content)
-        if (typeof lastUpdate.content === 'object' && lastUpdate.content !== null) {
-          (lastUpdate.content as Record<string, unknown>).text = this.mergeStreamingText(lastText, nextText)
-          consolidated = true
-        }
+        ;(lastUpdate.content as Record<string, unknown>).text = this.appendChunk(lastText, nextText, nextUpdate.sessionUpdate)
+        consolidated = true
       }
     }
 
@@ -1685,26 +1789,148 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
     return ''
   }
 
-  private mergeStreamingText(currentText: string, incomingChunk: string): string {
-    if (!currentText) return incomingChunk
-    if (!incomingChunk) return currentText
-    if (incomingChunk.startsWith(currentText)) return incomingChunk
-    if (currentText.endsWith(incomingChunk)) return currentText
-
-    const MIN_OVERLAP_CHARS = 8
-    const maxSkippedPrefix = Math.min(32, currentText.length - MIN_OVERLAP_CHARS)
-    for (let skipped = 1; skipped <= maxSkippedPrefix; skipped++) {
-      const replayedText = currentText.slice(skipped)
-      if (incomingChunk.startsWith(replayedText)) return currentText.slice(0, skipped) + incomingChunk
+  /**
+   * Streaming text is appended verbatim: a chunk is never compared with the text
+   * before it, because legitimate continuations often repeat it (`#997` + `7`,
+   * `--------` + `--------`). Duplicates are handled by explicit signals instead
+   * (`_meta.isReplay`, the load/turn gate, `messageId`, session id).
+   *
+   * The only exception is an agent that opts into `cumulativeChunks`, which re-sends
+   * the whole text so far: there a chunk starting with the current text replaces it.
+   */
+  private appendChunk(currentText: string, chunk: string, sessionUpdate?: string): string {
+    if (this.wrapperHooks.cumulativeChunks && sessionUpdate !== 'user_message_chunk' && sessionUpdate !== 'human_message_chunk'
+      && currentText && chunk.startsWith(currentText)) {
+      return chunk
     }
+    return currentText + chunk
+  }
 
-    const maxOverlap = Math.min(currentText.length, incomingChunk.length)
-    for (let length = maxOverlap; length > 0; length--) {
-      if (length >= MIN_OVERLAP_CHARS && currentText.endsWith(incomingChunk.slice(0, length))) {
-        return currentText + incomingChunk.slice(length)
+  /** Updates that carry transcript content (replayed by agents on load); mode/config/command updates are not. */
+  private isHistoryBearingUpdateType(sessionUpdate?: string | null): boolean {
+    return this.isAssistantStreamUpdateType(sessionUpdate) || this.isUserUpdateType(sessionUpdate)
+      || this.isToolingUpdateType(sessionUpdate) || sessionUpdate === 'plan' || sessionUpdate === 'usage_update'
+  }
+
+  private beginAutonomousTurn(session: AcpSession): void {
+    session.autonomousTurn = true
+    session.status = SessionStatusType.BUSY
+    session.currentTurnId += 1
+    session.activeTurnId = session.currentTurnId
+    session.pendingAssistantTurnSplit = true
+    session.autonomousNeedsBoundary = true
+  }
+
+  /**
+   * ACP v2 work-state: `subagent_update.state` is `running` / `requires_action` while a child
+   * reports foreground work, `idle` (or cleared) when it stops. While any child works, an
+   * out-of-turn turn stays BUSY regardless of quiet gaps; when the last one stops it ends
+   * immediately. Agents that never send it keep the quiet-timer fallback.
+   */
+  private handleSubagentWorkState(session: AcpSession, update: Record<string, unknown>): void {
+    // Secondary signal: the root session's own `state_update` wins whenever the agent sends it.
+    if (session.generation !== 'v2' || session.rootState !== null) return
+    const childId = typeof update.sessionId === 'string' ? update.sessionId : undefined
+    if (!childId || !('state' in update)) return
+    const state = (update.state as { state?: string } | null | undefined)?.state
+    if (state === 'running' || state === 'requires_action') {
+      session.workInProgress.add(childId)
+      if (session.activeTurnId === null && !session.loading) this.beginAutonomousTurn(session)
+      if (session.autonomousIdleTimer) { clearTimeout(session.autonomousIdleTimer); session.autonomousIdleTimer = undefined }
+      this.onDataAvailable?.(session.sessionId)
+    } else {
+      session.workInProgress.delete(childId)
+      if (session.workInProgress.size === 0 && session.autonomousTurn) this.endAutonomousTurn(session, true)
+    }
+  }
+
+  /**
+   * ACP v2 root-session work state (`session/update` `state_update`; not yet in the SDK typings, so it
+   * is read from the raw notification). `running` / `requires_action` keep the session busy with no
+   * quiet-gap idle; `idle` ends the turn and may carry `stopReason`, `usage` and `error`.
+   */
+  private handleRootStateUpdate(session: AcpSession, update: Record<string, unknown>): void {
+    if (typeof update.sessionId === 'string' && session.acpSessionId && update.sessionId !== session.acpSessionId) return
+    const raw = update.state
+    const state = typeof raw === 'string' ? raw : (raw as { state?: string } | null | undefined)?.state
+    const detail = (raw && typeof raw === 'object' ? { ...(raw as Record<string, unknown>), ...update } : update) as Record<string, unknown>
+
+    if (state === 'running' || state === 'requires_action') {
+      session.rootState = state
+      if (session.activeTurnId === null) {
+        session.usageReportedForTurn = false
+        this.beginAutonomousTurn(session)
       }
+      if (session.autonomousIdleTimer) { clearTimeout(session.autonomousIdleTimer); session.autonomousIdleTimer = undefined }
+      session.status = state === 'requires_action' && session.pendingApproval
+        ? SessionStatusType.WAITING_APPROVAL
+        : SessionStatusType.BUSY
+      this.onDataAvailable?.(session.sessionId)
+      return
     }
-    return currentText + incomingChunk
+    if (state !== 'idle') return
+
+    session.rootState = 'idle'
+    if (detail.usage && !session.usageReportedForTurn) {
+      session.usageReportedForTurn = true
+      this.reportPromptUsage(session, { usage: detail.usage })
+    }
+    const stopReason = typeof detail.stopReason === 'string' ? detail.stopReason : undefined
+    const errorMessage = this.extractStateError(detail.error) ?? (stopReason === 'error' ? 'The agent stopped with an error' : undefined)
+
+    if (session.autonomousIdleTimer) { clearTimeout(session.autonomousIdleTimer); session.autonomousIdleTimer = undefined }
+    session.autonomousTurn = false
+    session.autonomousNeedsBoundary = false
+    session.activeTurnId = null
+    session.workInProgress.clear()
+    session.pendingApproval = null
+    if (errorMessage) {
+      if (!this.handlePossibleProviderError(session, { code: -32000, message: errorMessage })) {
+        session.status = SessionStatusType.ERROR
+        session.lastError = errorMessage
+        const errorEvent = { _isError: true, message: errorMessage, data: null }
+        session.messageBuffer.push(errorEvent)
+        this.addToPermanentMessages(session, errorEvent)
+      }
+    } else {
+      session.status = SessionStatusType.IDLE
+    }
+    this.onDataAvailable?.(session.sessionId)
+  }
+
+  private extractStateError(error: unknown): string | undefined {
+    if (!error) return undefined
+    if (typeof error === 'string') return error
+    if (typeof error === 'object') {
+      const message = (error as { message?: unknown }).message
+      if (typeof message === 'string' && message) return message
+      return JSON.stringify(error).slice(0, 500)
+    }
+    return String(error)
+  }
+
+  private armAutonomousIdleTimer(session: AcpSession): void {
+    if (session.autonomousIdleTimer) clearTimeout(session.autonomousIdleTimer)
+    session.autonomousIdleTimer = undefined
+    if (session.workInProgress.size > 0 || session.rootState === 'running' || session.rootState === 'requires_action') return
+    session.autonomousIdleTimer = setTimeout(() => this.endAutonomousTurn(session, true), AcpAgentAdapter.AUTONOMOUS_IDLE_MS)
+    session.autonomousIdleTimer.unref?.()
+  }
+
+  private endAutonomousTurn(session: AcpSession, notify: boolean): void {
+    if (session.autonomousIdleTimer) clearTimeout(session.autonomousIdleTimer)
+    session.autonomousIdleTimer = undefined
+    if (!session.autonomousTurn) return
+    session.autonomousTurn = false
+    session.autonomousNeedsBoundary = false
+    session.activeTurnId = null
+    if (session.status === SessionStatusType.BUSY) session.status = SessionStatusType.IDLE
+    if (notify) this.onDataAvailable?.(session.sessionId)
+  }
+
+  /** Streamed or whole assistant text/thought updates (the ones gated outside a turn). */
+  private isAssistantStreamUpdateType(sessionUpdate?: string | null): boolean {
+    return this.isAssistantChunkUpdateType(sessionUpdate) || sessionUpdate === 'agent_message' || sessionUpdate === 'assistant_message'
   }
 
   private isUserUpdateType(sessionUpdate?: string | null): boolean {
@@ -1886,23 +2112,29 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
         })
       }
     } else if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'assistant_message_chunk') {
+      if (session && (notification as unknown as Record<string, unknown>)._turnBoundary) session.pendingAssistantTurnSplit = true
       const turnId = session ? this.getAssistantTurnId(session) : 0
-      const messageId = turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
+      const messageId = update.messageId
+        ? `agent-response-${turnId}-${update.messageId}`
+        : turnId > 0 ? `agent-response-${turnId}` : 'agent-response'
       const chunk = this.extractTextFromUpdateContent(update.content)
       if (chunk) {
         const currentText = partContentLengths.get(messageId) || ''
-        const newText = this.mergeStreamingText(currentText, chunk)
+        const newText = this.appendChunk(currentText, chunk, update.sessionUpdate)
         partContentLengths.set(messageId, newText)
         parts.push({ id: messageId, type: MessagePartType.TEXT, text: newText, role: 'assistant', update: seenPartIds.has(messageId) })
         seenPartIds.add(messageId)
       }
     } else if (update.sessionUpdate === 'agent_thought_chunk') {
+      if (session && (notification as unknown as Record<string, unknown>)._turnBoundary) session.pendingAssistantTurnSplit = true
       const turnId = session ? this.getAssistantTurnId(session) : 0
-      const thinkingId = turnId > 0 ? `agent-thinking-${turnId}` : 'agent-thinking'
+      const thinkingId = update.messageId
+        ? `agent-thinking-${turnId}-${update.messageId}`
+        : turnId > 0 ? `agent-thinking-${turnId}` : 'agent-thinking'
       const chunk = this.extractTextFromUpdateContent(update.content)
       if (chunk) {
         const currentText = partContentLengths.get(thinkingId) || ''
-        const newText = this.mergeStreamingText(currentText, chunk)
+        const newText = this.appendChunk(currentText, chunk, update.sessionUpdate)
         partContentLengths.set(thinkingId, newText)
         parts.push({ id: thinkingId, type: MessagePartType.REASONING, text: newText, role: 'assistant', update: seenPartIds.has(thinkingId) })
         seenPartIds.add(thinkingId)
@@ -1913,7 +2145,7 @@ export class AcpAgentAdapter implements CodingAgentAdapter {
       const chunk = this.extractTextFromUpdateContent(update.content)
       if (chunk) {
         const currentText = partContentLengths.get(userId) || ''
-        const newText = this.mergeStreamingText(currentText, chunk)
+        const newText = currentText + chunk
         partContentLengths.set(userId, newText)
         parts.push({ id: userId, type: MessagePartType.TEXT, text: newText, role: 'user', update: seenPartIds.has(userId) })
         seenPartIds.add(userId)
