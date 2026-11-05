@@ -707,3 +707,32 @@ git push 2>&1 | tail -2`
     expect(screen.queryByRole('button', { name: /workflow-builder/i })).toBeNull()
   })
 })
+
+describe('AgentTranscriptPanel workflow summary links', () => {
+  afterEach(() => {
+    cleanup()
+    act(() => useArtifactStore.setState({ artifactsByTask: {}, uiByTask: {} }))
+  })
+
+  it('shows the summary link as a workflow card under the text and opens the workflow tab on click', () => {
+    const url = 'https://app.workflo.example/flow?workflowId=wf-bills&tenantId=t-demo&view=summary'
+    render(<AgentTranscriptPanel taskId="task" messages={[{
+      id: 'final', role: 'assistant', content: `I built Daily supplier bills. Tested just now ✓ Active.\n\n[Daily supplier bills](${url})`, timestamp: new Date(), partType: 'text'
+    }]} status={SessionStatus.IDLE} onStop={() => undefined} />)
+    expect(screen.queryByRole('link', { name: 'Daily supplier bills' })).toBeNull()
+    expect(screen.getByText('I built Daily supplier bills. Tested just now ✓ Active.')).toBeInTheDocument()
+    const card = screen.getByRole('button', { name: /Daily supplier bills.*Workflow · Click to open/ })
+    fireEvent.click(card)
+    const state = useArtifactStore.getState()
+    expect(state.getArtifacts('task')).toEqual([expect.objectContaining({ id: 'task:workflow:wf-bills', type: ArtifactType.WORKFLOW, title: 'Daily supplier bills', url })])
+    expect(state.getUI('task')).toEqual(expect.objectContaining({ open: true, activeTabId: 'task:workflow:wf-bills' }))
+  })
+
+  it('keeps other links as links', () => {
+    render(<AgentTranscriptPanel taskId="task" messages={[{
+      id: 'final', role: 'assistant', content: 'See [the docs](https://example.com/flow?workflowId=wf-1).', timestamp: new Date(), partType: 'text'
+    }]} status={SessionStatus.IDLE} onStop={() => undefined} />)
+    expect(screen.getByRole('link', { name: 'the docs' })).toBeInTheDocument()
+    expect(screen.queryByText(/Workflow · Click to open/)).toBeNull()
+  })
+})

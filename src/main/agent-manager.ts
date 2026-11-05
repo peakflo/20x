@@ -71,7 +71,7 @@ import {
   type ContinuationAgent,
   type ContinuationPlan
 } from './context-handoff'
-import { ArtifactType, pullRequestUrlFromTool, type Artifact } from '../shared/artifacts'
+import { ArtifactType, pullRequestUrlFromTool, workflowArtifactId, workflowPanelFromTool, type Artifact } from '../shared/artifacts'
 import { buildSystemMessage, computeDeliveryId, SystemMessageOrigin } from '../shared/system-authority'
 import { sendMobilePush } from './mobile-push'
 import { AgentPushEvents, type QuestionPart } from './agent-push-events'
@@ -6869,6 +6869,24 @@ Important:
         type: ArtifactType.PR,
         title: number ? `Pull request #${number}` : 'Pull request',
         url,
+        updatedAt: Date.now(),
+        reloadTrigger: 0
+      })
+    }
+
+    // One workflow tab for each workflow: the newest summary link wins.
+    const workflows = new Map<string, { url: string; title: string }>()
+    for (const part of parts) {
+      const workflow = workflowPanelFromTool(part.tool)
+      if (workflow) workflows.set(workflow.workflowId, { url: workflow.url, title: workflow.title })
+    }
+    for (const [workflowId, workflow] of workflows) {
+      this.sendArtifactUpdated({
+        id: workflowArtifactId(taskId, workflowId),
+        taskId,
+        type: ArtifactType.WORKFLOW,
+        title: workflow.title,
+        url: workflow.url,
         updatedAt: Date.now(),
         reloadTrigger: 0
       })

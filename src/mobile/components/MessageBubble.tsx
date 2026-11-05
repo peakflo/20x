@@ -2,7 +2,8 @@ import { memo, useMemo, useState, type ReactNode } from 'react'
 import { Markdown } from '@/components/ui/Markdown'
 import { InlineHtmlRender } from '@/components/artifacts/InlineHtmlRender'
 import { findMessageArtifact } from '@/components/artifacts/find-message-artifact'
-import { ArtifactType, type Artifact } from '@shared/artifacts'
+import { ArtifactType, extractWorkflowPanelLinks, workflowPanelRefFromUrl, type Artifact } from '@shared/artifacts'
+import { ArtifactCard } from './ArtifactCard'
 import { mobileArtifactApi } from '../lib/artifact-api'
 import { cn } from '../lib/utils'
 import type { AgentMessage } from '../stores/agent-store'
@@ -608,6 +609,13 @@ export const MessageBubble = memo(function MessageBubble({ message, onAnswer, ca
   const isSystem = message.role === 'system'
   const isError = message.partType === 'error'
   const scadArtifact = !isSystem && !isError && onOpenArtifact ? findChatScadArtifact(message, artifacts) : undefined
+  // A workflow summary link shows as the workflow card, as on desktop. The
+  // phone opens only a known artifact, so the link stays as text otherwise.
+  const extracted = !isUser && !isSystem && !isError && onOpenArtifact ? extractWorkflowPanelLinks(message.content) : null
+  const workflowCards = extracted?.links.map((link) => artifacts.find((artifact) => artifact.type === ArtifactType.WORKFLOW
+    && workflowPanelRefFromUrl(artifact.url)?.workflowId === link.workflowId))
+  const showWorkflowCards = !!workflowCards?.length && workflowCards.every(Boolean)
+  const text = showWorkflowCards ? extracted!.text : message.content
 
   return (
     <div className={cn('flex gap-2', isUser ? 'justify-end' : 'justify-start', !isUser && 'w-full')}>
@@ -619,8 +627,13 @@ export const MessageBubble = memo(function MessageBubble({ message, onAnswer, ca
         !isUser && !isSystem && !isError && 'w-full py-1 text-foreground/80'
       )}>
         <div className="break-words min-w-0">
-          <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
+          {text && <Markdown size="sm" highlightQuery={searchQuery}>{text}</Markdown>}
         </div>
+        {showWorkflowCards && (
+          <div className="mt-2 space-y-2">
+            {workflowCards!.map((artifact) => <ArtifactCard key={artifact!.id} artifact={artifact!} onOpen={() => onOpenArtifact?.(artifact!)} />)}
+          </div>
+        )}
         {scadArtifact && <InlineScadPreview artifact={scadArtifact} renderModel={api.artifacts.renderScad} onOpen={() => onOpenArtifact?.(scadArtifact)} />}
         {message.stepMeta && (
           <div className="flex items-center gap-2 mt-1 text-[10px] text-muted-foreground">
