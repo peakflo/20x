@@ -1,16 +1,30 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Bot, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
-import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
+import { AgentTranscriptPanel, type ComposerAttachment } from '@/components/agents/AgentTranscriptPanel'
 import { AgentHoverCard } from '@/components/usage/AgentHoverCard'
 import { ProviderLogo } from '@/components/usage/ProviderLogo'
 import { useAgentStore, SessionStatus } from '@/stores/agent-store'
 import { useAgentSession } from '@/hooks/use-agent-session'
-import { agentApi, settingsApi } from '@/lib/ipc-client'
+import { agentApi, attachmentApi, settingsApi } from '@/lib/ipc-client'
 import { isUsageProvider } from '@shared/usage'
 import type { Agent } from '@/types'
 
 const MASTERMIND_SESSION_ID = 'mastermind-session'
+
+/**
+ * Mastermind has no task row, so its attachments are stored under the session
+ * id and sent with the message. The main process copies them into the
+ * Mastermind workspace when the message goes out.
+ */
+async function saveMastermindAttachments(filePaths: string[]): Promise<ComposerAttachment[]> {
+  if (filePaths.length === 0) return []
+  return Promise.all(filePaths.map((filePath) => attachmentApi.save(MASTERMIND_SESSION_ID, filePath)))
+}
+
+async function pickMastermindAttachments(): Promise<ComposerAttachment[]> {
+  return saveMastermindAttachments(await attachmentApi.pick())
+}
 
 /** Start the agent at app start, so the first sentence does not wait for it. */
 export const MASTERMIND_PREWARM_SETTING = 'mastermind_prewarm'
@@ -99,7 +113,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
 
   // Send message - the session is usually warm already, so this just sends.
   const handleSendMessage = useCallback(
-    async (message: string) => {
+    async (message: string, options?: { attachments?: ComposerAttachment[] }) => {
       if (!(await ensureSession())) return
 
       // Question answers should use approve() instead of sendMessage()
@@ -109,7 +123,7 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
       if (lastMessage?.partType === 'question' && lastMessage?.tool?.questions) {
         await approve(true, message)
       } else {
-        await sendMessage(message)
+        await sendMessage(message, options?.attachments?.length ? { attachments: options.attachments } : undefined)
       }
     },
     [ensureSession, sendMessage, approve]
@@ -183,6 +197,8 @@ export function OrchestratorPanel({ onClose }: OrchestratorPanelProps) {
           systemStatus={currentSession?.systemStatus}
           onStop={stop}
           onSend={handleSendMessage}
+          onPickAttachments={pickMastermindAttachments}
+          onAddAttachmentPaths={saveMastermindAttachments}
           className="flex-1 min-h-0"
           sessionId={currentSession?.sessionId}
           pendingApproval={currentSession?.pendingApproval ?? undefined}
