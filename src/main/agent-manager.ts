@@ -178,6 +178,9 @@ interface AgentSession {
   /** True after an auto-abort notice has been shown for the current prompt.
    *  Reset when the user sends a new prompt or the adapter emits fresh output. */
   autoAbortNotified?: boolean
+  /** Consecutive automatic continues after a watchdog abort (reset by any other message). */
+  autoContinueCount?: number
+  autoContinueSending?: boolean
   /** Timestamp of the last observed activity (creation, new output, prompt,
    *  or idle transition). Used by the inactivity reaper to decide when an
    *  idle session's in-memory runtime can be released. Idle is only a state
@@ -2882,6 +2885,28 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     }
   }
 
+  private static readonly MAX_AUTO_CONTINUES = 3
+  private static readonly AUTO_CONTINUE_DELAY_MS = 3_000
+  private static readonly AUTO_CONTINUE_MESSAGE =
+    'The previous turn was automatically aborted because it stopped responding (a tool call may have hung). Continue the task where you left off; if the last tool call hung, retry it differently or move on.'
+
+  /** After a watchdog abort, automatically send a "continue" message (capped). */
+  private scheduleAutoContinue(sessionId: string, session: AgentSession): void {
+    const count = session.autoContinueCount ?? 0
+    if (count >= AgentManager.MAX_AUTO_CONTINUES) {
+      console.log(`[AgentManager] Auto-continue limit reached for ${sessionId}`)
+      return
+    }
+    session.autoContinueCount = count + 1
+    setTimeout(() => {
+      if (this.sessions.get(sessionId) !== session || session.status === 'working') return
+      session.autoContinueSending = true
+      this.doSendAdapterMessage(session, sessionId, AgentManager.AUTO_CONTINUE_MESSAGE)
+        .catch((err) => console.error(`[AgentManager] Auto-continue failed for ${sessionId}:`, err))
+        .finally(() => { session.autoContinueSending = false })
+    }, AgentManager.AUTO_CONTINUE_DELAY_MS)
+  }
+
   private sendAutoAbortMessageOnce(
     sessionId: string,
     session: AgentSession,
@@ -3455,6 +3480,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
                   } catch (abortErr) {
                     console.error(`[AgentManager] Failed to abort stuck-tool session ${sessionId}:`, abortErr)
                   }
+                  this.scheduleAutoContinue(sessionId, session)
                   return
                 }
               }
@@ -3565,6 +3591,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
               } catch (abortErr) {
                 console.error(`[AgentManager] Failed to abort stuck session ${sessionId}:`, abortErr)
               }
+              this.scheduleAutoContinue(sessionId, session)
               return
             }
           }
@@ -5429,6 +5456,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       session.heartbeatDisableVersionAtTurnStart = this.db.getSetting(`heartbeat-manual-disable:${session.taskId}`)
     }
     session.autoAbortNotified = false
+    if (!session.autoContinueSending) session.autoContinueCount = 0
     // Remember the prompt so an automatic serverOverloaded retry can nudge
     // the session with the exact same prompt (see retryOverloadedSession).
     session.lastPromptText = message
