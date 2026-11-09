@@ -207,6 +207,46 @@ describe('buildContextHandoff', () => {
   })
 })
 
+describe('buildContextHandoff — secret scrubbing', () => {
+  it('redacts a secret value in a carried turn and in a carried tool result', async () => {
+    const { SecretScrubber } = await import('./secret-scrubber')
+    nextSeq = 1
+    const parts = [
+      turn('user', 'Fix the bug'),
+      turn('assistant', 'the key is leakedsecretvalue123, let me check'),
+      toolResult('bash', 'echo leakedsecretvalue123 -> leakedsecretvalue123')
+    ]
+    const scrubber = new SecretScrubber([{ name: 'MY_SECRET', value: 'leakedsecretvalue123' }])
+    const result = buildContextHandoff(parts, { previousAgentLabel: AGENT, tokenBudget: 1000, scrubber })!
+
+    expect(result.text).not.toContain('leakedsecretvalue123')
+    expect(result.text).toContain('«$MY_SECRET»')
+  })
+
+  it('redacts a secret value in the task request text', async () => {
+    const { SecretScrubber } = await import('./secret-scrubber')
+    nextSeq = 1
+    const parts = [turn('assistant', 'ok')]
+    const scrubber = new SecretScrubber([{ name: 'MY_SECRET', value: 'leakedsecretvalue123' }])
+    const result = buildContextHandoff(parts, {
+      previousAgentLabel: AGENT,
+      tokenBudget: 1000,
+      request: { title: 'Rotate leakedsecretvalue123', description: null },
+      scrubber
+    })!
+
+    expect(result.text).not.toContain('leakedsecretvalue123')
+    expect(result.text).toContain('«$MY_SECRET»')
+  })
+
+  it('leaves text unchanged when no scrubber is given (backward compatible)', () => {
+    nextSeq = 1
+    const parts = [turn('user', 'nothing secret here')]
+    const result = buildContextHandoff(parts, { previousAgentLabel: AGENT, tokenBudget: 1000 })!
+    expect(result.text).toContain('nothing secret here')
+  })
+})
+
 describe('context handoff markers and labels', () => {
   it('namespaces the setting key per task', () => {
     expect(contextHandoffSettingKey('task-9')).toBe('context-handoff:task-9')

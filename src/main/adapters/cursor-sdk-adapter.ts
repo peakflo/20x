@@ -280,9 +280,22 @@ export class CursorSdkAdapter implements CodingAgentAdapter {
     }
   }
 
+  /**
+   * Registers the credential this session authenticates with (explicit key,
+   * `CURSOR_API_KEY`, or the stored browser-login key) with the session's
+   * live scrubber, so an echo of it in the agent's output is redacted at the
+   * `sendToRenderer` choke point. The local SDK agent runs in-process, so its
+   * tools can see this value.
+   */
+  private registerCredentialWithScrubber(config: SessionConfig, apiKey: string | undefined): void {
+    if (!apiKey) return
+    config.getLiveScrubber?.()?.addEntries([{ name: 'CURSOR_API_KEY', value: apiKey }])
+  }
+
   async createSession(config: SessionConfig): Promise<string> {
     const sdk = await this.ensureSDKLoaded()
     const apiKey = await resolveCursorApiKey(config, this.credentialStore)
+    this.registerCredentialWithScrubber(config, apiKey)
     const agent = await sdk.Agent.create({
       model: this.toModelSelection(config.model),
       apiKey,
@@ -312,6 +325,7 @@ export class CursorSdkAdapter implements CodingAgentAdapter {
   async resumeSession(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
     const sdk = await this.ensureSDKLoaded()
     const apiKey = await resolveCursorApiKey(config, this.credentialStore)
+    this.registerCredentialWithScrubber(config, apiKey)
     let agent: SDKAgent
     try {
       agent = await sdk.Agent.resume(sessionId, {

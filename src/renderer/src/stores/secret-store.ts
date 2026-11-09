@@ -6,8 +6,11 @@ interface SecretState {
   secrets: Secret[]
   isLoading: boolean
   error: string | null
+  /** null = not checked yet. Re-checked on every create/update attempt, so a keychain that unlocks mid-session is picked up without a restart. */
+  encryptionAvailable: boolean | null
 
   fetchSecrets: () => Promise<void>
+  checkEncryptionAvailable: () => Promise<boolean>
   createSecret: (data: CreateSecretDTO) => Promise<Secret | null>
   updateSecret: (id: string, data: UpdateSecretDTO) => Promise<Secret | null>
   deleteSecret: (id: string) => Promise<boolean>
@@ -17,6 +20,7 @@ export const useSecretStore = create<SecretState>((set) => ({
   secrets: [],
   isLoading: false,
   error: null,
+  encryptionAvailable: null,
 
   fetchSecrets: async () => {
     set({ isLoading: true, error: null })
@@ -26,16 +30,31 @@ export const useSecretStore = create<SecretState>((set) => ({
     } catch (err) {
       set({ error: String(err), isLoading: false })
     }
+    void useSecretStore.getState().checkEncryptionAvailable()
+  },
+
+  checkEncryptionAvailable: async () => {
+    try {
+      const available = await secretApi.encryptionAvailable()
+      set({ encryptionAvailable: available })
+      return available
+    } catch {
+      // Treat an unexpected IPC failure as "unknown", not "unavailable" —
+      // surfacing a false alarm is worse than staying silent until the next check.
+      return true
+    }
   },
 
   createSecret: async (data) => {
     try {
       const secret = await secretApi.create(data)
-      set((state) => ({ secrets: [...state.secrets, secret] }))
+      set((state) => ({ secrets: [...state.secrets, secret], error: null }))
       return secret
     } catch (err) {
       set({ error: String(err) })
       return null
+    } finally {
+      void useSecretStore.getState().checkEncryptionAvailable()
     }
   },
 
@@ -44,13 +63,16 @@ export const useSecretStore = create<SecretState>((set) => ({
       const updated = await secretApi.update(id, data)
       if (updated) {
         set((state) => ({
-          secrets: state.secrets.map((s) => (s.id === id ? updated : s))
+          secrets: state.secrets.map((s) => (s.id === id ? updated : s)),
+          error: null
         }))
       }
       return updated || null
     } catch (err) {
       set({ error: String(err) })
       return null
+    } finally {
+      void useSecretStore.getState().checkEncryptionAvailable()
     }
   },
 

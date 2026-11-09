@@ -20,6 +20,7 @@ import {
   stopMcpAuthProxy,
   registerMcpProxyTarget,
   unregisterMcpProxyTarget,
+  unregisterMcpProxyTargetByKey,
   getMcpAuthProxyPort
 } from './mcp-auth-proxy'
 
@@ -124,42 +125,199 @@ describe('MCP Auth Proxy', () => {
 
   it('registers a target and returns a proxy URL with an unguessable id', async () => {
     const port = await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`)
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`)
     expect(proxyUrl).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${port}/[0-9a-f]{32}$`))
   })
 
   it('registers a target with a label', async () => {
     const port = await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'My Integration')
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`, 'My Integration')
     expect(proxyUrl).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${port}/[0-9a-f]{32}$`))
   })
 
-  it('deduplicates repeated registrations for the same target URL', async () => {
+  it('deduplicates repeated registrations for the same registration key', async () => {
     await startMcpAuthProxy(mockAuth as never)
     const targetUrl = `http://127.0.0.1:${upstream.port}`
+    const key = 'mcp-server-row-abc'
 
-    const url1 = registerMcpProxyTarget(targetUrl)
-    const url2 = registerMcpProxyTarget(targetUrl)
-    const url3 = registerMcpProxyTarget(targetUrl)
+    const url1 = registerMcpProxyTarget(key, targetUrl)
+    const url2 = registerMcpProxyTarget(key, targetUrl)
+    const url3 = registerMcpProxyTarget(key, targetUrl)
 
     // All calls should return the same proxy URL (same ID)
     expect(url2).toBe(url1)
     expect(url3).toBe(url1)
 
-    // A different target URL gets a DIFFERENT, independent id.
-    const url4 = registerMcpProxyTarget('http://example.com:9999')
+    // A different registration key gets a DIFFERENT, independent id — even
+    // for a different target URL.
+    const url4 = registerMcpProxyTarget('mcp-server-row-xyz', 'http://example.com:9999')
     expect(idOf(url4!)).not.toBe(idOf(url1!))
     expect(idOf(url4!)).toMatch(/^[0-9a-f]{32}$/)
   })
 
+  // The actual bug this is a regression test for: two MCP server CONFIG ROWS
+  // (e.g. the same shared endpoint added under two different accounts) that
+  // happen to point at the SAME target URL must never collapse into one
+  // registration — that would silently hand one account's requests the
+  // other's token (whichever registered last), a cross-account access bug.
+  it('keeps two different registration keys fully separate even when they share a target URL — including their tokens', async () => {
+    await startMcpAuthProxy(mockAuth as never)
+    const sharedUrl = `http://127.0.0.1:${upstream.port}`
+
+    const proxyUrlA = registerMcpProxyTarget('server-row-A', sharedUrl, 'Account A', async () => 'token-for-account-A')!
+    const proxyUrlB = registerMcpProxyTarget('server-row-B', sharedUrl, 'Account B', async () => 'token-for-account-B')!
+
+    expect(idOf(proxyUrlA)).not.toBe(idOf(proxyUrlB))
+
+    await fetch(proxyUrlA, { method: 'POST', body: '{}' })
+    expect(upstream.lastHeaders()['authorization']).toBe('Bearer token-for-account-A')
+
+    await fetch(proxyUrlB, { method: 'POST', body: '{}' })
+    expect(upstream.lastHeaders()['authorization']).toBe('Bearer token-for-account-B')
+
+    // Registering B did NOT retroactively change A's token.
+    await fetch(proxyUrlA, { method: 'POST', body: '{}' })
+    expect(upstream.lastHeaders()['authorization']).toBe('Bearer token-for-account-A')
+  })
+
   it('returns null from registerMcpProxyTarget when proxy is not running', () => {
-    const result = registerMcpProxyTarget('http://example.com')
+    const result = registerMcpProxyTarget('some-key', 'http://example.com')
     expect(result).toBeNull()
+  })
+
+  // Major finding 3: a plain remote MCP server with a user-typed static
+  // header (no OAuth/enterprise token refresh at all) must still be routed
+  // through the proxy — the header value itself must never appear in the
+  // mcpServers config object handed to a harness.
+  it('forwards a static header (e.g. a user-typed API key) with no token provider at all', async () => {
+    await startMcpAuthProxy()
+    const proxyUrl = registerMcpProxyTarget(
+      'static-header-server',
+      `http://127.0.0.1:${upstream.port}`,
+      'Static Header Server',
+      undefined,
+      { 'X-API-Key': 'sk-static-plain-key' }
+    )!
+
+    await fetch(proxyUrl, { method: 'POST', body: '{}' })
+    expect(upstream.lastHeaders()['x-api-key']).toBe('sk-static-plain-key')
+    // No dynamic Authorization was registered — none should be injected.
+    expect(upstream.lastHeaders()['authorization']).toBeUndefined()
+  })
+
+  it('forwards multiple static headers unchanged', async () => {
+    await startMcpAuthProxy()
+    const proxyUrl = registerMcpProxyTarget(
+      'multi-header-server',
+      `http://127.0.0.1:${upstream.port}`,
+      undefined,
+      undefined,
+      { 'X-API-Key': 'key-1', 'X-Tenant-Id': 'tenant-42' }
+    )!
+
+    await fetch(proxyUrl, { method: 'POST', body: '{}' })
+    expect(upstream.lastHeaders()['x-api-key']).toBe('key-1')
+    expect(upstream.lastHeaders()['x-tenant-id']).toBe('tenant-42')
+  })
+
+  it('a dynamic token provider overwrites a stale static Authorization header, not the other way around', async () => {
+    await startMcpAuthProxy()
+    const proxyUrl = registerMcpProxyTarget(
+      'static-plus-dynamic',
+      `http://127.0.0.1:${upstream.port}`,
+      'Mixed',
+      async () => 'fresh-dynamic-token',
+      { Authorization: 'Bearer stale-static-value', 'X-Other': 'kept' }
+    )!
+
+    await fetch(proxyUrl, { method: 'POST', body: '{}' })
+    expect(upstream.lastHeaders()['authorization']).toBe('Bearer fresh-dynamic-token')
+    // The unrelated static header survives even though Authorization was overwritten.
+    expect(upstream.lastHeaders()['x-other']).toBe('kept')
+  })
+
+  it('re-registering the same key with an empty headers object clears a previously-set static header', async () => {
+    await startMcpAuthProxy()
+    const targetUrl = `http://127.0.0.1:${upstream.port}`
+    const firstUrl = registerMcpProxyTarget('rotating-header-server', targetUrl, undefined, undefined, {
+      'X-API-Key': 'old-key'
+    })!
+    await fetch(firstUrl, { method: 'POST', body: '{}' })
+    expect(upstream.lastHeaders()['x-api-key']).toBe('old-key')
+
+    const secondUrl = registerMcpProxyTarget('rotating-header-server', targetUrl, undefined, undefined, {})!
+    expect(secondUrl).toBe(firstUrl)
+    await fetch(secondUrl, { method: 'POST', body: '{}' })
+    expect(upstream.lastHeaders()['x-api-key']).toBeUndefined()
+  })
+
+  it('503s when a registration has neither a token provider nor any static header', async () => {
+    await startMcpAuthProxy()
+    const proxyUrl = registerMcpProxyTarget('no-auth-at-all', `http://127.0.0.1:${upstream.port}`)!
+
+    const response = await fetch(proxyUrl, { method: 'POST', body: '{}' })
+    expect(response.status).toBe(503)
+  })
+
+  it('unregistering a target clears its static headers too', async () => {
+    await startMcpAuthProxy()
+    const targetUrl = `http://127.0.0.1:${upstream.port}`
+    const proxyUrl = registerMcpProxyTarget('unregister-headers', targetUrl, undefined, undefined, {
+      'X-API-Key': 'to-be-cleared'
+    })!
+    unregisterMcpProxyTarget(proxyUrl)
+
+    // Target no longer exists at all → 404, not a 503/leaked-header response.
+    const response = await fetch(proxyUrl, { method: 'POST', body: '{}' })
+    expect(response.status).toBe(404)
+  })
+
+  // Minor finding, re-review: unregisterMcpProxyTarget had no callers at
+  // all — nothing kept the ephemeral proxyUrl it needs around after
+  // buildMcpServersForAdapter returns, so every registration lived until
+  // the proxy itself restarted. unregisterMcpProxyTargetByKey looks a
+  // registration up by the caller's OWN registrationKey (the MCP server
+  // row id, which the caller DOES still have at session-end) instead.
+  it('unregisterMcpProxyTargetByKey removes a registration by the caller\'s own key, with no proxy URL needed', async () => {
+    await startMcpAuthProxy()
+    const targetUrl = `http://127.0.0.1:${upstream.port}`
+    const proxyUrl = registerMcpProxyTarget('server-row-id-1', targetUrl, undefined, undefined, {
+      'X-API-Key': 'to-be-cleared'
+    })!
+
+    unregisterMcpProxyTargetByKey('server-row-id-1')
+
+    const response = await fetch(proxyUrl, { method: 'POST', body: '{}' })
+    expect(response.status).toBe(404)
+
+    // Re-registering under the SAME key afterward works normally (not left
+    // in some half-cleaned state) — gets a fresh id, not the stale one.
+    const newProxyUrl = registerMcpProxyTarget('server-row-id-1', targetUrl, undefined, undefined, {})!
+    expect(newProxyUrl).not.toBe(proxyUrl)
+  })
+
+  it('unregisterMcpProxyTargetByKey is a no-op for a key that was never registered', async () => {
+    await startMcpAuthProxy()
+    expect(() => unregisterMcpProxyTargetByKey('never-registered')).not.toThrow()
+  })
+
+  it('unregisterMcpProxyTargetByKey only removes the ONE key given, leaving a different session sharing the same URL untouched', async () => {
+    await startMcpAuthProxy()
+    const targetUrl = `http://127.0.0.1:${upstream.port}`
+    const urlA = registerMcpProxyTarget('account-a', targetUrl, undefined, async () => 'token-a')!
+    const urlB = registerMcpProxyTarget('account-b', targetUrl, undefined, async () => 'token-b')!
+
+    unregisterMcpProxyTargetByKey('account-a')
+
+    expect((await fetch(urlA, { method: 'POST', body: '{}' })).status).toBe(404)
+    const bResponse = await fetch(urlB, { method: 'POST', body: '{}' })
+    expect(bResponse.status).not.toBe(404)
+    expect(upstream.lastHeaders().authorization).toBe('Bearer token-b')
   })
 
   it('forwards POST requests with fresh JWT to upstream', async () => {
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`)!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`)!
 
     const body = JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 })
     const response = await fetch(proxyUrl, {
@@ -180,7 +338,7 @@ describe('MCP Auth Proxy', () => {
 
   it('injects a FRESH JWT on each request (not cached)', async () => {
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`)!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`)!
 
     // First request with jwt-token-1
     await fetch(proxyUrl, { method: 'POST', body: '{}' })
@@ -199,7 +357,7 @@ describe('MCP Auth Proxy', () => {
 
   it('preserves sub-paths from the request', async () => {
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`)!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`)!
 
     await fetch(`${proxyUrl}/sse`, { method: 'GET' })
     expect(upstream.lastUrl()).toBe('/sse')
@@ -224,7 +382,7 @@ describe('MCP Auth Proxy', () => {
 
   it('returns 502 when auth fails and includes integration name in error', async () => {
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, '[Workflo] Organisation Workspace')!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`, '[Workflo] Organisation Workspace')!
 
     mockAuth.setFail(true)
 
@@ -237,7 +395,7 @@ describe('MCP Auth Proxy', () => {
 
   it('returns 502 with fallback label when no label was set', async () => {
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`)!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`)!
 
     mockAuth.setFail(true)
 
@@ -251,7 +409,7 @@ describe('MCP Auth Proxy', () => {
 
   it('shows a notification on first JWT failure per integration', async () => {
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'HubSpot')!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`, 'HubSpot')!
 
     mockAuth.setFail(true)
 
@@ -267,7 +425,7 @@ describe('MCP Auth Proxy', () => {
 
   it('deduplicates notifications — only one per integration per app run', async () => {
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'Linear')!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`, 'Linear')!
 
     mockAuth.setFail(true)
 
@@ -287,8 +445,8 @@ describe('MCP Auth Proxy', () => {
     // Create a second upstream to get a different target URL
     const upstream2 = await createMockUpstream()
 
-    const proxyUrl1 = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'Integration A')!
-    const proxyUrl2 = registerMcpProxyTarget(`http://127.0.0.1:${upstream2.port}`, 'Integration B')!
+    const proxyUrl1 = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`, 'Integration A')!
+    const proxyUrl2 = registerMcpProxyTarget(`http://127.0.0.1:${upstream2.port}`, `http://127.0.0.1:${upstream2.port}`, 'Integration B')!
 
     mockAuth.setFail(true)
 
@@ -308,7 +466,7 @@ describe('MCP Auth Proxy', () => {
 
   it('resets notification dedup state on stop/restart', async () => {
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'Notion')!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`, 'Notion')!
 
     mockAuth.setFail(true)
     await fetch(proxyUrl, { method: 'POST', body: '{}' })
@@ -321,7 +479,7 @@ describe('MCP Auth Proxy', () => {
 
     // Restart and re-register
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl2 = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, 'Notion')!
+    const proxyUrl2 = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`, 'Notion')!
 
     await fetch(proxyUrl2, { method: 'POST', body: '{}' })
 
@@ -331,7 +489,7 @@ describe('MCP Auth Proxy', () => {
 
   it('unregisters targets correctly', async () => {
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`)!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`)!
 
     // Works before unregister
     const before = await fetch(proxyUrl, { method: 'POST', body: '{}' })
@@ -359,7 +517,7 @@ describe('MCP Auth Proxy', () => {
     mockAuth.getJwt = async () => `jwt-call-${++callNum}`
 
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`)!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`)!
 
     // Fire 5 concurrent requests
     const responses = await Promise.all(
@@ -379,7 +537,7 @@ describe('MCP Auth Proxy', () => {
 
   it('forwards query parameters to upstream', async () => {
     await startMcpAuthProxy(mockAuth as never)
-    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`)!
+    const proxyUrl = registerMcpProxyTarget(`http://127.0.0.1:${upstream.port}`, `http://127.0.0.1:${upstream.port}`)!
 
     await fetch(`${proxyUrl}?foo=bar&baz=1`, { method: 'GET' })
     expect(upstream.lastUrl()).toBe('/?foo=bar&baz=1')
