@@ -313,6 +313,20 @@ function codeNotice(lines: number): string {
 }
 
 /**
+ * Names a path instead of reading it — unless the "path" is only digits and
+ * separators, which is a date (09/12/2026) or a ratio (24/7/365) and belongs
+ * to the listener. A full stop the match swallowed is put back, because a
+ * filename never ends in one and the sentence needs it to be released while
+ * the answer is still being written.
+ */
+function namePath(match: string, lead: string): string {
+  const token = match.slice(lead.length)
+  if (/^[\d\\/.]+$/.test(token)) return match
+  const stop = /\.+$/.exec(token)?.[0] ?? ''
+  return `${lead}a file path${stop}`
+}
+
+/**
  * Turns one assistant answer into something worth hearing.
  *
  * The rules come straight from design §5.7: never speak a code block, a file
@@ -389,8 +403,10 @@ function cleanLine(line: string): string {
       // A path is worse: nobody can follow "src slash main slash voice slash".
       // Two shapes are named — an absolute or home path, and a repository path
       // with at least two separators, which is what an agent answer contains.
-      .replace(/(^|\s)(?:[A-Za-z]:\\|~[\\/]|\/)(?:[\w.@+-]+[\\/])*[\w.@+-]+/g, '$1a file path')
-      .replace(/(^|\s)(?:[\w.@+-]+[\\/]){2,}[\w.@+-]+/g, '$1a file path')
+      // A run of digits and slashes is a date or a ratio, not a path, and is
+      // left for the voice to read. See namePath().
+      .replace(/(^|\s)(?:[A-Za-z]:\\|~[\\/]|\/)(?:[\w.@+-]+[\\/])*[\w.@+-]+/g, namePath)
+      .replace(/(^|\s)(?:[\w.@+-]+[\\/]){2,}[\w.@+-]+/g, namePath)
       .replace(/^\s{0,3}#{1,6}\s+/, '')
       .replace(/^\s{0,3}>\s?/, '')
       .replace(/^\s*[-*+]\s+/, '')
