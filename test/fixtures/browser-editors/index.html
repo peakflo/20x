@@ -1,0 +1,191 @@
+<!doctype html>
+<!--
+  Manual fixture for the agent browser tools (browser_type / browser_press_key /
+  browser_upload_file / browser_wait). It mimics how Draft.js-style editors
+  (x.com composer and Articles) behave:
+
+    * the editor keeps its own model (an array of blocks) and re-renders the DOM
+      from it — DOM-only edits (textContent =, execCommand) are discarded on
+      the next render;
+    * only TRUSTED events are honoured (event.isTrusted) — synthetic
+      KeyboardEvent / InputEvent dispatched by page script are ignored;
+    * Enter (trusted keydown) splits the block, Shift+Enter inserts a soft
+      break, Backspace deletes, Ctrl/Cmd+B toggles bold on the current block;
+    * "Post" reads the MODEL, not the DOM — like X's "Add post" button.
+
+  Serve locally (no external network needed):
+    python3 -m http.server 8765 --directory test/fixtures/browser-editors
+  then navigate a canvas browser panel to http://localhost:8765/ .
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>20x browser tools – rich editor fixture</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 24px; max-width: 760px; }
+  .editor { border: 1px solid #888; min-height: 120px; padding: 8px; outline: none; white-space: pre-wrap; }
+  .editor:focus { border-color: #1d9bf0; }
+  .block { margin: 0 0 4px; min-height: 1.2em; }
+  .block.bold { font-weight: 700; }
+  pre { background: #f4f4f4; padding: 8px; white-space: pre-wrap; }
+  section { margin-bottom: 24px; }
+</style>
+</head>
+<body>
+  <h1>Rich editor fixture</h1>
+
+  <section>
+    <h2>1. Plain contenteditable</h2>
+    <div id="plain" class="editor" contenteditable="true" aria-label="Plain editor"></div>
+  </section>
+
+  <section>
+    <h2>2. Model-backed editor (Draft.js-like, trusted input only)</h2>
+    <div id="draft" class="editor" contenteditable="true" role="textbox" aria-label="Post text" data-testid="draftEditor"></div>
+    <button id="post" type="button">Post</button>
+    <p>Model (what "Post" would publish):</p>
+    <pre id="model"></pre>
+    <p>Ignored untrusted events: <span id="ignored">0</span></p>
+    <p id="posted"></p>
+  </section>
+
+  <section>
+    <h2>3. Hidden file input</h2>
+    <label id="drop">Attach media <input id="file" type="file" multiple data-testid="fileInput" style="display:none" /></label>
+    <pre id="files">(no files)</pre>
+  </section>
+
+<script>
+(() => {
+  const ed = document.getElementById('draft');
+  const modelOut = document.getElementById('model');
+  const ignoredOut = document.getElementById('ignored');
+  let ignored = 0;
+  // Model: blocks of { text, bold }. Caret: { block, offset }.
+  let blocks = [{ text: '', bold: false }];
+  let caret = { block: 0, offset: 0 };
+  let selectAll = false;
+
+  function render() {
+    ed.innerHTML = '';
+    blocks.forEach((b, i) => {
+      const div = document.createElement('div');
+      div.className = 'block' + (b.bold ? ' bold' : '');
+      div.dataset.block = String(i);
+      div.textContent = b.text || '\u200b';
+      ed.appendChild(div);
+    });
+    modelOut.textContent = JSON.stringify(blocks, null, 2);
+    placeCaret();
+  }
+  function placeCaret() {
+    if (document.activeElement !== ed) return;
+    const node = ed.children[caret.block]?.firstChild;
+    if (!node) return;
+    const range = document.createRange();
+    const max = blocks[caret.block].text ? node.length : 0;
+    range.setStart(node, Math.min(caret.offset, max));
+    range.collapse(true);
+    const sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+  function syncSelectionFromDom() {
+    const sel = getSelection();
+    if (!sel.rangeCount || !ed.contains(sel.anchorNode)) return;
+    const r = sel.getRangeAt(0);
+    // Whole-editor selection (browser_type clear=true) => replace everything.
+    // (Range.toString() has no separators between block elements.)
+    selectAll = !r.collapsed && r.toString().replace(/\u200b/g, '') === blocks.map((b) => b.text).join('');
+    let el = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+    while (el && el !== ed && !el.dataset.block) el = el.parentElement;
+    if (el && el.dataset.block) caret = { block: Number(el.dataset.block), offset: sel.anchorOffset };
+    else if (r.collapsed && el === ed) caret = { block: blocks.length - 1, offset: blocks[blocks.length - 1].text.length };
+  }
+  function clearIfSelectAll() {
+    if (!selectAll) return;
+    blocks = [{ text: '', bold: false }];
+    caret = { block: 0, offset: 0 };
+    selectAll = false;
+  }
+  function insert(text) {
+    clearIfSelectAll();
+    const b = blocks[caret.block];
+    b.text = b.text.slice(0, caret.offset) + text + b.text.slice(caret.offset);
+    caret.offset += text.length;
+  }
+  function splitBlock() {
+    clearIfSelectAll();
+    const b = blocks[caret.block];
+    const rest = b.text.slice(caret.offset);
+    b.text = b.text.slice(0, caret.offset);
+    blocks.splice(caret.block + 1, 0, { text: rest, bold: false });
+    caret = { block: caret.block + 1, offset: 0 };
+  }
+  function backspace() {
+    if (selectAll) return clearIfSelectAll();
+    const b = blocks[caret.block];
+    if (caret.offset > 0) {
+      b.text = b.text.slice(0, caret.offset - 1) + b.text.slice(caret.offset);
+      caret.offset -= 1;
+    } else if (caret.block > 0) {
+      const prev = blocks[caret.block - 1];
+      caret = { block: caret.block - 1, offset: prev.text.length };
+      prev.text += b.text;
+      blocks.splice(caret.block + 1, 1);
+    }
+  }
+  function untrusted(e) {
+    if (e.isTrusted) return false;
+    ignored += 1;
+    ignoredOut.textContent = String(ignored);
+    e.preventDefault();
+    return true;
+  }
+
+  document.addEventListener('selectionchange', syncSelectionFromDom);
+  ed.addEventListener('focus', () => { syncSelectionFromDom(); });
+  ed.addEventListener('keydown', (e) => {
+    if (untrusted(e)) return;
+    syncSelectionFromDom();
+    const cmd = e.metaKey || e.ctrlKey;
+    if (cmd && e.keyCode === 66) { e.preventDefault(); blocks[caret.block].bold = !blocks[caret.block].bold; render(); return; }
+    if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); insert('\n'); render(); return; }
+    if (e.key === 'Enter') { e.preventDefault(); splitBlock(); render(); return; }
+    if (e.key === 'Backspace') { e.preventDefault(); backspace(); render(); return; }
+  });
+  ed.addEventListener('beforeinput', (e) => {
+    if (untrusted(e)) return;
+    e.preventDefault();
+    syncSelectionFromDom();
+    if (e.inputType === 'insertText' || e.inputType === 'insertReplacementText' || e.inputType === 'insertFromPaste') insert(e.data ?? e.dataTransfer?.getData('text/plain') ?? '');
+    else if (e.inputType === 'insertParagraph') splitBlock();
+    else if (e.inputType === 'insertLineBreak') insert('\n');
+    else if (e.inputType === 'deleteContentBackward') backspace();
+    render();
+  });
+  // Anything that changed the DOM without going through the model is reverted.
+  ed.addEventListener('input', (e) => { if (!e.isTrusted) ignoredOut.textContent = String(++ignored); render(); });
+  new MutationObserver(() => {
+    const domText = [...ed.children].map((c) => c.textContent.replace(/\u200b/g, '')).join('\n');
+    if (domText !== blocks.map((b) => b.text).join('\n')) queueMicrotask(render);
+  }).observe(ed, { childList: true, characterData: true, subtree: true });
+
+  document.getElementById('post').addEventListener('click', () => {
+    const text = blocks.map((b) => b.text).join('\n');
+    document.getElementById('posted').textContent = text.trim() ? `POSTED (${blocks.length} blocks): ${text}` : 'POST FAILED: model is empty';
+    blocks = [{ text: '', bold: false }];
+    caret = { block: 0, offset: 0 };
+    render();
+  });
+
+  document.getElementById('file').addEventListener('change', (e) => {
+    const list = [...e.target.files].map((f) => `${f.name} (${f.size} bytes, trusted=${e.isTrusted})`);
+    document.getElementById('files').textContent = list.join('\n') || '(no files)';
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
