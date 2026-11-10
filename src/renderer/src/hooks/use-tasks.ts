@@ -3,6 +3,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask, TaskPriority } from '@/types'
+import type { SortField, SortDirection } from '@/stores/ui-store'
 import { isSnoozed } from '@/lib/utils'
 import { isReviewUnseen } from '@shared/review-seen'
 
@@ -37,6 +38,39 @@ const STATUS_ORDER: Record<TaskStatus, number> = {
   [TaskStatus.Completed]: 0,
   [TaskStatus.Cancelled]: 0,
   [TaskStatus.Expired]: 0
+}
+
+/**
+ * Sort `tasks` in place. Date fields are parsed once per task per sort
+ * (decorate-sort-undecorate) instead of twice per comparison: with 2000 tasks
+ * that is ~2k parses instead of ~40k.
+ */
+export function sortTasks(tasks: WorkfloTask[], sortField: SortField, sortDirection: SortDirection): WorkfloTask[] {
+  const sign = sortDirection === 'desc' ? -1 : 1
+  const dateField = sortField === 'due_date' || sortField === 'updated_at'
+    ? sortField
+    : sortField === 'priority' || sortField === 'status' || sortField === 'title'
+      ? null
+      : 'created_at'
+  if (dateField) {
+    // Same keys as before (a missing due date is Infinity); Array#sort treats
+    // a NaN result as 0, so `sign * NaN` keeps the old tie behaviour.
+    const keyed = tasks.map((task) => {
+      const value = task[dateField]
+      const key = dateField === 'due_date' && !value ? Infinity : new Date(value as string).getTime()
+      return { task, key }
+    })
+    keyed.sort((a, b) => sign * (a.key - b.key))
+    for (let i = 0; i < keyed.length; i++) tasks[i] = keyed[i].task
+    return tasks
+  }
+  return tasks.sort((a, b) => {
+    let cmp = 0
+    if (sortField === 'priority') cmp = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]
+    else if (sortField === 'status') cmp = STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
+    else cmp = a.title.localeCompare(b.title)
+    return sign * cmp
+  })
 }
 
 export function useTasks() {
@@ -106,37 +140,7 @@ export function useTasks() {
       )
     }
 
-    // Sort
-    result.sort((a, b) => {
-      let cmp = 0
-      switch (sortField) {
-        case 'priority':
-          cmp = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]
-          break
-        case 'due_date': {
-          const aDate = a.due_date ? new Date(a.due_date).getTime() : Infinity
-          const bDate = b.due_date ? new Date(b.due_date).getTime() : Infinity
-          cmp = aDate - bDate
-          break
-        }
-        case 'status':
-          cmp = STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
-          break
-        case 'title':
-          cmp = a.title.localeCompare(b.title)
-          break
-        case 'updated_at':
-          cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
-          break
-        case 'created_at':
-        default:
-          cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-          break
-      }
-      return sortDirection === 'desc' ? -cmp : cmp
-    })
-
-    return result
+    return sortTasks(result, sortField, sortDirection)
   }, [tasks, sourceFilter, statusFilter, priorityFilter, searchQuery, sortField, sortDirection, reviewUnseenOnly, stickyReviewTaskId])
 
   const selectedTask: WorkfloTask | undefined = useMemo(

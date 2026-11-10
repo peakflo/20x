@@ -1,7 +1,7 @@
 import { ArtifactFileSelector } from './ArtifactFileSelector'
 import { useArtifactNavigation } from './use-artifact-navigation'
 import { useEffect, useState, type ReactNode } from 'react'
-import { PanelRightClose } from 'lucide-react'
+import { PanelRightClose, SquareArrowOutUpRight } from 'lucide-react'
 import { ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
@@ -36,9 +36,11 @@ export interface ArtifactsPanelProps {
   changes: ReactNode
   output: ReactNode
   className?: string
+  /** Canvas only: open the artifact as its own canvas panel. Absent elsewhere, so the action is hidden. */
+  onOpenArtifactInWindow?: (artifact: Artifact) => void
 }
 
-export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubtasks = false, subtaskCounts, hasOutput, changesCount, onSelectTab, onCloseTab, onToggleOpen, details, subtasks, changes, output, className }: ArtifactsPanelProps) {
+export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubtasks = false, subtaskCounts, hasOutput, changesCount, onSelectTab, onCloseTab, onToggleOpen, details, subtasks, changes, output, className, onOpenArtifactInWindow }: ArtifactsPanelProps) {
   const active = ui.activeTabId === PinnedArtifactTabId.SUBTASKS && !hasSubtasks ? PinnedArtifactTabId.DETAILS : ui.activeTabId || PinnedArtifactTabId.DETAILS
   const activeArtifact = artifacts.find((artifact) => artifact.id === active)
   const navigation = useArtifactNavigation(activeArtifact)
@@ -56,9 +58,12 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubt
   return (
     <section className={cn('flex h-full min-h-0 min-w-0 flex-col bg-background', className)} data-task-artifacts>
       <div className="relative">
-        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasSubtasks={hasSubtasks} subtaskCounts={subtaskCounts} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? 'pr-52' : 'pr-11'} />
+        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasSubtasks={hasSubtasks} subtaskCounts={subtaskCounts} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? (onOpenArtifactInWindow ? 'pr-60' : 'pr-52') : 'pr-11'} />
         <div className="absolute right-2 top-1.5 flex items-center gap-1 glass-control">
           {activeArtifact && <ArtifactCopyActions key={`${activeArtifact.id}:${selectedArtifact?.path}`} artifact={selectedArtifact!} artifactApi={artifactApi} />}
+          {activeArtifact && onOpenArtifactInWindow && (
+            <button type="button" aria-label="Open artifact in a separate panel" title="Open in a separate panel" onClick={() => onOpenArtifactInWindow(activeArtifact)} className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><SquareArrowOutUpRight className="h-3.5 w-3.5" /></button>
+          )}
           <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
         </div>
       </div>
@@ -79,7 +84,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubt
   )
 }
 
-function ArtifactViewer({ artifact, artifactApi, refreshTrigger, onLinkClick }: { artifact: Artifact; artifactApi: ArtifactApi; refreshTrigger: number; onLinkClick: (href: string) => boolean }) {
+export function ArtifactViewer({ artifact, artifactApi, refreshTrigger, onLinkClick }: { artifact: Artifact; artifactApi: ArtifactApi; refreshTrigger: number; onLinkClick: (href: string) => boolean }) {
   if (artifact.path?.toLowerCase().endsWith('.scad')) return <ScadArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
   switch (artifact.type) {
     case ArtifactType.MARKDOWN: return <MarkdownArtifactView onLinkClick={onLinkClick} artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />

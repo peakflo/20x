@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Mock } from 'vitest'
-import { useDashboardStore, computeLocalStats } from './dashboard-store'
+import { useDashboardStore, computeLocalStats, __resetCompletedStatsCacheForTest } from './dashboard-store'
 import type { ApplicationItem, DashboardStats } from './dashboard-store'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
@@ -278,6 +278,45 @@ describe('useDashboardStore', () => {
     expect(localStats!.totalAgentRuns).toBe(2)
     expect(localStats!.autonomousTasksCompleted).toBe(1)
     expect(localStats!.humanReviewedTasksCompleted).toBe(1)
+  })
+
+  it('updateLocalStats re-queries completed history only when it can have changed', async () => {
+    __resetCompletedStatsCacheForTest()
+    const getStats = window.electronAPI.db.getCompletedTaskStats as unknown as Mock
+    const open = makeTask({ id: 'open', status: TaskStatus.NotStarted })
+    const done = makeTask({ id: 'done', status: TaskStatus.Completed })
+    const store = useDashboardStore.getState()
+    const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+    store.updateLocalStats([open, done], 1)
+    await settle()
+    expect(getStats).toHaveBeenCalledTimes(1)
+
+    // An open task changed: reuse the aggregate, but recompute open counts.
+    store.updateLocalStats([{ ...open, title: 'renamed', status: TaskStatus.AgentWorking }, done], 1)
+    await settle()
+    expect(getStats).toHaveBeenCalledTimes(1)
+    expect(useDashboardStore.getState().localStats!.tasksByStatus[TaskStatus.AgentWorking]).toBe(1)
+
+    // A task completed, the DB total moved, or the window changed: re-query.
+    store.updateLocalStats([{ ...open, status: TaskStatus.Completed }, done], 1)
+    await settle()
+    expect(getStats).toHaveBeenCalledTimes(2)
+    store.updateLocalStats([{ ...open, status: TaskStatus.Completed }, done], 2)
+    await settle()
+    expect(getStats).toHaveBeenCalledTimes(3)
+    useDashboardStore.setState({ timeWindow: '30d' })
+    store.updateLocalStats([{ ...open, status: TaskStatus.Completed }, done], 2)
+    await settle()
+    expect(getStats).toHaveBeenCalledTimes(4)
+
+    // And never older than a minute.
+    const now = Date.now()
+    const spy = vi.spyOn(Date, 'now').mockReturnValue(now + 61_000)
+    store.updateLocalStats([{ ...open, status: TaskStatus.Completed }, done], 2)
+    spy.mockRestore()
+    await settle()
+    expect(getStats).toHaveBeenCalledTimes(5)
   })
 
   it('updateLocalStats excludes subtasks', async () => {

@@ -94,7 +94,7 @@ function CopyCodeButton({ text }: { text: string }) {
     <button
       type="button"
       onClick={handleCopy}
-      className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded text-muted-foreground opacity-0 transition hover:bg-background/80 hover:text-foreground group-hover:opacity-100 focus:opacity-100"
+      className="absolute right-2 top-2 z-10 flex h-6 w-6 items-center justify-center rounded text-muted-foreground opacity-0 transition glass-surface hover:bg-accent hover:text-foreground group-hover:opacity-100 focus:opacity-100"
       aria-label={copied ? 'Copied code' : 'Copy code'}
       title={copied ? 'Copied' : 'Copy code'}
     >

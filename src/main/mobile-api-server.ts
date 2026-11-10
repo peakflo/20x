@@ -431,7 +431,7 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
   // one-time seed of pre-store sessions.
   const transcriptMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transcript$/)
   if (transcriptMatch) {
-    return db.getTranscriptParts(decodeURIComponent(transcriptMatch[1]))
+    return db.getTranscriptPartsAsync(decodeURIComponent(transcriptMatch[1]))
   }
 
   // GET /api/tasks/:taskId/transcript/delta?sinceRev=N — parts changed since rev.
@@ -440,6 +440,19 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
   if (deltaMatch) {
     const sinceRev = Number(url.searchParams.get('sinceRev') || '0') || 0
     return db.getTranscriptDelta(decodeURIComponent(deltaMatch[1]), sinceRev)
+  }
+
+  // GET /api/tasks/:taskId/transcript/sync[?sinceRev=N] — resync for the
+  // `transcript:changed` delta stream: the whole transcript (or the parts changed
+  // since sinceRev) plus the stream position it is consistent with. Pure read as
+  // above (no backfill); it only sends the task's already-written pending delta
+  // first, so the answer and the stream agree.
+  const syncMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/transcript\/sync$/)
+  if (syncMatch) {
+    if (!agentRef) throw Object.assign(new Error('Agent manager not ready'), { status: 503 })
+    const rawSinceRev = url.searchParams.get('sinceRev')
+    const sinceRev = rawSinceRev != null && rawSinceRev !== '' && Number.isFinite(Number(rawSinceRev)) ? Number(rawSinceRev) : undefined
+    return agentRef.getTranscriptSync(decodeURIComponent(syncMatch[1]), sinceRev, { backfill: false })
   }
 
   // GET /api/tasks/:taskId/artifacts/content?path=... — authenticated artifact

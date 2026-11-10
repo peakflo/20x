@@ -25,6 +25,7 @@ describe('artifact deliverable boundary', () => {
       title: 'dashboard',
       grouped: true
     })
+    expect(artifactWorkpieceForPath('repo/output/final.pdf', ArtifactType.FILE)).not.toBeNull()
     expect(artifactWorkpieceForPath('outputs/dashboard/styles.css', ArtifactType.FILE)).toEqual({
       key: 'outputs/dashboard',
       title: 'dashboard',

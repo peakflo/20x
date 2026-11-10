@@ -392,6 +392,25 @@ export class PeakfloPlugin implements TaskSourcePlugin {
     // Collect file download jobs to run after the sync loop
     const fileDownloadJobs: Array<{ taskId: string; fields: PeakfloField[] }> = []
 
+    // A remote task not found under this source may still be a local task of
+    // the same tenant under another source (the source was removed and added
+    // again). The local tasks are indexed by external id once per sync, on the
+    // first such miss, instead of loading every task for every miss.
+    let localIdsByExternalId: Map<string, string[]> | null = null
+    const findRelinkableTaskId = (externalId: string, tenantId: string): string | undefined => {
+      if (!localIdsByExternalId) {
+        localIdsByExternalId = new Map()
+        // Newest first, the same order the full task list used.
+        for (const row of ctx.db.getExternalTaskIds()) {
+          const ids = localIdsByExternalId.get(row.external_id)
+          if (ids) ids.push(row.id)
+          else localIdsByExternalId.set(row.external_id, [row.id])
+        }
+      }
+      return localIdsByExternalId.get(externalId)?.find((id) =>
+        serverTaskSnapshot(ctx.db, id)?.tenantId === tenantId && !!ctx.db.getTask(id))
+    }
+
     try {
       let cursor: string | undefined
       let hasMore = true
@@ -401,8 +420,10 @@ export class PeakfloPlugin implements TaskSourcePlugin {
           try {
             const externalId = task.id // Workflo task ID is the external ID
             const existing = ctx.db.getTaskByExternalId(sourceId, externalId) ??
-              ctx.db.getTasks().find(local => local.external_id === externalId &&
-                serverTaskSnapshot(ctx.db, local.id)?.tenantId === task.tenantId)
+              (() => {
+                const id = findRelinkableTaskId(externalId, task.tenantId)
+                return id ? { id } : undefined
+              })()
 
             if (task.deletedAt) {
               if (existing) ctx.db.deleteTask(existing.id)

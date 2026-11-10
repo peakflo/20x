@@ -276,7 +276,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
               onChange={(e) => setTitle(e.target.value)}
               placeholder="What needs to be done?"
               autoFocus
-              className="w-full bg-transparent border border-input rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30"
+              className="w-full glass-surface border border-input rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30"
             />
           </div>
 
@@ -288,7 +288,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Add details, context, or notes..."
               rows={3}
-              className="w-full bg-transparent border border-input rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 resize-y"
+              className="w-full glass-surface border border-input rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring focus:ring-1 focus:ring-ring/30 resize-y"
             />
           </div>
 
@@ -319,7 +319,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                   <select
                     value={type}
                     onChange={(e) => setType(e.target.value)}
-                    className="w-full bg-transparent border border-input rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-ring"
+                    className="w-full glass-surface border border-input rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-ring"
                   >
                     {TASK_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
@@ -329,7 +329,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                   <select
                     value={priority}
                     onChange={(e) => setPriority(e.target.value)}
-                    className="w-full bg-transparent border border-input rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-ring"
+                    className="w-full glass-surface border border-input rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-ring"
                   >
                     {TASK_PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                   </select>
@@ -343,7 +343,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                   <select
                     value={status}
                     onChange={(e) => setStatus(e.target.value)}
-                    className="w-full bg-transparent border border-input rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-ring"
+                    className="w-full glass-surface border border-input rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-ring"
                   >
                     {TASK_STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
@@ -358,7 +358,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                     type="date"
                     value={dueDate}
                     onChange={(e) => setDueDate(e.target.value)}
-                    className="w-full bg-transparent border border-input rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-ring"
+                    className="w-full glass-surface border border-input rounded-md px-3 py-2 text-sm text-foreground focus:outline-none focus:border-ring"
                   />
                 </div>
                 <div className="space-y-1.5">
@@ -368,7 +368,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                     value={labels}
                     onChange={(e) => setLabels(e.target.value)}
                     placeholder="bug, feature..."
-                    className="w-full bg-transparent border border-input rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring"
+                    className="w-full glass-surface border border-input rounded-md px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring"
                   />
                 </div>
               </div>
@@ -417,12 +417,12 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                     onChange={(e) => setNewFieldName(e.target.value)}
                     placeholder="Field name..."
                     onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addOutputField() } }}
-                    className="flex-1 bg-transparent border border-input rounded-md px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring"
+                    className="flex-1 glass-surface border border-input rounded-md px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring"
                   />
                   <select
                     value={newFieldType}
                     onChange={(e) => setNewFieldType(e.target.value)}
-                    className="bg-transparent border border-input rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-ring w-24"
+                    className="glass-surface border border-input rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-ring w-24"
                   >
                     {OUTPUT_FIELD_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
@@ -471,7 +471,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                       value={rawCron}
                       onChange={(e) => setRawCron(e.target.value)}
                       placeholder="0 9 * * 1-5"
-                      className="w-full bg-transparent border border-input rounded-md px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring font-mono"
+                      className="w-full glass-surface border border-input rounded-md px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-ring font-mono"
                     />
                     <p className="text-[10px] text-muted-foreground">minute hour day-of-month month day-of-week</p>
                   </div>
@@ -485,7 +485,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                         <select
                           value={freqType}
                           onChange={(e) => setFreqType(e.target.value as FrequencyType)}
-                          className="w-full bg-transparent border border-input rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-ring"
+                          className="w-full glass-surface border border-input rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-ring"
                         >
                           {FREQUENCY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                         </select>
@@ -496,7 +496,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                           type="time"
                           value={freqTime}
                           onChange={(e) => setFreqTime(e.target.value)}
-                          className="w-full bg-transparent border border-input rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-ring"
+                          className="w-full glass-surface border border-input rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-ring"
                         />
                       </div>
                     </div>
@@ -509,7 +509,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                           min={1}
                           value={freqInterval}
                           onChange={(e) => setFreqInterval(parseInt(e.target.value) || 1)}
-                          className="w-20 bg-transparent border border-input rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-ring"
+                          className="w-20 glass-surface border border-input rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-ring"
                         />
                       </div>
                     )}
@@ -546,7 +546,7 @@ export function TaskFormPage({ taskId, onNavigate }: { taskId?: string; onNaviga
                           max={31}
                           value={freqMonthDay}
                           onChange={(e) => setFreqMonthDay(parseInt(e.target.value) || 1)}
-                          className="w-20 bg-transparent border border-input rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-ring"
+                          className="w-20 glass-surface border border-input rounded-md px-2 py-1.5 text-xs text-foreground focus:outline-none focus:border-ring"
                         />
                       </div>
                     )}

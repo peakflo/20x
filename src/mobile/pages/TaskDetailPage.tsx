@@ -497,7 +497,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
               <select
                 value={task.agent_id || ''}
                 onChange={(e) => handleAssignAgent(e.target.value || null)}
-                className="bg-transparent border border-border rounded px-2 py-1 text-sm cursor-pointer text-foreground min-w-0"
+                className="glass-surface border border-border rounded px-2 py-1 text-sm cursor-pointer text-foreground min-w-0"
               >
                 <option value="">No agent assigned</option>
                 {agents.map((a) => (
@@ -511,7 +511,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                   colored button on screen at a time. Stop stays destructive
                   since it's a conceptually distinct "halt" action. */}
               {canTriage && (
-                <button onClick={handleTriage} className="inline-flex items-center gap-1.5 border border-border bg-transparent text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
+                <button onClick={handleTriage} className="inline-flex items-center gap-1.5 border border-border glass-surface text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/>
                   </svg>
@@ -519,12 +519,12 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
                 </button>
               )}
               {canStart && (
-                <button onClick={handleStart} className="inline-flex items-center gap-1.5 border border-border bg-transparent text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
+                <button onClick={handleStart} className="inline-flex items-center gap-1.5 border border-border glass-surface text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   Start
                 </button>
               )}
               {canResume && (
-                <button onClick={handleResume} className="inline-flex items-center gap-1.5 border border-border bg-transparent text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
+                <button onClick={handleResume} className="inline-flex items-center gap-1.5 border border-border glass-surface text-foreground hover:bg-accent h-7 rounded-md px-3 text-xs font-medium shrink-0">
                   Resume
                 </button>
               )}
@@ -796,7 +796,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
           const primaryBtnClass =
             'w-full inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90 active:opacity-60 rounded-md px-4 py-2.5 text-sm font-medium'
           const secondaryBtnClass =
-            'w-full inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium active:opacity-60 border border-border bg-transparent text-foreground hover:bg-accent'
+            'w-full inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium active:opacity-60 border border-border glass-surface text-foreground hover:bg-accent'
 
           return (
             <div className="px-4 py-4 flex flex-col gap-2 border-b border-border">
@@ -1102,7 +1102,7 @@ function FeedbackModal({ onSubmit, onSkip, onCancel, completionDescription, sour
           <div role="group" aria-label="Session rating" className="flex justify-center gap-2">
             {[1, 2, 3, 4, 5].map(value => <button key={value} type="button" disabled={busy} aria-label={`Rate ${value}`} aria-pressed={rating === value} className={`flex h-11 w-11 items-center justify-center rounded-lg text-xl ${rating >= value ? 'text-amber-400' : 'text-muted-foreground/50'}`} onClick={() => setRating(value)}>★</button>)}
           </div>
-          <textarea aria-label="Feedback" placeholder="Optional feedback..." value={comment} disabled={busy} onChange={event => setComment(event.target.value)} className="min-h-24 w-full resize-y rounded-lg border border-border bg-background/70 p-3 text-sm text-foreground" />
+          <textarea aria-label="Feedback" placeholder="Optional feedback..." value={comment} disabled={busy} onChange={event => setComment(event.target.value)} className="min-h-24 w-full resize-y rounded-lg border border-border glass-surface p-3 text-sm text-foreground" />
         </>}
         {error && <p role="alert" className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive">{error}</p>}
         <div className="flex flex-wrap justify-end gap-2">

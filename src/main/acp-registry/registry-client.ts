@@ -210,20 +210,29 @@ export function searchAgents(index: AcpRegistryIndex, query: string): AcpRegistr
 
 const runnerCache = new Map<string, boolean>()
 
-/** Checks whether a runner (npm, uv, or any other command) resolves on PATH. Result is cached per-process. */
+/**
+ * Checks whether a runner (npm, uv, or any other command) resolves on PATH.
+ * Positive results are cached per-process; negative results are not, because
+ * PATH can be fixed later (late shell-env resolve, a fresh install).
+ */
 export async function commandExistsOnPath(cmd: string): Promise<boolean> {
   if (runnerCache.has(cmd)) return runnerCache.get(cmd) as boolean
   const finder = process.platform === 'win32' ? 'where' : 'which'
   const exists = await execFileAsync(finder, [cmd])
     .then(() => true)
     .catch(() => false)
-  runnerCache.set(cmd, exists)
+  if (exists) runnerCache.set(cmd, exists)
   return exists
+}
+
+/** Clears the per-process runner presence cache (e.g. after PATH changes). */
+export function clearRunnerCache(): void {
+  runnerCache.clear()
 }
 
 /** Test-only: clears the per-process runner presence cache. */
 export function __resetRunnerCacheForTests(): void {
-  runnerCache.clear()
+  clearRunnerCache()
 }
 
 export interface ResolveDistributionOptions {

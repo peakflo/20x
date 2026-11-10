@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook } from '@testing-library/react'
-import { useTasks } from './use-tasks'
+import { useTasks, sortTasks } from './use-tasks'
 import { useTaskStore } from '@/stores/task-store'
 import { useUIStore } from '@/stores/ui-store'
 import { TaskStatus } from '@/types'
@@ -346,5 +346,49 @@ describe('useTasks', () => {
       const { result } = renderHook(() => useTasks())
       expect(result.current.selectedTask?.id).toBe('t1')
     })
+  })
+})
+
+describe('sortTasks', () => {
+  // The comparator useTasks used before keys were precomputed (parses dates
+  // inside every comparison). sortTasks must order identically.
+  const PRIORITY: Record<string, number> = { critical: 3, high: 2, medium: 1, low: 0 }
+  function reference(tasks: WorkfloTask[], field: string, dir: 'asc' | 'desc'): WorkfloTask[] {
+    return [...tasks].sort((a, b) => {
+      let cmp = 0
+      switch (field) {
+        case 'priority': cmp = PRIORITY[a.priority] - PRIORITY[b.priority]; break
+        case 'due_date': {
+          const aDate = a.due_date ? new Date(a.due_date).getTime() : Infinity
+          const bDate = b.due_date ? new Date(b.due_date).getTime() : Infinity
+          cmp = aDate - bDate
+          break
+        }
+        case 'title': cmp = a.title.localeCompare(b.title); break
+        case 'updated_at': cmp = new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime(); break
+        default: cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      }
+      return dir === 'desc' ? -cmp : cmp
+    })
+  }
+
+  it('orders exactly like the per-comparison date parsing it replaces', () => {
+    let seed = 7
+    const rand = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n }
+    const iso = (): string => new Date(1_700_000_000_000 + rand(50) * 3_600_000).toISOString()
+    const tasks = Array.from({ length: 300 }, (_, i) => makeWorkfloTask({
+      id: `t${i}`,
+      title: `Task ${rand(40)}`,
+      priority: (['low', 'medium', 'high', 'critical'] as const)[rand(4)],
+      created_at: iso(),
+      updated_at: rand(10) === 0 ? 'not a date' : iso(),
+      due_date: rand(3) === 0 ? null : iso()
+    }))
+    for (const field of ['created_at', 'updated_at', 'due_date', 'priority', 'title'] as const) {
+      for (const dir of ['asc', 'desc'] as const) {
+        expect(sortTasks([...tasks], field, dir).map((t) => t.id), `${field} ${dir}`)
+          .toEqual(reference(tasks, field, dir).map((t) => t.id))
+      }
+    }
   })
 })

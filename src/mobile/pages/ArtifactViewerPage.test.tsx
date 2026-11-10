@@ -29,6 +29,9 @@ describe('ArtifactViewerPage', () => {
     useArtifactStore.setState({ artifactsByTask: new Map([['task-1', [{ id: 'report', taskId: 'task-1', title: 'Report', type: ArtifactType.MARKDOWN, path: 'report.md', updatedAt: 1, reloadTrigger: 0 }]]]) })
     vi.mocked(api.artifacts.content).mockResolvedValue({ kind: ArtifactContentKind.TEXT, content: '```mermaid\ngraph TD\nA --> B\n```\n\nEnd of report' })
     const view = render(<ArtifactViewerPage taskId="task-1" artifactId="report" onNavigate={vi.fn()} />)
+    // Finish loading the content before waiting for Mermaid's lazy import.
+    await view.findByText('End of report')
+    await act(async () => { await vi.dynamicImportSettled() })
     const diagram = await view.findByTestId('stable-diagram')
     const paragraph = view.getByText('End of report')
     const scroll = paragraph.closest('.overflow-auto')!

@@ -69,7 +69,7 @@ export function SearchableSelect({
             setTimeout(() => inputRef.current?.focus(), 0)
           }
         }}
-        className="w-full flex items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 py-2 text-sm cursor-pointer"
+        className="w-full flex items-center justify-between gap-2 rounded-md border border-input glass-surface px-3 py-2 text-sm cursor-pointer"
       >
         <span className={cn('truncate text-left', selectedLabel ? '' : 'text-muted-foreground')}>
           {selectedLabel || placeholder || 'Select...'}

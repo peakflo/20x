@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   Search, LayoutDashboard, Layers, CheckSquare, Zap, Settings, MessageSquare,
@@ -12,6 +12,7 @@ import { useTaskStore } from '@/stores/task-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { useDashboardStore } from '@/stores/dashboard-store'
 import { cn } from '@/lib/utils'
+import type { WorkfloTask } from '@/types'
 
 interface CommandItem {
   id: string
@@ -22,6 +23,8 @@ interface CommandItem {
   shortcut?: string
   run: () => void
 }
+
+const NO_TASKS: WorkfloTask[] = []
 
 const isMac = navigator.platform.toLowerCase().includes('mac')
 const mod = isMac ? '⌘' : 'Ctrl'
@@ -54,7 +57,17 @@ export interface CommandPaletteActions {
   toggleMastermindAudio: () => void
 }
 
-export function CommandPalette({ open, onOpenChange, actions }: { open: boolean; onOpenChange: (v: boolean) => void; actions: CommandPaletteActions }) {
+interface CommandPaletteProps { open: boolean; onOpenChange: (v: boolean) => void; actions: CommandPaletteActions }
+
+/**
+ * Always mounted by AppLayout, which re-renders on every task update and
+ * passes a fresh `actions` object each time. While the palette is closed
+ * nothing it renders depends on its props, so those parent renders are
+ * skipped; it re-renders (with the latest props) as soon as it opens.
+ */
+export const CommandPalette = memo(CommandPaletteImpl, (prev, next) => !prev.open && !next.open)
+
+function CommandPaletteImpl({ open, onOpenChange, actions }: CommandPaletteProps) {
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
@@ -66,7 +79,9 @@ export function CommandPalette({ open, onOpenChange, actions }: { open: boolean;
   const toggleOrchestrator = useUIStore((s) => s.toggleOrchestrator)
   const toggleTheme = useThemeStore((s) => s.toggle)
   const themeResolved = useThemeStore((s) => s.resolved)
-  const tasks = useTaskStore((s) => s.tasks)
+  // The palette stays mounted while closed; only follow the task list while
+  // it is open so task updates do not re-render it in the background.
+  const tasks = useTaskStore((s) => (open ? s.tasks : NO_TASKS))
   const searchCompleted = useTaskStore((s) => s.searchCompleted)
   // Completed history is not preloaded: look it up in the DB as the user types.
   useEffect(() => {

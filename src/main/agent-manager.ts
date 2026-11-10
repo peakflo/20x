@@ -8,7 +8,7 @@ import { existsSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSyn
 import { mkdir, writeFile } from 'fs/promises'
 import { app, Notification, powerSaveBlocker } from 'electron'
 import type { BrowserWindow } from 'electron'
-import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord, AgentRunIntervalRecord } from './database'
+import type { AgentRecord, CreateHarnessInstanceData, DatabaseManager, UpdateHarnessInstanceData, AgentMcpServerEntry, McpServerRecord, McpServerSource, OutputFieldRecord, SecretRecord, SkillRecord, TaskRecord, AcpAgentInstanceRecord, AgentRunIntervalRecord, TranscriptPartRecord } from './database'
 import { TaskStatus, SessionStatus, isTaskClosed } from '../shared/constants'
 import type { WorktreeManager } from './worktree-manager'
 import type { GitHubManager } from './github-manager'
@@ -16,6 +16,7 @@ import type { GitLabManager } from './gitlab-manager'
 import { OpencodeAdapter } from './adapters/opencode-adapter'
 import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { AcpAgentAdapter } from './adapters/acp-adapter'
+import { CursorSdkAdapter } from './adapters/cursor-sdk-adapter'
 import { getAcpInstallManager, getAcpRegistryClient } from './acp-registry/runtime'
 import { resolveAcpInstanceCommand } from './acp-registry/resolve-instance'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
@@ -35,7 +36,7 @@ import { createRateResolver } from './usage/usage-pricing'
 import { listCustomModelPrices, setCustomModelPrice, resetCustomModelPrice } from './usage/usage-custom-prices'
 import { agentInstanceId, harnessInstanceDisplayName, harnessTypeLabel, harnessTypeOf, defaultHarnessInstanceId, isDefaultHarnessInstanceId, isHarnessType, type HarnessInstanceView, type HarnessType } from '../shared/harness-instances'
 import { instanceHomeError, instanceHomeFor, linkSharedHistory, normalizeHomePath, realHomeFor } from './harness-instances'
-import { CURSOR_KEYCHAIN_ACCESS_SETTING, probeCursorUsageLimits } from './usage/cursor-limits'
+import { CURSOR_KEYCHAIN_ACCESS_SETTING } from './usage/cursor-limits'
 import { UsageLimitRecoveryScheduler, UsageLimitRecoveryStore } from './usage/usage-limit-recovery'
 import {
   AUTO_RESUME_LIMITED_TASKS_SETTING,
@@ -87,6 +88,7 @@ import {
 } from './usage/agent-run-intervals'
 import { computeParallelismSummary, periodBoundsForDays, type UsageParallelismResponse, type ParallelismSummary } from './usage/usage-parallelism'
 import type { UsageParallelismQuery } from './usage/usage-query'
+import { TranscriptDeltaEncoder, type TranscriptSyncResult } from '../shared/transcript-stream'
 
 // Coding agent backend type enum
 enum CodingAgentType {
@@ -176,6 +178,9 @@ interface AgentSession {
   /** True after an auto-abort notice has been shown for the current prompt.
    *  Reset when the user sends a new prompt or the adapter emits fresh output. */
   autoAbortNotified?: boolean
+  /** Consecutive automatic continues after a watchdog abort (reset by any other message). */
+  autoContinueCount?: number
+  autoContinueSending?: boolean
   /** Timestamp of the last observed activity (creation, new output, prompt,
    *  or idle transition). Used by the inactivity reaper to decide when an
    *  idle session's in-memory runtime can be released. Idle is only a state
@@ -371,6 +376,16 @@ function hasWorkfloMcpDevServer(entries: DocumentedMcpServer[]): boolean {
   })
 }
 
+/**
+ * Secret ids to inject for an agent. The native Cursor SDK adapter has no
+ * environment or shell hook to receive them through, so it gets none: it must
+ * never see secret values, only its own credential (apiKeys.cursor / CURSOR_API_KEY).
+ */
+function secretIdsForAgent(agent: { config?: { coding_agent?: string; secret_ids?: string[] } } | undefined | null): string[] | undefined {
+  if (agent?.config?.coding_agent === 'cursor') return undefined
+  return agent?.config?.secret_ids
+}
+
 export class AgentManager extends EventEmitter {
   private sessions: Map<string, AgentSession> = new Map()
   /** Maps old (temp) session IDs to their re-keyed (real) IDs so that
@@ -492,6 +507,11 @@ export class AgentManager extends EventEmitter {
   private transcriptChangedTimer: ReturnType<typeof setTimeout> | null = null
   private pendingTranscriptChanged = new Map<string, { sinceRev: number; maxRev: number }>()
   private static readonly TRANSCRIPT_CHANGED_FLUSH_MS = 125
+  /** Diffs changed parts against what was last sent (append vs whole part) and
+   *  numbers each task's `transcript:changed` events (see shared/transcript-stream). */
+  private transcriptEncoder = new TranscriptDeltaEncoder()
+  /** In-process consumers that need the full records of changed parts (voice). */
+  private transcriptPartsListeners: Array<(taskId: string, parts: TranscriptPartRecord[]) => void> = []
   private pollingInProgress = false  // Prevents overlapping tick() calls
   private pollTickFn: (() => Promise<void>) | null = null  // Reference to the tick function
 
@@ -960,10 +980,9 @@ export class AgentManager extends EventEmitter {
         adapter = new CodexAppServerAdapter({ harnessHome: instance?.home })
         break
       case CodingAgentType.CURSOR: {
-        console.log('[AgentManager] Creating new AcpAgentAdapter for Cursor')
-        // TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR; this shim keeps it on the generic ACP client until then.
-        const cursorAdapter = new AcpAgentAdapter({ command: 'cursor-agent', args: ['acp'] })
-        this.wireCursorPlanLimits(cursorAdapter)
+        console.log('[AgentManager] Creating new CursorSdkAdapter')
+        const cursorAdapter = new CursorSdkAdapter({ db: this.db })
+        this.wireCursorLoginEvents(cursorAdapter)
         adapter = cursorAdapter
         break
       }
@@ -1240,27 +1259,6 @@ export class AgentManager extends EventEmitter {
     }
     adapter.onUsageLimits = (event) => {
       this.getUsageTracker()?.applyLimitsEvent({ ...event, instanceId })
-    }
-  }
-
-  /**
-   * TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR. Until
-   * then it runs on the generic AcpAgentAdapter, which has no Cursor-shaped
-   * fields (the generic client's `probeUsageLimits` always resolves to
-   * null). This overrides that one instance's `probeUsageLimits` with
-   * Cursor's own CLI/Keychain-based plan-limit probe, reading the user's
-   * Keychain-access consent live (not captured once at creation time) so
-   * toggling `setCursorKeychainAccess` takes effect on the next probe.
-   */
-  private wireCursorPlanLimits(adapter: AcpAgentAdapter): void {
-    let inFlight: Promise<ProviderUsageLimits | null> | null = null
-    adapter.probeUsageLimits = () => {
-      if (inFlight) return inFlight
-      const pending = probeCursorUsageLimits({
-        allowKeychain: this.db.getSetting(CURSOR_KEYCHAIN_ACCESS_SETTING) === 'true'
-      }).finally(() => { inFlight = null })
-      inFlight = pending
-      return pending
     }
   }
 
@@ -1727,7 +1725,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Populate secret env vars and system prompt awareness
-    const secretIds = agent.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     // secretIds checked for agent config
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
@@ -1924,7 +1922,7 @@ export class AgentManager extends EventEmitter {
    */
   private setupSecretSession(agentId: string): string | undefined {
     const agent = this.db.getAgent(agentId)
-    const secretIds = agent?.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     if (!secretIds || secretIds.length === 0) return undefined
 
     const brokerPort = getSecretBrokerPort()
@@ -2177,7 +2175,7 @@ export class AgentManager extends EventEmitter {
     // Add secrets section — name and description only, never the value
     if (agentId) {
       const agent2 = this.db.getAgent(agentId)
-      const secretIds = agent2?.config?.secret_ids
+      const secretIds = secretIdsForAgent(agent2)
       if (secretIds && secretIds.length > 0) {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
@@ -2271,7 +2269,7 @@ export class AgentManager extends EventEmitter {
     // Add secrets section — name and description only, never the value
     if (agentId) {
       const agentForSecrets = this.db.getAgent(agentId)
-      const secretIds = agentForSecrets?.config?.secret_ids
+      const secretIds = secretIdsForAgent(agentForSecrets)
       if (secretIds && secretIds.length > 0) {
         const secrets = this.db.getSecretsByIds(secretIds)
         if (secrets.length > 0) {
@@ -2400,7 +2398,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Populate secret env vars + system prompt awareness
-    const secretIds = agent.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
       const secretsWithValues = this.db.getSecretsWithValues(secretIds)
@@ -2885,6 +2883,28 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       }
       console.log('[AgentManager] Polling coordinator stopped (no active sessions)')
     }
+  }
+
+  private static readonly MAX_AUTO_CONTINUES = 3
+  private static readonly AUTO_CONTINUE_DELAY_MS = 3_000
+  private static readonly AUTO_CONTINUE_MESSAGE =
+    'The previous turn was automatically aborted because it stopped responding (a tool call may have hung). Continue the task where you left off; if the last tool call hung, retry it differently or move on.'
+
+  /** After a watchdog abort, automatically send a "continue" message (capped). */
+  private scheduleAutoContinue(sessionId: string, session: AgentSession): void {
+    const count = session.autoContinueCount ?? 0
+    if (count >= AgentManager.MAX_AUTO_CONTINUES) {
+      console.log(`[AgentManager] Auto-continue limit reached for ${sessionId}`)
+      return
+    }
+    session.autoContinueCount = count + 1
+    setTimeout(() => {
+      if (this.sessions.get(sessionId) !== session || session.status === 'working') return
+      session.autoContinueSending = true
+      this.doSendAdapterMessage(session, sessionId, AgentManager.AUTO_CONTINUE_MESSAGE)
+        .catch((err) => console.error(`[AgentManager] Auto-continue failed for ${sessionId}:`, err))
+        .finally(() => { session.autoContinueSending = false })
+    }, AgentManager.AUTO_CONTINUE_DELAY_MS)
   }
 
   private sendAutoAbortMessageOnce(
@@ -3460,6 +3480,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
                   } catch (abortErr) {
                     console.error(`[AgentManager] Failed to abort stuck-tool session ${sessionId}:`, abortErr)
                   }
+                  this.scheduleAutoContinue(sessionId, session)
                   return
                 }
               }
@@ -3570,6 +3591,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
               } catch (abortErr) {
                 console.error(`[AgentManager] Failed to abort stuck session ${sessionId}:`, abortErr)
               }
+              this.scheduleAutoContinue(sessionId, session)
               return
             }
           }
@@ -3776,7 +3798,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     }
 
     // Populate secret env vars + system prompt awareness
-    const secretIds = agent.config?.secret_ids
+    const secretIds = secretIdsForAgent(agent)
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
       const secretsWithValues = this.db.getSecretsWithValues(secretIds)
@@ -4328,9 +4350,11 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     if (this.wakingParents.has(parentTaskId)) return
     this.wakingParents.add(parentTaskId)
     try {
-      const summary = subtasks
+      // Do not ask the coordinator to review completed subtasks again.
+      const pendingSubtasks = subtasks.filter((s) => s.status !== TaskStatus.Completed)
+      const summary = pendingSubtasks
         .map((s) => `- "${s.title}" (id: ${s.id}) → ${s.status}`)
-        .join('\n')
+        .join('\n') || 'No subtasks remain open.'
       // A subtask stuck in model_error will never move itself to
       // ready_for_review/completed — it needs the coordinator's attention,
       // not more waiting — so it counts as terminal here too.
@@ -4338,8 +4362,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
         (s) => s.status === TaskStatus.ReadyForReview || s.status === TaskStatus.Completed || s.status === TaskStatus.ModelError
       )
       const instructions = allTerminal
-        ? `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review their outputs, ` +
-          `then continue coordination: consolidate results, fill in the parent task's output fields, ` +
+        ? `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to ` +
+          `${pendingSubtasks.length > 0 ? 'review the listed subtasks and ' : ''}consolidate results, fill in the parent task's output fields, ` +
           `and complete the task — or create follow-up subtasks if more work is needed.`
         : `Use \`get_task\` / \`list_subtasks\` via the task-management MCP server to review the ready subtask's outputs, ` +
           `then continue coordination: start the next not_started subtask, create follow-up subtasks if more work ` +
@@ -4386,7 +4410,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     if (!this.ingestedTasks.has(taskId)) {
       await this.backfillTranscriptProjection(taskId)
     }
-    return this.db.getTranscriptParts(taskId, sinceSeq)
+    return this.db.getTranscriptPartsAsync(taskId, sinceSeq)
   }
 
   /**
@@ -4735,14 +4759,76 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     })
   }
 
-  /** Local agents help a human owner; only that human can accept completion. */
+  /**
+   * Completes a task that must not wait for a human review.
+   *
+   * This is deliberately session-independent: a task can reach this point
+   * without a live agent session — the TaskAutomationScheduler reconciliation
+   * sweep finds tasks left in review while their auto_complete_without_review
+   * flag was set, a coordinator marks its parent, an MCP client sets the
+   * status. Every route that honours the flag funnels through here.
+   *
+   * Only a task 20x itself owns may close here. A task with a source_id (or a
+   * server snapshot) is owned by its source — local help must not use the
+   * human owner's token to accept its own result there (#521), so it is left
+   * for review and the source's own completion flow decides.
+   *
+   * Returns false when the task was left for review instead.
+   */
   async completeTaskWithoutReview(taskId: string, knownTask?: TaskRecord): Promise<boolean> {
     const task = knownTask ?? this.db.getTask(taskId)
     if (!task) return false
 
-    // Agent-owned work completes through agent-harness. Local help must not
-    // use the human owner's token to accept its own result.
-    return false
+    const yieldEventLoop = (): Promise<void> => new Promise((r) => setImmediate(r))
+
+    if (task.source_id || serverTaskSnapshot(this.db, taskId)) {
+      console.log(
+        `[AgentManager] Task ${taskId} is owned by its source — completion must be confirmed there, leaving it for review`
+      )
+      return false
+    }
+
+    // A coordinator is not finished while its children are still to run.
+    //
+    // An agent that creates subtasks and then stops leaves them in
+    // not_started. Completing the parent there would mark the whole recurring
+    // occurrence done while none of the actual work had run. Park it in review
+    // instead; the parent is woken again by notifyParentOfSubtaskCompletion
+    // once every child reaches a terminal state, and completes then.
+    const pendingSubtasks = this.db.getSubtasks(taskId).filter(
+      (subtask) =>
+        subtask.status !== TaskStatus.Completed && subtask.status !== TaskStatus.ReadyForReview
+    )
+    if (pendingSubtasks.length > 0) {
+      console.log(
+        `[AgentManager] Task ${taskId} completes without review, but ${pendingSubtasks.length} ` +
+        `subtask(s) have not finished — leaving it for review`
+      )
+      if (task.status !== TaskStatus.ReadyForReview) {
+        this.db.updateTask(taskId, { status: TaskStatus.ReadyForReview })
+        await yieldEventLoop()
+        this.sendToRenderer('task:updated', {
+          taskId,
+          updates: { status: TaskStatus.ReadyForReview }
+        })
+      }
+      return false
+    }
+
+    this.db.updateTask(taskId, { status: TaskStatus.Completed })
+    await yieldEventLoop()
+    this.sendToRenderer('task:updated', {
+      taskId,
+      updates: { status: TaskStatus.Completed }
+    })
+
+    // A subtask that finishes must still wake its parent.
+    if (task.parent_task_id) {
+      this.notifyParentOfSubtaskCompletion(task.parent_task_id, taskId).catch((err) => {
+        console.error(`[AgentManager] Failed to wake parent ${task.parent_task_id} after subtask ${taskId} completed:`, err)
+      })
+    }
+    return true
   }
 
   private async transitionToIdle(sessionId: string, session: AgentSession): Promise<void> {
@@ -4893,7 +4979,22 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       return
     }
 
-    // Desktop agent work is help. Only the server can accept completion.
+    // A task told to finish without review finishes here, in main — but only
+    // when 20x owns the task. A source-linked task still goes to review: the
+    // source system must confirm completion first (see #521), and
+    // completeTaskWithoutReview refuses it anyway.
+    if (task.auto_complete_without_review && !task.source_id) {
+      console.log(`[AgentManager] Task ${session.taskId} completes without review`)
+      const completed = await this.completeTaskWithoutReview(session.taskId, task)
+      if (completed) this.autoEnableHeartbeat(session)
+      this.sendToRenderer('agent:status', {
+        sessionId, agentId: session.agentId, taskId: session.taskId, status: 'idle'
+      })
+      return
+    }
+
+    // Desktop agent work is help for source-owned tasks. Only the source can
+    // accept their completion.
 
     // Update task status to ready_for_review (only if task exists)
     if (task) {
@@ -5355,6 +5456,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       session.heartbeatDisableVersionAtTurnStart = this.db.getSetting(`heartbeat-manual-disable:${session.taskId}`)
     }
     session.autoAbortNotified = false
+    if (!session.autoContinueSending) session.autoContinueCount = 0
     // Remember the prompt so an automatic serverOverloaded retry can nudge
     // the session with the exact same prompt (see retryOverloadedSession).
     session.lastPromptText = message
@@ -6001,8 +6103,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       return (defaultAgent?.config?.coding_agent as string) || CodingAgentType.OPENCODE
     })()
 
-    // OpenCode and Pi expose configurable providers/models.
-    if (resolvedBackend !== CodingAgentType.OPENCODE && resolvedBackend !== CodingAgentType.PI) {
+    // OpenCode, Pi and Cursor expose configurable providers/models.
+    if (resolvedBackend !== CodingAgentType.OPENCODE && resolvedBackend !== CodingAgentType.PI && resolvedBackend !== CodingAgentType.CURSOR) {
       console.log(`[AgentManager] Backend "${resolvedBackend}" does not support provider listing, skipping`)
       return null
     }
@@ -6066,6 +6168,12 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       case CodingAgentType.PI:
         adapter = new PiAdapter(this.db)
         break
+      case CodingAgentType.CURSOR: {
+        const cursorAdapter = new CursorSdkAdapter({ db: this.db })
+        this.wireCursorLoginEvents(cursorAdapter)
+        adapter = cursorAdapter
+        break
+      }
     }
 
     if (adapter) {
@@ -6073,6 +6181,41 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       this.adapters.set(cacheKey, adapter)
     }
     return adapter
+  }
+
+  /** Forwards a Cursor SDK adapter's browser-login outcome to the renderer (Settings → Agents card). */
+  private wireCursorLoginEvents(adapter: CursorSdkAdapter): void {
+    adapter.onLoginComplete = (result) => {
+      this.sendToRenderer('cursor:loginComplete', result)
+    }
+  }
+
+  private getCursorAdapter(): CursorSdkAdapter | null {
+    return this.getAdapterByType(CodingAgentType.CURSOR) as CursorSdkAdapter | null
+  }
+
+  /** "Am I signed in, as whom" for the Settings → Agents Cursor card. Always live, never cached. */
+  async cursorAuthStatus(): Promise<{ authenticated: boolean; email?: string; reason?: string }> {
+    const adapter = this.getCursorAdapter()
+    if (!adapter) return { authenticated: false, reason: 'Cursor adapter unavailable' }
+    return adapter.whoAmI()
+  }
+
+  /** Starts a Cursor browser sign-in; resolves with the URL to show (with explicit consent) before opening it. */
+  async startCursorBrowserLogin(): Promise<{ url: string }> {
+    const adapter = this.getCursorAdapter()
+    if (!adapter) throw new Error('Cursor adapter unavailable')
+    return adapter.startBrowserLogin()
+  }
+
+  /** Cancels an in-flight Cursor browser sign-in. */
+  cancelCursorBrowserLogin(): void {
+    this.getCursorAdapter()?.cancelBrowserLogin()
+  }
+
+  /** Forgets the stored Cursor browser-login credential. */
+  async cursorLogout(): Promise<void> {
+    await this.getCursorAdapter()?.logout()
   }
 
   /**
@@ -6530,6 +6673,15 @@ Important:
     this.externalListeners.push(fn)
   }
 
+  /**
+   * Register an in-process listener for the full records of changed transcript
+   * parts. `transcript:changed` itself only carries deltas (appended text), so
+   * consumers that read whole parts (voice) subscribe here instead.
+   */
+  addTranscriptPartsListener(fn: (taskId: string, parts: TranscriptPartRecord[]) => void): void {
+    this.transcriptPartsListeners.push(fn)
+  }
+
   private hasHeartbeatFile(taskId: string): boolean {
     try {
       return existsSync(join(this.db.getWorkspaceDir(taskId), 'heartbeat.md'))
@@ -6660,23 +6812,72 @@ Important:
   private flushTranscriptChanged(): void {
     const pending = this.pendingTranscriptChanged
     this.pendingTranscriptChanged = new Map()
-    for (const [taskId, { sinceRev, maxRev: queuedMaxRev }] of pending) {
-      const { parts, maxRev } = this.db.getTranscriptDelta(taskId, sinceRev)
-      const effectiveMaxRev = Math.max(maxRev, queuedMaxRev)
-      if (parts.length === 0 && effectiveMaxRev <= sinceRev) continue
-      this.sendTranscriptChangedNow(taskId, parts, effectiveMaxRev)
-    }
+    for (const [taskId, range] of pending) this.flushTranscriptChangedRange(taskId, range)
   }
 
-  private sendTranscriptChangedNow(taskId: string, parts: ReturnType<DatabaseManager['getTranscriptParts']>, maxRev: number): void {
-    const payload = { taskId, parts, maxRev }
+  /** Send a task's queued changes now (before a resync read, so the read and
+   *  the stream position agree). */
+  private flushTranscriptChangedFor(taskId: string): void {
+    const range = this.pendingTranscriptChanged.get(taskId)
+    if (!range) return
+    this.pendingTranscriptChanged.delete(taskId)
+    this.flushTranscriptChangedRange(taskId, range)
+  }
+
+  private flushTranscriptChangedRange(taskId: string, { sinceRev, maxRev: queuedMaxRev }: { sinceRev: number; maxRev: number }): void {
+    const { parts, maxRev } = this.db.getTranscriptDelta(taskId, sinceRev)
+    const effectiveMaxRev = Math.max(maxRev, queuedMaxRev)
+    if (parts.length === 0 && effectiveMaxRev <= sinceRev) return
+    this.sendTranscriptChangedNow(taskId, parts, effectiveMaxRev)
+  }
+
+  private sendTranscriptChangedNow(taskId: string, parts: TranscriptPartRecord[], maxRev: number): void {
+    // Window and mobile get the same numbered delta: appended text for a part
+    // that only grew, the whole part otherwise.
+    const payload = this.transcriptEncoder.encode(taskId, parts, maxRev)
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send('transcript:changed', payload)
     }
     for (const fn of this.externalListeners) {
       try { fn('transcript:changed', payload) } catch { /* ignore */ }
     }
+    for (const fn of this.transcriptPartsListeners) {
+      try { fn(taskId, parts) } catch { /* ignore */ }
+    }
     this.emitArtifactUpdatesFromParts(taskId, parts)
+  }
+
+  /**
+   * Resync for a `transcript:changed` receiver (first bind, gap, reconnect):
+   * the whole transcript, or the parts changed since `sinceRev`, plus the
+   * stream position they are consistent with. Pending changes for the task are
+   * sent first, so the receiver can apply the event with `seq + 1` next.
+   *
+   * `backfill: false` keeps the read pure for mobile readers (no one-time
+   * history ingest, which writes to the projection).
+   */
+  async getTranscriptSync(taskId: string, sinceRev?: number, options: { backfill?: boolean } = {}): Promise<TranscriptSyncResult<TranscriptPartRecord>> {
+    if (options.backfill !== false && !this.ingestedTasks.has(taskId)) {
+      await this.backfillTranscriptProjection(taskId)
+    }
+    this.flushTranscriptChangedFor(taskId)
+    const full = typeof sinceRev !== 'number'
+    let parts: TranscriptPartRecord[]
+    let maxRev: number
+    if (full) {
+      parts = this.db.getTranscriptParts(taskId)
+      maxRev = parts.reduce((m, p) => Math.max(m, p.rev || 0), 0)
+    } else {
+      ({ parts, maxRev } = this.db.getTranscriptDelta(taskId, sinceRev))
+    }
+    return {
+      taskId,
+      epoch: this.transcriptEncoder.epoch,
+      seq: this.transcriptEncoder.currentSeq(taskId),
+      maxRev,
+      full,
+      parts
+    }
   }
 
   /** Broadcast automatically discovered URL/screenshot artifacts. Durable file
@@ -7025,7 +7226,13 @@ Important:
       }
     }
 
-    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+    // The window renders the durable projection only (`transcript:changed`,
+    // emitted by persistTranscriptEvent above). Nothing in the renderer listens
+    // to raw `agent:output*`, and each batch re-sends the full text of every
+    // growing part, so sending it here only cost structured-clone work on both
+    // sides (about 2 MB per 20 KB streamed answer).
+    const rendererConsumes = channel !== 'agent:output' && channel !== 'agent:output-batch'
+    if (rendererConsumes && this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send(channel, data)
     }
     // Also notify external listeners (mobile API WebSocket)

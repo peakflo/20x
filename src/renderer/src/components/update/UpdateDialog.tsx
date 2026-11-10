@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogBody, DialogTitle, DialogDescription } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
 import { updaterApi } from '@/lib/ipc-client'
+import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { Download, RotateCw, Loader2, ExternalLink, Check, RefreshCw } from 'lucide-react'
 
 interface UpdateDialogProps {
@@ -37,9 +38,20 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
     })
   }, [])
 
+  const openRef = useRef(open)
+  openRef.current = open
+
   // Subscribe to updater status events
   useEffect(() => {
     const cleanup = updaterApi.onStatus((data) => {
+      // Download finished while the dialog was hidden: show the standard
+      // auto-dismissing success toast. Install & Restart stays available from
+      // the update indicator, Settings, and the quit-time prompt.
+      if (data.status === 'downloaded' && !openRef.current) {
+        const toasts = useProgressToastStore.getState()
+        toasts.show('app-update', 'Update downloaded')
+        toasts.finish('app-update', `${data.version ? `v${data.version} is` : 'The update is'} ready. Restart 20x to install.`)
+      }
       setState((prev) => ({
         ...prev,
         status: data.status,
@@ -236,7 +248,7 @@ export function UpdateDialog({ open, onClose }: UpdateDialogProps) {
                 </Button>
               ) : null}
               <Button variant="outline" onClick={onClose}>
-                {hasUpdate ? 'Later' : 'Close'}
+                {state.status === 'downloading' ? 'Hide' : hasUpdate ? 'Later' : 'Close'}
               </Button>
             </div>
           </div>

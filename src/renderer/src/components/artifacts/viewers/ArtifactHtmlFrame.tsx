@@ -17,11 +17,18 @@ import { useHtmlRenderTheme } from './useHtmlRenderTheme'
  * two animation frames, and on every ResizeObserver tick of `<html>`. */
 const SIZE_BOOTSTRAP_SCRIPT = `<script>(function(){
   var last=-1;
+  var lastViewportHeight=-1,lastViewportWidth=-1,lastOverflow=-1;
   function send(){
     var r=document.documentElement;
-    var h=Math.round(r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height);
+    var overflow=r.scrollHeight-r.clientHeight;
+    var viewportHeight=r.clientHeight,viewportWidth=r.clientWidth;
+    // A page with 100vh plus margins grows when its iframe grows. That is
+    // not new content: reporting it again creates an endless resize loop.
+    var followsViewport=lastViewportHeight!==-1&&viewportHeight!==lastViewportHeight&&viewportWidth===lastViewportWidth&&overflow===lastOverflow;
+    if(followsViewport)return;
+    var h=Math.round(overflow>0?r.scrollHeight:r.getBoundingClientRect().height);
     if(h===last)return;
-    last=h;
+    last=h;lastViewportHeight=viewportHeight;lastViewportWidth=viewportWidth;lastOverflow=overflow;
     window.parent.postMessage({type:'${HTML_RENDER_SIZE_MESSAGE_TYPE}',height:h},'*');
   }
   if(window.ResizeObserver)new ResizeObserver(send).observe(document.documentElement);
@@ -63,13 +70,16 @@ const EMPTY_DOCUMENT = '<!doctype html><html><head></head><body></body></html>'
  * theme changes are pushed over `postMessage` by the caller instead of
  * calling this again — changing srcDoc would reload the document.
  */
-export function hardenArtifactHtml(source: string, theme?: HtmlRenderTheme): string {
+export function hardenArtifactHtml(source: string, theme?: HtmlRenderTheme, inline = false): string {
   const shelled = applyHtmlRenderShell(source, theme)
   // Insert the interactive scripts right after the shell `applyHtmlRenderShell`
   // just added (CSP meta + base + theme style), still before any artifact
   // content/markup.
   const shellEnd = shelled.indexOf('</style>') + '</style>'.length
-  return `${shelled.slice(0, shellEnd)}${interactiveScripts()}${shelled.slice(shellEnd)}`
+  // The browser paints a default canvas color when color-scheme is dark.
+  // Set the inline canvas to the exact chat background theme variable.
+  const inlineBackground = inline ? '<style>html{background:var(--background)}</style>' : ''
+  return `${shelled.slice(0, shellEnd)}${inlineBackground}${interactiveScripts()}${shelled.slice(shellEnd)}`
 }
 
 type Reply = (message: Record<string, unknown>) => void
@@ -132,8 +142,8 @@ export function ArtifactHtmlFrame({
   const bakedThemeRef = useRef<HtmlRenderTheme | undefined>(undefined)
   const srcDoc = useMemo(() => {
     bakedThemeRef.current = themeRef.current
-    return hardenArtifactHtml(prepared || EMPTY_DOCUMENT, themeRef.current)
-  }, [prepared])
+    return hardenArtifactHtml(prepared || EMPTY_DOCUMENT, themeRef.current, !fill)
+  }, [prepared, fill])
 
   useEffect(() => {
     if (bakedThemeRef.current === theme) return
@@ -182,7 +192,7 @@ export function ArtifactHtmlFrame({
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
       srcDoc={srcDoc}
-      className={fill ? 'h-full w-full border-0 bg-white' : 'w-full border-0'}
+      className={fill ? 'h-full w-full border-0 bg-white' : 'w-full border-0 bg-transparent'}
       style={fill ? undefined : { height: `${height ?? 80}px` }}
     />
   )

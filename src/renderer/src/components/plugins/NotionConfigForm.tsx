@@ -425,7 +425,7 @@ function MultiSelectValues({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search values..."
-            className="w-full rounded border border-input bg-transparent pl-7 pr-2 py-1 text-xs outline-none"
+            className="w-full rounded border border-input glass-surface pl-7 pr-2 py-1 text-xs outline-none"
           />
         </div>
       )}

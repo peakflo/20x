@@ -237,10 +237,21 @@ export function findComposerElement(): HTMLTextAreaElement | null {
   return null
 }
 
+/**
+ * Focus a composer. On the canvas the browser must not scroll it into view:
+ * the canvas root is `overflow: hidden`, yet focus() still scrolls it to reveal
+ * a composer in a partly off-screen panel. That shifts the whole canvas — the
+ * panels, the zoom controls and the minimap — out of view, with no way to
+ * scroll it back.
+ */
+export function focusComposerElement(el: HTMLTextAreaElement): void {
+  el.focus({ preventScroll: !!el.closest('[data-canvas-root]') })
+}
+
 export function focusComposerInput(): boolean {
   const el = findComposerElement()
   if (!el) return false
-  el.focus()
+  focusComposerElement(el)
   return document.activeElement === el
 }
 
@@ -259,6 +270,21 @@ export function shouldAutoFocusComposer(event: KeyboardEvent, hasPendingChord = 
   if (SINGLE_KEY_SHORTCUTS.has(lower) || CHORD_STARTERS.has(lower)) return false
   const composer = findComposerElement()
   return !!composer
+}
+
+/**
+ * Just start typing: a printable key that is not a shortcut focuses the
+ * composer and inserts the character, so the first keystroke is not lost.
+ * Returns true when the key was consumed.
+ */
+export function autoTypeIntoComposer(event: KeyboardEvent, hasPendingChord = false): boolean {
+  if (!shouldAutoFocusComposer(event, hasPendingChord)) return false
+  const composer = findComposerElement()
+  if (!composer) return false
+  event.preventDefault()
+  focusComposerElement(composer)
+  insertIntoComposer(composer, event.key)
+  return true
 }
 
 export function insertIntoComposer(composer: HTMLTextAreaElement, text: string): void {

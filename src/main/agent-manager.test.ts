@@ -79,6 +79,7 @@ vi.mock('electron', () => {
 vi.mock('./adapters/opencode-adapter', () => ({ OpencodeAdapter: vi.fn() }))
 vi.mock('./adapters/claude-code-adapter', () => ({ ClaudeCodeAdapter: vi.fn() }))
 vi.mock('./adapters/acp-adapter', () => ({ AcpAgentAdapter: vi.fn() }))
+vi.mock('./adapters/cursor-sdk-adapter', () => ({ CursorSdkAdapter: vi.fn() }))
 vi.mock('./adapters/codex-app-server-adapter', () => ({ CodexAppServerAdapter: vi.fn() }))
 vi.mock('./adapters/pi-adapter', () => ({ PiAdapter: vi.fn() }))
 vi.mock('./task-api-server', () => ({ getTaskApiPort: vi.fn(), waitForTaskApiServer: vi.fn() }))
@@ -92,6 +93,7 @@ vi.mock('./secret-broker', () => ({
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
 import { AcpAgentAdapter } from './adapters/acp-adapter'
+import { CursorSdkAdapter } from './adapters/cursor-sdk-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
 import { getTaskApiPort } from './task-api-server'
@@ -127,6 +129,10 @@ function makeSkillRecord(overrides: Partial<{
 
 function createMockDb(agentConfig: Record<string, unknown> = {}) {
   return {
+    // Mirrors DatabaseManager: same rows as getTranscriptParts (worker read in production).
+    getTranscriptPartsAsync: vi.fn(function (this: { getTranscriptParts: (taskId: string, sinceSeq?: number) => unknown }, taskId: string, sinceSeq?: number) {
+      return Promise.resolve(this.getTranscriptParts(taskId, sinceSeq))
+    }),
     getTask: vi.fn(() => ({
       id: 'task-1',
       title: 'Test Task',
@@ -276,16 +282,15 @@ describe('AgentManager skill file paths', () => {
       expect(AcpAgentAdapter).not.toHaveBeenCalled()
     })
 
-    it('uses ACP for Cursor agents', () => {
+    it('uses the native Cursor SDK adapter for Cursor agents', () => {
       const mockDb = createMockDb({ coding_agent: 'cursor' })
       manager = new AgentManager(mockDb)
 
       const adapter = (manager as any).getAdapter('agent-1')
 
-      // TEMPORARY: Cursor moves to @cursor/sdk in a stacked follow-up PR; this
-      // shim keeps it on the generic ACP client until then (see agent-manager.ts).
-      expect(adapter).toBeInstanceOf(AcpAgentAdapter)
-      expect(AcpAgentAdapter).toHaveBeenCalledWith({ command: 'cursor-agent', args: ['acp'] })
+      expect(adapter).toBeInstanceOf(CursorSdkAdapter)
+      expect(CursorSdkAdapter).toHaveBeenCalledWith({ db: mockDb })
+      expect(AcpAgentAdapter).not.toHaveBeenCalled()
     })
 
     it('uses the Pi RPC adapter for Pi agents', () => {
@@ -1752,19 +1757,68 @@ describe('AgentManager transitionToIdle — completing without review', () => {
     return { mgr, session }
   }
 
-  it.each([true,false])('desktop work requires server review with auto-complete=%s', async auto => {
-    const mockDb=makeDb({auto_complete_without_review:auto});const {mgr,session}=setup(mockDb)
-    const executeAction=vi.fn();mgr.setSyncManager({executeAction} as never)
-    await (mgr as any).transitionToIdle('session-1',session)
-    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1',{status:TaskStatus.Completed})
-    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1',{status:TaskStatus.ReadyForReview})
+  it('completes a source-less task in main when the flag is set', async () => {
+    const mockDb = makeDb({ auto_complete_without_review: true })
+    const { mgr, session } = setup(mockDb)
+    await (mgr as any).transitionToIdle('session-1', session)
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+  })
+  it('leaves a source-less task in review when the flag is off', async () => {
+    const mockDb = makeDb({ auto_complete_without_review: false })
+    const { mgr, session } = setup(mockDb)
+    await (mgr as any).transitionToIdle('session-1', session)
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+  })
+  it('leaves a source-linked task in review even with the flag set', async () => {
+    const mockDb = makeDb({ source_id: 'source-1' })
+    const { mgr, session } = setup(mockDb)
+    const executeAction = vi.fn(); mgr.setSyncManager({ executeAction } as never)
+    await (mgr as any).transitionToIdle('session-1', session)
+    expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.ReadyForReview })
+    expect(mockDb.updateTask).not.toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
     expect(executeAction).not.toHaveBeenCalled()
   })
-  it('cannot complete from a desktop agent without a server credential', async()=>{
-    const mockDb=makeDb();const {mgr}=setup(mockDb)
-    const executeAction=vi.fn();mgr.setSyncManager({executeAction} as never)
-    expect(await mgr.completeTaskWithoutReview('task-1')).toBe(false)
-    expect(mockDb.updateTask).not.toHaveBeenCalled();expect(executeAction).not.toHaveBeenCalled()
+  /** The same completion has to be reachable without a session.
+   *
+   * A task can land in ready_for_review by routes that never run
+   * transitionToIdle — a coordinator marking its parent once every subtask is
+   * done, an MCP client setting the status, the mobile API. Those routes used
+   * to ignore auto_complete_without_review entirely, which is why a recurring
+   * task could reach review and then sit there for ever.
+   */
+  describe('completeTaskWithoutReview — no session required', () => {
+    it('completes a source-less task that no session is attached to', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview })
+      const mgr = new AgentManager(mockDb)
+      vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(true)
+
+      expect(mockDb.updateTask).toHaveBeenCalledWith('task-1', { status: TaskStatus.Completed })
+    })
+
+    it('refuses a source-linked task and touches nothing', async () => {
+      const mockDb = makeDb({ status: TaskStatus.ReadyForReview, source_id: 'source-1' })
+      const mgr = new AgentManager(mockDb)
+      vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      await expect(mgr.completeTaskWithoutReview('task-1')).resolves.toBe(false)
+
+      expect(mockDb.updateTask).not.toHaveBeenCalled()
+    })
+
+    it('does nothing for a task that no longer exists', async () => {
+      const mockDb = makeDb()
+      ;(mockDb.getTask as any).mockReturnValue(undefined)
+      const mgr = new AgentManager(mockDb)
+      vi.spyOn(mgr as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      await expect(mgr.completeTaskWithoutReview('task-gone')).resolves.toBe(false)
+
+      expect(mockDb.updateTask).not.toHaveBeenCalled()
+    })
   })
 })
 
@@ -3825,8 +3879,24 @@ describe('AgentManager event-driven parent wake-up', () => {
     const [taskId, message] = wakeSpy.mock.calls[0]
     expect(taskId).toBe('parent-1')
     expect(message).toContain('Child A')
-    expect(message).toContain('Child B')
+    expect(message).not.toContain('Child B')
     expect(message).toContain('terminal state')
+  })
+
+  it('wakes the parent without listing completed subtasks when every child is completed', async () => {
+    const { mgr, wakeSpy } = buildManager({ 'parent-1': parentTask }, [
+      { id: 'sub-1', title: 'Child A', status: TaskStatus.Completed },
+      { id: 'sub-2', title: 'Child B', status: TaskStatus.Completed },
+    ])
+
+    await mgr.notifyParentOfSubtaskCompletion('parent-1', 'sub-2')
+
+    expect(wakeSpy).toHaveBeenCalledOnce()
+    const [, message] = wakeSpy.mock.calls[0]
+    expect(message).toContain('No subtasks remain open.')
+    expect(message).not.toContain('Child A')
+    expect(message).not.toContain('Child B')
+    expect(message).toContain('complete the task')
   })
 
   it('does not wake the parent while some subtasks are still active', async () => {
@@ -4025,8 +4095,10 @@ describe('AgentManager durable transcript write-through', () => {
       expect((mockDb as any).getTranscriptDelta).toHaveBeenCalledWith('task-1', 0)
       const transcriptEvents = sent.filter((e) => e.channel === 'transcript:changed')
       expect(transcriptEvents).toHaveLength(1)
-      expect(transcriptEvents[0].data).toMatchObject({ taskId: 'task-1', maxRev: 3 })
-      expect((transcriptEvents[0].data as { parts: Array<{ partId: string }> }).parts.map((p) => p.partId)).toEqual(['p1', 'p2', 'p3'])
+      expect(transcriptEvents[0].data).toMatchObject({ taskId: 'task-1', maxRev: 3, seq: 1 })
+      const ops = (transcriptEvents[0].data as { ops: Array<{ op: string; part: { partId: string } }> }).ops
+      expect(ops.map((o) => o.op)).toEqual(['put', 'put', 'put'])
+      expect(ops.map((o) => o.part.partId)).toEqual(['p1', 'p2', 'p3'])
     } finally {
       vi.useRealTimers()
     }

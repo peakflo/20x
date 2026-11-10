@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo, type CSSProperties } from 'react'
+import { useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo, type CSSProperties, type UIEvent } from 'react'
 import {
   useCanvasStore,
   DEFAULT_PANEL_WIDTH,
@@ -19,6 +19,7 @@ import { DrawingProperties } from './drawing/DrawingProperties'
 import { CanvasPanel } from './CanvasPanel'
 import { CanvasConnections } from './CanvasConnections'
 import { CanvasContextMenu } from './CanvasContextMenu'
+import { flattenPanelScrollers, restorePanelScrollers, type FlattenedScroller } from './flatten-panel-scrollers'
 import { CanvasMinimap } from './CanvasMinimap'
 import { ArrowDown, ArrowDownLeft, ArrowDownRight, ArrowLeft, ArrowRight, ArrowUp, ArrowUpLeft, ArrowUpRight, Move, ZoomIn, ZoomOut, RotateCcw, Maximize2, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -131,6 +132,20 @@ function isTaskPanelSelected(): boolean {
   const { selectedPanelId, panels } = useCanvasStore.getState()
   if (!selectedPanelId) return false
   return panels.find((p) => p.id === selectedPanelId)?.type === 'task'
+}
+
+/**
+ * The canvas root is `overflow: hidden` and never scrolls on purpose, but
+ * focus() / scrollIntoView() on an element in a partly off-screen panel still
+ * scrolls it. That shifts the panels, zoom controls and minimap out of view
+ * with no way back, so undo any such scroll.
+ */
+function resetCanvasRootScroll(e: UIEvent<HTMLDivElement>): void {
+  const el = e.currentTarget
+  if (el.scrollTop !== 0 || el.scrollLeft !== 0) {
+    el.scrollTop = 0
+    el.scrollLeft = 0
+  }
 }
 
 /** False when the element, or an ancestor, is `visibility: hidden` (the canvas is hidden in other views). */
@@ -496,6 +511,8 @@ export function InfiniteCanvas() {
   const viewportDirtyRef = useRef(false)
   const wheelIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const layerReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Panel scrollers made non-composited for the current gesture (see flattenPanelScrollers).
+  const flattenedScrollersRef = useRef<FlattenedScroller[] | null>(null)
 
   const pendingPanRef = useRef({ dx: 0, dy: 0 })
   const pendingZoomRef = useRef<{ deltaY: number; clientX: number; clientY: number; rect: DOMRect } | null>(null)
@@ -550,7 +567,12 @@ export function InfiniteCanvas() {
     // Promote the layer for the duration of the gesture only — a permanent
     // will-change keeps a dedicated compositor layer (and its memory) alive.
     const layer = transformLayerRef.current
-    if (layer) layer.style.willChange = 'transform'
+    if (layer) {
+      layer.setAttribute('data-canvas-gesturing', '')
+      layer.style.willChange = 'transform'
+      // Still flattened if the previous gesture's release timer was pending.
+      if (!flattenedScrollersRef.current) flattenedScrollersRef.current = flattenPanelScrollers(layer)
+    }
   }, [])
 
   const flushViewportUpdate = useCallback(() => {
@@ -590,7 +612,15 @@ export function InfiniteCanvas() {
       const layer = transformLayerRef.current
       if (layerReleaseTimerRef.current != null) clearTimeout(layerReleaseTimerRef.current)
       layerReleaseTimerRef.current = setTimeout(() => {
-        if (layer) layer.style.willChange = ''
+        if (layer) {
+          layer.style.willChange = ''
+          layer.removeAttribute('data-canvas-gesturing')
+        }
+        // Same moment as the layer release: one re-layerization, not two.
+        if (flattenedScrollersRef.current) {
+          restorePanelScrollers(flattenedScrollersRef.current)
+          flattenedScrollersRef.current = null
+        }
         layerReleaseTimerRef.current = null
       }, LAYER_RELEASE_MS)
     }
@@ -696,6 +726,10 @@ export function InfiniteCanvas() {
       if (viewportRafRef.current != null) cancelAnimationFrame(viewportRafRef.current)
       if (wheelIdleTimerRef.current != null) clearTimeout(wheelIdleTimerRef.current)
       if (layerReleaseTimerRef.current != null) clearTimeout(layerReleaseTimerRef.current)
+      if (flattenedScrollersRef.current) {
+        restorePanelScrollers(flattenedScrollersRef.current)
+        flattenedScrollersRef.current = null
+      }
     }
   }, [])
 
@@ -844,7 +878,9 @@ export function InfiniteCanvas() {
       panStartRef.current = { x: e.clientX, y: e.clientY }
       queuePan(dx, dy)
     },
-    [isPanning, queuePan]
+    // connectingFromId must be a dependency: without it the handler keeps the
+    // value from before connect mode started and the pending line never draws.
+    [connectingFromId, isPanning, queuePan]
   )
 
   const handleMouseUp = useCallback(() => {
@@ -1014,7 +1050,7 @@ export function InfiniteCanvas() {
       : 'default'
 
   return (
-    <div data-canvas-root="true" className="overflow-hidden bg-[var(--canvas-bg)]" style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div data-canvas-root="true" className="overflow-hidden bg-[var(--canvas-bg)]" style={{ position: 'relative', width: '100%', height: '100%' }} onScroll={resetCanvasRootScroll}>
       {/* Canvas container */}
       <div
         ref={containerRef}

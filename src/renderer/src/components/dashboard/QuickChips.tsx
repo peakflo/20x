@@ -38,7 +38,7 @@ export function QuickChips({ onAskMastermind, onCreateTask }: QuickChipsProps) {
                 onCreateTask(chip.label)
               }
             }}
-            className="group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs text-foreground/70 border border-border bg-card/50 hover:border-border hover:text-foreground hover:bg-card transition-all duration-150 cursor-pointer"
+            className="group flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs text-foreground/70 border border-border glass-surface hover:border-border hover:text-foreground hover:bg-card transition-all duration-150 cursor-pointer"
           >
             {isMastermind ? (
               <MessageSquare className="h-3 w-3 opacity-70 group-hover:opacity-100 transition-opacity" />

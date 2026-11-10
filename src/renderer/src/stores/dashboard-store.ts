@@ -72,6 +72,30 @@ export type TimeWindow = '24h' | '7d' | '30d' | 'all'
 
 let localStatsRequest = 0
 
+/** Upper bound on how stale the completed-history aggregate may get (window edges move with time). */
+const COMPLETED_STATS_MAX_AGE_MS = 60_000
+let completedStatsCache: { key: string; fetchedAt: number; result: Promise<CompletedTaskStats> } | null = null
+
+/**
+ * What the completed-history aggregate (`db.getCompletedTaskStats`) can depend
+ * on among the loaded tasks: the completed ones and the fields the query
+ * filters/counts on, plus the database's completed total (reopened or
+ * deleted history that is not loaded) and the time window.
+ */
+function completedStatsKey(tasks: WorkfloTask[], timeWindow: TimeWindow, completedTotal?: number): string {
+  let key = `${timeWindow}|${completedTotal ?? ''}`
+  for (const t of tasks) {
+    if (t.status !== TaskStatus.Completed) continue
+    key += `|${t.id},${t.updated_at},${t.created_at},${t.agent_id ?? ''},${t.parent_task_id ?? ''},${t.snoozed_until ?? ''},${t.is_recurring ? 1 : 0},${t.recurrence_parent_id ?? ''}`
+  }
+  return key
+}
+
+/** Test hook: forget the cached completed-history aggregate. */
+export function __resetCompletedStatsCacheForTest(): void {
+  completedStatsCache = null
+}
+
 function getWindowStart(timeWindow: TimeWindow): Date | null {
   if (timeWindow === 'all') return null
   const now = new Date()
@@ -208,7 +232,8 @@ interface DashboardState {
   startPeriodicRefresh: () => void
   /** Stop periodic background refresh. */
   stopPeriodicRefresh: () => void
-  updateLocalStats: (tasks: WorkfloTask[]) => void
+  /** `completedTotal` (task store) lets changes to unloaded completed history invalidate the cached aggregate. */
+  updateLocalStats: (tasks: WorkfloTask[], completedTotal?: number) => void
   openApplication: (workflowId: string) => Promise<void>
   switchTab: (workflowId: string) => void
   closeTab: (workflowId: string) => void
@@ -306,22 +331,32 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     get().fetchStats()
   },
 
-  updateLocalStats: (tasks: WorkfloTask[]) => {
+  updateLocalStats: (tasks: WorkfloTask[], completedTotal?: number) => {
     const { timeWindow } = get()
     // Completed history is not in the task store; aggregate it in the DB.
     const request = ++localStatsRequest
-    const windowStart = getWindowStart(timeWindow)
     const getStats = typeof window !== 'undefined' ? window.electronAPI?.db?.getCompletedTaskStats : undefined
     if (typeof getStats !== 'function') {
       set({ localStats: computeLocalStats(tasks, timeWindow) })
       return
     }
-    void getStats(windowStart ? windowStart.toISOString() : null)
+    // Most task updates (agent status, titles, review marks) do not touch
+    // completed history, so reuse the last aggregate unless something it
+    // depends on changed or it is older than COMPLETED_STATS_MAX_AGE_MS.
+    const key = completedStatsKey(tasks, timeWindow, completedTotal)
+    const now = Date.now()
+    if (!completedStatsCache || completedStatsCache.key !== key || now - completedStatsCache.fetchedAt > COMPLETED_STATS_MAX_AGE_MS) {
+      const windowStart = getWindowStart(timeWindow)
+      completedStatsCache = { key, fetchedAt: now, result: getStats(windowStart ? windowStart.toISOString() : null) }
+    }
+    const cached = completedStatsCache
+    void cached.result
       .then((completedStats) => {
         if (request !== localStatsRequest) return
         set({ localStats: computeLocalStats(tasks, timeWindow, completedStats) })
       })
       .catch(() => {
+        if (completedStatsCache === cached) completedStatsCache = null
         if (request !== localStatsRequest) return
         set({ localStats: computeLocalStats(tasks, timeWindow) })
       })

@@ -13,13 +13,22 @@ import { MASTERMIND_PREWARM_SETTING } from '@/components/orchestrator/Orchestrat
 import { PushNotificationSettings } from './PushNotificationSettings'
 
 /** Human-readable summary of a cleanup run, or null when there is nothing to report. */
-function describeCleanupOutcome(cleaned: number | undefined, nodeModulesCleaned: number | undefined): string | null {
+function describeCleanupOutcome(cleaned: number | undefined, retiredWorkspaces: number | undefined, nodeModulesCleaned: number | undefined, nextCachesCleaned: number | undefined, turboFilesCleaned: number | undefined): string | null {
   const parts: string[] = []
   if (cleaned !== undefined && cleaned > 0) {
     parts.push(`Cleaned ${cleaned} workspace${cleaned !== 1 ? 's' : ''}`)
   }
+  if (retiredWorkspaces !== undefined && retiredWorkspaces > 0) {
+    parts.push(`retired ${retiredWorkspaces} finished workspace${retiredWorkspaces !== 1 ? 's' : ''}`)
+  }
   if (nodeModulesCleaned !== undefined && nodeModulesCleaned > 0) {
     parts.push(`pruned ${nodeModulesCleaned} idle node_modules`)
+  }
+  if (nextCachesCleaned !== undefined && nextCachesCleaned > 0) {
+    parts.push(`pruned ${nextCachesCleaned} idle .next/cache folder${nextCachesCleaned !== 1 ? 's' : ''}`)
+  }
+  if (turboFilesCleaned !== undefined && turboFilesCleaned > 0) {
+    parts.push(`pruned ${turboFilesCleaned} old Turbo cache files`)
   }
   return parts.length > 0 ? parts.join(', ') : null
 }
@@ -66,13 +75,13 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
       if (event.phase === 'done') {
         setCleanupRunning(false)
         setCleanupProgress(null)
-        const summary = describeCleanupOutcome(event.cleaned, event.nodeModulesCleaned)
+        const summary = describeCleanupOutcome(event.cleaned, event.retiredWorkspaces, event.nodeModulesCleaned, event.nextCachesCleaned, event.turboFilesCleaned)
         if (summary) {
           setCleanupResult(summary)
         } else if (event.errors && event.errors.length > 0) {
           setCleanupResult(`Cleanup finished with ${event.errors.length} error${event.errors.length !== 1 ? 's' : ''}`)
         } else {
-          setCleanupResult('No workspaces to clean')
+          setCleanupResult('No old data to clean')
         }
       } else {
         setCleanupRunning(true)
@@ -522,7 +531,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
               <img src={qrDataUrl} alt="QR code" className="rounded-lg border border-border" width={200} height={200} />
               {/* PIN overlay — shown when phone has scanned and is waiting for PIN */}
               {pairingPin && (
-                <div className="absolute inset-0 bg-background/95 rounded-lg flex flex-col items-center justify-center gap-2">
+                <div className="absolute inset-0 glass-surface rounded-lg flex flex-col items-center justify-center gap-2">
                   <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Enter this PIN on your phone</p>
                   <div className="flex gap-1.5">
                     {pairingPin.split('').map((d, i) => (
@@ -599,14 +608,14 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
 
     <SettingsSection
       title="Workspace Auto-Cleanup"
-      description="Preserve task workspaces and artifacts; clean up old orphaned workspaces and idle dependencies"
+      description="Keep artifacts and outputs; remove old finished workspace files, idle dependencies, and cache files"
     >
       <div className="space-y-4">
         <div className="flex items-center justify-between py-2 border-b border-border">
           <div className="space-y-0.5">
             <Label htmlFor="autoclean-enabled">Enable auto-cleanup</Label>
             <p className="text-xs text-muted-foreground">
-              Automatically remove old workspace directories only when their task no longer exists
+              After this period, remove finished workspace files, local edits, and separate Git clones. Keep artifacts and outputs. Clear old Turbo cache files.
             </p>
           </div>
           <Switch
@@ -624,7 +633,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
           <div className="space-y-0.5">
             <Label htmlFor="autoclean-days">Retention period</Label>
             <p className="text-xs text-muted-foreground">
-              Days to keep orphaned workspace directories
+              Days to keep orphaned workspaces, finished workspace files, and Turbo cache files
             </p>
           </div>
           <select
@@ -647,12 +656,16 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
           </select>
         </div>
 
+        <p className="text-xs text-muted-foreground">
+          20x uses your existing pnpm package store for agent-run installs. Each workspace still has its own dependency links.
+        </p>
+
         <div className="flex items-center justify-between py-2 border-b border-border">
           <div className="space-y-0.5">
-            <Label htmlFor="nodemodules-gc-enabled">Prune idle node_modules</Label>
+            <Label htmlFor="nodemodules-gc-enabled">Prune idle node_modules and .next/cache</Label>
             <p className="text-xs text-muted-foreground">
-              Delete dependency folders untouched for more than the configured days, in every workspace.
-              Source files are kept — dependencies reinstall on the next run.
+              Delete idle dependency and Next.js cache folders in every workspace.
+              Source files are kept. The deleted folders are made again when needed.
             </p>
           </div>
           <Switch
@@ -670,7 +683,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
           <div className="space-y-0.5">
             <Label htmlFor="nodemodules-gc-days">Dependency inactivity period</Label>
             <p className="text-xs text-muted-foreground">
-              Days without changes before a node_modules folder is pruned
+              Days without changes before these folders are pruned
             </p>
           </div>
           <select
@@ -696,7 +709,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             <div className="space-y-0.5">
               <Label>Manual cleanup</Label>
               <p className="text-xs text-muted-foreground">
-                Remove old orphaned workspaces and prune idle dependencies now
+                Remove old orphaned and finished workspace files, idle dependencies, and cache files now
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -716,13 +729,13 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                     // The progress listener handles the final state via the 'done' event,
                     // but also handle the IPC response as a fallback
                     if (!cleanupProgress) {
-                      const summary = describeCleanupOutcome(result.cleaned, result.nodeModulesCleaned)
+                      const summary = describeCleanupOutcome(result.cleaned, result.retiredWorkspaces, result.nodeModulesCleaned, result.nextCachesCleaned, result.turboFilesCleaned)
                       if (summary) {
                         setCleanupResult(summary)
                       } else if (result.errors.length > 0 && result.errors[0] === 'Cleanup is already in progress') {
                         setCleanupResult('Cleanup already in progress')
                       } else {
-                        setCleanupResult('No workspaces to clean')
+                        setCleanupResult('No old data to clean')
                       }
                       setCleanupRunning(false)
                     }
@@ -832,7 +845,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                 await settingsApi.set('heartbeat_active_hours_start', e.target.value)
               }}
               disabled={loading || !heartbeatEnabled}
-              className="bg-transparent border rounded px-2 py-1 text-sm disabled:opacity-50"
+              className="glass-surface border rounded px-2 py-1 text-sm disabled:opacity-50"
               placeholder="09:00"
             />
             <span className="text-muted-foreground">to</span>
@@ -844,7 +857,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
                 await settingsApi.set('heartbeat_active_hours_end', e.target.value)
               }}
               disabled={loading || !heartbeatEnabled}
-              className="bg-transparent border rounded px-2 py-1 text-sm disabled:opacity-50"
+              className="glass-surface border rounded px-2 py-1 text-sm disabled:opacity-50"
               placeholder="22:00"
             />
           </div>
@@ -866,7 +879,7 @@ const [currentVersion, setCurrentVersion] = useState<string | null>(null)
             }}
             disabled={loading || !heartbeatEnabled}
             rows={6}
-            className="w-full bg-transparent border rounded px-3 py-2 text-sm font-mono disabled:opacity-50 resize-y placeholder:text-muted-foreground"
+            className="w-full glass-surface border rounded px-3 py-2 text-sm font-mono disabled:opacity-50 resize-y placeholder:text-muted-foreground"
             placeholder="e.g. Always run `gh api` calls to verify status. Never skip checks. Reply HEARTBEAT_OK only when everything is clean."
           />
         </div>

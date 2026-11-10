@@ -3,6 +3,7 @@ import { PeakfloPlugin } from './peakflo-plugin'
 import { TaskStatus } from '../../shared/constants'
 import type { PluginContext } from './types'
 import type { DatabaseManager, McpServerRecord, TaskRecord } from '../database'
+import { createTestDb } from '../../../test/helpers/db-test-helper'
 
 function makeContext(overrides: Partial<PluginContext> = {}): PluginContext {
   return {
@@ -307,6 +308,62 @@ describe('PeakfloPlugin', () => {
         expect.objectContaining({ status: TaskStatus.NotStarted }),
         'workflo-server'
       )
+    })
+  })
+
+  describe('importTasksEnterprise - re-linking tasks of another source', () => {
+    function remote(id: string, tenantId: string, extra: Record<string, unknown> = {}) {
+      return {
+        id, tenantId, title: `Remote ${id}`, status: 'pending', priority: 'medium',
+        description: '', taskData: { fields: [], outputs: [] }, assignees: [], ...extra
+      }
+    }
+
+    function setup(remoteTasks: unknown[]) {
+      const { db } = createTestDb()
+      const oldSource = db.createTaskSource({ mcp_server_id: null, name: 'Old', plugin_id: 'peakflo' })!
+      const newSource = db.createTaskSource({ mcp_server_id: null, name: 'New', plugin_id: 'peakflo' })!
+      const local = (externalId: string, tenantId: string) => {
+        const task = db.createTask({ title: `Local ${externalId}`, source_id: oldSource.id, external_id: externalId })!
+        db.setSetting(`workflo-task:${task.id}`, JSON.stringify({ id: externalId, tenantId }))
+        return task
+      }
+      const ctx = makeContext({
+        db,
+        workfloApiClient: {
+          listTaskCache: vi.fn().mockResolvedValue({ tasks: remoteTasks, nextCursor: null }),
+          downloadFile: vi.fn()
+        } as unknown as PluginContext['workfloApiClient']
+      })
+      return { db, ctx, newSource, local }
+    }
+
+    it('updates the local task of the same tenant instead of creating a copy', async () => {
+      const { db, ctx, newSource, local } = setup([remote('wf-1', 'tenant-a'), remote('wf-2', 'tenant-a')])
+      const sameTenant = local('wf-1', 'tenant-a')
+      const otherTenant = local('wf-2', 'tenant-b')
+
+      const result = await plugin.importTasks(newSource.id, { enterprise_mode: true }, ctx)
+
+      expect(result).toMatchObject({ updated: 1, imported: 1, errors: [] })
+      expect(db.getTask(sameTenant.id)!.title).toBe('Remote wf-1')
+      // A task of another tenant with the same external id is left alone.
+      expect(db.getTask(otherTenant.id)!.title).toBe('Local wf-2')
+      expect(db.getTaskByExternalId(newSource.id, 'wf-2')).toBeDefined()
+    })
+
+    it('deletes the re-linked local task when the remote one was deleted', async () => {
+      const { db, ctx, newSource, local } = setup([
+        remote('wf-1', 'tenant-a', { deletedAt: new Date().toISOString() }),
+        // The same remote id again after the delete must not find the deleted task.
+        remote('wf-1', 'tenant-a')
+      ])
+      const linked = local('wf-1', 'tenant-a')
+
+      const result = await plugin.importTasks(newSource.id, { enterprise_mode: true }, ctx)
+
+      expect(db.getTask(linked.id)).toBeUndefined()
+      expect(result).toMatchObject({ updated: 0, imported: 1, errors: [] })
     })
   })
 })

@@ -3,7 +3,7 @@ import type { WorkfloTask } from './workflo-api-client'
 import { TaskStatus } from '../shared/constants'
 
 /** The server snapshot is a cache. No local status can grant completion. */
-export function isWorkfloLinkedTask(db: DatabaseManager, task: TaskRecord): boolean {
+export function isWorkfloLinkedTask(db: DatabaseManager, task: Pick<TaskRecord, 'external_id' | 'source_id'>): boolean {
   return !!task.external_id && !!task.source_id &&
     db.getTaskSource(task.source_id)?.plugin_id === 'peakflo'
 }

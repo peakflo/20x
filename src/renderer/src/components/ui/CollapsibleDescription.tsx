@@ -157,7 +157,7 @@ export function CollapsibleDescription({
           rows={Math.min(12, Math.max(4, draft.split('\n').length + 1))}
           placeholder={placeholder}
           disabled={saving}
-          className="w-full min-h-[96px] rounded-md border border-input bg-transparent px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/70 focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/30 resize-y disabled:opacity-60"
+          className="w-full min-h-[96px] rounded-md border border-input glass-surface px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/70 focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/30 resize-y disabled:opacity-60"
           data-testid="description-edit-textarea"
         />
         <div className="mt-2 flex items-center justify-end gap-2">

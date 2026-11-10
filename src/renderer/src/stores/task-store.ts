@@ -57,6 +57,23 @@ function normalizeTask(task: WorkfloTask): WorkfloTask {
   }
 }
 
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  // Arrays/objects arrive as fresh copies over IPC; compare by content.
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+/** True when `next` (a superset of `previous`'s keys) has the same field values. */
+function sameTaskValues(previous: WorkfloTask, next: WorkfloTask): boolean {
+  const prev = previous as unknown as Record<string, unknown>
+  const nxt = next as unknown as Record<string, unknown>
+  for (const key of Object.keys(nxt)) {
+    if (!sameValue(prev[key], nxt[key])) return false
+  }
+  return true
+}
+
 /**
  * Merge fetched tasks into the current list: fetched records replace stale
  * ones by id (keeping list position), new ones are appended.
@@ -358,6 +375,11 @@ onTaskUpdated((event) => {
     }
     return
   }
+  const nextTask = normalizeTask({ ...previousTask, ...event.updates })
+  // Main often re-sends values the renderer already has (whole DB records,
+  // repeated status pushes). Keep the array identity then, so nothing that
+  // subscribes to `tasks` re-renders or re-sorts.
+  if (sameTaskValues(previousTask, nextTask)) return
   useTaskStore.setState((state) => ({
     tasks: state.tasks.map((t) =>
       t.id === event.taskId ? normalizeTask({ ...t, ...event.updates }) : t

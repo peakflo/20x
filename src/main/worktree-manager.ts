@@ -5,6 +5,7 @@ import { readdir } from 'fs/promises'
 import { isAbsolute, join, relative, resolve, sep, win32 } from 'path'
 import { app, type BrowserWindow } from 'electron'
 import { generateBranchName, shortTaskId, withBranchSuffix, WORKTREE_BRANCH_MODE_KEY, WORKTREE_BRANCH_PREFIX_KEY, WORKTREE_BRANCH_TEMPLATE_KEY, type BranchTask } from '../shared/worktree-branch-name'
+import { gitChildEnv } from './git-child-env'
 
 const execFileAsync = promisify(execFile)
 
@@ -405,7 +406,8 @@ export class WorktreeManager {
       if (existsSync(barePath) && existsSync(wtPath)) {
         try {
           await execFileAsync('git', ['worktree', 'remove', wtPath, '--force'], {
-            cwd: barePath
+            cwd: barePath,
+            env: gitChildEnv()
           })
         } catch {
           // If git worktree remove fails, remove directory manually

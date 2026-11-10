@@ -58,6 +58,7 @@ import { listTaskArtifactEntries, readTaskArtifact, resolveTaskArtifactFilePath,
 import { renderTaskScadArtifact } from './scad-preview'
 import { readScadAttachment, renderScadAttachment, saveScadAttachment } from './scad-attachments'
 import { writeArtifactFileToClipboard } from './artifact-clipboard'
+import { canvasArtifactBroker, type ArtifactPanelRegistration } from './canvas-artifact-broker'
 import { writeClipboardAttachment, removeStagedClipboardFile } from './clipboard-attachments'
 import { ArtifactClipboardMode, type ArtifactCopyFileResult } from '../shared/artifacts'
 import { guardChildStreams, writeToChildStdin } from './child-stream-guards'
@@ -102,6 +103,13 @@ function clipboardStagingDir(): string {
 }
 
 const desktopBackdropStates = new WeakMap<BrowserWindow, { enabled: boolean }>()
+
+// Set by registerIpcHandlers; lets the main process drop the cached deps:check
+// result (e.g. after the real shell PATH is resolved late) so the next check is fresh.
+let resetDepsCheckCache: () => void = () => {}
+export function clearDepsCheckCache(): void {
+  resetDepsCheckCache()
+}
 
 export function registerIpcHandlers(
   db: DatabaseManager,
@@ -642,6 +650,24 @@ export function registerIpcHandlers(
     return failure ? { ok: false as const, kind: failure.kind, message: failure.message } : { ok: true as const }
   })
 
+  // Cursor SDK sign-in: Settings → Agents "Cursor" card (subscription login status/actions).
+  // API-key status is per-agent config (AgentForm), not shown here.
+  ipcMain.handle('cursor:authStatus', async () => {
+    return agentManager.cursorAuthStatus()
+  })
+
+  ipcMain.handle('cursor:startBrowserLogin', async () => {
+    return agentManager.startCursorBrowserLogin()
+  })
+
+  ipcMain.handle('cursor:cancelBrowserLogin', () => {
+    agentManager.cancelCursorBrowserLogin()
+  })
+
+  ipcMain.handle('cursor:logout', async () => {
+    await agentManager.cursorLogout()
+  })
+
   // Agent Session handlers
   ipcMain.handle('agentSession:start', async (_, agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => {
     agentManager.noteUserTaskActivity(taskId)
@@ -787,15 +813,12 @@ export function registerIpcHandlers(
     return { saved: true, filePath }
   })
 
-  // Durable transcript snapshot: the renderer hydrates transcript state from
-  // the main-process projection instead of depending on catching live events.
-  ipcMain.handle('agentSession:getTranscriptSnapshot', (_, taskId: string, sinceSeq?: number) => {
-    return agentManager.getTranscriptSnapshot(taskId, sinceSeq)
-  })
-
-  // Event-sourced projection: delta since a rev cursor (parts changed since then).
-  ipcMain.handle('agentSession:getTranscriptDelta', (_, taskId: string, sinceRev: number) => {
-    return agentManager.getTranscriptDelta(taskId, sinceRev)
+  // Durable transcript: the renderer hydrates from the main-process projection
+  // and then follows `transcript:changed` deltas. This is its resync: the whole
+  // transcript (or the parts changed since `sinceRev`) plus the stream
+  // position the answer is consistent with.
+  ipcMain.handle('agentSession:getTranscriptSync', (_, taskId: string, sinceRev?: number) => {
+    return agentManager.getTranscriptSync(taskId, typeof sinceRev === 'number' ? sinceRev : undefined)
   })
 
   // Agent Config handlers
@@ -950,7 +973,7 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('workspace:runCleanupNow', async () => {
-    if (!workspaceCleanupScheduler) return { cleaned: 0, errors: ['Cleanup scheduler not initialized'] }
+    if (!workspaceCleanupScheduler) return { cleaned: 0, retiredWorkspaces: 0, nodeModulesCleaned: 0, nextCachesCleaned: 0, turboFilesCleaned: 0, turboBytesCleaned: 0, errors: ['Cleanup scheduler not initialized'] }
     return await workspaceCleanupScheduler.runNow()
   })
 
@@ -1049,6 +1072,7 @@ export function registerIpcHandlers(
   // Dependency check handler — delegates to the shared detectInstalledAgents()
   // which returns Record<string, { installed: boolean; version: string | null }>
   let depsCheckCache: Record<string, { installed: boolean; version: string | null }> | null = null
+  resetDepsCheckCache = () => { depsCheckCache = null }
 
   ipcMain.handle('deps:check', async () => {
     if (depsCheckCache) {
@@ -2486,6 +2510,18 @@ else:
   ipcMain.handle('browser:unregisterBrokerPanel', (_event, panelId: string) => {
     if (typeof panelId !== 'string') return { success: false }
     panelBrowserBroker.unregisterPanel(panelId)
+    return { success: true }
+  })
+
+  // Canvas artifact panels register here with the task ids edge-connected to
+  // them, so those tasks' agents can read the artifact via canvas_artifact_*.
+  ipcMain.handle('canvasArtifact:registerPanel', (_event, payload: ArtifactPanelRegistration) => {
+    return { success: canvasArtifactBroker.register(payload) }
+  })
+
+  ipcMain.handle('canvasArtifact:unregisterPanel', (_event, panelId: string) => {
+    if (typeof panelId !== 'string') return { success: false }
+    canvasArtifactBroker.unregister(panelId)
     return { success: true }
   })
 

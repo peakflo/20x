@@ -31,7 +31,7 @@ export function SubtasksTab({ subtasks, onNavigateToTask, onOpenSubtaskInWindow 
             placeholder="Search subtasks"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            className="h-9 w-full rounded-md border border-border/50 bg-card/60 pl-9 pr-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring"
+            className="h-9 w-full rounded-md border border-border/50 glass-surface pl-9 pr-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-ring"
           />
         </div>
         <div className="flex flex-wrap gap-1.5" aria-label="Filter subtasks">

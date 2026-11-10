@@ -16,7 +16,7 @@ export function useTaskRunDurations(taskIds: string[]): Record<string, TaskRunDu
 
     const refresh = () => {
       void window.electronAPI.tasks.getRunDurations(ids)
-        .then((result) => { if (active) setDurations(result) })
+        .then((result) => { if (active) setDurations((prev) => reuseUnchangedDurations(prev, result)) })
         .catch((error) => console.error('Could not load agent run time:', error))
     }
     refresh()
@@ -28,6 +28,29 @@ export function useTaskRunDurations(taskIds: string[]): Record<string, TaskRunDu
   }, [idsKey])
 
   return durations
+}
+
+/**
+ * Each poll returns fresh objects for every task. Keep the previous object for
+ * entries whose values did not change (and the previous map when nothing
+ * changed), so memoized task rows only re-render when their own duration does.
+ */
+export function reuseUnchangedDurations(
+  prev: Record<string, TaskRunDuration>,
+  next: Record<string, TaskRunDuration>
+): Record<string, TaskRunDuration> {
+  let changed = Object.keys(prev).length !== Object.keys(next).length
+  const merged: Record<string, TaskRunDuration> = {}
+  for (const [id, value] of Object.entries(next)) {
+    const old = prev[id]
+    if (old && old.durationMs === value.durationMs && old.isRunning === value.isRunning) {
+      merged[id] = old
+    } else {
+      merged[id] = value
+      changed = true
+    }
+  }
+  return changed ? merged : prev
 }
 
 export function formatTaskRunDuration(durationMs: number): string {

@@ -10,6 +10,7 @@ import type { ProviderUsageLimits, UsageLimitsRefreshResult, UsageParallelismPer
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { PushPreferences } from '@shared/push-notifications'
 import type { HarnessInstanceView } from '@shared/harness-instances'
+import type { TranscriptSyncResult } from '@shared/transcript-stream'
 import type { AcpAgentInstanceView } from '@shared/acp-registry'
 import type {
   HarnessKey,
@@ -174,12 +175,12 @@ export const api = {
       post<{ success: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}/stop`)
   },
   transcript: {
-    /** Full durable transcript projection for a task (the render source). */
-    snapshot: (taskId: string) =>
-      get<TranscriptPartRecord[]>(`/api/tasks/${encodeURIComponent(taskId)}/transcript`),
-    /** Parts changed since a rev cursor (delta reconcile). */
-    delta: (taskId: string, sinceRev: number) =>
-      get<{ parts: TranscriptPartRecord[]; maxRev: number }>(`/api/tasks/${encodeURIComponent(taskId)}/transcript/delta?sinceRev=${sinceRev}`)
+    /** Resync for the `transcript:changed` stream: the whole transcript, or the
+     *  parts changed since `sinceRev`, plus the stream position it matches. */
+    sync: (taskId: string, sinceRev?: number) =>
+      get<TranscriptSyncResult<TranscriptPartRecord>>(
+        `/api/tasks/${encodeURIComponent(taskId)}/transcript/sync${typeof sinceRev === 'number' ? `?sinceRev=${sinceRev}` : ''}`
+      )
   },
   artifacts: {
     list: (taskId: string) =>

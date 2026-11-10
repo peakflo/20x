@@ -240,7 +240,7 @@ export const HTML_RENDER_THEME_GUIDE =
 
 export const HTML_RENDER_LAYOUT_GUIDE =
   'Layout rules: no background on html/body (the page sits on the chat background); fluid width, no fixed page width; '
-  + 'no outer card or title (the toolbar already shows the title); give charts a fixed pixel height, never 100vh; use the theme variables above.'
+  + 'no outer card or page title (the page sits directly in chat); give charts a fixed pixel height, never 100vh; use the theme variables above.'
 
 export const HTML_RENDER_NETWORK_POLICY =
   `Network policy: scripts and styles may load only from ${HTML_RENDER_ALLOWED_CDNS.join(', ')}. `

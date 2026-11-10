@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { runInNewContext } from 'node:vm'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import { HTML_RENDER_ALLOWED_CDNS, HTML_RENDER_DEFAULT_THEME, HTML_RENDER_SIZE_MESSAGE_TYPE, HTML_RENDER_THEME_MESSAGE_TYPE } from '@shared/html-render'
 import { ArtifactHtmlFrame, hardenArtifactHtml } from './ArtifactHtmlFrame'
@@ -32,6 +33,11 @@ describe('hardenArtifactHtml CSP', () => {
     expect(srcDoc).toContain('color-scheme:dark;')
   })
 
+  it('uses the chat background variable for inline pages only', () => {
+    expect(hardenArtifactHtml('<p>hi</p>', HTML_RENDER_DEFAULT_THEME.dark, true)).toContain('<style>html{background:var(--background)}</style>')
+    expect(hardenArtifactHtml('<p>hi</p>', HTML_RENDER_DEFAULT_THEME.dark)).not.toContain('<style>html{background:var(--background)}</style>')
+  })
+
   it('still puts the CSP before any artifact text', () => {
     const srcDoc = hardenArtifactHtml('<html data-x="<head>"><body><p>decoy</p></body></html>')
     expect(srcDoc.startsWith('<!doctype html><meta http-equiv="Content-Security-Policy"')).toBe(true)
@@ -43,6 +49,48 @@ describe('hardenArtifactHtml CSP', () => {
     expect(srcDoc).toContain('ResizeObserver')
     expect(srcDoc).toContain(HTML_RENDER_SIZE_MESSAGE_TYPE)
     expect(srcDoc).toContain(HTML_RENDER_THEME_MESSAGE_TYPE)
+  })
+
+  it('does not keep growing an inline frame when content follows viewport height', () => {
+    const srcDoc = hardenArtifactHtml('<p>hi</p>')
+    const bootstrap = [...srcDoc.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+      .map((match) => match[1])
+      .find((script) => script.includes(HTML_RENDER_SIZE_MESSAGE_TYPE))
+    expect(bootstrap).toBeDefined()
+
+    const root = {
+      clientHeight: 800,
+      clientWidth: 500,
+      scrollHeight: 816,
+      getBoundingClientRect: () => ({ height: root.clientHeight })
+    }
+    const messages: Array<{ height: number }> = []
+    const listeners: Record<string, () => void> = {}
+    let resize: () => void = () => undefined
+    class ResizeObserverStub {
+      constructor(callback: () => void) { resize = callback }
+      observe() { /* The test starts the first measurement with DOMContentLoaded. */ }
+    }
+    runInNewContext(bootstrap!, {
+      document: { documentElement: root, addEventListener: (name: string, listener: () => void) => { listeners[name] = listener } },
+      window: { parent: { postMessage: (message: { height: number }) => messages.push(message) }, addEventListener: () => undefined, ResizeObserver: ResizeObserverStub },
+      ResizeObserver: ResizeObserverStub,
+      requestAnimationFrame: () => undefined
+    })
+
+    listeners.DOMContentLoaded()
+    expect(messages.map((message) => message.height)).toEqual([816])
+
+    root.clientHeight = 816
+    root.scrollHeight = 816 // The root can resize before the body catches up.
+    resize()
+    root.scrollHeight = 832 // 100vh body plus 16px of spacing
+    resize()
+    expect(messages.map((message) => message.height)).toEqual([816])
+
+    root.scrollHeight = 900 // Real new content must still grow the frame.
+    resize()
+    expect(messages.map((message) => message.height)).toEqual([816, 900])
   })
 })
 
@@ -64,6 +112,7 @@ describe('ArtifactHtmlFrame auto-height (fill=false)', () => {
     const frame = screen.getByTitle('Chart') as HTMLIFrameElement
     expect(frame.className).not.toContain('bg-white')
     expect(frame.className).not.toContain('h-full')
+    expect(frame.getAttribute('srcdoc')).toContain('<style>html{background:var(--background)}</style>')
     expect(frame.style.height).toBe('240px')
   })
 

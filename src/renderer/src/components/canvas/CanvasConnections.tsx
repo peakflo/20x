@@ -141,9 +141,11 @@ export function CanvasConnections({
         const edgeType = edge.edge.edgeType
         const colorFaded = edgeType === 'browser' ? 'rgba(249,115,22,0.5)'
           : edgeType === 'terminal' ? 'rgba(34,197,94,0.5)'
+          : edgeType === 'artifact' ? 'rgba(217,70,239,0.5)'
           : 'rgba(30,150,235,0.45)'
         const colorDot = edgeType === 'browser' ? 'rgba(249,115,22,0.8)'
           : edgeType === 'terminal' ? 'rgba(34,197,94,0.8)'
+          : edgeType === 'artifact' ? 'rgba(217,70,239,0.8)'
           : 'rgba(30,150,235,0.7)'
 
         return (

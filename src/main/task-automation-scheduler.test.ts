@@ -433,4 +433,37 @@ describe('TaskAutomationScheduler — parents and subtasks', () => {
 
     expect(agentManager.startTask).not.toHaveBeenCalled()
   })
+
+  it('keeps the children of each parent apart when several parents are swept at once', async () => {
+    // Children of all parents are read in one query; each parent must still
+    // only see its own.
+    const busy = parentWithChildren(
+      { auto_start_agent: true },
+      [{ title: 'busy 1', status: TaskStatus.AgentWorking }, { title: 'busy 2' }]
+    )
+    const idle = parentWithChildren(
+      { auto_start_agent: true },
+      [{ title: 'idle 1', status: TaskStatus.Completed }, { title: 'idle 2' }]
+    )
+    const plain = db.createTask(makeTask({ auto_start_agent: true }))!
+    const reviewDone = parentWithChildren(
+      { auto_complete_without_review: true },
+      [{ title: 'done 1', status: TaskStatus.Completed }]
+    )
+    const reviewPending = parentWithChildren(
+      { auto_complete_without_review: true },
+      [{ title: 'pending 1' }]
+    )
+    for (const id of [busy.parentId, idle.parentId, reviewDone.parentId, reviewPending.parentId]) {
+      db.updateTask(id, { status: TaskStatus.ReadyForReview })
+    }
+    const agentManager = mockAgentManager()
+
+    await new TaskAutomationScheduler(db, agentManager).runNow()
+
+    expect(vi.mocked(agentManager.startTask).mock.calls.map(([id]) => id).sort())
+      .toEqual([idle.childIds[1], plain.id].sort())
+    expect(vi.mocked(agentManager.completeTaskWithoutReview).mock.calls.map(([id]) => id))
+      .toEqual([reviewDone.parentId])
+  })
 })

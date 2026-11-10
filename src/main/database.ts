@@ -1,5 +1,8 @@
 import { isWorkfloLinkedTask } from './workflo-task-sync'
 import Database from 'better-sqlite3'
+import { instrumentMainDatabase } from './perf/main-thread-perf'
+import { readTranscriptParts, type TranscriptPartRecord } from './db-read/transcript-query'
+import { DbReadClient, isDbReadWorkerEnabled } from './db-read/db-read-client'
 import { app, safeStorage } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync, rmSync } from 'fs'
@@ -410,6 +413,15 @@ export interface RecurrencePatternObject {
 /** A cron expression string OR a legacy JSON object */
 export type RecurrencePatternRecord = RecurrencePatternObject | string
 
+/** Settings and task-source reads used to decorate a task with Workflo server ownership. */
+interface ServerOwnershipLookup {
+  getSetting: (key: string) => string | undefined
+  isLinked: (task: TaskRecord) => boolean
+}
+
+/** Sync-marker settings prefixes, few rows in practice; bulk-read for task-list loads. */
+const PRELOADED_OWNERSHIP_PREFIXES = ['workflo-upload:', 'workflo-update:', 'workflo-completion:'] as const
+
 /** Input shape for persisting a transcript part (mirrors agent:output payloads). */
 export interface TranscriptPartInput {
   id: string
@@ -423,21 +435,31 @@ export interface TranscriptPartInput {
   receivedAt?: number
 }
 
-/** Persisted transcript part returned by snapshot queries. */
-export interface TranscriptPartRecord {
-  taskId: string
-  partId: string
-  seq: number
-  role: string
-  content: string
-  partType?: string
-  tool?: unknown
-  payload?: unknown
-  createdAt: number
-  updatedAt: number
-  /** Global monotonic change cursor for this row (delta subscriptions). */
-  rev: number
+/** A `transcript_parts` row as stored (mapped like `getTranscriptParts`). */
+interface TranscriptPartRow {
+  task_id: string; part_id: string; seq: number; role: string; content: string;
+  part_type: string | null; tool: string | null; payload: string | null;
+  created_at: number; updated_at: number; rev: number
 }
+
+function toTranscriptPartRecord(r: TranscriptPartRow): TranscriptPartRecord {
+  return {
+    taskId: r.task_id,
+    partId: r.part_id,
+    seq: r.seq,
+    role: r.role,
+    content: r.content,
+    rev: r.rev ?? 0,
+    partType: r.part_type ?? undefined,
+    tool: r.tool ? (JSON.parse(r.tool) as unknown) : undefined,
+    payload: r.payload ? (JSON.parse(r.payload) as unknown) : undefined,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }
+}
+
+/** Persisted transcript part returned by snapshot queries. */
+export type { TranscriptPartRecord }
 
 /** Raw `agent_run_intervals` row, snake_case as stored. */
 interface AgentRunIntervalRow {
@@ -1211,12 +1233,19 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  *   The per-column `if (!columnNames.has(...))` checks in
  *   migrateReviewSeenColumns() are idempotent, so bumping this is safe for
  *   everyone else — it's a no-op where the columns already exist.
+ * 12 → 13: Cursor moves from `cursor-agent acp` to the native `@cursor/sdk`
+ *   adapter. Cursor task sessions created through ACP cannot be resumed by it,
+ *   so their session id is cleared and a handoff marker carries the history.
  */
-export const SCHEMA_VERSION = 12
+export const SCHEMA_VERSION = 13
 
 export class DatabaseManager {
   public db!: Database.Database
   private usageStore: UsageStore | null = null
+  /** Read-only worker connection for heavy reads (null in tests and when disabled). */
+  private readClient: DbReadClient | null = null
+  /** Overrides the bundled worker script (tests and benchmarks run from source). */
+  readWorkerScriptPath: string | undefined
 
   /**
    * Subscription usage persistence (token usage events, session totals, plan
@@ -1233,6 +1262,8 @@ export class DatabaseManager {
   }
 
   close(): void {
+    void this.readClient?.close()
+    this.readClient = null
     if (this.ensureDbOpen()) {
       this.db.pragma('wal_checkpoint(TRUNCATE)')
       this.db.close()
@@ -1243,7 +1274,8 @@ export class DatabaseManager {
     const userDataPath = app.getPath('userData')
     const dbPath = join(userDataPath, 'pf-desktop.db')
 
-    this.db = new Database(dbPath)
+    // No-op unless TWENTYX_PERF=1 (opt-in main-thread DB timing).
+    this.db = instrumentMainDatabase(new Database(dbPath))
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('foreign_keys = ON')
     this.db.pragma('busy_timeout = 5000') // Retry on SQLITE_BUSY for up to 5s
@@ -1264,11 +1296,20 @@ export class DatabaseManager {
     // ensure default records exist (default agent, MCP server,
     // orchestrator skill).
     this.ensureTranscriptRevColumn()
+    this.ensureReviewSeenColumns()
     this.seedDefaultAgent()
     this.migrateAgentPermissionDefaults()
     this.initializeTasksFts()
     this.initializeTaskManagementMcpServer()
     this.initializeOrchestratorSkill()
+
+    // Heavy reads that are already async at their call site (transcript
+    // snapshots) run on a read-only connection in a worker thread, so a large
+    // transcript does not block the main thread. Writes stay on this connection.
+    if (isDbReadWorkerEnabled()) {
+      this.readClient = new DbReadClient({ dbPath, scriptPath: this.readWorkerScriptPath, fallback: { getTranscriptParts: (taskId, sinceSeq) => this.getTranscriptParts(taskId, sinceSeq) } })
+      this.readClient.start()
+    }
   }
 
   /**
@@ -1305,6 +1346,25 @@ export class DatabaseManager {
       this.db.exec(`CREATE INDEX IF NOT EXISTS idx_transcript_parts_task_created ON transcript_parts(task_id, created_at, seq)`)
     } catch (err) {
       console.error('[Database] ensureTranscriptRevColumn failed:', err)
+    }
+  }
+
+  /**
+   * Self-heal for tasks.review_entered_at / review_seen_at on every startup.
+   * The SCHEMA_VERSION gate can be skipped when the shared pf-desktop.db was
+   * already stamped at v11 by another build/worktree that did not add these
+   * columns; createTask then fails with "table tasks has no column named
+   * review_entered_at". Idempotent; backfills only if it had to add columns.
+   */
+  ensureReviewSeenColumns(): void {
+    try {
+      const cols = this.db.pragma('table_info(tasks)') as { name: string }[]
+      const names = new Set(cols.map((c) => c.name))
+      if (names.has('review_entered_at') && names.has('review_seen_at')) return
+      this.migrateReviewSeenColumns(names, true)
+      console.log('[Database] Self-healed missing tasks.review_entered_at/review_seen_at columns')
+    } catch (err) {
+      console.error('[Database] ensureReviewSeenColumns failed:', err)
     }
   }
 
@@ -1613,6 +1673,10 @@ export class DatabaseManager {
       -- currently-open interval for that session) and by open-ness on crash
       -- recovery (startup sweep for ended_at_ms IS NULL rows).
       CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_session_open ON agent_run_intervals(session_id, ended_at_ms);
+      -- Per-task run time (getTaskRunDurations), polled every 5 s for every task
+      -- in the sidebar. Covering, so the sum never touches the table; without it
+      -- each poll scanned every interval ever recorded.
+      CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_task ON agent_run_intervals(task_id, started_at_ms, ended_at_ms);
 
       -- One row per span the main window was focused/visible — the "my
       -- multiplier" denominator is the user's own screen time in the app, not
@@ -1884,6 +1948,9 @@ export class DatabaseManager {
 
     // Free-text account_home on agents → harness instances
     this.migrateAccountHomesToHarnessInstances()
+
+    // Cursor ACP sessions are not resumable by the native SDK adapter
+    this.migrateCursorAcpSessionsToHandoff()
 
     // Migrate task_sources: add plugin_id + config columns
     const tsColumns = this.db.pragma('table_info(task_sources)') as { name: string }[]
@@ -2497,6 +2564,31 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     }
   }
 
+  /**
+   * Before the native `@cursor/sdk` adapter, `coding_agent: 'cursor'` ran
+   * through ACP, so every stored Cursor session id is an ACP session the SDK
+   * cannot resume. Clear them and mark the task for a context handoff, so the
+   * stored transcript is carried into the next session. Agents keep
+   * `coding_agent: 'cursor'` and switch adapters with no user action.
+   */
+  private migrateCursorAcpSessionsToHandoff(): void {
+    const agents = this.db.prepare('SELECT id, config FROM agents').all() as { id: string; config: string }[]
+    const cursorAgentIds = agents.filter((a) => {
+      try { return (JSON.parse(a.config) as { coding_agent?: string })?.coding_agent === 'cursor' } catch { return false }
+    }).map((a) => a.id)
+    for (const agentId of cursorAgentIds) {
+      const tasks = this.db.prepare(
+        "SELECT id FROM tasks WHERE agent_id = ? AND session_id IS NOT NULL AND session_id != ''"
+      ).all(agentId) as { id: string }[]
+      for (const task of tasks) {
+        // Marker first: markContextHandoff skips tasks with neither transcript nor session.
+        // fromAgentId is null (not the agent itself) so the handoff is not treated as a no-op.
+        this.markContextHandoff(task.id, null)
+        this.db.prepare('UPDATE tasks SET session_id = NULL WHERE id = ?').run(task.id)
+      }
+    }
+  }
+
   private migrateInlineMcpServers(): void {
     const agents = this.db.prepare('SELECT id, config FROM agents').all() as { id: string; config: string }[]
     const now = new Date().toISOString()
@@ -2578,15 +2670,59 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       'SELECT * FROM tasks ORDER BY created_at DESC'
     ).all() as TaskRow[]
 
-    return rows.map(row => this.withServerOwnership(deserializeTask(row)))
+    return this.decorateTaskRows(rows)
   }
 
-  private withServerOwnership(task: TaskRecord): TaskRecord {
-    if (this.getSetting(`workflo-upload:${task.id}`)) return { ...task, server_pending_edits: JSON.parse(this.getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_sync_pending: true, server_sync_error: this.getSetting(`workflo-upload:${task.id}:error`) }
-    if (!isWorkfloLinkedTask(this, task)) return task
-    const snapshot = this.getSetting(`workflo-task:${task.id}`)
+  private withServerOwnership(task: TaskRecord, lookup: ServerOwnershipLookup = this.singleTaskOwnershipLookup()): TaskRecord {
+    const getSetting = lookup.getSetting
+    if (getSetting(`workflo-upload:${task.id}`)) return { ...task, server_pending_edits: JSON.parse(getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_sync_pending: true, server_sync_error: getSetting(`workflo-upload:${task.id}:error`) }
+    if (!lookup.isLinked(task)) return task
+    const snapshot = getSetting(`workflo-task:${task.id}`)
     const remote = snapshot ? JSON.parse(snapshot) as import('./workflo-api-client').WorkfloTask : undefined
-    return { ...task, server_pending_edits: JSON.parse(this.getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_cron: remote?.cron ?? null, server_execution_mode: remote?.executionMode ?? 'human', server_space_name: remote?.spaceName ?? null, server_triage_reason: remote?.metadata?.triage?.reason ?? null, server_sync_pending: !!this.getSetting(`workflo-update:${task.id}`) || !!this.getSetting(`workflo-completion:${task.id}`), server_sync_error: this.getSetting(`workflo-update:${task.id}:error`) ?? this.getSetting(`workflo-completion:${task.id}:error`) }
+    return { ...task, server_pending_edits: JSON.parse(getSetting(`workflo-update:${task.id}`) || '{}').fields, server_managed: true, server_cron: remote?.cron ?? null, server_execution_mode: remote?.executionMode ?? 'human', server_space_name: remote?.spaceName ?? null, server_triage_reason: remote?.metadata?.triage?.reason ?? null, server_sync_pending: !!getSetting(`workflo-update:${task.id}`) || !!getSetting(`workflo-completion:${task.id}`), server_sync_error: getSetting(`workflo-update:${task.id}:error`) ?? getSetting(`workflo-completion:${task.id}:error`) }
+  }
+
+  private singleTaskOwnershipLookup(): ServerOwnershipLookup {
+    return {
+      getSetting: (key) => this.getSetting(key),
+      isLinked: (task) => isWorkfloLinkedTask(this, task)
+    }
+  }
+
+  /**
+   * Lookups for decorating MANY task rows (task-list loads). Per row,
+   * withServerOwnership needs up to 7 settings reads plus a task-source read;
+   * doing those one prepare+query at a time made getOpenTasks() cost hundreds of
+   * ms on the main thread for 2k tasks. Here the sync-marker settings (few rows)
+   * and the task-source plugin ids are read once; the larger per-task snapshot
+   * (`workflo-task:`) is read only for linked tasks, through one prepared
+   * statement. Results are identical to the single-task lookup.
+   */
+  private batchOwnershipLookup(): ServerOwnershipLookup {
+    const preloaded = new Map<string, string>()
+    const range = this.db.prepare('SELECT key, value FROM settings WHERE key >= ? AND key < ?')
+    for (const prefix of PRELOADED_OWNERSHIP_PREFIXES) {
+      // Every key starting with `prefix` sorts in [prefix, prefix with its last char + 1).
+      const upper = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1)
+      for (const row of range.all(prefix, upper) as { key: string; value: string }[]) preloaded.set(row.key, row.value)
+    }
+    const settingStmt = this.db.prepare('SELECT value FROM settings WHERE key = ?')
+    const pluginBySource = new Map<string, string>()
+    for (const row of this.db.prepare('SELECT id, plugin_id FROM task_sources').all() as { id: string; plugin_id: string | null }[]) {
+      pluginBySource.set(row.id, row.plugin_id || 'peakflo')
+    }
+    return {
+      getSetting: (key) => PRELOADED_OWNERSHIP_PREFIXES.some((prefix) => key.startsWith(prefix))
+        ? preloaded.get(key)
+        : (settingStmt.get(key) as { value: string } | undefined)?.value,
+      isLinked: (task) => !!task.external_id && !!task.source_id && pluginBySource.get(task.source_id) === 'peakflo'
+    }
+  }
+
+  private decorateTaskRows(rows: TaskRow[]): TaskRecord[] {
+    if (rows.length === 0) return []
+    const lookup = this.batchOwnershipLookup()
+    return rows.map(row => this.withServerOwnership(deserializeTask(row), lookup))
   }
 
   getTask(id: string): TaskRecord | undefined {
@@ -2611,15 +2747,19 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const closedStatuses = [TaskStatus.Completed, TaskStatus.Cancelled, TaskStatus.Expired]
     const rows = this.db.prepare(`
       SELECT * FROM tasks t
-      WHERE t.status NOT IN (?, ?, ?)
+      WHERE (t.status NOT IN (?, ?, ?)
+        AND NOT (t.status = ? AND EXISTS (
+          SELECT 1 FROM tasks p WHERE p.id = t.parent_task_id AND p.status = ?)))
         OR (t.is_recurring = 1 AND t.recurrence_parent_id IS NULL)
         OR (t.parent_task_id IS NOT NULL AND EXISTS (
           SELECT 1 FROM tasks p WHERE p.id = t.parent_task_id AND p.status NOT IN (?, ?, ?)))
-        OR EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id = t.id AND c.status NOT IN (?, ?, ?))
+        OR EXISTS (SELECT 1 FROM tasks c WHERE c.parent_task_id = t.id AND c.status NOT IN (?, ?, ?)
+          AND NOT (t.status = ? AND c.status = ?))
       ORDER BY t.created_at DESC
-    `).all(...closedStatuses, ...closedStatuses, ...closedStatuses) as TaskRow[]
+    `).all(...closedStatuses, TaskStatus.ReadyForReview, TaskStatus.Completed,
+      ...closedStatuses, ...closedStatuses, TaskStatus.Completed, TaskStatus.ReadyForReview) as TaskRow[]
 
-    return rows.map(row => this.withServerOwnership(deserializeTask(row)))
+    return this.decorateTaskRows(rows)
   }
 
   /**
@@ -2659,8 +2799,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
       `SELECT * FROM tasks WHERE parent_task_id IN (${ids.map(() => '?').join(',')}) ORDER BY sort_order ASC, created_at ASC`
     ).all(...ids) as TaskRow[]
 
+    const parentStatus = new Map(parents.map((parent) => [parent.id, parent.status]))
     return {
-      tasks: [...parents, ...children].map(row => this.withServerOwnership(deserializeTask(row))),
+      tasks: this.decorateTaskRows([...parents, ...children]).map((task) =>
+        task.status === TaskStatus.ReadyForReview && task.parent_task_id &&
+        parentStatus.get(task.parent_task_id) === TaskStatus.Completed
+          ? { ...task, status: TaskStatus.Completed }
+          : task
+      ),
       total
     }
   }
@@ -2808,33 +2954,34 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   /** Snapshot query: ordered transcript for a task, optionally only parts after seq. */
   getTranscriptParts(taskId: string, sinceSeq?: number): TranscriptPartRecord[] {
     if (!this.ensureDbOpen()) return []
+    return readTranscriptParts(this.db, taskId, sinceSeq)
+  }
 
-    // Order by REAL event time (created_at), with seq as a stable tiebreaker.
-    // Insertion order (seq) is not chronological when a partial projection is
-    // later backfilled with older history — ordering by created_at keeps the
-    // transcript correct regardless of when each part was ingested.
-    const rows = (sinceSeq != null
-      ? this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? AND seq > ? ORDER BY created_at ASC, seq ASC').all(taskId, sinceSeq)
-      : this.db.prepare('SELECT * FROM transcript_parts WHERE task_id = ? ORDER BY created_at ASC, seq ASC').all(taskId)
-    ) as Array<{
-      task_id: string; part_id: string; seq: number; role: string; content: string;
-      part_type: string | null; tool: string | null; payload: string | null;
-      created_at: number; updated_at: number; rev: number
-    }>
+  /**
+   * Same result as getTranscriptParts, read off the main thread when the
+   * read worker is running. Use from async call sites (IPC/HTTP handlers).
+   */
+  getTranscriptPartsAsync(taskId: string, sinceSeq?: number): Promise<TranscriptPartRecord[]> {
+    if (this.readClient && this.ensureDbOpen()) return this.readClient.getTranscriptParts(taskId, sinceSeq)
+    return Promise.resolve(this.getTranscriptParts(taskId, sinceSeq))
+  }
 
-    return rows.map((r) => ({
-      taskId: r.task_id,
-      partId: r.part_id,
-      seq: r.seq,
-      role: r.role,
-      content: r.content,
-      rev: r.rev ?? 0,
-      partType: r.part_type ?? undefined,
-      tool: r.tool ? (JSON.parse(r.tool) as unknown) : undefined,
-      payload: r.payload ? (JSON.parse(r.payload) as unknown) : undefined,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at
-    }))
+  /**
+   * The parts written after the task's last user message, in transcript order —
+   * the same result as `sinceLastUserMessage(getTranscriptParts(taskId))`, but
+   * only this turn is read instead of the whole conversation. With no user
+   * message at all, the whole transcript is returned.
+   */
+  getTranscriptPartsSinceLastUserMessage(taskId: string): TranscriptPartRecord[] {
+    if (!this.ensureDbOpen()) return []
+    const last = this.db.prepare(
+      "SELECT created_at, seq FROM transcript_parts WHERE task_id = ? AND role = 'user' ORDER BY created_at DESC, seq DESC LIMIT 1"
+    ).get(taskId) as { created_at: number; seq: number } | undefined
+    if (!last) return this.getTranscriptParts(taskId)
+    const rows = this.db.prepare(
+      'SELECT * FROM transcript_parts WHERE task_id = ? AND (created_at > ? OR (created_at = ? AND seq > ?)) ORDER BY created_at ASC, seq ASC'
+    ).all(taskId, last.created_at, last.created_at, last.seq) as TranscriptPartRow[]
+    return rows.map(toTranscriptPartRecord)
   }
 
   /**
@@ -3944,6 +4091,14 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
   deleteTaskSource(id: string): boolean {
     const result = this.db.prepare('DELETE FROM task_sources WHERE id = ?').run(id)
     return result.changes > 0
+  }
+
+  /** Id and external id of every task that has one, newest first. */
+  getExternalTaskIds(): Array<{ id: string; external_id: string }> {
+    if (!this.ensureDbOpen()) return []
+    return this.db.prepare(
+      'SELECT id, external_id FROM tasks WHERE external_id IS NOT NULL ORDER BY created_at DESC'
+    ).all() as Array<{ id: string; external_id: string }>
   }
 
   getTaskByExternalId(sourceId: string, externalId: string): TaskRecord | undefined {

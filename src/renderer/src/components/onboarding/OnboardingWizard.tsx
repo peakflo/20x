@@ -308,10 +308,18 @@ export function OnboardingWizard({ open, onOpenChange }: OnboardingWizardProps) 
   const [wizardTemplate, setWizardTemplate] = useState<PresetupTemplate | null>(null)
   const [wasAuthenticated, setWasAuthenticated] = useState(false)
 
-  const { fetchAgents, agents, createAgent, updateAgent } = useAgentStore()
-  const { fetchSettings, setGitProvider } = useSettingsStore()
-  const { isAuthenticated, loadSession } = useEnterpriseStore()
-  const { presetupTemplates, fetchPresetups } = useDashboardStore()
+  // Per-field selectors: the wizard is always mounted (closed) in AppLayout, and
+  // a whole-store subscription re-rendered it on every streamed agent delta.
+  const fetchAgents = useAgentStore((s) => s.fetchAgents)
+  const agents = useAgentStore((s) => s.agents)
+  const createAgent = useAgentStore((s) => s.createAgent)
+  const updateAgent = useAgentStore((s) => s.updateAgent)
+  const fetchSettings = useSettingsStore((s) => s.fetchSettings)
+  const setGitProvider = useSettingsStore((s) => s.setGitProvider)
+  const isAuthenticated = useEnterpriseStore((s) => s.isAuthenticated)
+  const loadSession = useEnterpriseStore((s) => s.loadSession)
+  const presetupTemplates = useDashboardStore((s) => s.presetupTemplates)
+  const fetchPresetups = useDashboardStore((s) => s.fetchPresetups)
 
   // Initialize state on open
   useEffect(() => {

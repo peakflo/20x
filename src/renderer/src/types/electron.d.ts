@@ -3,6 +3,7 @@ import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } f
 import type { UiCommandAck, UiCommandEnvelope } from '@shared/ui-commands'
 import type { TaskRunDuration } from '@shared/task-run-duration'
 import type { DataCategory, DataExportResult, DataImportPreview, DataImportResult } from '@shared/data-transfer'
+import type { TranscriptDeltaEvent, TranscriptSyncResult } from '@shared/transcript-stream'
 import type {
   WorkfloTask,
   CreateTaskDTO,
@@ -38,7 +39,7 @@ import type {
   PluginResources,
   HeartbeatLog
 } from './index'
-import type { PullRequestDetails } from '@shared/artifacts'
+import type { CanvasArtifactPanelRegistration, PullRequestDetails } from '@shared/artifacts'
 import type { HarnessInstanceView } from '@shared/harness-instances'
 import type {
   AcpAgentInstanceView,
@@ -48,6 +49,7 @@ import type {
   LocalCommandValidationResult,
   UpdateAcpAgentInstanceDTO
 } from '@shared/acp-registry'
+import type { CursorAuthStatus, CursorLoginCompleteEvent, CursorLoginUrlResult } from '@shared/cursor-auth'
 import type { ArtifactApi } from '@shared/artifacts'
 import type {
   HarnessKey,
@@ -140,12 +142,11 @@ export interface TranscriptPartRecord {
   rev: number
 }
 
-/** Payload of the transcript:changed delta push. */
-export interface TranscriptChangedEvent {
-  taskId: string
-  parts: TranscriptPartRecord[]
-  maxRev: number
-}
+/** Payload of the transcript:changed delta push (see shared/transcript-stream). */
+export type TranscriptChangedEvent = TranscriptDeltaEvent<TranscriptPartRecord>
+
+/** Resync answer for the transcript:changed stream. */
+export type TranscriptSync = TranscriptSyncResult<TranscriptPartRecord>
 
 export interface SkillSyncResult {
   created: string[]
@@ -205,12 +206,16 @@ export interface WorktreeProgressEvent {
 }
 
 export interface WorkspaceCleanupProgressEvent {
-  phase: 'starting' | 'scanning' | 'cleaning' | 'pruning' | 'done'
+  phase: 'starting' | 'scanning' | 'cleaning' | 'pruning' | 'retiring' | 'turbo' | 'done'
   current: number
   total: number
   message?: string
   cleaned?: number
+  retiredWorkspaces?: number
   nodeModulesCleaned?: number
+  nextCachesCleaned?: number
+  turboFilesCleaned?: number
+  turboBytesCleaned?: number
   errors?: string[]
 }
 
@@ -219,6 +224,12 @@ export interface ToolStatus {
   version: string | null
   supported?: boolean
   reason?: string | null
+  /** Resolved executable path, when known. */
+  path?: string
+  /** Set when the executable exists but `--version` failed (stderr snippet). */
+  error?: string
+  /** Node binary used to run an `env node` script when PATH's node failed. */
+  via?: string
 }
 
 export interface DepsStatus {
@@ -232,6 +243,8 @@ export interface DepsStatus {
   opencode: ToolStatus
   codex: ToolStatus
   cursor: ToolStatus
+  gemini?: ToolStatus
+  amp?: ToolStatus
   pi: ToolStatus
 }
 
@@ -301,6 +314,13 @@ interface ElectronAPI {
     install: (id: string) => Promise<AcpInstallResult>
     validateLocalCommand: (executable: string) => Promise<LocalCommandValidationResult>
   }
+  cursor: {
+    authStatus: () => Promise<CursorAuthStatus>
+    startBrowserLogin: () => Promise<CursorLoginUrlResult>
+    cancelBrowserLogin: () => Promise<void>
+    logout: () => Promise<void>
+    onLoginComplete: (callback: (event: CursorLoginCompleteEvent) => void) => () => void
+  }
   agentSession: {
     start: (agentId: string, taskId: string, workspaceDir?: string, skipInitialPrompt?: boolean) => Promise<AgentSessionStartResult>
     resume: (agentId: string, taskId: string, ocSessionId: string) => Promise<AgentSessionStartResult & { ended?: boolean }>
@@ -314,8 +334,7 @@ interface ElectronAPI {
     syncSkillsForTask: (taskId: string) => Promise<SkillSyncResult>
     learnFromSession: (sessionId: string, message: string) => Promise<SkillSyncResult>
     getRawTranscript: (taskId: string) => Promise<Array<{ role: string; parts: Array<{ type: string; content?: string; tool?: { name: string; status?: string; input?: string; output?: string; error?: string } }> }>>
-    getTranscriptSnapshot: (taskId: string, sinceSeq?: number) => Promise<TranscriptPartRecord[]>
-    getTranscriptDelta: (taskId: string, sinceRev: number) => Promise<{ parts: TranscriptPartRecord[]; maxRev: number }>
+    getTranscriptSync: (taskId: string, sinceRev?: number) => Promise<TranscriptSync>
   }
   agentConfig: {
     getProviders: (serverUrl?: string, backendType?: string) => Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null>
@@ -389,7 +408,7 @@ interface ElectronAPI {
     changes: (taskId: string, repos: { fullName: string }[]) => Promise<Array<{ repo: string; diff: string; allFiles?: string[]; workspace?: boolean; error?: string; noWorktree?: boolean; path?: string; branch?: string; pushed?: boolean; prNumber?: number; prUrl?: string; prState?: string; prTitle?: string; ciStatus?: 'passing' | 'failing' | 'pending' | 'none' }>>
     files: (taskId: string, repos: { fullName: string }[]) => Promise<Array<{ repo: string; allFiles: string[]; workspace?: boolean; error?: string; noWorktree?: boolean; path?: string }>>
     readFile: (taskId: string, repoFullName: string | null, filePath: string) => Promise<{ content: string; size: number; binary: boolean; truncated: boolean } | null>
-    runCleanupNow: () => Promise<{ cleaned: number; errors: string[]; nodeModulesCleaned: number }>
+    runCleanupNow: () => Promise<{ cleaned: number; retiredWorkspaces: number; errors: string[]; nodeModulesCleaned: number; nextCachesCleaned: number; turboFilesCleaned: number; turboBytesCleaned: number }>
   }
   taskSources: {
     getAll: () => Promise<TaskSource[]>
@@ -603,6 +622,10 @@ interface ElectronAPI {
   onWorktreeProgress: (callback: (event: WorktreeProgressEvent) => void) => () => void
   onWorkspaceCleanupProgress: (callback: (event: WorkspaceCleanupProgressEvent) => void) => () => void
   onGithubDeviceCode: (callback: (code: string) => void) => () => void
+  canvasArtifacts: {
+    registerPanel: (payload: CanvasArtifactPanelRegistration) => Promise<{ success: boolean }>
+    unregisterPanel: (panelId: string) => Promise<{ success: boolean }>
+  }
   browser: {
     listImportSources: () => Promise<BrowserImportSource[]>
     importSessions: (input: BrowserImportRequest) => Promise<BrowserImportResult>

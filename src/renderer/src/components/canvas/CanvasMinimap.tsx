@@ -17,6 +17,7 @@ const MINIMAP_PAD = 12 // padding inside the minimap
 const PANEL_COLORS: Record<string, string> = {
   task: 'rgba(59,130,246,0.7)',     // fallback blue when a task status is unavailable
   browser: 'rgba(249,115,22,0.7)',  // orange
+  artifact: 'rgba(217,70,239,0.7)', // fuchsia
   terminal: 'rgba(139,92,246,0.7)',  // violet
   app: 'rgba(20,184,166,0.7)',      // teal
   transcript: 'rgba(6,182,212,0.62)', // cyan
@@ -87,6 +88,7 @@ const MinimapContent = memo(function MinimapContent({
         if (!from || !to) return null
         const edgeColor = edge.edgeType === 'browser' ? 'rgba(249,115,22,0.4)'
           : edge.edgeType === 'terminal' ? 'rgba(34,197,94,0.4)'
+          : edge.edgeType === 'artifact' ? 'rgba(217,70,239,0.4)'
           : 'rgba(30,150,235,0.3)'
         return (
           <line

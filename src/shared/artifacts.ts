@@ -151,6 +151,26 @@ export interface Artifact {
   heightHint?: number
 }
 
+/** Registration of a canvas artifact panel with the main-process artifact
+ * broker: which artifact it shows and which tasks are edge-connected to it. */
+export interface CanvasArtifactPanelRegistration {
+  panelId: string
+  /** Task that owns the artifact. */
+  ownerTaskId: string
+  /** Renderer artifact id (stable per task). */
+  artifactId: string
+  title: string
+  type: string
+  /** Entry (preview) file, relative to the owner task workspace. */
+  path?: string
+  /** All owned files, relative to the owner task workspace. */
+  files?: string[]
+  /** External URL (e.g. PR artifacts). */
+  url?: string
+  /** Task ids edge-connected to the panel on the canvas (owner excluded). */
+  taskIds: string[]
+}
+
 export interface ArtifactUIState {
   open: boolean
   activeTabId: string | null
@@ -219,9 +239,10 @@ export function pullRequestUrlFromTool(value: unknown): string | undefined {
 
 /** Directories that form an explicit deliverable boundary. Files elsewhere in
  * a repository are code and belong in Changes, not in the artifact picker. */
-const ARTIFACT_OUTPUT_DIRECTORIES = new Set([
+export const ARTIFACT_OUTPUT_DIRECTORIES: ReadonlySet<string> = new Set([
   'artifacts',
   'deliverables',
+  'output',
   'outputs',
   'reports'
 ])

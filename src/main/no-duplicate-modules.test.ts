@@ -20,12 +20,13 @@ import { execFileSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
+import { gitChildEnv } from './git-child-env'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 /** Every file git tracks under src/, so generated output is never considered. */
 function trackedSourceFiles(): string[] {
-  return execFileSync('git', ['ls-files', 'src'], { cwd: repoRoot, encoding: 'utf-8' })
+  return execFileSync('git', ['ls-files', 'src'], { cwd: repoRoot, env: gitChildEnv(), encoding: 'utf-8' })
     .split('\n')
     .filter(Boolean)
 }

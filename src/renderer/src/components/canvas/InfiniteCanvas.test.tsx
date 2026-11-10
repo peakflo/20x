@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { Profiler } from 'react'
 import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react'
 import { InfiniteCanvas } from './InfiniteCanvas'
 import { useCanvasStore } from '@/stores/canvas-store'
@@ -6,6 +7,7 @@ import { useDrawingStore } from '@/stores/drawing-store'
 import { DEFAULT_TOOL_OPTIONS } from './drawing/types'
 import { TaskStatus } from '@/types'
 import type { WorkfloTask } from '@/types'
+import { autoTypeIntoComposer } from '@/lib/keyboard-shortcuts'
 
 // Mock only the clipboard paste (no real clipboard in happy-dom) — the
 // DrawingLayer component itself stays real.
@@ -593,6 +595,7 @@ describe('InfiniteCanvas', () => {
       // DOM moved…
       expect(layer.style.transform).toBe('translate(-30px, -40px) scale(1)')
       expect(layer.style.willChange).toBe('transform')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(true)
       // …but the store was NOT written during the gesture.
       expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
 
@@ -600,14 +603,95 @@ describe('InfiniteCanvas', () => {
       await advanceTime(200)
       expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -40, zoom: 1 })
       expect(layer.style.willChange).toBe('transform')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(true)
       // A second wheel event inside the release window keeps the same layer.
       fireEvent.wheel(canvas, { deltaY: 10 })
       await flushFrames()
       await advanceTime(250)
       expect(layer.style.willChange).toBe('transform')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(true)
       expect(useCanvasStore.getState().viewport).toEqual({ x: -30, y: -50, zoom: 1 })
       await advanceTime(250)
       expect(layer.style.willChange).toBe('')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(false)
+    })
+
+    it('makes panel scrollers non-composited for the gesture and restores them with the layer', async () => {
+      useCanvasStore.setState({
+        panels: [{ id: 'p-1', type: 'app' as const, title: 'App', x: 0, y: 0, width: 600, height: 400, zIndex: 1 }],
+      })
+      const { container } = render(<InfiniteCanvas />)
+      await flushFrames()
+      const layer = container.querySelector('[data-canvas-transform-layer="true"]') as HTMLElement
+      const canvas = layer.parentElement as HTMLElement
+      const panel = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
+
+      // A transcript-like scroller with overflowing content, scrolled down…
+      const transcript = document.createElement('div')
+      transcript.className = 'h-full overflow-y-auto'
+      Object.defineProperty(transcript, 'scrollHeight', { value: 5000, configurable: true })
+      Object.defineProperty(transcript, 'clientHeight', { value: 400, configurable: true })
+      transcript.scrollTop = 1234
+      // …and one that does not overflow (never composited, left alone).
+      const idle = document.createElement('div')
+      idle.className = 'overflow-auto'
+      panel.append(transcript, idle)
+
+      fireEvent.wheel(canvas, { deltaY: -4, ctrlKey: true, clientX: 100, clientY: 100 })
+      await flushFrames()
+      expect(transcript.style.overflow).toBe('hidden')
+      expect(transcript.scrollTop).toBe(1234)
+      expect(idle.style.overflow).toBe('')
+
+      // Committed, but still inside the layer release window.
+      await advanceTime(200)
+      expect(transcript.style.overflow).toBe('hidden')
+      await advanceTime(350)
+      expect(layer.style.willChange).toBe('')
+      expect(layer.hasAttribute('data-canvas-gesturing')).toBe(false)
+      expect(transcript.style.overflow).toBe('')
+      expect(transcript.scrollTop).toBe(1234)
+    })
+
+    it('does zero React commits per wheel frame, however many panels are open', async () => {
+      useCanvasStore.setState({
+        panels: Array.from({ length: 30 }, (_, i) => ({
+          id: `p-${i}`,
+          type: 'app' as const,
+          title: `App ${i}`,
+          x: (i % 6) * 700,
+          y: Math.floor(i / 6) * 500,
+          width: 600,
+          height: 400,
+          zIndex: i + 1,
+        })),
+      })
+      let commits = 0
+      const { container } = render(
+        <Profiler id="canvas" onRender={() => { commits++ }}>
+          <InfiniteCanvas />
+        </Profiler>
+      )
+      await flushFrames()
+      const layer = container.querySelector('[data-canvas-transform-layer="true"]') as HTMLElement
+      const canvas = layer.parentElement as HTMLElement
+
+      commits = 0
+      // 30 frames of mixed pinch-zoom and trackpad pan, all inside one gesture.
+      for (let i = 0; i < 30; i++) {
+        if (i % 2 === 0) fireEvent.wheel(canvas, { deltaY: -4, ctrlKey: true, clientX: 400, clientY: 300 })
+        else fireEvent.wheel(canvas, { deltaX: 3, deltaY: 2 })
+        await flushFrames()
+      }
+      expect(layer.style.transform).not.toBe('translate(0px, 0px) scale(1)')
+      expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
+      expect(commits).toBe(0)
+
+      // Wheel idle → the single store commit re-renders the canvas once.
+      await advanceTime(200)
+      expect(useCanvasStore.getState().viewport).not.toEqual({ x: 0, y: 0, zoom: 1 })
+      expect(commits).toBeGreaterThan(0)
+      expect(commits).toBeLessThanOrEqual(2)
     })
 
     it('commits the viewport on mouseup after a drag-pan', async () => {
@@ -707,6 +791,7 @@ describe('InfiniteCanvas', () => {
       // Moved on the compositor, store untouched (left/top still the origin).
       expect(panelEl.style.transform).toBe('translate(60px, 50px)')
       expect(panelEl.style.willChange).toBe('transform')
+      expect(panelEl.dataset.canvasMoving).toBe('true')
       expect(useCanvasStore.getState().panels[0]).toMatchObject({ x: 100, y: 100 })
 
       await act(async () => {
@@ -716,6 +801,7 @@ describe('InfiniteCanvas', () => {
       expect(useCanvasStore.getState().panels[0]).toMatchObject({ x: 160, y: 150 })
       expect(panelEl.style.transform).toBe('')
       expect(panelEl.style.willChange).toBe('')
+      expect(panelEl.hasAttribute('data-canvas-moving')).toBe(false)
     })
   })
 
@@ -929,6 +1015,68 @@ describe('InfiniteCanvas', () => {
       fireEvent.keyDown(window, { code: 'Escape' })
       fireEvent.keyDown(window, { code: 'KeyR' })
       expect(useDrawingStore.getState().activeTool).toBe('rectangle')
+    })
+
+    it('keeps the canvas, HUD and panels in place when "t" types into the selected task composer', () => {
+      addTaskPanel()
+      const { container } = render(<InfiniteCanvas />)
+      const panel = container.querySelector('[data-canvas-panel="true"]') as HTMLElement
+      fireEvent.mouseDown(panel)
+      const root = container.querySelector('[data-canvas-root="true"]') as HTMLElement
+
+      // The selected task panel's composer (TaskWorkspace is not rendered here).
+      const composer = document.createElement('div')
+      composer.setAttribute('data-testid', 'transcript-composer')
+      const textarea = document.createElement('textarea')
+      composer.appendChild(textarea)
+      panel.appendChild(composer)
+      Object.defineProperty(textarea, 'offsetParent', { get: () => composer, configurable: true })
+
+      // Emulate Chromium: focus() scrolls even an overflow:hidden ancestor to
+      // reveal an off-screen element, unless preventScroll is set.
+      const nativeFocus = HTMLElement.prototype.focus
+      const focusSpy = vi.spyOn(textarea, 'focus').mockImplementation(function (this: HTMLTextAreaElement, options?: FocusOptions) {
+        nativeFocus.call(this, options)
+        if (!options?.preventScroll) {
+          root.scrollTop = 600
+          root.scrollLeft = 200
+          fireEvent.scroll(root)
+        }
+      })
+
+      // The global "just start typing" route AppLayout takes for "t".
+      const onKeyDown = (e: KeyboardEvent) => { autoTypeIntoComposer(e) }
+      window.addEventListener('keydown', onKeyDown)
+      try {
+        fireEvent.keyDown(window, { key: 't', code: 'KeyT' })
+      } finally {
+        window.removeEventListener('keydown', onKeyDown)
+      }
+
+      // "t" did its intended action…
+      expect(textarea.value).toBe('t')
+      expect(document.activeElement).toBe(textarea)
+      expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true })
+      // …without shifting the canvas out of view.
+      expect(root.scrollTop).toBe(0)
+      expect(root.scrollLeft).toBe(0)
+      expect(screen.getByTitle('Zoom in')).toBeTruthy()
+      expect(screen.getByTitle('Zoom out')).toBeTruthy()
+      expect(container.querySelector('svg.cursor-crosshair')).toBeTruthy()
+      expect(container.querySelector('[data-canvas-panel="true"]')).toBe(panel)
+      expect(useCanvasStore.getState().viewport).toEqual({ x: 0, y: 0, zoom: 1 })
+      expect(useDrawingStore.getState().activeTool).toBe('select')
+    })
+
+    it('undoes any stray scroll of the overflow-hidden canvas root', () => {
+      addTaskPanel()
+      const { container } = render(<InfiniteCanvas />)
+      const root = container.querySelector('[data-canvas-root="true"]') as HTMLElement
+      root.scrollTop = 600
+      root.scrollLeft = 200
+      fireEvent.scroll(root)
+      expect(root.scrollTop).toBe(0)
+      expect(root.scrollLeft).toBe(0)
     })
 
     it('keeps drawing tool shortcuts for non-task selections', () => {

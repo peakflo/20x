@@ -1,5 +1,5 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
-import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptPartRecord, TranscriptChangedEvent } from '@/types/electron'
+import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptChangedEvent, TranscriptSync } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { CustomModelPrice, ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageParallelismResponse, UsageSummary, UsageSummaryQuery } from '@shared/usage'
@@ -12,6 +12,7 @@ import type {
   LocalCommandValidationResult,
   UpdateAcpAgentInstanceDTO
 } from '@shared/acp-registry'
+import type { CursorAuthStatus, CursorLoginCompleteEvent, CursorLoginUrlResult } from '@shared/cursor-auth'
 import type {
   HarnessKey,
   HarnessMaintenanceStatus,
@@ -226,6 +227,28 @@ export const harnessMaintenanceApi = {
   }
 }
 
+export const cursorAuthApi = {
+  status: (): Promise<CursorAuthStatus> => {
+    return window.electronAPI.cursor.authStatus()
+  },
+
+  startBrowserLogin: (): Promise<CursorLoginUrlResult> => {
+    return window.electronAPI.cursor.startBrowserLogin()
+  },
+
+  cancelBrowserLogin: (): Promise<void> => {
+    return window.electronAPI.cursor.cancelBrowserLogin()
+  },
+
+  logout: (): Promise<void> => {
+    return window.electronAPI.cursor.logout()
+  },
+
+  onLoginComplete: (callback: (event: CursorLoginCompleteEvent) => void): (() => void) => {
+    return window.electronAPI.cursor.onLoginComplete(callback)
+  }
+}
+
 export const agentApi = {
   getAll: (): Promise<Agent[]> => {
     return window.electronAPI.agents.getAll()
@@ -299,12 +322,9 @@ export const agentSessionApi = {
     return window.electronAPI.agentSession.getRawTranscript(taskId)
   },
 
-  getTranscriptSnapshot: (taskId: string, sinceSeq?: number): Promise<TranscriptPartRecord[]> => {
-    return window.electronAPI.agentSession.getTranscriptSnapshot(taskId, sinceSeq)
-  },
-
-  getTranscriptDelta: (taskId: string, sinceRev: number): Promise<{ parts: TranscriptPartRecord[]; maxRev: number }> => {
-    return window.electronAPI.agentSession.getTranscriptDelta(taskId, sinceRev)
+  /** Resync for the transcript:changed stream (whole transcript when sinceRev is omitted). */
+  getTranscriptSync: (taskId: string, sinceRev?: number): Promise<TranscriptSync> => {
+    return window.electronAPI.agentSession.getTranscriptSync(taskId, sinceRev)
   }
 }
 
@@ -795,7 +815,7 @@ export const worktreeApi = {
     }
     return readFile(taskId, repoFullName, filePath)
   },
-  runCleanupNow: (): Promise<{ cleaned: number; errors: string[]; nodeModulesCleaned: number }> => {
+  runCleanupNow: (): Promise<{ cleaned: number; retiredWorkspaces: number; errors: string[]; nodeModulesCleaned: number; nextCachesCleaned: number; turboFilesCleaned: number; turboBytesCleaned: number }> => {
     return window.electronAPI.worktree.runCleanupNow()
   }
 }

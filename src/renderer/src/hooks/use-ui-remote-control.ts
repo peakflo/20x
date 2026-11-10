@@ -26,11 +26,14 @@ export function useUiRemoteControl(): void {
 
     let timer: ReturnType<typeof setTimeout> | null = null
     let pending = false
+    let publishedWaiting: boolean | null = null
 
     const publishNow = (): void => {
       pending = false
       if (timer) clearTimeout(timer)
-      void window.electronAPI.ui.publishState({ ...collectUiState() })
+      const state = collectUiState()
+      publishedWaiting = state.waitingForYou
+      void window.electronAPI.ui.publishState({ ...state })
       timer = setTimeout(() => {
         timer = null
         if (!pending) return
@@ -51,7 +54,13 @@ export function useUiRemoteControl(): void {
     publish()
     const offUi = useUIStore.subscribe(publish)
     const offTasks = useTaskStore.subscribe(publish)
-    const offAgents = useAgentStore.subscribe(publish)
+    // The published screen reads one thing from the agent store: whether the
+    // selected task waits for the user. Every streamed delta replaces
+    // `sessions`, so republishing on any change rebuilt and sent the whole
+    // screen about 4 times a second while any agent streamed.
+    const offAgents = useAgentStore.subscribe(() => {
+      if (selectedTaskWaiting() !== publishedWaiting) publish()
+    })
     // Panels and viewport only: a panel drag writes `liveDrag` every frame and
     // must not push the whole screen out with it.
     const offPanels = useCanvasStore.subscribe((s) => s.panels, publish)
@@ -71,6 +80,11 @@ export function useUiRemoteControl(): void {
       offCommand?.()
     }
   }, [])
+}
+
+function selectedTaskWaiting(): boolean {
+  const selected = useTaskStore.getState().selectedTaskId
+  return Boolean(selected && useAgentStore.getState().sessions.get(selected)?.pendingApproval)
 }
 
 /**

@@ -45,7 +45,7 @@ import { KeyboardShortcutsDialog } from './KeyboardShortcutsDialog'
 import { SubtaskPickerDialog } from '@/components/tasks/SubtaskPickerDialog'
 import type { SidebarView } from '@/stores/ui-store'
 import logo20x from '@/assets/logos/20x.svg'
-import { createChordTracker, dispatchTaskShortcut, findComposerElement, focusComposerInput, getNextNudgeMessage, getShortcutKey, insertIntoComposer, isGlobalShortcutBlocked, isModifierKeyEvent, onShortcutFeedback, shouldAutoFocusComposer, TaskShortcutAction, type ChordCommand } from '@/lib/keyboard-shortcuts'
+import { autoTypeIntoComposer, createChordTracker, dispatchTaskShortcut, focusComposerInput, getNextNudgeMessage, getShortcutKey, isGlobalShortcutBlocked, isModifierKeyEvent, onShortcutFeedback, TaskShortcutAction, type ChordCommand } from '@/lib/keyboard-shortcuts'
 import { selectVoiceReady, useVoiceStore } from '@/stores/voice-store'
 import { composerCanSubmit, MASTERMIND_COMPOSER_KEY, sendComposerMessage, setActiveComposer } from '@/lib/voice-dictation-target'
 
@@ -239,6 +239,10 @@ export function AppLayout() {
     await updateTask(taskId, data as UpdateTaskDTO)
   }, [updateTask])
   const handleNavigateToTask = useCallback((taskId: string) => selectTask(taskId), [selectTask])
+  // Stable so the memoized TaskWorkspace does not re-render the whole selected
+  // task view whenever any other task changes (AppLayout re-renders on every
+  // task:updated through useTasks).
+  const handleBackFromTask = useCallback(() => selectTask(null), [selectTask])
 
   const handleEditDashboardPreviewTask = useCallback(() => {
     if (dashboardPreviewTaskId) openEditModal(dashboardPreviewTaskId)
@@ -261,6 +265,9 @@ export function AppLayout() {
   const handleCompleteDashboardPreviewTask = useCallback(async (completeAtSource?: boolean) => {
     if (dashboardPreviewTaskId) await completeTask(dashboardPreviewTaskId, { completeAtSource })
   }, [completeTask, dashboardPreviewTaskId])
+  const handleOpenDashboardPreviewFullView = useCallback(() => {
+    if (dashboardPreviewTaskId) handleGoToFullView(dashboardPreviewTaskId)
+  }, [dashboardPreviewTaskId, handleGoToFullView])
 
   // On the canvas the selected task panel is the active task; everywhere else
   // the dashboard preview and the tasks-view selection take precedence.
@@ -673,15 +680,9 @@ export function AppLayout() {
 
     // Just start typing: any printable key that is not a defined shortcut focuses the
     // composer and inserts the character, so the first keystroke is not lost.
-    if (shouldAutoFocusComposer(e, chords.isPending())) {
-      const composer = findComposerElement()
-      if (composer) {
-        e.preventDefault()
-        composer.focus()
-        insertIntoComposer(composer, e.key)
-        captureAnalyticsEvent('composer_focused', { source: 'keyboard', trigger: 'auto_type' })
-        return
-      }
+    if (autoTypeIntoComposer(e, chords.isPending())) {
+      captureAnalyticsEvent('composer_focused', { source: 'keyboard', trigger: 'auto_type' })
+      return
     }
 
     if (e.key === 'Enter' && !(e.target as HTMLElement | null)?.closest('button, a')) { e.preventDefault(); openSelectedTask() }
@@ -930,7 +931,7 @@ export function AppLayout() {
               onAssignAgent={handleAssignAgent}
               onUpdateTask={handleUpdateTask}
               onNavigateToTask={handleNavigateToTask}
-              onBack={() => selectTask(null)}
+              onBack={handleBackFromTask}
             />
           ) : null}
           </div>
@@ -1080,7 +1081,7 @@ export function AppLayout() {
                 onUpdateTask={handleUpdateTask}
                 onNavigateToTask={handleNavigateFromDashboardPreview}
                 onBack={closeDashboardPreview}
-                onOpenFullView={() => dashboardPreviewTaskId && handleGoToFullView(dashboardPreviewTaskId)}
+                onOpenFullView={handleOpenDashboardPreviewFullView}
               />
             )}
           </div>

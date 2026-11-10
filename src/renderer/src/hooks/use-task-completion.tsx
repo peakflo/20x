@@ -19,7 +19,6 @@ export function useTaskCompletion({ onToast }: UseTaskCompletionOptions = {}) {
   const [pending, setPending] = useState<{ taskId: string; options?: CompleteTaskRequestOptions } | null>(null)
   const [isBusy, setIsBusy] = useState(false)
   const sources = useTaskSourceStore(s => s.sources)
-  const tasks = useTaskStore(s => s.tasks)
   const executeAction = useTaskSourceStore(s => s.executeAction)
   const requestComplete = useCallback(async (taskId: string, options?: CompleteTaskRequestOptions) => {
     const task = useTaskStore.getState().tasks.find(t => t.id === taskId)
@@ -60,7 +59,11 @@ export function useTaskCompletion({ onToast }: UseTaskCompletionOptions = {}) {
       setIsBusy(false)
     }
   }, [executeAction, onToast])
-  const pendingTask = tasks.find(task => task.id === pending?.taskId)
+  // Subscribe to the pending task only (none while no dialog is open): every
+  // canvas task panel runs this hook, and a whole-list subscription re-rendered
+  // all of them on any task update.
+  const pendingTaskId = pending?.taskId ?? null
+  const pendingTask = useTaskStore(s => pendingTaskId ? s.tasks.find(task => task.id === pendingTaskId) : undefined)
   const completionDialog = pendingTask && pending ? <CompleteAtSourceDialog
     isOpen={true}
     taskTitle={pendingTask.title}

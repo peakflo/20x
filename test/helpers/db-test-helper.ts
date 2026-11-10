@@ -289,6 +289,7 @@ export function createTestDb(): { db: DatabaseManager; rawDb: InstanceType<typeo
     CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_started ON agent_run_intervals(started_at_ms);
     CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_ended ON agent_run_intervals(ended_at_ms);
     CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_session_open ON agent_run_intervals(session_id, ended_at_ms);
+    CREATE INDEX IF NOT EXISTS idx_agent_run_intervals_task ON agent_run_intervals(task_id, started_at_ms, ended_at_ms);
 
     CREATE TABLE IF NOT EXISTS app_focus_intervals (
       id TEXT PRIMARY KEY,

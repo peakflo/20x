@@ -501,7 +501,6 @@ export const MessageActivityGroup = memo(
               key={message.id}
               artifact={artifact}
               artifactApi={mobileArtifactApi}
-              onExpand={() => onOpenArtifact?.(artifact)}
               onLinkClick={openExternalLink}
             />
           )

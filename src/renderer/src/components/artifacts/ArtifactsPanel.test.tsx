@@ -205,4 +205,20 @@ describe('ArtifactsPanel', () => {
     expect(screen.getByRole('button', { name: 'Copy content' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Copy file' })).toBeInTheDocument()
   })
+
+  it('shows the open-in-separate-panel action only when the canvas provides it', () => {
+    const artifact: Artifact = { id: 'notes', taskId: 'task-1', type: ArtifactType.MARKDOWN, title: 'Notes', path: 'notes.md', updatedAt: 1, reloadTrigger: 0 }
+    const props = {
+      taskId: 'task-1', artifacts: [artifact], artifactApi, hasChanges: false, hasOutput: false,
+      onSelectTab: vi.fn(), onCloseTab: vi.fn(), onToggleOpen: vi.fn(), onToggleRail: vi.fn(),
+      details: null, changes: null, output: null, ui: { ...baseUi, activeTabId: artifact.id }
+    }
+    const { rerender } = render(<ArtifactsPanel {...props} />)
+    expect(screen.queryByRole('button', { name: 'Open artifact in a separate panel' })).not.toBeInTheDocument()
+
+    const onOpenArtifactInWindow = vi.fn()
+    rerender(<ArtifactsPanel {...props} onOpenArtifactInWindow={onOpenArtifactInWindow} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open artifact in a separate panel' }))
+    expect(onOpenArtifactInWindow).toHaveBeenCalledWith(artifact)
+  })
 })

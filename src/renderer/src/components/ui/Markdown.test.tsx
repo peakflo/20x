@@ -251,6 +251,9 @@ Second paragraph.`
 
       rerender(<Markdown>{finalSnapshot}</Markdown>)
 
+      // The closed fence keeps its source height until the SVG is ready.
+      expect(container.querySelector('pre')).toHaveTextContent('A[Start] --> B[End]')
+
       await waitFor(() => {
         expect(container.querySelector(mermaidSvgSelector)).toBeInTheDocument()
       })

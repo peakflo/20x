@@ -9,17 +9,15 @@ import {
 } from './workspace-process-cleanup'
 
 /**
- * Age-based pruning of idle `node_modules` directories inside task workspaces.
+ * Age-based pruning of idle `node_modules` and `.next/cache` directories.
  *
  * Task workspaces are preserved for their artifacts, so dependency directories
  * can accumulate (measured: 175 stale `node_modules` holding ~23 GB).
- * Dependencies are regenerable from
- * `package.json`, so deleting just them is safe for every task status — source
- * files, worktrees and review state are left untouched.
+ * Dependencies and Next.js caches can be made again. Source files, worktrees
+ * and review state are left untouched.
  *
- * Inactivity is the `node_modules` directory's own mtime: installing, adding
- * or removing a top-level entry refreshes it, while reads (builds, typechecks)
- * do not. A directory untouched for longer than the threshold is pruned.
+ * Inactivity is each target directory's own mtime. A directory untouched for
+ * longer than the threshold is pruned.
  *
  * Settings:
  * - `workspace_nodemodules_gc_enabled` — "true"/"false" (default: "true")
@@ -36,6 +34,8 @@ export const DEFAULT_NODE_MODULES_GC_DAYS = 7
 export interface NodeModulesPruneResult {
   /** Absolute paths of the `node_modules` directories that were removed. */
   pruned: string[]
+  /** Absolute paths of the `.next/cache` directories that were removed. */
+  nextCachesPruned: string[]
   errors: string[]
 }
 
@@ -45,17 +45,17 @@ export function isInactive(mtimeMs: number, nowMs: number, inactiveDays: number)
 }
 
 /**
- * Every top-level `node_modules` directory under `workspaceDir`, at any depth:
- * `.opencode/node_modules`, `<repo>/node_modules`, `<repo>/functions/node_modules`,
- * `<pkg>/packages/<name>/node_modules`, …
+ * Every top-level `node_modules` and `.next/cache` directory under a workspace.
  *
  * A `node_modules` that contains another `node_modules` is reported once — the
  * walk does not descend into it, since removing the outer one removes the inner.
  * `.git` directories are never descended into (worktree metadata, not deps).
+ * Only the direct `cache` child of `.next` is selected; its other output stays.
  * Unreadable subdirectories are skipped silently; they are retried on the next run.
  */
-export function findTopLevelNodeModules(workspaceDir: string): string[] {
-  const found: string[] = []
+export function findPrunableCacheDirs(workspaceDir: string): { nodeModules: string[]; nextCaches: string[] } {
+  const nodeModules: string[] = []
+  const nextCaches: string[] = []
   const stack: string[] = [workspaceDir]
   while (stack.length > 0) {
     const dir = stack.pop() as string
@@ -68,7 +68,19 @@ export function findTopLevelNodeModules(workspaceDir: string): string[] {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
       if (entry.name === 'node_modules') {
-        found.push(join(dir, entry.name))
+        nodeModules.push(join(dir, entry.name))
+        continue
+      }
+      if (entry.name === '.next') {
+        // Only .next/cache is regenerable here. Do not walk or remove the rest
+        // of .next, which can contain output the user still needs.
+        try {
+          const cache = readdirSync(join(dir, entry.name), { withFileTypes: true })
+            .find((child) => child.name === 'cache' && child.isDirectory())
+          if (cache) nextCaches.push(join(dir, entry.name, cache.name))
+        } catch {
+          // An unreadable cache can be checked on the next run.
+        }
         continue
       }
       // Symbolic links to directories are not followed: a linked `node_modules`
@@ -79,7 +91,11 @@ export function findTopLevelNodeModules(workspaceDir: string): string[] {
       stack.push(join(dir, entry.name))
     }
   }
-  return found
+  return { nodeModules, nextCaches }
+}
+
+export function findTopLevelNodeModules(workspaceDir: string): string[] {
+  return findPrunableCacheDirs(workspaceDir).nodeModules
 }
 
 /**
@@ -134,8 +150,8 @@ export function activeStatusWorkspaceIds(
 }
 
 /**
- * Removes every top-level `node_modules` under `workspacesRoot` whose own mtime
- * is older than `inactiveDays`, except in skipped workspaces.
+ * Removes top-level `node_modules` and `.next/cache` directories whose own
+ * mtime is older than `inactiveDays`, except in skipped workspaces.
  *
  * Never throws: per-directory failures are collected in `errors` and the run
  * continues. Rejects a threshold below 1 day rather than pruning everything.
@@ -148,23 +164,24 @@ export function pruneStaleNodeModules(input: {
   onProgress?: (processed: number, total: number, currentPath: string) => void
 }): NodeModulesPruneResult {
   const pruned: string[] = []
+  const nextCachesPruned: string[] = []
   const errors: string[] = []
   const { workspacesRoot, skipWorkspaceIds, onProgress } = input
   const now = input.now ?? Date.now()
   const inactiveDays = input.inactiveDays
 
   if (!Number.isFinite(inactiveDays) || inactiveDays < 1) {
-    return { pruned, errors: [`Refusing node_modules prune with invalid threshold: ${String(inactiveDays)}`] }
+    return { pruned, nextCachesPruned, errors: [`Refusing cache prune with invalid threshold: ${String(inactiveDays)}`] }
   }
 
   let dirNames: string[]
   try {
-    if (!existsSync(workspacesRoot)) return { pruned, errors }
+    if (!existsSync(workspacesRoot)) return { pruned, nextCachesPruned, errors }
     dirNames = readdirSync(workspacesRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
   } catch (err) {
-    return { pruned, errors: [`Could not list workspaces directory: ${err instanceof Error ? err.message : String(err)}`] }
+    return { pruned, nextCachesPruned, errors: [`Could not list workspaces directory: ${err instanceof Error ? err.message : String(err)}`] }
   }
 
   const candidates = dirNames.filter((name) => !(skipWorkspaceIds?.has(name) ?? false))
@@ -172,26 +189,31 @@ export function pruneStaleNodeModules(input: {
   for (const name of candidates) {
     const workspaceDir = join(workspacesRoot, name)
     onProgress?.(processed, candidates.length, workspaceDir)
-    for (const nmPath of findTopLevelNodeModules(workspaceDir)) {
+    const found = findPrunableCacheDirs(workspaceDir)
+    const targets = [
+      ...found.nodeModules.map((path) => ({ path, output: pruned })),
+      ...found.nextCaches.map((path) => ({ path, output: nextCachesPruned }))
+    ]
+    for (const { path, output } of targets) {
       let mtimeMs: number
       try {
-        mtimeMs = statSync(nmPath).mtimeMs
+        mtimeMs = statSync(path).mtimeMs
       } catch (err) {
-        errors.push(`Could not stat ${nmPath}: ${err instanceof Error ? err.message : String(err)}`)
+        errors.push(`Could not stat ${path}: ${err instanceof Error ? err.message : String(err)}`)
         continue
       }
       if (!isInactive(mtimeMs, now, inactiveDays)) continue
       try {
-        rmSync(nmPath, { recursive: true, force: true })
-        pruned.push(nmPath)
-        console.log(`[NodeModulesGC] Pruned idle node_modules: ${nmPath}`)
+        rmSync(path, { recursive: true, force: true })
+        output.push(path)
+        console.log(`[NodeModulesGC] Pruned idle cache: ${path}`)
       } catch (err) {
-        errors.push(`Failed to prune ${nmPath}: ${err instanceof Error ? err.message : String(err)}`)
+        errors.push(`Failed to prune ${path}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
     processed++
   }
   onProgress?.(processed, candidates.length, '')
 
-  return { pruned, errors }
+  return { pruned, nextCachesPruned, errors }
 }
