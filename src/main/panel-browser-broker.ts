@@ -15,13 +15,33 @@
  *     bound when exactly one browser panel is linked to the calling task), so
  *     there are no positional tab indexes to go stale.
  *
- * Everything runs on plain Electron APIs (loadURL / executeJavaScript /
- * capturePage) — no debugger attachment, no CDP sockets.
+ * Reads and DOM queries run on plain Electron APIs (loadURL /
+ * executeJavaScript / capturePage). Typing into rich-text editors, key
+ * presses and file uploads need *trusted* input, so they go through the
+ * panel's own in-process `webContents.debugger` (see panel-browser-input.ts)
+ * — still no remote-debugging port, and only registered panels are attached.
+ *
+ * Every agent-supplied string is embedded in page scripts as a JSON literal
+ * (JSON.stringify) — never spliced into script source — so it is data, not code.
  */
 import { app, webContents } from 'electron'
 import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
+import {
+  BACKSPACE_KEY,
+  buildFallbackKeyEvents,
+  ENTER_KEY,
+  PanelDebuggerSessions,
+  parseKeyCombo,
+  pressKeyCdp,
+  splitTypingSegments,
+  typeSegmentsCdp,
+  typeSegmentsFallback,
+  type CdpSend,
+  type InputWebContents,
+  type ParsedKey
+} from './panel-browser-input'
 import { BrowserRecordingService } from './browser-recording'
 import { getAgentBrowserSession } from './agent-browser-session'
 import { buildRecordingInstallScript, buildRecordingSnapshotScript, buildRecordingTargetScript, RECORDING_PREFIX, RECORDING_REMOVE_SCRIPT, RECORDING_WORLD } from './browser-recording-scripts'
@@ -170,7 +190,7 @@ function queryFor(refOrSelector: string): string {
 export function buildClickScript(refOrSelector: string): string {
   return `(async () => {
   const el = document.querySelector(${queryFor(refOrSelector)});
-  if (!el) return JSON.stringify({ error: 'Stale or unknown target "${refOrSelector.replace(/"/g, '')}" — run browser_snapshot again.' });
+  if (!el) return JSON.stringify({ error: 'Stale or unknown target ' + JSON.stringify(${JSON.stringify(refOrSelector)}) + ' — run browser_snapshot again.' });
   el.scrollIntoView({ block: 'center' });
   await new Promise(r => setTimeout(r, 50));
   el.click();
@@ -178,10 +198,22 @@ export function buildClickScript(refOrSelector: string): string {
 })()`
 }
 
-/** Focuses an element and sets its value with React-compatible events. */
-export function buildTypeScript(refOrSelector: string, text: string, submit?: boolean): string {
+/**
+ * Focuses the target and fills it.
+ *
+ * input / textarea / select: sets the value through the native setter with
+ * React-compatible input/change events (works for controlled inputs).
+ *
+ * contenteditable (Draft.js, Lexical, ProseMirror …): only focuses the
+ * editing host and places the selection (all content when `clear`, else the
+ * caret at the end unless it is already inside). It returns
+ * `{ trusted: true }` and the broker then types with trusted CDP input —
+ * editors ignore script-made DOM edits and isTrusted=false events.
+ */
+export function buildTypeScript(refOrSelector: string, text: string, submit?: boolean, clear = true): string {
   return `(async () => {
-  const el = document.querySelector(${queryFor(refOrSelector)});
+  const target = ${JSON.stringify(refOrSelector)};
+  let el = document.querySelector(${queryFor(refOrSelector)});
   if (!el) return JSON.stringify({ error: 'Stale or unknown target — run browser_snapshot again.' });
   const tag = el.tagName;
   if (tag === 'SELECT') {
@@ -195,14 +227,28 @@ export function buildTypeScript(refOrSelector: string, text: string, submit?: bo
     else el.value = ${JSON.stringify(text)};
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-  } else if (el.isContentEditable) {
-    el.focus();
-    el.textContent = ${JSON.stringify(text)};
-    el.dispatchEvent(new InputEvent('input', { bubbles: true }));
   } else {
-    // Not an editable element (e.g. a link or button was passed): report
-    // instead of throwing "Illegal invocation" from the native value setter.
-    return JSON.stringify({ error: 'Target "${refOrSelector.replace(/"/g, '')}" is not an editable element (role: ' + (el.getAttribute('role') || tag.toLowerCase()) + '). Pick an input/textarea ref from browser_snapshot.' });
+    // A wrapper (e.g. a composer container) may hold the editable element.
+    if (!el.isContentEditable) el = el.querySelector('[contenteditable]:not([contenteditable=false])') || el;
+    if (!el.isContentEditable) {
+      // Not an editable element (e.g. a link or button was passed): report
+      // instead of throwing "Illegal invocation" from the native value setter.
+      return JSON.stringify({ error: 'Target ' + JSON.stringify(target) + ' is not an editable element (role: ' + (el.getAttribute('role') || tag.toLowerCase()) + '). Pick an input/textarea/contenteditable ref from browser_snapshot.' });
+    }
+    let host = el;
+    while (host.parentElement && host.parentElement.isContentEditable) host = host.parentElement;
+    host.scrollIntoView({ block: 'center' });
+    host.focus();
+    const sel = window.getSelection();
+    const inside = sel && sel.rangeCount > 0 && host.contains(sel.anchorNode);
+    if (sel && (${clear ? 'true' : 'false'} || !inside)) {
+      const range = document.createRange();
+      range.selectNodeContents(host);
+      if (!${clear ? 'true' : 'false'}) range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    return JSON.stringify({ trusted: true, hadContent: (host.innerText || '').trim().length > 0 });
   }
   if (${submit ? 'true' : 'false'}) {
     el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, bubbles: true }));
@@ -214,45 +260,20 @@ export function buildTypeScript(refOrSelector: string, text: string, submit?: bo
 })()`
 }
 
-const KEY_CODES: Record<string, { key: string; code: string; keyCode: number }> = {
-  enter: { key: 'Enter', code: 'Enter', keyCode: 13 },
-  tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
-  escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
-  backspace: { key: 'Backspace', code: 'Backspace', keyCode: 8 },
-  delete: { key: 'Delete', code: 'Delete', keyCode: 46 },
-  space: { key: ' ', code: 'Space', keyCode: 32 },
-  arrowup: { key: 'ArrowUp', code: 'ArrowUp', keyCode: 38 },
-  arrowdown: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
-  arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
-  arrowright: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
-  home: { key: 'Home', code: 'Home', keyCode: 36 },
-  end: { key: 'End', code: 'End', keyCode: 35 },
-  pageup: { key: 'PageUp', code: 'PageUp', keyCode: 33 },
-  pagedown: { key: 'PageDown', code: 'PageDown', keyCode: 34 }
-}
-
-/** Maps user-facing key names ("Enter", "arrowdown") to CDP-style key data. */
-export function resolveKeyName(key: string): { key: string; code: string; keyCode: number } | null {
-  const k = KEY_CODES[key.toLowerCase()]
-  if (k) return k
-  if (/^[a-z0-9]$/i.test(key)) {
-    return { key: key.toUpperCase(), code: `Key${key.toUpperCase()}`, keyCode: key.toUpperCase().charCodeAt(0) }
-  }
-  return null
-}
-
-/** Dispatches a keydown/keypress/keyup sequence on the focused element. */
-export function buildPressScript(key: string): string {
-  const k = resolveKeyName(key)
-  if (!k) return `JSON.stringify({ error: 'Unsupported key ${JSON.stringify(key)} — use Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown or a single character.' })`
-  const init = JSON.stringify(k)
+/**
+ * Finds the file input for browser_upload_file: the target itself, or an
+ * input[type=file] inside it (sites often hide the real input). Tags it with
+ * a one-off attribute so CDP can resolve the same node.
+ */
+export function buildUploadTargetScript(refOrSelector: string, marker: string): string {
   return `(() => {
-  const target = document.activeElement || document.body;
-  const opts = { ...${init}, bubbles: true, cancelable: true };
-  target.dispatchEvent(new KeyboardEvent('keydown', opts));
-  target.dispatchEvent(new KeyboardEvent('keypress', opts));
-  target.dispatchEvent(new KeyboardEvent('keyup', opts));
-  return JSON.stringify({ ok: true });
+  const target = ${JSON.stringify(refOrSelector)};
+  let el = document.querySelector(${queryFor(refOrSelector)});
+  if (!el) return JSON.stringify({ error: 'Stale or unknown target ' + JSON.stringify(target) + ' — run browser_snapshot again or pass a CSS selector such as input[type=file].' });
+  if (!(el.tagName === 'INPUT' && el.type === 'file')) el = el.querySelector('input[type=file]') || (el.tagName === 'LABEL' && el.control) || el;
+  if (!(el.tagName === 'INPUT' && el.type === 'file')) return JSON.stringify({ error: 'Target ' + JSON.stringify(target) + ' is not an <input type=file> and does not contain one.' });
+  el.setAttribute('data-bx-upload', ${JSON.stringify(marker)});
+  return JSON.stringify({ ok: true, multiple: !!el.multiple, disabled: !!el.disabled });
 })()`
 }
 
@@ -302,7 +323,7 @@ export function buildWaitScript(mode: 'selector' | 'text' | 'url', value: string
           : `hit = location.href.includes(${JSON.stringify(value)});`
     }
     if (hit) return JSON.stringify({ ok: true, waitedMs: Date.now() - t0 });
-    if (Date.now() - t0 >= ${t}) return JSON.stringify({ error: 'Timed out after ${t}ms waiting for ${mode}: ${value.replace(/[\\"]|<\/script/g, '')}' });
+    if (Date.now() - t0 >= ${t}) return JSON.stringify({ error: 'Timed out after ${t}ms waiting for ${mode}: ' + ${JSON.stringify(value)} });
     await new Promise(r => setTimeout(r, 250));
   }
 })()`
@@ -448,8 +469,12 @@ export function withTimeout<T>(
 
 // ── Broker ───────────────────────────────────────────────────────────────────
 
+const PAGE_TIMEOUT_ERROR = 'Timed out after 30s — the page did not answer (it may be navigating or throttled in the background).'
+
 export class PanelBrowserBroker {
   private registry: PanelRegistry = new Map()
+  /** In-process CDP sessions for trusted input / uploads / screenshots. */
+  private debuggerSessions = new PanelDebuggerSessions()
   private recordingService?: BrowserRecordingService
   private recordingNonces = new Map<string, string>()
   private recordingQueues = new Map<string, Promise<void>>()
@@ -607,6 +632,14 @@ export class PanelBrowserBroker {
     const wc = this.getLiveWebContents(webContentsId)
     if (!wc) return false
     this.registry.set(panelId, { webContentsId, taskIds: new Set(taskIds) })
+    // Agent-driven panels usually sit behind other panels or off-viewport.
+    // A throttled/hidden renderer starves page-side polling (browser_wait),
+    // delays executeJavaScript and makes capturePage fail, so keep it live.
+    try {
+      wc.setBackgroundThrottling?.(false)
+    } catch {
+      // Best effort — torn-down contents.
+    }
     if (!this.consoleBuffers.has(panelId)) this.consoleBuffers.set(panelId, [])
     this.ensureConsoleHook(webContentsId, wc)
     return true
@@ -623,7 +656,12 @@ export class PanelBrowserBroker {
   unregisterPanel(panelId: string): boolean {
     this.interruptRecording(panelId)
     this.consoleBuffers.delete(panelId)
-    return this.registry.delete(panelId)
+    const entry = this.registry.get(panelId)
+    const removed = this.registry.delete(panelId)
+    if (entry && ![...this.registry.values()].some((p) => p.webContentsId === entry.webContentsId)) {
+      this.debuggerSessions.release(entry.webContentsId)
+    }
+    return removed
   }
 
   listPanels(taskId: string): Array<{ panelId: string; url: string; title: string }> {
@@ -642,6 +680,7 @@ export class PanelBrowserBroker {
 
   stopAll(): void {
     for (const id of this.registry.keys()) this.interruptRecording(id)
+    for (const panel of this.registry.values()) this.debuggerSessions.release(panel.webContentsId)
     this.registry.clear()
     this.consoleBuffers.clear()
     this.consoleHooked.clear()
@@ -784,12 +823,96 @@ export class PanelBrowserBroker {
     return this.recordAction(taskId, panelId, 'click', buildClickScript(target), target)
   }
 
-  type(taskId: string, target: string, text: string, submit?: boolean, panelId?: string | null): Promise<Record<string, unknown>> {
-    return this.recordAction(taskId, panelId, submit ? 'type-and-submit' : 'type', buildTypeScript(target, text, submit), target)
+  /**
+   * Types into an input/textarea/select (value setter) or a contenteditable
+   * rich-text editor (trusted CDP input: Input.insertText per line and a real
+   * Enter key between lines, so block editors create new paragraphs).
+   * clear=false keeps existing content and types at the caret / the end.
+   */
+  type(taskId: string, target: string, text: string, submit?: boolean, panelId?: string | null, clear = true): Promise<Record<string, unknown>> {
+    return this.recordActionWith(taskId, panelId, submit ? 'type-and-submit' : 'type', async (wc) => {
+      const prepared = await this.eval(wc, buildTypeScript(target, text, submit, clear))
+      if (prepared.trusted !== true) return prepared
+      // Let the editor observe the new selection (selectionchange is async).
+      await new Promise((r) => setTimeout(r, 50))
+      return this.typeTrusted(wc, text, clear && prepared.hadContent === true, submit === true)
+    }, target)
   }
 
+  private async typeTrusted(wc: Electron.WebContents, text: string, clearFirst: boolean, submit: boolean): Promise<Record<string, unknown>> {
+    const segments = splitTypingSegments(text)
+    const session = this.debuggerSessions.acquire(wc as unknown as InputWebContents)
+    if ('send' in session) {
+      try {
+        if (clearFirst) await pressKeyCdp(session.send, BACKSPACE_KEY)
+        await typeSegmentsCdp(session.send, segments)
+        if (submit) await pressKeyCdp(session.send, ENTER_KEY)
+        return { ok: true, input: 'trusted' }
+      } catch (err) {
+        return { error: `Trusted typing failed: ${(err as Error).message}` }
+      }
+    }
+    // Fallback (debugger unavailable, e.g. DevTools open on the panel).
+    const fallbackWc = wc as unknown as InputWebContents
+    if (clearFirst) for (const ev of buildFallbackKeyEvents(BACKSPACE_KEY)) fallbackWc.sendInputEvent(ev)
+    typeSegmentsFallback(fallbackWc, segments)
+    if (submit) for (const ev of buildFallbackKeyEvents(ENTER_KEY)) fallbackWc.sendInputEvent(ev)
+    return { ok: true, input: 'sendInputEvent', note: `${session.error}. Used sendInputEvent, which only reaches the page while the 20x window is focused.` }
+  }
+
+  /**
+   * Presses a key or combo ("Enter", "Backspace", "a", "Control+B",
+   * "Meta+B", "Shift+Enter") on the focused element with trusted input.
+   */
   pressKey(taskId: string, key: string, panelId?: string | null): Promise<Record<string, unknown>> {
-    return this.recordAction(taskId, panelId, resolveKeyName(key) && key.length > 1 ? `press-key:${key}` : 'press-key (character omitted)', buildPressScript(key))
+    const parsed = parseKeyCombo(key)
+    if ('error' in parsed) return Promise.resolve({ error: parsed.error })
+    const label = parsed.text && !parsed.modifiers ? 'press-key (character omitted)' : `press-key:${key}`
+    return this.recordActionWith(taskId, panelId, label, (wc) => this.pressTrusted(wc, parsed))
+  }
+
+  private async pressTrusted(wc: Electron.WebContents, parsed: ParsedKey): Promise<Record<string, unknown>> {
+    const session = this.debuggerSessions.acquire(wc as unknown as InputWebContents)
+    if ('send' in session) {
+      try {
+        await pressKeyCdp(session.send, parsed)
+        return { ok: true, input: 'trusted' }
+      } catch (err) {
+        return { error: `Key press failed: ${(err as Error).message}` }
+      }
+    }
+    for (const ev of buildFallbackKeyEvents(parsed)) (wc as unknown as InputWebContents).sendInputEvent(ev)
+    return { ok: true, input: 'sendInputEvent', note: `${session.error}. Used sendInputEvent, which only reaches the page while the 20x window is focused.` }
+  }
+
+  /**
+   * Sets files on an <input type=file> (target itself or one inside it) via
+   * CDP DOM.setFileInputFiles, which fires trusted input/change events.
+   * `files` must already be validated absolute paths (resolveUploadPaths).
+   */
+  uploadFile(taskId: string, target: string, files: string[], panelId?: string | null): Promise<Record<string, unknown>> {
+    return this.recordActionWith(taskId, panelId, `upload-file:${files.length}`, async (wc) => {
+      const marker = randomUUID()
+      const found = await this.eval(wc, buildUploadTargetScript(target, marker))
+      if (found.error) return found
+      if (found.disabled === true) return { error: 'The file input is disabled.' }
+      if (files.length > 1 && found.multiple !== true) return { error: 'This file input accepts a single file; pass one path.' }
+      const session = this.debuggerSessions.acquire(wc as unknown as InputWebContents)
+      if (!('send' in session)) return { error: `${session.error}. File upload needs the panel debugger; close DevTools on this panel and retry.` }
+      try {
+        const doc = await session.send('DOM.getDocument', { depth: 0 }) as { root?: { nodeId?: number } }
+        const rootId = doc?.root?.nodeId
+        if (typeof rootId !== 'number') return { error: 'Could not read the page document.' }
+        const { nodeId } = await session.send('DOM.querySelector', { nodeId: rootId, selector: `[data-bx-upload="${marker}"]` }) as { nodeId?: number }
+        if (!nodeId) return { error: 'The file input disappeared before upload.' }
+        await session.send('DOM.setFileInputFiles', { files, nodeId })
+        return { ok: true, files: files.length }
+      } catch (err) {
+        return { error: `Upload failed: ${(err as Error).message}` }
+      } finally {
+        await this.eval(wc, `(() => { for (const el of document.querySelectorAll(${JSON.stringify(`[data-bx-upload="${marker}"]`)})) el.removeAttribute('data-bx-upload'); return JSON.stringify({ ok: true }); })()`)
+      }
+    }, target)
   }
 
   scroll(taskId: string, direction?: string, amount?: number, target?: string, panelId?: string | null): Promise<Record<string, unknown>> {
@@ -864,7 +987,17 @@ export class PanelBrowserBroker {
     )
   }
 
-  private async recordAction(taskId: string, panelId: string | null | undefined, action: string, script: string, target?: string): Promise<Record<string, unknown>> {
+  private recordAction(taskId: string, panelId: string | null | undefined, action: string, script: string, target?: string): Promise<Record<string, unknown>> {
+    return this.recordActionWith(taskId, panelId, action, (wc) => this.eval(wc, script), target)
+  }
+
+  private async recordActionWith(
+    taskId: string,
+    panelId: string | null | undefined,
+    action: string,
+    run: (wc: Electron.WebContents) => Promise<Record<string, unknown>>,
+    target?: string
+  ): Promise<Record<string, unknown>> {
     const resolved = this.resolve(taskId, panelId)
     if (!resolved.ok) return resolved
     let description: string | undefined
@@ -872,7 +1005,7 @@ export class PanelBrowserBroker {
       const selector = /^@?e\d+$/.test(target) ? `[data-bx-ref="${normalizeRef(target)}"]` : target
       description = await withTimeout(resolved.wc.executeJavaScriptInIsolatedWorld(RECORDING_WORLD, [{ code: buildRecordingTargetScript(selector) }]).catch(() => '[unknown target]'), 2000, '[unknown target]')
     }
-    const result = await this.evalOnResolved(taskId, panelId, script)
+    const result = await withTimeout(run(resolved.wc), 30000, { error: PAGE_TIMEOUT_ERROR })
     const commandTarget = target ? sanitizeRecordingTarget(target) : undefined
     const recordedTarget = commandTarget ? `${/^@?e\d+$/.test(commandTarget) ? 'ref' : 'selector'} ${commandTarget}${description ? ` | ${description}` : ''}`.slice(0, 300) : description
     await this.recordStep(resolved.wc, { source: 'agent', action, target: recordedTarget, outcome: result.error ? 'error' : 'ok', snapshotPhase: 'after-action' })
@@ -882,23 +1015,55 @@ export class PanelBrowserBroker {
   private async evalOnResolved(taskId: string, panelId: string | null | undefined, script: string): Promise<Record<string, unknown>> {
     const resolved = this.resolve(taskId, panelId)
     if (!resolved.ok) return resolved
-    return withTimeout(this.eval(resolved.wc, script), 30000, { error: 'Timed out after 30s — the page did not answer (it may be navigating or throttled in the background).' })
+    return withTimeout(this.eval(resolved.wc, script), 30000, { error: PAGE_TIMEOUT_ERROR })
   }
 
+  /**
+   * Captures the panel. capturePage() needs a presented compositor frame and
+   * can fail ("UnknownVizError") or hang for a panel that is hidden /
+   * off-viewport; then fall back to CDP Page.captureScreenshot, which renders
+   * a fresh frame for the page itself.
+   */
   async screenshot(taskId: string, panelId?: string | null): Promise<Record<string, unknown>> {
     const resolved = this.resolve(taskId, panelId)
     if (!resolved.ok) return resolved
+    const wc = resolved.wc
+    let png: Buffer | null = null
+    let firstError = ''
     try {
-      const image = await resolved.wc.capturePage()
+      const image = await withTimeout(wc.capturePage(), 10000, null)
+      if (image && !image.isEmpty()) png = image.toPNG()
+      else firstError = image ? 'empty image' : 'timed out'
+    } catch (err) {
+      firstError = (err as Error).message
+    }
+    if (!png) {
+      const session = this.debuggerSessions.acquire(wc as unknown as InputWebContents)
+      if ('send' in session) {
+        try {
+          const shot = await withTimeout(captureViaCdp(session.send), 15000, null)
+          if (shot) png = shot
+        } catch (err) {
+          firstError = `${firstError}; CDP: ${(err as Error).message}`
+        }
+      }
+    }
+    if (!png) return { error: `Screenshot failed: ${firstError || 'no image'}. Bring the panel into view on the canvas and retry.` }
+    try {
       const dir = join(app.getPath('temp'), '20x-browser-screenshots')
       mkdirSync(dir, { recursive: true })
       const file = join(dir, `${taskId}-${Date.now()}.png`)
-      writeFileSync(file, image.toPNG())
+      writeFileSync(file, png)
       return { ok: true, path: file }
     } catch (err) {
       return { error: `Screenshot failed: ${(err as Error).message}` }
     }
   }
+}
+
+async function captureViaCdp(send: CdpSend): Promise<Buffer | null> {
+  const result = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }) as { data?: string }
+  return typeof result?.data === 'string' && result.data ? Buffer.from(result.data, 'base64') : null
 }
 
 export const panelBrowserBroker = new PanelBrowserBroker()

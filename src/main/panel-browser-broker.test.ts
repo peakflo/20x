@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { rmSync } from 'fs'
+import { Script, createContext } from 'vm'
 
 // The broker only touches Electron APIs inside its command methods; the pure
 // helpers under test here need nothing from it. `fromId` is configurable so
@@ -22,11 +23,11 @@ vi.mock('electron', () => ({
 import {
   buildClickScript,
   buildGetScript,
-  buildPressScript,
   buildResourceTimingScript,
   buildScrollScript,
   buildSnapshotScript,
   buildTypeScript,
+  buildUploadTargetScript,
   buildWaitScript,
   consoleLevelName,
   filterConsoleEntries,
@@ -36,7 +37,6 @@ import {
   parseResourceTimingResult,
   parseSnapshotResult,
   pushConsoleEntry,
-  resolveKeyName,
   resolvePanelForTask,
   sanitizeRecordingTarget,
   unwrapEval,
@@ -140,13 +140,6 @@ describe('interaction scripts', () => {
     const script = buildTypeScript('@e2', 'he said "hi"', true)
     expect(script).toContain('"he said \\"hi\\""')
     expect(script).toContain('requestSubmit')
-  })
-
-  it('press maps known keys and rejects unknown ones', () => {
-    expect(buildPressScript('Enter')).toContain('"keyCode":13')
-    expect(buildPressScript('arrowdown')).toContain('"keyCode":40')
-    expect(resolveKeyName('q')).toMatchObject({ key: 'Q' })
-    expect(buildPressScript('meta+shift+p')).toContain('Unsupported key')
   })
 
   it('scroll defaults downward and honors direction', () => {
@@ -475,5 +468,237 @@ describe('broker recording stop', () => {
       append.mockRestore()
       broker.unregisterPanel('p-write-failure')
     }
+  })
+})
+
+// ── Script escaping (issue: agent text spliced into page script) ────────────
+
+const NASTY_VALUES = [
+  'line one\nline two',
+  "it's",
+  'say "hi"',
+  'back`tick`',
+  '${globalThis.pwned = 1}',
+  "'); globalThis.pwned = 1; ('",
+  '"); globalThis.pwned = 1; ("',
+  '</script><script>globalThis.pwned = 1</script>',
+  '\\u2028     end',
+  '\\'
+]
+
+/** Runs a builder's script in a sandbox with a minimal fake DOM. */
+async function runScript(script: string, ctx: Record<string, unknown>): Promise<Record<string, unknown>> {
+  new Script(script) // must at least compile
+  const context = createContext({ JSON, Promise, setTimeout, ...ctx })
+  const raw = await new Script(script).runInContext(context)
+  expect(context.pwned).toBeUndefined()
+  return JSON.parse(raw as string)
+}
+
+describe('script escaping', () => {
+  it('wait(text) treats the value as data: matches literally and never executes it', async () => {
+    for (const value of NASTY_VALUES) {
+      const hit = await runScript(buildWaitScript('text', value, 500), { document: { body: { innerText: `xx${value}xx` } }, Date })
+      expect(hit).toMatchObject({ ok: true })
+    }
+  })
+
+  it('wait timeout message echoes the value verbatim without breaking the script', async () => {
+    for (const value of NASTY_VALUES) {
+      let now = 0
+      const fakeDate = { now: () => (now += 1000) }
+      const miss = await runScript(buildWaitScript('text', value, 500), { document: { body: { innerText: '' } }, Date: fakeDate })
+      expect(miss.error).toBe(`Timed out after 500ms waiting for text: ${value}`)
+    }
+  })
+
+  it('wait(selector|url) compiles for any value', async () => {
+    for (const value of NASTY_VALUES) {
+      const sel = await runScript(buildWaitScript('selector', value, 500), { document: { querySelector: (q: string) => (q === value ? {} : null) }, Date })
+      expect(sel).toMatchObject({ ok: true })
+      const url = await runScript(buildWaitScript('url', value, 500), { location: { href: `https://x.io/${value}` }, Date })
+      expect(url).toMatchObject({ ok: true })
+    }
+  })
+
+  it('click reports an unknown target without executing it', async () => {
+    for (const value of NASTY_VALUES) {
+      const result = await runScript(buildClickScript(value), { document: { querySelector: () => null } })
+      expect(result.error).toContain(JSON.stringify(value))
+    }
+  })
+
+  it('type embeds text and selectors as data for inputs', async () => {
+    for (const value of NASTY_VALUES) {
+      const el = { tagName: 'INPUT', readOnly: false, value: '', focus: () => {}, dispatchEvent: () => true, closest: () => null }
+      const proto = { set value(v: string) { el.value = v } }
+      const result = await runScript(buildTypeScript(value, value), {
+        document: { querySelector: (q: string) => (q === value ? el : null) },
+        HTMLInputElement: { prototype: proto },
+        HTMLTextAreaElement: { prototype: proto },
+        Event: class { constructor(public type: string) {} }
+      })
+      expect(result).toEqual({ ok: true })
+      expect(el.value).toBe(value)
+    }
+  })
+
+  it('type reports a non-editable target without executing its name', async () => {
+    for (const value of NASTY_VALUES) {
+      const el = { tagName: 'A', isContentEditable: false, getAttribute: () => null, querySelector: () => null }
+      const result = await runScript(buildTypeScript(value, 'x'), { document: { querySelector: () => el } })
+      expect(result.error).toContain('is not an editable element')
+    }
+  })
+
+  it('upload target script compiles for any target', async () => {
+    for (const value of NASTY_VALUES) {
+      const result = await runScript(buildUploadTargetScript(value, 'm1'), { document: { querySelector: () => null } })
+      expect(result.error).toContain(JSON.stringify(value))
+    }
+  })
+})
+
+describe('type into contenteditable', () => {
+  it('only focuses + selects, then signals trusted input (no textContent writes)', () => {
+    const script = buildTypeScript('@e1', 'hello')
+    expect(script).not.toContain('textContent =')
+    expect(script).toContain('trusted: true')
+    expect(script).toContain('selectNodeContents')
+  })
+})
+
+// ── Broker trusted input via mocked webContents.debugger ───────────────────
+
+function fakeInputWebContents(id: number, evalResult: unknown, opts: { attachThrows?: boolean } = {}) {
+  const sendCommand = vi.fn(async (method: string): Promise<unknown> => {
+    if (method === 'DOM.getDocument') return { root: { nodeId: 1 } }
+    if (method === 'DOM.querySelector') return { nodeId: 7 }
+    if (method === 'Page.captureScreenshot') return { data: Buffer.from('png-bytes').toString('base64') }
+    return {}
+  })
+  const wc = {
+    id,
+    isDestroyed: vi.fn(() => false),
+    getURL: vi.fn(() => 'https://editor.test/'),
+    on: vi.fn(),
+    once: vi.fn(),
+    removeListener: vi.fn(),
+    setBackgroundThrottling: vi.fn(),
+    executeJavaScript: vi.fn(async () => (typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult))),
+    sendInputEvent: vi.fn(),
+    capturePage: vi.fn(async () => { throw new Error('UnknownVizError') }),
+    debugger: {
+      isAttached: vi.fn(() => false),
+      attach: vi.fn(() => { if (opts.attachThrows) throw new Error('Another debugger is already attached') }),
+      detach: vi.fn(),
+      sendCommand,
+      on: vi.fn(),
+      removeListener: vi.fn()
+    }
+  }
+  return wc
+}
+
+function withPanel<T>(wc: ReturnType<typeof fakeInputWebContents>, fn: (broker: PanelBrowserBroker) => Promise<T>): Promise<T> {
+  const broker = new PanelBrowserBroker()
+  electronMocks.fromId.mockReturnValue(Object.assign(wc, { session: electronMocks.agentSession }))
+  broker.registerPanel(`p-${wc.id}`, wc.id, [`task-${wc.id}`])
+  return fn(broker).finally(() => {
+    broker.unregisterPanel(`p-${wc.id}`)
+    electronMocks.fromId.mockReturnValue(null)
+  })
+}
+
+const cdpCalls = (wc: ReturnType<typeof fakeInputWebContents>) => wc.debugger.sendCommand.mock.calls.map((c) => c as unknown as [string, Record<string, unknown>])
+
+describe('broker trusted input', () => {
+  it('disables background throttling for registered agent panels', async () => {
+    const wc = fakeInputWebContents(201, { ok: true })
+    await withPanel(wc, async () => {
+      expect(wc.setBackgroundThrottling).toHaveBeenCalledWith(false)
+    })
+  })
+
+  it('types into a rich editor with Input.insertText and real Enter between lines', async () => {
+    const wc = fakeInputWebContents(202, { trusted: true, hadContent: true })
+    await withPanel(wc, async (broker) => {
+      const result = await broker.type('task-202', '@e1', 'Title\nBody', false, 'p-202')
+      expect(result).toEqual({ ok: true, input: 'trusted' })
+      const calls = cdpCalls(wc).filter(([m]) => m.startsWith('Input.'))
+      expect(calls.map(([m, p]) => `${m}:${p.type ?? p.text}`)).toEqual([
+        'Input.dispatchKeyEvent:rawKeyDown', // Backspace clears the selected old content
+        'Input.dispatchKeyEvent:keyUp',
+        'Input.insertText:Title',
+        'Input.dispatchKeyEvent:keyDown', // Enter → new block
+        'Input.dispatchKeyEvent:keyUp',
+        'Input.insertText:Body'
+      ])
+      expect(calls[0][1]).toMatchObject({ key: 'Backspace' })
+      expect(calls[3][1]).toMatchObject({ key: 'Enter', text: '\r' })
+      expect(wc.debugger.attach).toHaveBeenCalledTimes(1)
+    })
+    expect(wc.debugger.detach).toHaveBeenCalled()
+  })
+
+  it('appends without clearing when clear=false and presses Enter on submit', async () => {
+    const wc = fakeInputWebContents(203, { trusted: true, hadContent: true })
+    await withPanel(wc, async (broker) => {
+      await broker.type('task-203', '@e1', 'more', true, 'p-203', false)
+      const calls = cdpCalls(wc).filter(([m]) => m.startsWith('Input.'))
+      expect(calls[0]).toEqual(['Input.insertText', { text: 'more' }])
+      expect(calls.slice(1).map(([, p]) => p.key)).toEqual(['Enter', 'Enter'])
+    })
+  })
+
+  it('keeps the value-setter path for plain inputs (no CDP)', async () => {
+    const wc = fakeInputWebContents(204, { ok: true })
+    await withPanel(wc, async (broker) => {
+      expect(await broker.type('task-204', '#q', 'hello', false, 'p-204')).toEqual({ ok: true })
+      expect(wc.debugger.attach).not.toHaveBeenCalled()
+    })
+  })
+
+  it('falls back to sendInputEvent when the debugger is taken', async () => {
+    const wc = fakeInputWebContents(205, { trusted: true, hadContent: false }, { attachThrows: true })
+    await withPanel(wc, async (broker) => {
+      const result = await broker.type('task-205', '@e1', 'ab\nc', false, 'p-205')
+      expect(result).toMatchObject({ ok: true, input: 'sendInputEvent' })
+      const sent = wc.sendInputEvent.mock.calls.map((c) => (c as unknown as [Electron.KeyboardInputEvent])[0])
+      expect(sent.map((e) => `${e.type}:${e.keyCode}`)).toEqual(['char:a', 'char:b', 'rawKeyDown:Enter', 'char:Enter', 'keyUp:Enter', 'char:c'])
+    })
+  })
+
+  it('press_key sends trusted key events with modifiers', async () => {
+    const wc = fakeInputWebContents(206, { ok: true })
+    await withPanel(wc, async (broker) => {
+      expect(await broker.pressKey('task-206', 'Control+B', 'p-206')).toEqual({ ok: true, input: 'trusted' })
+      const keys = cdpCalls(wc).filter(([m]) => m === 'Input.dispatchKeyEvent').map(([, p]) => p)
+      expect(keys).toEqual([
+        expect.objectContaining({ type: 'rawKeyDown', key: 'b', code: 'KeyB', windowsVirtualKeyCode: 66, modifiers: 2 }),
+        expect.objectContaining({ type: 'keyUp', modifiers: 2 })
+      ])
+      expect(wc.executeJavaScript).not.toHaveBeenCalled()
+      expect(await broker.pressKey('task-206', 'Hyper+Q', 'p-206')).toHaveProperty('error')
+    })
+  })
+
+  it('uploads validated files through DOM.setFileInputFiles', async () => {
+    const wc = fakeInputWebContents(207, { ok: true, multiple: false, disabled: false })
+    await withPanel(wc, async (broker) => {
+      expect(await broker.uploadFile('task-207', 'input[type=file]', ['/ws/a.png'], 'p-207')).toEqual({ ok: true, files: 1 })
+      expect(cdpCalls(wc)).toContainEqual(['DOM.setFileInputFiles', { files: ['/ws/a.png'], nodeId: 7 }])
+      expect(await broker.uploadFile('task-207', 'input[type=file]', ['/ws/a.png', '/ws/b.png'], 'p-207')).toHaveProperty('error')
+    })
+  })
+
+  it('falls back to CDP Page.captureScreenshot when capturePage fails', async () => {
+    const wc = fakeInputWebContents(208, { ok: true })
+    await withPanel(wc, async (broker) => {
+      const result = await broker.screenshot('task-208', 'p-208')
+      expect(result).toMatchObject({ ok: true })
+      expect(cdpCalls(wc).map(([m]) => m)).toContain('Page.captureScreenshot')
+      rmSync(result.path as string, { force: true })
+    })
   })
 })

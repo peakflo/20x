@@ -49,6 +49,7 @@ import {
   writeRegisteredTaskArtifactFile
 } from './artifacts'
 import { panelBrowserBroker } from './panel-browser-broker'
+import { resolveUploadPaths } from './panel-browser-input'
 import { canvasArtifactBroker } from './canvas-artifact-broker'
 import * as electron from 'electron'
 import { appearanceFromInput, captureHtmlPreview, HtmlRenderImageError, HtmlRenderPageTooLargeError, inlineLocalImages } from './html-render'
@@ -1510,7 +1511,16 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
       if (typeof params.target !== 'string' || !params.target) return { error: 'target (@ref or CSS selector) is required' }
       if (typeof params.text !== 'string') return { error: 'text is required' }
-      return panelBrowserBroker.type(taskId, params.target, params.text, params.submit === true, str(params.panel_id))
+      return panelBrowserBroker.type(taskId, params.target, params.text, params.submit === true, str(params.panel_id), params.clear !== false)
+    }
+
+    case '/browser_upload_file': {
+      const taskId = typeof params.task_id === 'string' ? params.task_id : ''
+      if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
+      if (typeof params.target !== 'string' || !params.target) return { error: 'target (CSS selector or @ref of the file input) is required' }
+      const files = resolveUploadPaths(params.paths, [db.getWorkspaceDir(taskId), db.getAttachmentsDir(taskId)])
+      if (!files.ok) return { error: files.error }
+      return panelBrowserBroker.uploadFile(taskId, params.target, files.files, str(params.panel_id))
     }
 
     case '/browser_press_key': {
