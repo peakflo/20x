@@ -2,8 +2,9 @@
  * Minimal declarations for the two archive helpers.
  *
  * Neither package ships types and neither has a DefinitelyTyped package worth
- * adding for four functions. Only the parts `voice-tts-model-manager.ts` uses
- * are declared, so an unused corner of either API cannot be called by mistake.
+ * adding for a handful of functions. Only the parts `voice-tts-model-manager.ts`
+ * and `data-transfer.ts` use are declared, so an unused corner of either API
+ * cannot be called by mistake.
  */
 
 declare module 'unbzip2-stream' {
@@ -30,6 +31,11 @@ declare module 'tar-stream' {
     on(event: string, listener: (...args: never[]) => void): this
   }
 
+  export interface TarPack extends Readable {
+    entry(header: TarHeader, buffer: Buffer | string, callback?: (err?: Error | null) => void): void
+    finalize(): void
+  }
+
   export function extract(): TarExtract
-  export function pack(): Readable
+  export function pack(): TarPack
 }

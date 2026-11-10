@@ -17,6 +17,7 @@ import {
   scanTaskArtifacts,
   writeRegisteredTaskArtifactFile
 } from './artifacts'
+import { canSymlink } from '../../test/helpers/can-symlink'
 
 describe('task artifact files', () => {
   let testRoot: string
@@ -59,7 +60,7 @@ describe('task artifact files', () => {
     expect(artifacts.every((artifact) => artifact.size >= 0 && artifact.updatedAt > 0)).toBe(true)
   })
 
-  it('does not follow symlinks while scanning', async () => {
+  it.skipIf(!canSymlink)('does not follow symlinks while scanning', async () => {
     const outsideFile = join(testRoot, 'outside.md')
     await writeFile(outsideFile, 'secret')
     await symlink(outsideFile, join(workspaceDir, 'linked.md'))
@@ -162,7 +163,7 @@ describe('task artifact files', () => {
     expect(await readTaskArtifact(workspaceDir, 'unregistered.zip')).toBeNull()
   })
 
-  it('reads and exact-edits registered files while enforcing task and path boundaries', async () => {
+  it.skipIf(!canSymlink)('reads and exact-edits registered files while enforcing task and path boundaries', async () => {
     const registered = await createRegisteredTaskArtifact(workspaceDir, 'task-1', {
       title: 'Report',
       type: ArtifactType.MARKDOWN
@@ -204,7 +205,7 @@ describe('task artifact files', () => {
     await expect(readFile(outsideFile, 'utf8')).resolves.toBe('secret')
   })
 
-  it('rejects symlinked registry and artifact directories before writing outside the workspace', async () => {
+  it.skipIf(!canSymlink)('rejects symlinked registry and artifact directories before writing outside the workspace', async () => {
     const outsideRegistry = join(testRoot, 'outside-registry')
     await mkdir(outsideRegistry)
     await symlink(outsideRegistry, join(workspaceDir, '.20x'))
@@ -227,7 +228,7 @@ describe('task artifact files', () => {
     await expect(readdir(outsideArtifacts)).resolves.toEqual([])
   })
 
-  it('rejects a symlinked registry file without reading or replacing its target', async () => {
+  it.skipIf(!canSymlink)('rejects a symlinked registry file without reading or replacing its target', async () => {
     const outsideRegistryFile = join(testRoot, 'outside-artifacts.json')
     const outsideContent = '{"version":1,"artifacts":[]}'
     await writeFile(outsideRegistryFile, outsideContent)
@@ -242,7 +243,7 @@ describe('task artifact files', () => {
     await expect(readFile(outsideRegistryFile, 'utf8')).resolves.toBe(outsideContent)
   })
 
-  it('rejects a symlinked nested artifact directory before creating files through it', async () => {
+  it.skipIf(!canSymlink)('rejects a symlinked nested artifact directory before creating files through it', async () => {
     const registered = await createRegisteredTaskArtifact(workspaceDir, 'task-1', {
       title: 'Report',
       type: ArtifactType.MARKDOWN
@@ -294,7 +295,7 @@ describe('task artifact files', () => {
     })
   })
 
-  it('rejects traversal, absolute paths, sibling-prefix paths, and escaping symlinks', async () => {
+  it.skipIf(!canSymlink)('rejects traversal, absolute paths, sibling-prefix paths, and escaping symlinks', async () => {
     const outsideFile = join(testRoot, 'outside.md')
     await writeFile(outsideFile, 'secret')
     await symlink(outsideFile, join(workspaceDir, 'linked.md'))
@@ -316,7 +317,7 @@ describe('task artifact files', () => {
     await expect(readTaskArtifact(workspaceDir, 'large.md')).resolves.toBeNull()
   })
 
-  it('resolves an artifact file path for the clipboard only inside the workspace', async () => {
+  it.skipIf(!canSymlink)('resolves an artifact file path for the clipboard only inside the workspace', async () => {
     const outsideFile = join(testRoot, 'outside.md')
     await writeFile(outsideFile, 'secret')
     await symlink(outsideFile, join(workspaceDir, 'linked.md'))

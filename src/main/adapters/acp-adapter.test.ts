@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { AcpAgentAdapter } from './acp-adapter'
 import { SessionStatusType, MessagePartType, MessagePart, SessionConfig } from './coding-agent-adapter'
 import { registerWrapperHooksForTests, unregisterWrapperHooksForTests } from '../acp-registry/wrapper-hooks'
+import { canSymlink } from '../../../test/helpers/can-symlink'
 
 vi.mock('child_process', () => ({
   execFile: vi.fn(),
@@ -614,7 +615,7 @@ describe('AcpAgentAdapter - fs scoping (enableFs)', () => {
     expect(responses[0]).toMatchObject({ error: { code: -32000 } })
   })
 
-  it('rejects a symlink that escapes the workspace', async () => {
+  it.skipIf(!canSymlink)('rejects a symlink that escapes the workspace', async () => {
     const outsideDir = mkdtempSync(join(tmpdir(), 'acp-fs-outside-'))
     const secretFile = join(outsideDir, 'secret.txt')
     writeFileSync(secretFile, 'top secret')

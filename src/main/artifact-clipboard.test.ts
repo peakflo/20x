@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { clipboard as electronClipboard, nativeImage } from 'electron'
 import { ArtifactClipboardMode } from '../shared/artifacts'
 import { writeArtifactFileToClipboard } from './artifact-clipboard'
+import { isWindows } from '../../test/helpers/can-symlink'
 
 /** Mirrors the payload shape of the Electron ClipboardItem constructor. */
 const { FakeClipboardItem } = vi.hoisted(() => ({
@@ -42,7 +43,7 @@ afterEach(() => {
 })
 
 describe('writeArtifactFileToClipboard', () => {
-  it('puts a file URL on the macOS pasteboard so Finder can paste the file', async () => {
+  it.skipIf(isWindows)('puts a file URL on the macOS pasteboard so Finder can paste the file', async () => {
     setPlatform('darwin')
 
     await expect(writeArtifactFileToClipboard('/tmp/workspace/reports/summary.md')).resolves.toEqual({
@@ -53,7 +54,7 @@ describe('writeArtifactFileToClipboard', () => {
     })
   })
 
-  it('puts a URI list on the Linux clipboard', async () => {
+  it.skipIf(isWindows)('puts a URI list on the Linux clipboard', async () => {
     setPlatform('linux')
 
     await expect(writeArtifactFileToClipboard('/tmp/workspace/reports/summary.md')).resolves.toEqual({
