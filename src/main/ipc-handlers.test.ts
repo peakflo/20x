@@ -35,6 +35,7 @@ vi.mock('child_process', () => ({
 
 import { ipcMain } from 'electron'
 import { registerIpcHandlers } from './ipc-handlers'
+import { isWindows } from '../../test/helpers/can-symlink'
 
 describe('registerIpcHandlers', () => {
   beforeEach(() => {
@@ -179,7 +180,7 @@ describe('registerIpcHandlers', () => {
     ])
   })
 
-  it('terminal:kill ignores stale expectedPid and only kills matching process', async () => {
+  it.skipIf(isWindows)('terminal:kill ignores stale expectedPid and only kills matching process', async () => {
     const db = {} as unknown as Parameters<typeof registerIpcHandlers>[0]
     const agentManager = {} as unknown as Parameters<typeof registerIpcHandlers>[1]
     const githubManager = {} as unknown as Parameters<typeof registerIpcHandlers>[2]

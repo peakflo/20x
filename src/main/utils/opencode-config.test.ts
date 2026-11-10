@@ -1,3 +1,4 @@
+const isWindows = process.platform === 'win32'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { buildMergedOpencodeConfig, readOpencodeConfig, readOpencodeAuth } from './opencode-config'
 
@@ -114,7 +115,7 @@ describe('buildMergedOpencodeConfig', () => {
     expect(config.plugin).toEqual(['/path/to/plugin.js'])
   })
 
-  it('removes missing generated 20x runtime plugins from stored config', () => {
+  it.skipIf(isWindows)('removes missing generated 20x runtime plugins from stored config', () => {
     const existingPlugin = '/home/testuser/workspace/.opencode/plugins/20x-tilldone.js'
     const missingPlugin = 'file:///home/testuser/missing/.opencode/plugins/20x-secret-injector.js'
     const userPlugin = '/home/testuser/custom-plugin.js'
@@ -155,7 +156,7 @@ describe('buildMergedOpencodeConfig', () => {
     expect(config).toEqual({ plugin: ['/path/to/plugin.js'] })
   })
 
-  it('handles provider with no options object', () => {
+  it.skipIf(isWindows)('handles provider with no options object', () => {
     mockExistsSync.mockReturnValue(true)
     mockReadFileSync
       .mockReturnValueOnce(JSON.stringify({

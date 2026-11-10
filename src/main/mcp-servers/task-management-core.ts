@@ -645,6 +645,9 @@ const recordingPageParams = {
   limit: { type: 'integer', minimum: 1, maximum: 100, default: 50, description: 'Maximum number of entries.' }
 }
 const browserRecordingToolNames = new Set(['browser_recording_list', 'browser_recording_get', 'browser_recording_steps', 'browser_recording_snapshot'])
+// Tools whose task_id is pinned to the session's own task: recordings are
+// task-private, and uploads may only read the calling task's own workspace.
+const taskPinnedBrowserToolNames = new Set([...browserRecordingToolNames, 'browser_upload_file'])
 const browserTools: Tool[] = [
   {
     name: 'browser_recording_list',
@@ -696,7 +699,7 @@ const browserTools: Tool[] = [
   },
   {
     name: 'browser_type',
-    description: 'Type text into an input/textarea/select by ref or CSS selector. Set submit=true to press Enter afterwards.',
+    description: 'Type text into an input/textarea/select or a rich-text editor (contenteditable, e.g. Draft.js/Lexical) by ref or CSS selector. Rich-text editors receive trusted keyboard input; each newline in text is a real Enter (new paragraph/block). Set submit=true to press Enter afterwards.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -704,6 +707,7 @@ const browserTools: Tool[] = [
         target: { type: 'string', description: '@ref from browser_snapshot or a CSS selector' },
         text: { type: 'string' },
         submit: { type: 'boolean', description: 'Press Enter / submit the form after typing' },
+        clear: { type: 'boolean', description: 'Rich-text editors only: replace existing content (default true). false types at the current caret, or at the end when the caret is outside the editor.' },
         panel_id: panelIdParam
       },
       required: ['task_id', 'target', 'text']
@@ -711,11 +715,25 @@ const browserTools: Tool[] = [
   },
   {
     name: 'browser_press_key',
-    description: 'Press a key on the focused element: Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown or a single character.',
+    description: 'Press a key on the focused element with trusted keyboard input (works in rich-text editors): Enter, Tab, Escape, Backspace, Delete, Space, ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown, F1-F12 or a single character, optionally with modifiers joined by "+": Control, Meta (Cmd), Alt, Shift, Mod (Cmd on macOS, Ctrl elsewhere). Examples: "Enter", "Shift+Enter", "Mod+B", "Meta+Shift+Z".',
     inputSchema: {
       type: 'object',
-      properties: { task_id: taskParam, key: { type: 'string' }, panel_id: panelIdParam },
+      properties: { task_id: taskParam, key: { type: 'string', description: 'Key or combo, e.g. "Enter", "a", "Control+B", "Shift+Enter"' }, panel_id: panelIdParam },
       required: ['task_id', 'key']
+    }
+  },
+  {
+    name: 'browser_upload_file',
+    description: 'Attach local files to an <input type=file> in a browser panel (like choosing files in the file picker). Only files inside this task\'s workspace or attachments directory are allowed; relative paths resolve against the task workspace. target may be a hidden file input selector (e.g. input[type=file]) or an element that contains one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task_id: taskParam,
+        target: { type: 'string', description: 'CSS selector or @ref of the file input, or of an element containing it' },
+        paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 20, description: 'File paths inside the task workspace / attachments' },
+        panel_id: panelIdParam
+      },
+      required: ['task_id', 'target', 'paths']
     }
   },
   {
@@ -1118,7 +1136,7 @@ export async function callToolForScope(
     const normalizedArgs: Record<string, unknown> = args ? { ...args } : {}
     if (normalizedArgs.status === 'in_progress') normalizedArgs.status = 'agent_working'
     if (artifactToolNames.has(name) && scope.artifactTaskId) normalizedArgs.task_id = scope.artifactTaskId
-    if ((browserRecordingToolNames.has(name) || canvasArtifactToolNames.has(name)) && (scope.taskId || scope.artifactTaskId)) {
+    if ((taskPinnedBrowserToolNames.has(name) || canvasArtifactToolNames.has(name)) && (scope.taskId || scope.artifactTaskId)) {
       normalizedArgs.task_id = scope.taskId || scope.artifactTaskId
     }
 

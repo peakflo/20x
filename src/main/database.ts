@@ -1237,7 +1237,7 @@ function deserializeInstalledPlugin(row: InstalledPluginRow): InstalledPluginRec
  *   adapter. Cursor task sessions created through ACP cannot be resumed by it,
  *   so their session id is cleared and a handoff marker carries the history.
  */
-const SCHEMA_VERSION = 13
+export const SCHEMA_VERSION = 13
 
 export class DatabaseManager {
   public db!: Database.Database
@@ -4268,7 +4268,9 @@ Remember: Be helpful, concise, and proactive. Learn from history, but adapt to c
     const rows = this.db.prepare(
       `SELECT * FROM secrets WHERE id IN (${placeholders}) ORDER BY name ASC`
     ).all(...ids) as SecretRow[]
-    return rows.map(deserializeSecretWithValue)
+    // A secret with no value yet (one that arrived by data import) is left out,
+    // so an empty variable never hides the same variable from the user's shell.
+    return rows.map(deserializeSecretWithValue).filter((secret) => secret.value !== '')
   }
 
   createSecret(data: CreateSecretData): SecretRecord | undefined {

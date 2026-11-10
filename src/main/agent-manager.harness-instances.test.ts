@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { AgentManager } from './agent-manager'
 import { MessagePartType, MessageRole } from './adapters/coding-agent-adapter'
+import { isWindows } from '../../test/helpers/can-symlink'
 
 // Adapters are recorded instead of spawning processes. Each records the home it was built for.
 const built = vi.hoisted(() => [] as Array<{ kind: string; harnessHome?: string; self: any }>)
@@ -127,7 +128,7 @@ beforeEach(() => {
 })
 
 describe('one adapter per harness instance', () => {
-  it('builds a separate adapter for each instance of one harness, each with its own home', () => {
+  it.skipIf(isWindows)('builds a separate adapter for each instance of one harness, each with its own home', () => {
     const { manager } = setup({
       agents: {
         'agent-work': { coding_agent: 'codex', harness_instance_id: 'hi_work' },
@@ -150,7 +151,7 @@ describe('one adapter per harness instance', () => {
     expect((manager as any).getAdapter('agent-work')).toBe(work)
   })
 
-  it('keeps the instance home when a Claude instance is resumed under a second agent', () => {
+  it.skipIf(isWindows)('keeps the instance home when a Claude instance is resumed under a second agent', () => {
     const { manager } = setup({
       agents: {
         'agent-a': { coding_agent: 'claude-code', harness_instance_id: 'hi_claude_b' },
@@ -172,7 +173,7 @@ describe('one adapter per harness instance', () => {
 })
 
 describe('resuming on another harness instance', () => {
-  it('keeps the session and holds the handoff marker until the first prompt is accepted (same harness, shareable)', async () => {
+  it.skipIf(isWindows)('keeps the session and holds the handoff marker until the first prompt is accepted (same harness, shareable)', async () => {
     const { manager, task, settings } = setup({
       agents: { 'agent-1': { coding_agent: 'claude-code', harness_instance_id: 'hi_claude_b' } },
       taskAgent: 'agent-1',

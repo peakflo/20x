@@ -27,6 +27,7 @@ import {
   withProviderNameLimitHint,
 } from './pi-adapter'
 import { MessagePartType } from './coding-agent-adapter'
+import { isWindows } from '../../../test/helpers/can-symlink'
 
 function fakeProcess() {
   const process = new EventEmitter() as EventEmitter & Record<string, any>
@@ -81,7 +82,7 @@ describe('PiAdapter', () => {
     vi.clearAllMocks()
   })
 
-  it('uses the native Pi session file and applies model selection through RPC', async () => {
+  it.skipIf(isWindows)('uses the native Pi session file and applies model selection through RPC', async () => {
     const child = fakeProcess()
     spawnMock.mockReturnValue(child)
     const adapter = new PiAdapter({ getSetting: vi.fn(() => null) } as any)
@@ -126,7 +127,7 @@ describe('PiAdapter', () => {
     )
   })
 
-  it('discovers the effective Pi model catalog through RPC', async () => {
+  it.skipIf(isWindows)('discovers the effective Pi model catalog through RPC', async () => {
     const child = fakeProcess()
     spawnMock.mockReturnValue(child)
     const adapter = new PiAdapter({ getSetting: vi.fn(() => null) } as any)

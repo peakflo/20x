@@ -15,6 +15,7 @@ import {
   type HtmlPreviewWindow
 } from './html-render'
 import { HTML_PREVIEW_MAX_CONCURRENT } from '../shared/html-render'
+import { canSymlink } from '../../test/helpers/can-symlink'
 
 const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])
 const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0])
@@ -80,7 +81,7 @@ describe('inlineLocalImages', () => {
     expect(result.missingImages).toEqual(['/no/such/image.png'])
   })
 
-  it('rejects a file whose bytes are not a real image, even via a symlink with an image extension', async () => {
+  it.skipIf(!canSymlink)('rejects a file whose bytes are not a real image, even via a symlink with an image extension', async () => {
     const dir = await tempDir()
     const secretPath = join(dir, 'secret.env')
     await writeFile(secretPath, 'API_KEY=super-secret\n')
