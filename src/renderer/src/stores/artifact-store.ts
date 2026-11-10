@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import {
   ArtifactType,
   pullRequestUrlFromTool,
+  workflowArtifactId,
+  workflowPanelFromTool,
   type Artifact,
   type ArtifactApi,
   type ArtifactFileEntry,
@@ -214,6 +216,11 @@ export function artifactsFromMessage(taskId: string, message: ArtifactMessageLik
   const prUrl = pullRequestUrlFromTool(tool)
   if (prUrl) {
     artifacts.push({ taskId, type: ArtifactType.PR, title: `Pull request ${titleFromTarget(prUrl)}`, url: prUrl, updatedAt })
+  }
+
+  const workflow = workflowPanelFromTool(tool)
+  if (workflow) {
+    artifacts.push({ id: workflowArtifactId(taskId, workflow.workflowId), taskId, type: ArtifactType.WORKFLOW, title: workflow.title, url: workflow.url, updatedAt })
   }
 
   return artifacts

@@ -321,3 +321,23 @@ describe('MessageActivityGroup inline HTML renders', () => {
     expect(screen.queryByTitle('Report')).toBeNull()
   })
 })
+
+describe('MessageBubble workflow summary links', () => {
+  afterEach(cleanup)
+  const url = 'https://app.workflo.example/flow?workflowId=wf-bills&view=summary'
+  const message: AgentMessage = { id: 'final', role: 'assistant', content: `I built it.\n\n[Daily supplier bills](${url})`, timestamp: new Date(), partType: 'text' }
+
+  it('shows the known workflow artifact as a card instead of the link', () => {
+    const artifact: Artifact = { id: 'task-1:workflow:wf-bills', taskId: 'task-1', type: ArtifactType.WORKFLOW, title: 'Daily supplier bills', url, updatedAt: 1, reloadTrigger: 0 }
+    const onOpenArtifact = vi.fn()
+    render(<MessageBubble message={message} artifacts={[artifact]} onOpenArtifact={onOpenArtifact} />)
+    expect(screen.queryByRole('link', { name: 'Daily supplier bills' })).toBeNull()
+    fireEvent.click(screen.getByText('Workflow · Tap to open'))
+    expect(onOpenArtifact).toHaveBeenCalledWith(artifact)
+  })
+
+  it('keeps the link when no workflow artifact is known', () => {
+    render(<MessageBubble message={message} artifacts={[]} onOpenArtifact={vi.fn()} />)
+    expect(screen.getByRole('link', { name: 'Daily supplier bills' })).toBeTruthy()
+  })
+})

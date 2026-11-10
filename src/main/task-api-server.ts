@@ -377,7 +377,7 @@ export async function handleRoute(db: DatabaseManager, route: string, params: Re
       const type = typeof params.type === 'string' ? params.type as ArtifactType : ArtifactType.FILE
       if (!taskId || !db.getTask(taskId)) return { error: 'Task not found' }
       if (!title.trim()) return { error: 'Artifact title is required' }
-      if (!Object.values(ArtifactType).includes(type) || type === ArtifactType.PR) return { error: 'Unsupported artifact type' }
+      if (!Object.values(ArtifactType).includes(type) || type === ArtifactType.PR || type === ArtifactType.WORKFLOW) return { error: 'Unsupported artifact type' }
       const artifact = await createRegisteredTaskArtifact(db.getWorkspaceDir(taskId), taskId, { title, type })
       return { artifact }
     }

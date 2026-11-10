@@ -87,6 +87,14 @@ describe('artifact projector', () => {
     expect(projected).toEqual([expect.objectContaining({ type: ArtifactType.PR, url: 'https://github.com/peakflo/20x/pull/42' })])
   })
 
+  it('projects one workflow artifact from a Spaces workflow tool panelUrl', () => {
+    const panelUrl = 'https://app.workflo.example/flow?workflowId=wf-1&tenantId=t-1&view=summary'
+    const projected = artifactsFromMessage('task-1', part({
+      name: 'mcp__workflo__workflow_test_run', status: 'completed', output: JSON.stringify({ name: 'Daily invoice PDF', panelUrl })
+    }))
+    expect(projected).toEqual([expect.objectContaining({ id: 'task-1:workflow:wf-1', type: ArtifactType.WORKFLOW, title: 'Daily invoice PDF', url: panelUrl })])
+  })
+
   it('does not promote pull-request examples found while reading source files', () => {
     const projected = artifactsFromMessage('task-1', part({
       name: 'Read', status: 'success', output: 'Example: https://github.com/org/repo/pull/123'

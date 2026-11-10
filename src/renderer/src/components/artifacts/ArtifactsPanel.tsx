@@ -13,6 +13,7 @@ import { HtmlArtifactView } from './viewers/HtmlArtifactView'
 import { PrArtifactView } from './viewers/PrArtifactView'
 import { FileArtifactView } from './viewers/FileArtifactView'
 import { ScadArtifactView } from './viewers/ScadArtifactView'
+import { WorkflowArtifactView } from './viewers/WorkflowArtifactView'
 import { handleArtifactMcpMessage } from '@shared/artifact-mcp-host'
 
 export const ACTIVE_ARTIFACT_REFRESH_INTERVAL_MS = 30_000
@@ -94,6 +95,8 @@ export function ArtifactViewer({ artifact, artifactApi, refreshTrigger, onLinkCl
       void handleArtifactMcpMessage(html, { taskId: artifact.taskId, path: artifact.path }, data, reply, artifactApi.mcpCall)
     }} />
     case ArtifactType.PR: return <PrArtifactView artifact={artifact} refreshTrigger={refreshTrigger} />
+    // Not refreshed by the 30 s timer: a reload would lose what the user does in the page.
+    case ArtifactType.WORKFLOW: return <WorkflowArtifactView artifact={artifact} />
     default: return <FileArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
   }
 }

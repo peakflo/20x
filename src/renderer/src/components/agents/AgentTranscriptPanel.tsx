@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, ListTodo, FileText, ArrowDown, ArrowUp, Paperclip, Search, X, Image as ImageIcon, GitPullRequest, MonitorPlay } from 'lucide-react'
+import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, ListTodo, FileText, ArrowDown, ArrowUp, Paperclip, Search, X, Image as ImageIcon, GitPullRequest, MonitorPlay, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { Markdown } from '@/components/ui/Markdown'
 import type { AgentMessage } from '@/hooks/use-agent-session'
@@ -9,7 +9,7 @@ import { serializeTranscriptForDebug, type RawTranscriptMessage } from '@/lib/se
 import { agentSessionApi, artifactApi, voiceApi } from '@/lib/ipc-client'
 import { cn } from '@/lib/utils'
 import { useArtifactStore } from '@/stores/artifact-store'
-import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifacts'
+import { ArtifactContentKind, ArtifactType, extractWorkflowPanelLinks, type Artifact } from '@shared/artifacts'
 import { findChatScadArtifact } from '@shared/scad-chat'
 import { InlineScadPreview } from '@/components/artifacts/viewers/InlineScadPreview'
 import { VoiceMicButton } from '@/components/voice/VoiceMicButton'
@@ -19,6 +19,7 @@ import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
 import { useClipboardAttachmentPaste } from '@/hooks/use-clipboard-attachment-paste'
 import { InlineHtmlRender } from '@/components/artifacts/InlineHtmlRender'
 import { findMessageArtifact } from '@/components/artifacts/find-message-artifact'
+import { markdownLinkLabel, openWorkflowLink, workflowCardArtifact } from '@/components/artifacts/open-workflow-link'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -619,11 +620,13 @@ function ArtifactTranscriptCard({ artifact, onOpen }: { artifact: Artifact; onOp
   const Icon = artifact.type === ArtifactType.IMAGE ? ImageIcon
     : artifact.type === ArtifactType.HTML ? MonitorPlay
       : artifact.type === ArtifactType.PR ? GitPullRequest
-        : FileText
+        : artifact.type === ArtifactType.WORKFLOW ? Workflow
+          : FileText
   const noun = artifact.type === ArtifactType.IMAGE ? 'Screenshot'
     : artifact.type === ArtifactType.HTML ? 'Preview'
       : artifact.type === ArtifactType.PR ? 'Pull request'
-        : artifact.type === ArtifactType.MARKDOWN ? 'Markdown' : 'File'
+        : artifact.type === ArtifactType.WORKFLOW ? 'Workflow'
+          : artifact.type === ArtifactType.MARKDOWN ? 'Markdown' : 'File'
 
   return (
     <button onClick={() => onOpen(artifact)} className="my-1 ml-1 flex w-[min(420px,calc(100%-8px))] items-center gap-3 rounded-lg border border-border/50 bg-card p-2 text-left transition-colors hover:border-primary/40 hover:bg-accent/40">
@@ -685,7 +688,7 @@ function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFAC
   )
 }
 
-function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswerQuestion?: boolean; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void }) {
+function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact, onLinkClick }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswerQuestion?: boolean; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void; onLinkClick?: (href: string, text?: string) => boolean }) {
   if (message.partType === 'question' && message.tool?.questions) {
     return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} searchQuery={searchQuery} />
   }
@@ -715,6 +718,12 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const isError = message.partType === 'error' || message.partType === 'retry'
+  // Markdown passes only the href; add the link label from this message.
+  const messageLinkClick = onLinkClick ? (href: string) => onLinkClick(href, markdownLinkLabel(message.content, href)) : undefined
+  // A workflow summary link in the agent's text shows as a workflow card
+  // under the text, the same as the tool-output card. A click opens the tab.
+  const workflowLinks = onLinkClick && !isUser && !isSystem && !isError ? extractWorkflowPanelLinks(message.content) : null
+  const text = workflowLinks?.links.length ? workflowLinks.text : message.content
   const scadArtifact = !isSystem && !isError && onOpenArtifact ? findChatScadArtifact(message, artifacts) : undefined
 
   return (
@@ -735,7 +744,14 @@ function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQue
             <AlertTriangle className="h-3 w-3" /> Error
           </span>
         )}
-        <Markdown size="sm" highlightQuery={searchQuery}>{message.content}</Markdown>
+        {text && <Markdown size="sm" highlightQuery={searchQuery} onLinkClick={messageLinkClick}>{text}</Markdown>}
+        {workflowLinks?.links.map((link) => (
+          <ArtifactTranscriptCard
+            key={link.workflowId}
+            artifact={workflowCardArtifact(link, artifacts)}
+            onOpen={() => { onLinkClick?.(link.url, link.name) }}
+          />
+        ))}
         {scadArtifact && artifactApi.renderScad && <InlineScadPreview artifact={scadArtifact} renderModel={artifactApi.renderScad} onOpen={() => onOpenArtifact?.(scadArtifact)} />}
         <div className={`flex items-center gap-2 mt-1 ${!isUser ? 'opacity-70' : ''}`}>
           <span className="text-[10px] text-muted-foreground">{message.timestamp.toLocaleTimeString()}</span>
@@ -886,6 +902,11 @@ export function AgentTranscriptPanel({
   const handleOpenArtifact = useCallback((artifact: Artifact) => {
     selectArtifactTab(artifact.taskId, artifact.id, true)
   }, [selectArtifactTab])
+  // A Spaces workflow summary link in the agent's text opens the workflow in
+  // the artifacts panel. Other links keep the default behaviour.
+  const handleTranscriptLinkClick = useCallback((href: string, text?: string) => (
+    taskId ? openWorkflowLink(taskId, href, text) : false
+  ), [taskId])
 
   // ── Hidden debug copy: Cmd/Ctrl+Shift+D ──
   // Read messages through a ref: depending on `messages` (new identity per
@@ -1493,6 +1514,7 @@ export function AgentTranscriptPanel({
                               searchQuery={normalizedSearchQuery}
                               artifacts={taskArtifacts}
                               onOpenArtifact={handleOpenArtifact}
+                              onLinkClick={handleTranscriptLinkClick}
                             />
                           )}
                         </div>
