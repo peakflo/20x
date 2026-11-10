@@ -16,10 +16,12 @@
  *     there are no positional tab indexes to go stale.
  *
  * Reads and DOM queries run on plain Electron APIs (loadURL /
- * executeJavaScript / capturePage). Typing into rich-text editors, key
- * presses and file uploads need *trusted* input, so they go through the
- * panel's own in-process `webContents.debugger` (see panel-browser-input.ts)
- * — still no remote-debugging port, and only registered panels are attached.
+ * executeJavaScript / capturePage). Typing into rich-text editors and key
+ * presses need *trusted* input: they go through the guest webContents' own
+ * insertText / sendInputEvent, which are bound to the guest page (never the
+ * CDP Input domain, which leaks to the 20x UI — see panel-browser-input.ts).
+ * File uploads use the panel's in-process `webContents.debugger` — still no
+ * remote-debugging port, and only registered panels are attached.
  *
  * Every agent-supplied string is embedded in page scripts as a JSON literal
  * (JSON.stringify) — never spliced into script source — so it is data, not code.
@@ -29,18 +31,14 @@ import { mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import {
-  BACKSPACE_KEY,
-  buildFallbackKeyEvents,
-  ENTER_KEY,
+  buildEditorCleanupScript,
   PanelDebuggerSessions,
   parseKeyCombo,
-  pressKeyCdp,
-  splitTypingSegments,
-  typeSegmentsCdp,
-  typeSegmentsFallback,
+  pressKeyInGuest,
+  typeIntoEditor,
   type CdpSend,
-  type InputWebContents,
-  type ParsedKey
+  type GuestInputWebContents,
+  type InputWebContents
 } from './panel-browser-input'
 import { BrowserRecordingService } from './browser-recording'
 import { getAgentBrowserSession } from './agent-browser-session'
@@ -186,9 +184,30 @@ function queryFor(refOrSelector: string): string {
   return JSON.stringify(`[data-bx-ref="${normalizeRef(refOrSelector.trim())}"]`)
 }
 
+/**
+ * In-page statement that returns `{ error: 'Invalid selector: …' }` from the
+ * enclosing script when the CSS selector does not parse. Without it
+ * querySelector throws a DOMException, which executeJavaScript cannot
+ * serialize — the agent got a bare `{}` with no message.
+ */
+export function selectorGuard(refOrSelector: string): string {
+  if (/^@?e\d+$/.test(refOrSelector.trim())) return ''
+  return `try { document.createDocumentFragment().querySelector(${JSON.stringify(refOrSelector)}); } catch (err) { if (err && err.name === 'SyntaxError') return JSON.stringify({ error: 'Invalid selector: ' + ${JSON.stringify(refOrSelector)} }); }`
+}
+
+/** Best-effort message for an executeJavaScript rejection (not always an Error). */
+export function evalErrorMessage(err: unknown): string {
+  if (err && typeof err === 'object' && 'message' in err && typeof (err as { message: unknown }).message === 'string' && (err as Error).message) {
+    return (err as Error).message
+  }
+  if (typeof err === 'string' && err) return err
+  return 'The page script failed (the page threw a non-serializable error).'
+}
+
 /** Clicks a snapshot ref (or CSS selector), scrolling it into view first. */
 export function buildClickScript(refOrSelector: string): string {
   return `(async () => {
+  ${selectorGuard(refOrSelector)}
   const el = document.querySelector(${queryFor(refOrSelector)});
   if (!el) return JSON.stringify({ error: 'Stale or unknown target ' + JSON.stringify(${JSON.stringify(refOrSelector)}) + ' — run browser_snapshot again.' });
   el.scrollIntoView({ block: 'center' });
@@ -207,11 +226,12 @@ export function buildClickScript(refOrSelector: string): string {
  * contenteditable (Draft.js, Lexical, ProseMirror …): only focuses the
  * editing host and places the selection (all content when `clear`, else the
  * caret at the end unless it is already inside). It returns
- * `{ trusted: true }` and the broker then types with trusted CDP input —
+ * `{ trusted: true }` and the broker then types with trusted guest input (typeIntoEditor) —
  * editors ignore script-made DOM edits and isTrusted=false events.
  */
-export function buildTypeScript(refOrSelector: string, text: string, submit?: boolean, clear = true): string {
+export function buildTypeScript(refOrSelector: string, text: string, submit?: boolean, clear = true, marker?: string): string {
   return `(async () => {
+  ${selectorGuard(refOrSelector)}
   const target = ${JSON.stringify(refOrSelector)};
   let el = document.querySelector(${queryFor(refOrSelector)});
   if (!el) return JSON.stringify({ error: 'Stale or unknown target — run browser_snapshot again.' });
@@ -248,6 +268,7 @@ export function buildTypeScript(refOrSelector: string, text: string, submit?: bo
       sel.removeAllRanges();
       sel.addRange(range);
     }
+    ${marker ? `host.setAttribute('data-bx-type', ${JSON.stringify(marker)});` : ''}
     return JSON.stringify({ trusted: true, hadContent: (host.innerText || '').trim().length > 0 });
   }
   if (${submit ? 'true' : 'false'}) {
@@ -267,6 +288,7 @@ export function buildTypeScript(refOrSelector: string, text: string, submit?: bo
  */
 export function buildUploadTargetScript(refOrSelector: string, marker: string): string {
   return `(() => {
+  ${selectorGuard(refOrSelector)}
   const target = ${JSON.stringify(refOrSelector)};
   let el = document.querySelector(${queryFor(refOrSelector)});
   if (!el) return JSON.stringify({ error: 'Stale or unknown target ' + JSON.stringify(target) + ' — run browser_snapshot again or pass a CSS selector such as input[type=file].' });
@@ -282,6 +304,7 @@ export function buildScrollScript(direction?: string, amount?: number, refOrSele
   const delta = typeof amount === 'number' && amount > 0 ? Math.round(amount) : 600
   if (refOrSelector) {
     return `(() => {
+  ${selectorGuard(refOrSelector)}
   const el = document.querySelector(${queryFor(refOrSelector)});
   if (!el) return JSON.stringify({ error: 'Stale or unknown target — run browser_snapshot again.' });
   el.scrollIntoView({ block: 'center' });
@@ -312,6 +335,7 @@ export function buildGetScript(what: string): string {
 export function buildWaitScript(mode: 'selector' | 'text' | 'url', value: string, timeoutMs: number): string {
   const t = Math.max(500, Math.min(timeoutMs || 10000, 60000))
   return `(async () => {
+  ${mode === 'selector' ? selectorGuard(value) : ''}
   const t0 = Date.now();
   for (;;) {
     let hit = false;
@@ -473,7 +497,7 @@ const PAGE_TIMEOUT_ERROR = 'Timed out after 30s — the page did not answer (it 
 
 export class PanelBrowserBroker {
   private registry: PanelRegistry = new Map()
-  /** In-process CDP sessions for trusted input / uploads / screenshots. */
+  /** In-process CDP sessions for uploads / screenshots only (never Input.*). */
   private debuggerSessions = new PanelDebuggerSessions()
   private recordingService?: BrowserRecordingService
   private recordingNonces = new Map<string, string>()
@@ -751,7 +775,7 @@ export class PanelBrowserBroker {
     try {
       return unwrapEval(await wc.executeJavaScript(script, true))
     } catch (err) {
-      return { error: (err as Error).message }
+      return { error: evalErrorMessage(err) }
     }
   }
 
@@ -825,39 +849,28 @@ export class PanelBrowserBroker {
 
   /**
    * Types into an input/textarea/select (value setter) or a contenteditable
-   * rich-text editor (trusted CDP input: Input.insertText per line and a real
+   * rich-text editor (trusted input via the guest webContents: insertText per line and a real
    * Enter key between lines, so block editors create new paragraphs).
    * clear=false keeps existing content and types at the caret / the end.
    */
   type(taskId: string, target: string, text: string, submit?: boolean, panelId?: string | null, clear = true): Promise<Record<string, unknown>> {
     return this.recordActionWith(taskId, panelId, submit ? 'type-and-submit' : 'type', async (wc) => {
-      const prepared = await this.eval(wc, buildTypeScript(target, text, submit, clear))
+      const marker = randomUUID()
+      const prepared = await this.eval(wc, buildTypeScript(target, text, submit, clear, marker))
       if (prepared.trusted !== true) return prepared
-      // Let the editor observe the new selection (selectionchange is async).
-      await new Promise((r) => setTimeout(r, 50))
-      return this.typeTrusted(wc, text, clear && prepared.hadContent === true, submit === true)
-    }, target)
-  }
-
-  private async typeTrusted(wc: Electron.WebContents, text: string, clearFirst: boolean, submit: boolean): Promise<Record<string, unknown>> {
-    const segments = splitTypingSegments(text)
-    const session = this.debuggerSessions.acquire(wc as unknown as InputWebContents)
-    if ('send' in session) {
       try {
-        if (clearFirst) await pressKeyCdp(session.send, BACKSPACE_KEY)
-        await typeSegmentsCdp(session.send, segments)
-        if (submit) await pressKeyCdp(session.send, ENTER_KEY)
-        return { ok: true, input: 'trusted' }
-      } catch (err) {
-        return { error: `Trusted typing failed: ${(err as Error).message}` }
+        // Let the editor observe the new selection (selectionchange is async).
+        await new Promise((r) => setTimeout(r, 50))
+        return await typeIntoEditor(wc as unknown as GuestInputWebContents, (script) => this.eval(wc, script), {
+          marker,
+          text,
+          clearFirst: clear && prepared.hadContent === true,
+          submit: submit === true
+        })
+      } finally {
+        await this.eval(wc, buildEditorCleanupScript(marker))
       }
-    }
-    // Fallback (debugger unavailable, e.g. DevTools open on the panel).
-    const fallbackWc = wc as unknown as InputWebContents
-    if (clearFirst) for (const ev of buildFallbackKeyEvents(BACKSPACE_KEY)) fallbackWc.sendInputEvent(ev)
-    typeSegmentsFallback(fallbackWc, segments)
-    if (submit) for (const ev of buildFallbackKeyEvents(ENTER_KEY)) fallbackWc.sendInputEvent(ev)
-    return { ok: true, input: 'sendInputEvent', note: `${session.error}. Used sendInputEvent, which only reaches the page while the 20x window is focused.` }
+    }, target)
   }
 
   /**
@@ -868,21 +881,8 @@ export class PanelBrowserBroker {
     const parsed = parseKeyCombo(key)
     if ('error' in parsed) return Promise.resolve({ error: parsed.error })
     const label = parsed.text && !parsed.modifiers ? 'press-key (character omitted)' : `press-key:${key}`
-    return this.recordActionWith(taskId, panelId, label, (wc) => this.pressTrusted(wc, parsed))
-  }
-
-  private async pressTrusted(wc: Electron.WebContents, parsed: ParsedKey): Promise<Record<string, unknown>> {
-    const session = this.debuggerSessions.acquire(wc as unknown as InputWebContents)
-    if ('send' in session) {
-      try {
-        await pressKeyCdp(session.send, parsed)
-        return { ok: true, input: 'trusted' }
-      } catch (err) {
-        return { error: `Key press failed: ${(err as Error).message}` }
-      }
-    }
-    for (const ev of buildFallbackKeyEvents(parsed)) (wc as unknown as InputWebContents).sendInputEvent(ev)
-    return { ok: true, input: 'sendInputEvent', note: `${session.error}. Used sendInputEvent, which only reaches the page while the 20x window is focused.` }
+    return this.recordActionWith(taskId, panelId, label, (wc) =>
+      pressKeyInGuest(wc as unknown as GuestInputWebContents, (script) => this.eval(wc, script), parsed))
   }
 
   /**

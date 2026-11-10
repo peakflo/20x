@@ -5,25 +5,25 @@
  * their own document model and only update it from *trusted* input:
  * `beforeinput` / `textInput` / real `keydown`. Script-made changes
  * (`el.textContent = …`, synthetic `new KeyboardEvent()` with isTrusted=false)
- * reach the DOM but never the editor model, so the editor reverts or drops
- * them on its next render. The helpers here drive the page through the
- * panel's own `webContents.debugger` (Chrome DevTools Protocol), which
- * produces exactly the events a real keyboard does.
+ * reach the DOM but never the editor model.
  *
- * Why CDP over `webContents.sendInputEvent`:
- *  - sendInputEvent requires the hosting BrowserWindow to be focused
- *    (Electron docs), which an agent-driven, usually unfocused panel is not.
- *  - CDP has `Input.insertText` (IME-commit path: fires beforeinput +
- *    textInput, which React's onBeforeInput and Draft.js listen to), focus
- *    emulation for background panels, `DOM.setFileInputFiles` for uploads and
- *    `Page.captureScreenshot` as a screenshot fallback.
- * sendInputEvent is still used as a fallback when the debugger cannot be
- * attached (e.g. the user opened DevTools on the panel).
+ * Keyboard input goes ONLY through the guest webContents' own
+ * `insertText()` (IME-commit path: trusted beforeinput + textInput) and
+ * `sendInputEvent()` (trusted keydown/char/keyup). Electron forwards both to
+ * the guest's render widget, so they reach the panel page even while the
+ * 20x window is unfocused or the user is typing in the app.
  *
- * Safety: the debugger is attached in-process to a single registered panel
- * webContents — no remote-debugging port is opened, the main window is never
- * attached, and agents cannot send arbitrary CDP methods (only the fixed
- * commands below are used).
+ * NEVER use the CDP Input domain (Input.insertText / Input.dispatchKeyEvent)
+ * on a panel: for a <webview> guest Chromium routes those to the focused
+ * widget of the *embedder* — i.e. whatever is focused in the 20x UI (the
+ * agent chat box), not the guest page — even with focus emulation enabled
+ * or after guest.focus(). That leaked agent keystrokes into the app and sent
+ * chat messages. PanelDebuggerSessions rejects Input.* methods to keep it so.
+ *
+ * The debugger is still used for DOM.setFileInputFiles (uploads) and
+ * Page.captureScreenshot. It is attached in-process to a single registered
+ * panel webContents — no remote-debugging port, never the main window, and
+ * agents cannot send arbitrary CDP methods.
  */
 import { realpathSync, statSync } from 'fs'
 import { isAbsolute, relative, resolve, sep } from 'path'
@@ -192,27 +192,7 @@ export function parseKeyCombo(input: string, platform: NodeJS.Platform = process
   return result
 }
 
-/** CDP Input.dispatchKeyEvent params for one key press (down + up). */
-export function buildKeyEvents(k: ParsedKey): Array<Record<string, unknown>> {
-  const base = {
-    modifiers: k.modifiers,
-    key: k.key,
-    code: k.code,
-    windowsVirtualKeyCode: k.keyCode,
-    nativeVirtualKeyCode: k.keyCode
-  }
-  const down: Record<string, unknown> = {
-    ...base,
-    // keyDown with text = keydown + keypress/char (+ beforeinput/textInput);
-    // rawKeyDown = keydown only (editing/navigation keys, shortcuts).
-    type: k.text ? 'keyDown' : 'rawKeyDown',
-    ...(k.text ? { text: k.text, unmodifiedText: k.text } : {}),
-    ...(k.commands ? { commands: k.commands } : {})
-  }
-  return [down, { ...base, type: 'keyUp' }]
-}
-
-/** Electron sendInputEvent sequence for one key press (fallback path). */
+/** Electron sendInputEvent sequence for one key press (down [+ char] + up). */
 export function buildFallbackKeyEvents(k: ParsedKey): Electron.KeyboardInputEvent[] {
   const modifiers = k.modifierNames as Electron.KeyboardInputEvent['modifiers']
   const events: Electron.KeyboardInputEvent[] = [{ type: 'rawKeyDown', keyCode: k.accelerator, modifiers }]
@@ -240,7 +220,7 @@ export function splitTypingSegments(text: string): TypingSegment[] {
   return out
 }
 
-// ── Debugger sessions ───────────────────────────────────────────────────────
+// ── Debugger sessions (uploads + screenshot fallback only) ─────────────────
 
 export type CdpSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>
 
@@ -248,13 +228,12 @@ export type CdpSend = (method: string, params?: Record<string, unknown>) => Prom
 export interface InputWebContents {
   id: number
   debugger: Pick<Electron.Debugger, 'attach' | 'detach' | 'isAttached' | 'sendCommand' | 'on' | 'removeListener'>
-  sendInputEvent: (event: Electron.KeyboardInputEvent) => void
 }
 
 /**
  * Keeps one CDP session per panel webContents, attached lazily on first use
- * and kept for the panel's lifetime (re-attaching per command would toggle
- * page focus emulation and blur the editor between commands).
+ * and kept for the panel's lifetime. Used ONLY for DOM.setFileInputFiles and
+ * Page.captureScreenshot — never for the Input domain (see the module header).
  */
 export class PanelDebuggerSessions {
   private attached = new Map<number, { wc: InputWebContents; onDetach: () => void }>()
@@ -275,11 +254,15 @@ export class PanelDebuggerSessions {
       }
       dbg.on('detach', onDetach)
       this.attached.set(wc.id, { wc, onDetach })
-      // Background panels: make the page behave as focused so caret, focus
-      // and keyboard routing work while the panel is not the active widget.
-      void dbg.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => undefined)
     }
-    return { send: (method, params) => dbg.sendCommand(method, params ?? {}) }
+    return {
+      send: (method, params) => {
+        // Defense in depth: the Input domain of a <webview> guest's debugger
+        // targets the embedder's focused widget — it must never be used.
+        if (method.startsWith('Input.')) return Promise.reject(new Error(`${method} is not allowed on panel debuggers`))
+        return dbg.sendCommand(method, params ?? {})
+      }
+    }
   }
 
   release(webContentsId: number): void {
@@ -299,9 +282,38 @@ export class PanelDebuggerSessions {
   }
 }
 
-/** Sends one key press through CDP. */
-export async function pressKeyCdp(send: CdpSend, k: ParsedKey): Promise<void> {
-  for (const event of buildKeyEvents(k)) await send('Input.dispatchKeyEvent', event)
+// ── Guest-bound input delivery ──────────────────────────────────────────────
+
+/** Minimal slice of Electron.WebContents used to deliver input to a panel guest. */
+export interface GuestInputWebContents {
+  getType: () => string
+  insertText: (text: string) => Promise<void>
+  sendInputEvent: (event: Electron.KeyboardInputEvent) => void
+}
+
+/** Runs a script in the panel page and returns its parsed result. */
+export type PageEval = (script: string) => Promise<Record<string, unknown>>
+
+/**
+ * Input may only be delivered to a <webview> guest. Its own
+ * `insertText` / `sendInputEvent` go to the guest's render widget; anything
+ * else (a BrowserWindow, the main app window) is refused outright.
+ */
+export function guestInputGuard(wc: Partial<GuestInputWebContents>): string | null {
+  let type = ''
+  try {
+    type = typeof wc.getType === 'function' ? wc.getType() : ''
+  } catch {
+    type = ''
+  }
+  if (type !== 'webview') return 'Refusing to send keyboard input: the target is not a browser panel (<webview>).'
+  if (typeof wc.insertText !== 'function' || typeof wc.sendInputEvent !== 'function') return 'Keyboard input is unavailable for this panel.'
+  return null
+}
+
+/** Sends one key press to the guest's own widget. */
+export function sendKeyToGuest(wc: Pick<GuestInputWebContents, 'sendInputEvent'>, k: ParsedKey): void {
+  for (const ev of buildFallbackKeyEvents(k)) wc.sendInputEvent(ev)
 }
 
 const ENTER = parseKeyCombo('Enter') as ParsedKey
@@ -309,23 +321,152 @@ const BACKSPACE = parseKeyCombo('Backspace') as ParsedKey
 
 export { ENTER as ENTER_KEY, BACKSPACE as BACKSPACE_KEY }
 
-/** Types segments with trusted input: Input.insertText per run, real Enter between lines. */
-export async function typeSegmentsCdp(send: CdpSend, segments: TypingSegment[]): Promise<void> {
-  for (const seg of segments) {
-    if (seg.kind === 'enter') await pressKeyCdp(send, ENTER)
-    else await send('Input.insertText', { text: seg.value })
+/**
+ * Reads the editing host tagged `data-bx-type="<marker>"` by buildTypeScript:
+ * whether it holds keyboard focus inside the page, its text, and how many
+ * trusted beforeinput/input events reached it since `arm`.
+ */
+export function buildEditorStateScript(marker: string, arm = false): string {
+  return `(() => {
+  const host = document.querySelector(${JSON.stringify(`[data-bx-type="${marker}"]`)});
+  if (!host) return JSON.stringify({ found: false });
+  const a = document.activeElement;
+  const focused = !!a && (a === host || host.contains(a));
+  if (${arm ? 'true' : 'false'}) {
+    const w = { count: 0 };
+    w.fn = (e) => { if (e.isTrusted && e.target instanceof Node && host.contains(e.target)) w.count++; };
+    document.addEventListener('beforeinput', w.fn, true);
+    document.addEventListener('input', w.fn, true);
+    host.__bxTypeWatch = w;
   }
+  const w = host.__bxTypeWatch;
+  return JSON.stringify({ found: true, focused, text: host.innerText || '', inputs: w ? w.count : 0 });
+})()`
 }
 
-/** Fallback typing via sendInputEvent (needs the window focused). */
-export function typeSegmentsFallback(wc: Pick<InputWebContents, 'sendInputEvent'>, segments: TypingSegment[]): void {
-  for (const seg of segments) {
-    if (seg.kind === 'enter') {
-      for (const ev of buildFallbackKeyEvents(ENTER)) wc.sendInputEvent(ev)
-    } else {
-      for (const ch of seg.value) wc.sendInputEvent({ type: 'char', keyCode: ch })
-    }
+/** Removes the marker and the input watcher installed by buildEditorStateScript. */
+export function buildEditorCleanupScript(marker: string): string {
+  return `(() => {
+  for (const host of document.querySelectorAll(${JSON.stringify(`[data-bx-type="${marker}"]`)})) {
+    const w = host.__bxTypeWatch;
+    if (w) { document.removeEventListener('beforeinput', w.fn, true); document.removeEventListener('input', w.fn, true); delete host.__bxTypeWatch; }
+    host.removeAttribute('data-bx-type');
   }
+  return JSON.stringify({ ok: true });
+})()`
+}
+
+const normalizeText = (s: string): string => s.replace(/\s+/g, ' ').trim()
+
+export interface TypeIntoEditorOptions {
+  marker: string
+  text: string
+  clearFirst: boolean
+  submit: boolean
+  /** Delay helper (injectable for tests). */
+  sleep?: (ms: number) => Promise<void>
+}
+
+/**
+ * Types into the contenteditable host prepared by buildTypeScript.
+ *
+ *  1. Guard: the target is a <webview> guest and the host holds focus inside
+ *     the page — otherwise nothing is sent.
+ *  2. Delivery through the guest's own widget (insertText / sendInputEvent).
+ *     insertText and key events travel on different channels, so each step
+ *     waits until the page reflects it before the next one is sent (else
+ *     Enter presses overtake the text and lines end up merged).
+ *  3. Verify: every text run must reach the host (trusted input events or a
+ *     text change) — otherwise stop and return ok:false, never a silent ok.
+ *  4. submit's Enter is pressed only after all text was verified.
+ */
+export async function typeIntoEditor(
+  wc: GuestInputWebContents,
+  evalPage: PageEval,
+  opts: TypeIntoEditorOptions
+): Promise<Record<string, unknown>> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  const guardError = guestInputGuard(wc)
+  if (guardError) return { ok: false, error: guardError }
+  const before = await evalPage(buildEditorStateScript(opts.marker, true))
+  if (before.error) return { ok: false, error: String(before.error) }
+  if (before.found !== true) return { ok: false, error: 'The editor disappeared before typing — run browser_snapshot again.' }
+  if (before.focused !== true) {
+    return { ok: false, error: 'The editor did not take keyboard focus inside the page, so nothing was typed. Click it with browser_click and retry.' }
+  }
+  let last = { inputs: Number(before.inputs) || 0, text: String(before.text ?? '') }
+  /** Polls until the page shows progress; null = no progress within ~300ms. */
+  const settle = async (): Promise<Record<string, unknown> | null> => {
+    for (let i = 0; i < 12; i++) {
+      await sleep(25)
+      const state = await evalPage(buildEditorStateScript(opts.marker))
+      if (state.error || state.found !== true) return state
+      const next = { inputs: Number(state.inputs) || 0, text: String(state.text ?? '') }
+      if (next.inputs > last.inputs || next.text !== last.text) {
+        last = next
+        return state
+      }
+    }
+    return null
+  }
+  const lost = (state: Record<string, unknown>): Record<string, unknown> =>
+    state.error
+      ? { ok: false, error: `Could not verify typing: ${String(state.error)}` }
+      : { ok: false, error: 'The editor disappeared while typing; the text may be incomplete. Check with browser_snapshot.' }
+
+  const segments = splitTypingSegments(opts.text)
+  try {
+    if (opts.clearFirst) {
+      sendKeyToGuest(wc, BACKSPACE)
+      const state = await settle()
+      if (state && (state.error || state.found !== true)) return lost(state)
+    }
+    for (const seg of segments) {
+      if (seg.kind === 'enter') sendKeyToGuest(wc, ENTER)
+      else await wc.insertText(seg.value)
+      const state = await settle()
+      if (state && (state.error || state.found !== true)) return lost(state)
+      // A text run must visibly arrive; Enter may legitimately be absorbed.
+      if (!state && seg.kind === 'text') {
+        return { ok: false, error: 'The page did not receive the typed text (no input events, content unchanged). Typing stopped and nothing was submitted. Click the editor with browser_click and retry.' }
+      }
+    }
+  } catch (err) {
+    return { ok: false, error: `Typing failed: ${(err as Error)?.message ?? String(err)}` }
+  }
+  const result: Record<string, unknown> = { ok: true, input: 'trusted' }
+  const lastLine = [...segments].reverse().find((s) => s.kind === 'text') as { value: string } | undefined
+  if (lastLine && !normalizeText(last.text).includes(normalizeText(lastLine.value))) {
+    result.warning = 'The editor received input but its text does not contain the last typed line; it may have reformatted or rejected part of it. Verify with browser_snapshot.'
+  }
+  if (opts.submit) sendKeyToGuest(wc, ENTER)
+  return result
+}
+
+/**
+ * Presses a key in the guest. On macOS, Cmd+A/Z/X/C/V are editing commands
+ * (NSResponder selectors) that a raw key event does not trigger, so when the
+ * page did not handle the keydown itself, run the matching command in-page.
+ */
+export async function pressKeyInGuest(
+  wc: GuestInputWebContents,
+  evalPage: PageEval,
+  k: ParsedKey,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise<void>((r) => setTimeout(r, ms))
+): Promise<Record<string, unknown>> {
+  const guardError = guestInputGuard(wc)
+  if (guardError) return { ok: false, error: guardError }
+  const command = k.commands?.[0]
+  if (command) {
+    const armed = await evalPage(`(() => { window.__bxKeyHandled = undefined; window.addEventListener('keydown', (e) => { window.__bxKeyHandled = e.defaultPrevented; }, { once: true }); return JSON.stringify({ ok: true }); })()`)
+    if (armed.error) return { ok: false, error: String(armed.error) }
+  }
+  sendKeyToGuest(wc, k)
+  if (command) {
+    await sleep(50)
+    await evalPage(`(() => { const h = window.__bxKeyHandled; delete window.__bxKeyHandled; if (h !== true) document.execCommand(${JSON.stringify(command)}); return JSON.stringify({ ok: true }); })()`)
+  }
+  return { ok: true, input: 'trusted' }
 }
 
 // ── Upload path validation ─────────────────────────────────────────────────

@@ -30,6 +30,7 @@ import {
   buildUploadTargetScript,
   buildWaitScript,
   consoleLevelName,
+  evalErrorMessage,
   filterConsoleEntries,
   normalizeRef,
   PanelBrowserBroker,
@@ -559,6 +560,53 @@ describe('script escaping', () => {
   })
 })
 
+describe('invalid CSS selectors', () => {
+  // Mimics the DOMException a real page throws for an unparsable selector.
+  const syntaxError = (): never => { throw Object.assign(new Error("'a[[' is not a valid selector."), { name: 'SyntaxError' }) }
+  const page = {
+    createDocumentFragment: () => ({ querySelector: syntaxError }),
+    querySelector: syntaxError,
+    querySelectorAll: syntaxError
+  }
+
+  it('wait/click/type/scroll/upload return "Invalid selector: …" instead of throwing', async () => {
+    const scripts = [
+      buildWaitScript('selector', 'a[[', 500),
+      buildClickScript('a[['),
+      buildTypeScript('a[[', 'x'),
+      buildScrollScript(undefined, undefined, 'a[['),
+      buildUploadTargetScript('a[[', 'm1')
+    ]
+    for (const script of scripts) {
+      expect(await runScript(script, { document: page, Date })).toEqual({ error: 'Invalid selector: a[[' })
+    }
+  })
+
+  it('does not guard snapshot refs and lets valid selectors through', async () => {
+    expect(buildClickScript('@e3')).not.toContain('createDocumentFragment')
+    const ok = { createDocumentFragment: () => ({ querySelector: () => null }), querySelector: () => ({}) }
+    expect(await runScript(buildWaitScript('selector', '.ok', 500), { document: ok, Date })).toMatchObject({ ok: true })
+  })
+
+  it('evalErrorMessage never yields an empty error', () => {
+    expect(evalErrorMessage(new Error('boom'))).toBe('boom')
+    expect(evalErrorMessage('bad')).toBe('bad')
+    // executeJavaScript rejects with a plain {} when the page throws a DOMException.
+    expect(evalErrorMessage({})).toMatch(/page script failed/)
+    expect(evalErrorMessage(undefined)).toMatch(/page script failed/)
+  })
+
+  it('broker.wait surfaces a message when executeJavaScript rejects with a non-Error', async () => {
+    const wc = fakeInputWebContents(212, { ok: true })
+    wc.executeJavaScript.mockImplementation(async () => { throw {} })
+    await withPanel(wc, async (broker) => {
+      const result = await broker.wait('task-212', 'selector', 'div', 1000, 'p-212')
+      expect(typeof result.error).toBe('string')
+      expect(String(result.error).length).toBeGreaterThan(0)
+    })
+  })
+})
+
 describe('type into contenteditable', () => {
   it('only focuses + selects, then signals trusted input (no textContent writes)', () => {
     const script = buildTypeScript('@e1', 'hello')
@@ -568,25 +616,34 @@ describe('type into contenteditable', () => {
   })
 })
 
-// ── Broker trusted input via mocked webContents.debugger ───────────────────
+// ── Broker trusted input via mocked webContents ────────────────────────────
 
-function fakeInputWebContents(id: number, evalResult: unknown, opts: { attachThrows?: boolean } = {}) {
+type EvalResponder = unknown | ((script: string) => unknown)
+
+function fakeInputWebContents(id: number, evalResult: EvalResponder, opts: { attachThrows?: boolean; type?: string } = {}) {
   const sendCommand = vi.fn(async (method: string): Promise<unknown> => {
     if (method === 'DOM.getDocument') return { root: { nodeId: 1 } }
     if (method === 'DOM.querySelector') return { nodeId: 7 }
     if (method === 'Page.captureScreenshot') return { data: Buffer.from('png-bytes').toString('base64') }
     return {}
   })
+  const log: string[] = []
   const wc = {
     id,
+    log,
     isDestroyed: vi.fn(() => false),
     getURL: vi.fn(() => 'https://editor.test/'),
+    getType: vi.fn(() => opts.type ?? 'webview'),
     on: vi.fn(),
     once: vi.fn(),
     removeListener: vi.fn(),
     setBackgroundThrottling: vi.fn(),
-    executeJavaScript: vi.fn(async () => (typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult))),
-    sendInputEvent: vi.fn(),
+    executeJavaScript: vi.fn(async (script: string) => {
+      const value = typeof evalResult === 'function' ? (evalResult as (s: string) => unknown)(script) : evalResult
+      return typeof value === 'string' ? value : JSON.stringify(value)
+    }),
+    insertText: vi.fn(async (text: string) => { log.push(`insertText:${text}`) }),
+    sendInputEvent: vi.fn((ev: Electron.KeyboardInputEvent) => { log.push(`${ev.type}:${ev.keyCode}`) }),
     capturePage: vi.fn(async () => { throw new Error('UnknownVizError') }),
     debugger: {
       isAttached: vi.fn(() => false),
@@ -598,6 +655,20 @@ function fakeInputWebContents(id: number, evalResult: unknown, opts: { attachThr
     }
   }
   return wc
+}
+
+/** Simulates a page with a contenteditable editor prepared by buildTypeScript. */
+function editorPage(opts: { focused?: boolean; receives?: boolean; before?: string; after?: string } = {}) {
+  let reads = 0
+  return (script: string): unknown => {
+    if (script.includes('removeAttribute(\'data-bx-type\')')) return { ok: true }
+    if (script.includes('[data-bx-type=')) {
+      // Each read after arming shows one more trusted input event (progress).
+      const inputs = opts.receives === false ? 0 : reads++
+      return { found: true, focused: opts.focused ?? true, text: inputs ? (opts.after ?? 'Title\nBody') : (opts.before ?? ''), inputs }
+    }
+    return { trusted: true, hadContent: (opts.before ?? '') !== '' }
+  }
 }
 
 function withPanel<T>(wc: ReturnType<typeof fakeInputWebContents>, fn: (broker: PanelBrowserBroker) => Promise<T>): Promise<T> {
@@ -620,64 +691,78 @@ describe('broker trusted input', () => {
     })
   })
 
-  it('types into a rich editor with Input.insertText and real Enter between lines', async () => {
-    const wc = fakeInputWebContents(202, { trusted: true, hadContent: true })
+  it('types into a rich editor through the guest webContents only (never CDP Input)', async () => {
+    const wc = fakeInputWebContents(202, editorPage({ before: 'old' }))
     await withPanel(wc, async (broker) => {
       const result = await broker.type('task-202', '@e1', 'Title\nBody', false, 'p-202')
       expect(result).toEqual({ ok: true, input: 'trusted' })
-      const calls = cdpCalls(wc).filter(([m]) => m.startsWith('Input.'))
-      expect(calls.map(([m, p]) => `${m}:${p.type ?? p.text}`)).toEqual([
-        'Input.dispatchKeyEvent:rawKeyDown', // Backspace clears the selected old content
-        'Input.dispatchKeyEvent:keyUp',
-        'Input.insertText:Title',
-        'Input.dispatchKeyEvent:keyDown', // Enter → new block
-        'Input.dispatchKeyEvent:keyUp',
-        'Input.insertText:Body'
+      expect(wc.log).toEqual([
+        'rawKeyDown:Backspace', 'keyUp:Backspace', // clears the selected old content
+        'insertText:Title',
+        'rawKeyDown:Enter', 'char:Enter', 'keyUp:Enter', // Enter → new block
+        'insertText:Body'
       ])
-      expect(calls[0][1]).toMatchObject({ key: 'Backspace' })
-      expect(calls[3][1]).toMatchObject({ key: 'Enter', text: '\r' })
-      expect(wc.debugger.attach).toHaveBeenCalledTimes(1)
+      expect(wc.debugger.attach).not.toHaveBeenCalled()
+      expect(cdpCalls(wc)).toEqual([])
+      // The marker + input watcher are removed afterwards.
+      const scripts = wc.executeJavaScript.mock.calls.map((c) => String(c[0]))
+      expect(scripts[scripts.length - 1]).toContain("removeAttribute('data-bx-type')")
     })
-    expect(wc.debugger.detach).toHaveBeenCalled()
   })
 
   it('appends without clearing when clear=false and presses Enter on submit', async () => {
-    const wc = fakeInputWebContents(203, { trusted: true, hadContent: true })
+    const wc = fakeInputWebContents(203, editorPage({ before: 'x', after: 'xmore' }))
     await withPanel(wc, async (broker) => {
-      await broker.type('task-203', '@e1', 'more', true, 'p-203', false)
-      const calls = cdpCalls(wc).filter(([m]) => m.startsWith('Input.'))
-      expect(calls[0]).toEqual(['Input.insertText', { text: 'more' }])
-      expect(calls.slice(1).map(([, p]) => p.key)).toEqual(['Enter', 'Enter'])
+      expect(await broker.type('task-203', '@e1', 'more', true, 'p-203', false)).toEqual({ ok: true, input: 'trusted' })
+      expect(wc.log).toEqual(['insertText:more', 'rawKeyDown:Enter', 'char:Enter', 'keyUp:Enter'])
     })
   })
 
-  it('keeps the value-setter path for plain inputs (no CDP)', async () => {
+  it('sends nothing when the editor is not focused inside the page', async () => {
+    const wc = fakeInputWebContents(209, editorPage({ focused: false }))
+    await withPanel(wc, async (broker) => {
+      const result = await broker.type('task-209', '@e1', 'secret\n', true, 'p-209')
+      expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/keyboard focus/) })
+      expect(wc.log).toEqual([])
+    })
+  })
+
+  it('returns ok:false and does not submit when the page received nothing', async () => {
+    const wc = fakeInputWebContents(210, editorPage({ receives: false }))
+    await withPanel(wc, async (broker) => {
+      const result = await broker.type('task-210', '@e1', 'hello', true, 'p-210')
+      expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/did not receive/) })
+      expect(wc.log).toEqual(['insertText:hello'])
+    })
+  })
+
+  it('refuses keyboard input for a non-webview target', async () => {
+    const wc = fakeInputWebContents(211, editorPage(), { type: 'window' })
+    await withPanel(wc, async (broker) => {
+      expect(await broker.type('task-211', '@e1', 'x', false, 'p-211')).toMatchObject({ ok: false })
+      expect(await broker.pressKey('task-211', 'Enter', 'p-211')).toMatchObject({ ok: false })
+      expect(wc.log).toEqual([])
+    })
+  })
+
+  it('keeps the value-setter path for plain inputs (no keyboard events)', async () => {
     const wc = fakeInputWebContents(204, { ok: true })
     await withPanel(wc, async (broker) => {
       expect(await broker.type('task-204', '#q', 'hello', false, 'p-204')).toEqual({ ok: true })
       expect(wc.debugger.attach).not.toHaveBeenCalled()
+      expect(wc.log).toEqual([])
     })
   })
 
-  it('falls back to sendInputEvent when the debugger is taken', async () => {
-    const wc = fakeInputWebContents(205, { trusted: true, hadContent: false }, { attachThrows: true })
-    await withPanel(wc, async (broker) => {
-      const result = await broker.type('task-205', '@e1', 'ab\nc', false, 'p-205')
-      expect(result).toMatchObject({ ok: true, input: 'sendInputEvent' })
-      const sent = wc.sendInputEvent.mock.calls.map((c) => (c as unknown as [Electron.KeyboardInputEvent])[0])
-      expect(sent.map((e) => `${e.type}:${e.keyCode}`)).toEqual(['char:a', 'char:b', 'rawKeyDown:Enter', 'char:Enter', 'keyUp:Enter', 'char:c'])
-    })
-  })
-
-  it('press_key sends trusted key events with modifiers', async () => {
+  it('press_key sends key events to the guest with modifiers', async () => {
     const wc = fakeInputWebContents(206, { ok: true })
     await withPanel(wc, async (broker) => {
       expect(await broker.pressKey('task-206', 'Control+B', 'p-206')).toEqual({ ok: true, input: 'trusted' })
-      const keys = cdpCalls(wc).filter(([m]) => m === 'Input.dispatchKeyEvent').map(([, p]) => p)
-      expect(keys).toEqual([
-        expect.objectContaining({ type: 'rawKeyDown', key: 'b', code: 'KeyB', windowsVirtualKeyCode: 66, modifiers: 2 }),
-        expect.objectContaining({ type: 'keyUp', modifiers: 2 })
+      expect(wc.sendInputEvent.mock.calls.map((c) => c[0])).toEqual([
+        { type: 'rawKeyDown', keyCode: 'B', modifiers: ['control'] },
+        { type: 'keyUp', keyCode: 'B', modifiers: ['control'] }
       ])
+      expect(wc.debugger.attach).not.toHaveBeenCalled()
       expect(wc.executeJavaScript).not.toHaveBeenCalled()
       expect(await broker.pressKey('task-206', 'Hyper+Q', 'p-206')).toHaveProperty('error')
     })
