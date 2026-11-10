@@ -83,8 +83,9 @@ if [ "$NOTARY_STATUS" != "Accepted" ]; then
   exit 1
 fi
 
+# Stapling validates the ticket. A second validate call can fail on a new
+# CloudKit request even after the ticket was attached successfully.
 retry xcrun stapler staple "$STAPLE_PATH"
-retry xcrun stapler validate "$STAPLE_PATH"
 
 if [ "$ASSESS" = "--assess" ]; then
   retry spctl --assess --type execute --verbose=4 "$STAPLE_PATH"
