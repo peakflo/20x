@@ -1158,6 +1158,25 @@ describe('ClaudeCodeAdapter background task safety cap', () => {
  * that pushes `msg.subtype` as the message content.
  */
 describe('ClaudeCodeAdapter background-task system messages', () => {
+  it.each([
+    'vcs_state_changed',
+    'code_change_published',
+    'notification',
+    'commands_changed',
+  ])('does not render the internal %s event', async (subtype) => {
+    const { adapter } = createAdapterWithSession('s1', [
+      { type: 'system', subtype, uuid: `system-${subtype}` },
+      { type: 'assistant', uuid: `assistant-${subtype}`, message: {
+        id: `msg-${subtype}`, content: [{ type: 'text', text: 'Work continues' }],
+      } },
+    ])
+
+    const parts = await adapter.pollMessages('s1', new Set(), new Set(), new Map(), {} as any)
+
+    expect(parts).toHaveLength(1)
+    expect(parts[0].text).toBe('Work continues')
+  })
+
   it('does not render task_updated as a transcript text bubble', () => {
     const adapter = new ClaudeCodeAdapter()
     const parts = (adapter as any).convertSDKMessageToParts(

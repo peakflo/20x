@@ -82,6 +82,10 @@ export enum ClaudeSystemSubtype {
    *  SDKs (e.g. 0.2.x) do pass it through, so it is handled defensively both as a
    *  status source and as a transcript-suppression case. */
   BACKGROUND_TASKS_CHANGED = 'background_tasks_changed',
+  VCS_STATE_CHANGED = 'vcs_state_changed',
+  CODE_CHANGE_PUBLISHED = 'code_change_published',
+  NOTIFICATION = 'notification',
+  COMMANDS_CHANGED = 'commands_changed',
   STATUS = 'status',
   THINKING_TOKENS = 'thinking_tokens',
 }
@@ -2493,17 +2497,20 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         return parts
       }
 
-      // ── Internal background-task bookkeeping — never rendered ──
+      // ── Internal CLI events — never rendered ──
       // `task_updated` carries wire-level status patches and `background_tasks_changed`
       // carries the in-flight list. Both are consumed by trackBackgroundTask(); the
       // user-visible progress is already covered by task_started / task_progress /
-      // task_notification. Without this they fall through to the generic system
-      // handler below, which pushes the raw subtype string as a text bubble —
-      // spamming the transcript with literal "task_updated" /
-      // "background_tasks_changed" messages between every subagent update.
+      // task_notification. VCS, publication, notification, and command events
+      // are CLI bookkeeping. The generic system handler below would show their
+      // raw subtype names as text bubbles.
       if (
         msgWithProps.subtype === ClaudeSystemSubtype.TASK_UPDATED ||
-        msgWithProps.subtype === ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED
+        msgWithProps.subtype === ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED ||
+        msgWithProps.subtype === ClaudeSystemSubtype.VCS_STATE_CHANGED ||
+        msgWithProps.subtype === ClaudeSystemSubtype.CODE_CHANGE_PUBLISHED ||
+        msgWithProps.subtype === ClaudeSystemSubtype.NOTIFICATION ||
+        msgWithProps.subtype === ClaudeSystemSubtype.COMMANDS_CHANGED
       ) {
         return parts
       }
