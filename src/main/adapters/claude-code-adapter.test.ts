@@ -1149,20 +1149,24 @@ describe('ClaudeCodeAdapter background task safety cap', () => {
   })
 })
 
-/**
- * Regression tests for transcript pollution + authoritative background-task list.
- *
- * Observed in a real run: the transcript was littered with literal
- * "background_tasks_changed" / "task_updated" text bubbles between every subagent
- * update, because unhandled `system` subtypes fall through to a generic handler
- * that pushes `msg.subtype` as the message content.
- */
-describe('ClaudeCodeAdapter background-task system messages', () => {
+/** Regression coverage for internal system events leaking raw subtype names. */
+describe('ClaudeCodeAdapter system messages', () => {
   it.each([
     'vcs_state_changed',
     'code_change_published',
     'notification',
     'commands_changed',
+    'compact_boundary',
+    'hook_started',
+    'hook_progress',
+    'hook_response',
+    'session_state_changed',
+    'files_persisted',
+    'elicitation_complete',
+    'control_request_progress',
+    'memory_recall',
+    'worker_shutting_down',
+    'plugin_install',
   ])('does not render the internal %s event', async (subtype) => {
     const { adapter } = createAdapterWithSession('s1', [
       { type: 'system', subtype, uuid: `system-${subtype}` },
@@ -1197,14 +1201,45 @@ describe('ClaudeCodeAdapter background-task system messages', () => {
     expect(parts).toEqual([])
   })
 
-  it('still renders genuinely unknown system subtypes so nothing is silently swallowed', () => {
+  it('does not render an unknown system subtype as a raw name', () => {
     const adapter = new ClaudeCodeAdapter()
     const parts = (adapter as any).convertSDKMessageToParts(
       { type: 'system', subtype: 'some_future_subtype', uuid: 'u3' },
       new Set<string>(), new Map<string, string>()
     )
+    expect(parts).toEqual([])
+  })
+
+  it.each([
+    ['notification', { key: 'attention', text: 'Claude needs your attention', priority: 'high' }, 'Claude needs your attention'],
+    ['informational', { content: 'A hook stopped this turn', level: 'warning' }, 'A hook stopped this turn'],
+    ['local_command_output', { content: 'Usage details' }, 'Usage details'],
+    ['model_refusal_fallback', { content: 'Claude will try another model' }, 'Claude will try another model'],
+    ['model_refusal_no_fallback', { content: 'The model refused this request' }, 'The model refused this request'],
+    ['permission_denied', { message: 'Bash was denied' }, 'Bash was denied'],
+    ['mirror_error', { error: 'Session copy failed' }, 'Session copy failed'],
+    ['plugin_install', { status: 'failed', error: 'Plugin install failed' }, 'Plugin install failed'],
+  ])('shows useful text from %s', (subtype, payload, expected) => {
+    const adapter = new ClaudeCodeAdapter()
+    const parts = (adapter as any).convertSDKMessageToParts(
+      { type: 'system', subtype, ...payload, uuid: `u-${subtype}` },
+      new Set<string>(), new Map<string, string>()
+    )
     expect(parts).toHaveLength(1)
-    expect(parts[0].content).toBe('some_future_subtype')
+    expect(parts[0].content || parts[0].text).toBe(expected)
+    expect(parts[0].type).toBe(
+      ['model_refusal_no_fallback', 'permission_denied', 'mirror_error', 'plugin_install'].includes(subtype)
+        ? MessagePartType.ERROR : MessagePartType.TEXT
+    )
+  })
+
+  it('does not show a successful plugin install as a text bubble', () => {
+    const adapter = new ClaudeCodeAdapter()
+    const parts = (adapter as any).convertSDKMessageToParts(
+      { type: 'system', subtype: 'plugin_install', status: 'installed', name: 'example', uuid: 'plugin-1' },
+      new Set<string>(), new Map<string, string>()
+    )
+    expect(parts).toEqual([])
   })
 
   it('rebuilds the in-flight set from background_tasks_changed when the SDK passes it through', () => {

@@ -82,10 +82,6 @@ export enum ClaudeSystemSubtype {
    *  SDKs (e.g. 0.2.x) do pass it through, so it is handled defensively both as a
    *  status source and as a transcript-suppression case. */
   BACKGROUND_TASKS_CHANGED = 'background_tasks_changed',
-  VCS_STATE_CHANGED = 'vcs_state_changed',
-  CODE_CHANGE_PUBLISHED = 'code_change_published',
-  NOTIFICATION = 'notification',
-  COMMANDS_CHANGED = 'commands_changed',
   STATUS = 'status',
   THINKING_TOKENS = 'thinking_tokens',
 }
@@ -2497,24 +2493,6 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         return parts
       }
 
-      // ── Internal CLI events — never rendered ──
-      // `task_updated` carries wire-level status patches and `background_tasks_changed`
-      // carries the in-flight list. Both are consumed by trackBackgroundTask(); the
-      // user-visible progress is already covered by task_started / task_progress /
-      // task_notification. VCS, publication, notification, and command events
-      // are CLI bookkeeping. The generic system handler below would show their
-      // raw subtype names as text bubbles.
-      if (
-        msgWithProps.subtype === ClaudeSystemSubtype.TASK_UPDATED ||
-        msgWithProps.subtype === ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED ||
-        msgWithProps.subtype === ClaudeSystemSubtype.VCS_STATE_CHANGED ||
-        msgWithProps.subtype === ClaudeSystemSubtype.CODE_CHANGE_PUBLISHED ||
-        msgWithProps.subtype === ClaudeSystemSubtype.NOTIFICATION ||
-        msgWithProps.subtype === ClaudeSystemSubtype.COMMANDS_CHANGED
-      ) {
-        return parts
-      }
-
       // SDKStatusMessage — transient status indicators (e.g. 'compacting')
       if (msgWithProps.subtype === ClaudeSystemSubtype.STATUS) {
         // null status means "cleared" — skip
@@ -2561,17 +2539,49 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         return parts
       }
 
-      const partId = `system-${msgWithProps.uuid || Date.now()}`
-      if (!seenPartIds.has(partId)) {
-        seenPartIds.add(partId)
+      // Only show system events that carry user-facing text. The SDK also emits
+      // bookkeeping events (VCS, commands, hooks, task state, checkpoints, etc.)
+      // and may add new subtypes. Never display a raw subtype as a text bubble.
+      const systemMsg = msg as Record<string, unknown>
+      const subtype = msgWithProps.subtype
+      let content: string | undefined
+      switch (subtype) {
+        case 'notification':
+          content = typeof systemMsg.text === 'string' ? systemMsg.text : undefined
+          break
+        case 'informational':
+        case 'local_command_output':
+        case 'model_refusal_fallback':
+        case 'model_refusal_no_fallback':
+          content = typeof systemMsg.content === 'string' ? systemMsg.content : undefined
+          break
+        case 'permission_denied':
+          content = typeof systemMsg.message === 'string' ? systemMsg.message : undefined
+          break
+        case 'mirror_error':
+          content = typeof systemMsg.error === 'string' ? systemMsg.error : undefined
+          break
+        case 'plugin_install':
+          if (systemMsg.status === 'failed') {
+            content = typeof systemMsg.error === 'string' ? systemMsg.error : 'Plugin install failed'
+          }
+          break
+      }
 
-        const content = msgWithProps.subtype || 'System message'
-        partContentLengths.set(partId, String(content.length))
-        parts.push({
-          id: partId,
-          type: MessagePartType.TEXT,
-          content,
-        })
+      if (content?.trim()) {
+        const partId = `system-${msgWithProps.uuid || Date.now()}`
+        if (!seenPartIds.has(partId)) {
+          seenPartIds.add(partId)
+          partContentLengths.set(partId, String(content.length))
+          const isError = subtype === 'permission_denied' || subtype === 'mirror_error' ||
+            subtype === 'model_refusal_no_fallback' || subtype === 'plugin_install'
+          parts.push({
+            id: partId,
+            type: isError ? MessagePartType.ERROR : MessagePartType.TEXT,
+            content,
+            role: subtype === 'local_command_output' ? 'assistant' : 'system',
+          })
+        }
       }
     }
 
