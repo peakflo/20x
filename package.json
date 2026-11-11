@@ -54,7 +54,7 @@
     "qrcode": "^1.5.4",
     "tar-stream": "^3.2.0",
     "unbzip2-stream": "^1.4.3",
-    "undici": "^7.30.1",
+    "undici": "^7.30.2",
     "web-push": "^3.6.7",
     "ws": "^8.19.0"
   },
@@ -115,7 +115,9 @@
     "zustand": "^5.0.3"
   },
   "pnpm": {
-    "overrides": {}
+    "overrides": {
+      "undici@>=7 <7.30.2": "7.30.2"
+    }
   },
   "build": {
     "appId": "com.20x.app",
