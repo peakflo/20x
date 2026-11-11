@@ -1151,6 +1151,42 @@ describe('ClaudeCodeAdapter background task safety cap', () => {
 
 /** Regression coverage for internal system events leaking raw subtype names. */
 describe('ClaudeCodeAdapter system messages', () => {
+  it('sends VCS and published PR events to the task workspace', async () => {
+    const { adapter, session } = createAdapterWithSession('s1', [])
+    session.config = { taskId: 'task-1' } as any
+    ;(session as any).queryIterator = (async function* () {
+      yield { type: 'system', subtype: 'vcs_state_changed', uuid: 'vcs-1' }
+      yield { type: 'system', subtype: 'code_change_published', uuid: 'pr-1',
+        url: 'https://github.com/peakflo/20x/pull/699', repo: 'peakflo/20x', identifier: '699' }
+    })()
+    const onWorkspaceEvent = vi.fn()
+    adapter.onWorkspaceEvent = onWorkspaceEvent
+
+    await (adapter as any).consumeStream('s1', session)
+
+    expect(onWorkspaceEvent).toHaveBeenCalledTimes(2)
+    expect(onWorkspaceEvent).toHaveBeenNthCalledWith(1, { taskId: 'task-1', kind: 'vcs' })
+    expect(onWorkspaceEvent).toHaveBeenNthCalledWith(2, {
+      taskId: 'task-1', kind: 'published_change', url: 'https://github.com/peakflo/20x/pull/699',
+      repo: 'peakflo/20x', identifier: '699'
+    })
+  })
+
+  it('does not send an unsafe published URL to the PR view', async () => {
+    const { adapter, session } = createAdapterWithSession('s1', [])
+    session.config = { taskId: 'task-1' } as any
+    ;(session as any).queryIterator = (async function* () {
+      yield { type: 'system', subtype: 'code_change_published', uuid: 'pr-unsafe', url: 'javascript:alert(1)' }
+    })()
+    const onWorkspaceEvent = vi.fn()
+    adapter.onWorkspaceEvent = onWorkspaceEvent
+
+    await (adapter as any).consumeStream('s1', session)
+
+    expect(onWorkspaceEvent).toHaveBeenCalledTimes(1)
+    expect(onWorkspaceEvent).toHaveBeenCalledWith({ taskId: 'task-1', kind: 'vcs' })
+  })
+
   it.each([
     'vcs_state_changed',
     'code_change_published',

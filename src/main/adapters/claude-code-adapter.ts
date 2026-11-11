@@ -25,6 +25,7 @@ import { open, writeFile, type FileHandle } from 'fs/promises'
 import { StringDecoder } from 'string_decoder'
 import { join } from 'path'
 import type { ProviderUsageLimits } from '../../shared/usage'
+import type { AgentWorkspaceEvent } from '../../shared/agent-workspace-events'
 import { supportsUltrafast } from '../../shared/ultrafast'
 import {
   claudeRateLimitInfoToUpdate,
@@ -195,6 +196,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * latency of the fixed-interval polling heartbeat.
    */
   onDataAvailable?: (sessionId: string) => void
+
+  /** Workspace changes go to the Changes view, not the transcript. */
+  onWorkspaceEvent?: (event: AgentWorkspaceEvent) => void
 
   /** Set by agent-manager: receives cumulative token usage from `result` messages. */
   onUsage?: (report: AdapterUsageReport) => void
@@ -1430,6 +1434,32 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
 
         // Log message with truncation for large content
         this.safeLogMessage(message)
+
+        if (msg.type === 'system' && session.config.taskId && this.onWorkspaceEvent) {
+          try {
+            if (msg.subtype === 'vcs_state_changed') {
+              this.onWorkspaceEvent({ taskId: session.config.taskId, kind: 'vcs' })
+            } else if (msg.subtype === 'code_change_published') {
+              const rawUrl = typeof msg.url === 'string' ? msg.url : ''
+              let publishedUrl: URL | null = null
+              try { publishedUrl = new URL(rawUrl) } catch { /* No usable URL in this event. */ }
+              if (publishedUrl && /^https?:$/.test(publishedUrl.protocol) &&
+                /\/(?:pull|merge_requests)\/\d+\/?$/.test(publishedUrl.pathname)) {
+                this.onWorkspaceEvent({
+                  taskId: session.config.taskId,
+                  kind: 'published_change',
+                  url: publishedUrl.toString(),
+                  ...(typeof msg.repo === 'string' ? { repo: msg.repo } : {}),
+                  ...(typeof msg.identifier === 'string' ? { identifier: msg.identifier } : {})
+                })
+              } else {
+                this.onWorkspaceEvent({ taskId: session.config.taskId, kind: 'vcs' })
+              }
+            }
+          } catch (error) {
+            console.warn('[ClaudeCodeAdapter] Failed to report workspace event:', error)
+          }
+        }
 
         // Extract real Claude Code session ID from first message
         if (!session.sessionId && 'session_id' in msg) {

@@ -20,6 +20,7 @@ import type {
   HarnessUpdateResult
 } from '@shared/harness-maintenance'
 import type { DataCategory, DataExportResult, DataImportPreview, DataImportResult } from '@shared/data-transfer'
+import type { AgentWorkspaceEvent } from '@shared/agent-workspace-events'
 import type {
   MicrophonePermission,
   VoiceActionOutcome,
@@ -409,6 +410,10 @@ export const onArtifactUpdated = (callback: (event: { taskId: string; artifact: 
 
 export const onTranscriptChanged = (callback: (event: TranscriptChangedEvent) => void): (() => void) => {
   return window.electronAPI.onTranscriptChanged(callback)
+}
+
+export const onAgentWorkspaceEvent = (callback: (event: AgentWorkspaceEvent) => void): (() => void) => {
+  return window.electronAPI.onAgentWorkspaceEvent(callback)
 }
 
 export const onAgentStatus = (callback: (event: AgentStatusEvent) => void): (() => void) => {

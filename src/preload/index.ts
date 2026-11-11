@@ -250,6 +250,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('transcript:changed', handler)
     return () => ipcRenderer.removeListener('transcript:changed', handler)
   },
+  onAgentWorkspaceEvent: (callback: (event: unknown) => void): (() => void) => {
+    const handler = (_: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('agent:workspace-event', handler)
+    return () => ipcRenderer.removeListener('agent:workspace-event', handler)
+  },
   onAgentStatus: (callback: (event: unknown) => void): (() => void) => {
     const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('agent:status', handler)
