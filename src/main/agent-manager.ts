@@ -1020,6 +1020,9 @@ export class AgentManager extends EventEmitter {
         return null
     }
 
+    if (adapter instanceof ClaudeCodeAdapter) {
+      adapter.onWorkspaceEvent = (event) => this.sendToRenderer('agent:workspace-event', event)
+    }
     this.wireUsageTracking(adapter, instance?.id ?? defaultHarnessInstanceId(backendType))
     this.adapters.set(cacheKey, adapter)
     console.log('[AgentManager] Cached adapter for', cacheKey)
@@ -6177,6 +6180,9 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     }
 
     if (adapter) {
+      if (adapter instanceof ClaudeCodeAdapter) {
+        adapter.onWorkspaceEvent = (event) => this.sendToRenderer('agent:workspace-event', event)
+      }
       this.wireUsageTracking(adapter, instanceId ?? defaultHarnessInstanceId(backendType))
       this.adapters.set(cacheKey, adapter)
     }

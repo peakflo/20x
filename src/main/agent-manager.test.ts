@@ -93,6 +93,7 @@ vi.mock('./secret-broker', () => ({
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'fs/promises'
 import { existsSync, copyFileSync, mkdirSync, readFileSync } from 'fs'
 import { AcpAgentAdapter } from './adapters/acp-adapter'
+import { ClaudeCodeAdapter } from './adapters/claude-code-adapter'
 import { CursorSdkAdapter } from './adapters/cursor-sdk-adapter'
 import { CodexAppServerAdapter } from './adapters/codex-app-server-adapter'
 import { PiAdapter } from './adapters/pi-adapter'
@@ -259,6 +260,18 @@ describe('AgentManager skill file paths', () => {
   })
 
   describe('getAdapter', () => {
+    it('forwards Claude workspace events to the renderer', () => {
+      const mockDb = createMockDb({ coding_agent: 'claude-code' })
+      manager = new AgentManager(mockDb)
+      const send = vi.spyOn(manager as any, 'sendToRenderer').mockImplementation(() => undefined)
+
+      const adapter = (manager as any).getAdapter('agent-1') as ClaudeCodeAdapter
+      const event = { taskId: 'task-1', kind: 'vcs' } as const
+      adapter.onWorkspaceEvent?.(event)
+
+      expect(send).toHaveBeenCalledWith('agent:workspace-event', event)
+    })
+
     it('uses Codex app-server by default for Codex agents', () => {
       const mockDb = createMockDb({ coding_agent: 'codex' })
       manager = new AgentManager(mockDb)
