@@ -32,7 +32,14 @@ const scope: TaskMcpScope = {
   // Every real task session receives this even when it needs unscoped task
   // orchestration tools. Artifact file operations are always pinned to the
   // current task so an agent cannot mutate another task's workpieces.
-  artifactTaskId: process.env.TASK_ARTIFACT_SCOPE_ID || process.env.TASK_SCOPE_TASK_ID || null
+  artifactTaskId: process.env.TASK_ARTIFACT_SCOPE_ID || process.env.TASK_SCOPE_TASK_ID || null,
+  // Nothing sets this today — 20x no longer spawns this stdio entry point for
+  // agent sessions (see the file header), so no caller currently has a
+  // memory token to pass it. Wired up anyway, the same way every other scope
+  // field here is, so a future direct `node task-management-mcp.js` run with
+  // TASK_SCOPE_MEMORY_TOKEN set behaves exactly like the in-process endpoint
+  // instead of silently never getting memory access.
+  memoryToken: process.env.TASK_SCOPE_MEMORY_TOKEN || null
 }
 
 async function callApi(route: string, params: Record<string, unknown> = {}): Promise<unknown> {
