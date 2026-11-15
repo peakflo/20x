@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runInNewContext } from 'node:vm'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { HTML_RENDER_ALLOWED_CDNS, HTML_RENDER_DEFAULT_THEME, HTML_RENDER_SIZE_MESSAGE_TYPE, HTML_RENDER_THEME_MESSAGE_TYPE } from '@shared/html-render'
 import { ArtifactHtmlFrame, hardenArtifactHtml } from './ArtifactHtmlFrame'
 
@@ -94,6 +94,24 @@ describe('hardenArtifactHtml CSP', () => {
   })
 })
 
+describe('ArtifactHtmlFrame page theme', () => {
+  it('starts full-page artifacts in light mode and changes theme without reloading the frame', async () => {
+    render(<ArtifactHtmlFrame html="<style>body{background:white;color:var(--foreground)}</style><p>Report</p>" title="Report" taskId="task-1" path="index.html" files={[]} readFile={readFile} />)
+    await waitFor(() => expect(screen.getByTitle('Report').getAttribute('srcdoc')).toContain('<p>Report</p>'))
+    const frame = screen.getByTitle('Report') as HTMLIFrameElement
+    expect(frame.getAttribute('srcdoc')).toContain(`--foreground:${HTML_RENDER_DEFAULT_THEME.light.foreground}`)
+    const postMessage = vi.spyOn(frame.contentWindow!, 'postMessage')
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Page theme' }), { target: { value: 'dark' } })
+
+    expect(screen.getByTitle('Report')).toBe(frame)
+    expect(postMessage).toHaveBeenCalledWith({ type: HTML_RENDER_THEME_MESSAGE_TYPE, theme: HTML_RENDER_DEFAULT_THEME.dark }, '*')
+    postMessage.mockClear()
+    fireEvent.load(frame)
+    expect(postMessage).toHaveBeenCalledWith({ type: HTML_RENDER_THEME_MESSAGE_TYPE, theme: HTML_RENDER_DEFAULT_THEME.dark }, '*')
+  })
+})
+
 describe('ArtifactHtmlFrame auto-height (fill=false)', () => {
   it('sizes the iframe from the height prop and has no hard-coded white background', async () => {
     render(
@@ -152,7 +170,8 @@ describe('ArtifactHtmlFrame auto-height (fill=false)', () => {
     render(<ArtifactHtmlFrame html="<p>x</p>" title="Full" taskId="task-1" path="index.html" files={[]} readFile={readFile} />)
     await waitFor(() => expect(screen.getByTitle('Full').getAttribute('srcdoc')).toContain('<p>x</p>'))
     const frame = screen.getByTitle('Full') as HTMLIFrameElement
-    expect(frame.className).toContain('h-full')
-    expect(frame.className).toContain('bg-white')
+    expect(frame.parentElement?.className).toContain('h-full')
+    expect(frame.className).toContain('flex-1')
+    expect(frame.style.backgroundColor).toBe(HTML_RENDER_DEFAULT_THEME.light.background)
   })
 })

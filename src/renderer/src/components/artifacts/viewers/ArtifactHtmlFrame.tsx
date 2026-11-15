@@ -4,9 +4,11 @@ import { ARTIFACT_BRIDGE_HANDSHAKE, ARTIFACT_MCP_SHIM } from '@shared/artifact-m
 import {
   applyHtmlRenderShell,
   clampHtmlRenderHeight,
+  HTML_RENDER_DEFAULT_THEME,
   HTML_RENDER_SIZE_MESSAGE_TYPE,
   HTML_RENDER_THEME_MESSAGE_TYPE,
   isHtmlRenderSizeMessage,
+  type HtmlRenderAppearance,
   type HtmlRenderTheme
 } from '@shared/html-render'
 import { prepareArtifactHtml } from '../artifact-resources'
@@ -136,7 +138,12 @@ export function ArtifactHtmlFrame({
   // The live theme (follows the app's own light/dark toggle). Baked into the
   // document on (re)mount; later changes are pushed over postMessage below,
   // never by recomputing srcDoc — that would reload the page.
-  const theme = useHtmlRenderTheme()
+  const appTheme = useHtmlRenderTheme()
+  // A full-page artifact can contain fixed light backgrounds. Using dark
+  // host text tokens on those backgrounds makes the page hard to read.
+  // Inline pages still follow the chat theme, as their layout guide requires.
+  const [appearance, setAppearance] = useState<'app' | HtmlRenderAppearance>(fill ? 'light' : 'app')
+  const theme = appearance === 'app' ? appTheme : HTML_RENDER_DEFAULT_THEME[appearance]
   const themeRef = useRef(theme)
   themeRef.current = theme
   const bakedThemeRef = useRef<HtmlRenderTheme | undefined>(undefined)
@@ -184,7 +191,7 @@ export function ArtifactHtmlFrame({
       port?.close()
     }
   }, [srcDoc])
-  return (
+  const frame = (
     <iframe
       key={srcDoc}
       ref={frameRef}
@@ -192,8 +199,29 @@ export function ArtifactHtmlFrame({
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
       srcDoc={srcDoc}
-      className={fill ? 'h-full w-full border-0 bg-white' : 'w-full border-0 bg-transparent'}
-      style={fill ? undefined : { height: `${height ?? 80}px` }}
+      onLoad={() => frameRef.current?.contentWindow?.postMessage({ type: HTML_RENDER_THEME_MESSAGE_TYPE, theme: themeRef.current }, '*')}
+      className={fill ? 'min-h-0 w-full flex-1 border-0' : 'w-full border-0 bg-transparent'}
+      style={fill ? { backgroundColor: theme.background } : { height: `${height ?? 80}px` }}
     />
+  )
+  if (!fill) return frame
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-end border-b border-border/50 bg-background px-3 py-1">
+        <span className="mr-2 text-xs text-muted-foreground">Page theme</span>
+        <select
+          aria-label="Page theme"
+          value={appearance}
+          onChange={(event) => setAppearance(event.target.value as 'app' | HtmlRenderAppearance)}
+          className="rounded-md border border-border/50 bg-background px-2 py-0.5 text-xs text-foreground"
+        >
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+          <option value="app">App</option>
+        </select>
+      </div>
+      {frame}
+    </div>
   )
 }
