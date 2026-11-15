@@ -22,6 +22,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 describe('ArtifactViewerPage', () => {
+  it('shows a light page theme for HTML and lets the reader choose dark', async () => {
+    useArtifactStore.setState({ artifactsByTask: new Map([['task-1', [{ id: 'report', taskId: 'task-1', title: 'Report', type: ArtifactType.HTML, path: 'report.html', updatedAt: 1, reloadTrigger: 0 }]]]) })
+    vi.mocked(api.artifacts.content).mockResolvedValue({ kind: ArtifactContentKind.TEXT, content: '<p>Report</p>' })
+    const view = render(<ArtifactViewerPage taskId="task-1" artifactId="report" onNavigate={vi.fn()} />)
+
+    await waitFor(() => expect(view.getByTitle('Report').getAttribute('srcdoc')).toContain('<p>Report</p>'))
+    expect((view.getByRole('combobox', { name: 'Page theme' }) as HTMLSelectElement).value).toBe('light')
+    fireEvent.change(view.getByRole('combobox', { name: 'Page theme' }), { target: { value: 'dark' } })
+    expect((view.getByRole('combobox', { name: 'Page theme' }) as HTMLSelectElement).value).toBe('dark')
+  })
+
   it('keeps the diagram and scroll container through parent renders and refresh', async () => {
     let refresh!: () => void
     vi.spyOn(window, 'setInterval').mockImplementation((callback, timeout) => { if (timeout === 30_000) refresh = callback as () => void; return 1 as unknown as ReturnType<typeof window.setInterval> })
