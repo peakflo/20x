@@ -52,6 +52,15 @@ export interface AcpWrapperHooks {
    */
   handleExtensionNotification?: (method: string, params: unknown) => { retryClass?: AcpErrorClass } | void
 
+  /**
+   * The agent re-sends the whole message/thought text so far in each chunk instead of
+   * a delta. In that mode a chunk replaces the current text when it starts with it,
+   * and nothing else is deduplicated. Default off: ACP chunks are deltas and are
+   * appended verbatim. Enable only for an agent verified to behave this way; it
+   * misreads a genuine continuation that happens to start with the current text.
+   */
+  cumulativeChunks?: boolean
+
   /** Translates the client's selected model id to whatever the wire protocol expects. */
   mapModelIdToWire?: (modelId: string) => string
   /** Interprets the model id the agent reports back as "current model." */
