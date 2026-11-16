@@ -4,6 +4,7 @@ import type { UiCommandAck, UiCommandEnvelope } from '@shared/ui-commands'
 import type { TaskRunDuration } from '@shared/task-run-duration'
 import type { DataCategory, DataExportResult, DataImportPreview, DataImportResult } from '@shared/data-transfer'
 import type { TranscriptDeltaEvent, TranscriptSyncResult } from '@shared/transcript-stream'
+import type { AgentWorkspaceEvent } from '@shared/agent-workspace-events'
 import type {
   WorkfloTask,
   CreateTaskDTO,
@@ -591,6 +592,7 @@ interface ElectronAPI {
   onAgentOutputBatch: (callback: (event: AgentOutputBatchEvent) => void) => () => void
   onArtifactUpdated: (callback: (event: { taskId: string; artifact: import('@shared/artifacts').Artifact }) => void) => () => void
   onTranscriptChanged: (callback: (event: TranscriptChangedEvent) => void) => () => void
+  onAgentWorkspaceEvent: (callback: (event: AgentWorkspaceEvent) => void) => () => void
   onAgentStatus: (callback: (event: AgentStatusEvent) => void) => () => void
   onAgentApproval: (callback: (event: AgentApprovalRequest) => void) => () => void
   usage: {

@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
-const { changes, files, readFile } = vi.hoisted(() => ({ changes: vi.fn(), files: vi.fn(), readFile: vi.fn() }))
-vi.mock('@/lib/ipc-client', () => ({ worktreeApi: { changes, files, readFile } }))
+const { changes, files, readFile, workspaceListeners } = vi.hoisted(() => ({
+  changes: vi.fn(), files: vi.fn(), readFile: vi.fn(),
+  workspaceListeners: new Set<(event: { taskId: string; kind: string; url?: string; repo?: string }) => void>()
+}))
+vi.mock('@/lib/ipc-client', () => ({
+  worktreeApi: { changes, files, readFile },
+  onAgentWorkspaceEvent: (callback: (event: { taskId: string; kind: string; url?: string; repo?: string }) => void) => {
+    workspaceListeners.add(callback)
+    return () => workspaceListeners.delete(callback)
+  }
+}))
 
 import { ChangesPanel } from './ChangesPanel'
 
@@ -35,6 +44,7 @@ new file mode 100644
 
 beforeEach(() => {
   persisted.clear()
+  workspaceListeners.clear()
   const inventory = [{
     repo: 'Task workspace',
     allFiles: ['.agents/skills/ui/SKILL.md', 'AGENTS.md', 'attachments/spec.pdf'],
@@ -59,9 +69,43 @@ beforeEach(() => {
   })
 })
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); vi.useRealTimers() })
 
 describe('ChangesPanel', () => {
+  it('refreshes this task after a VCS event', async () => {
+    render(<ChangesPanel taskId="task-1" repos={['peakflo/20x']} />)
+    await waitFor(() => expect(screen.getByTitle('Refresh')).not.toBeDisabled())
+    changes.mockClear()
+    expect(workspaceListeners.size).toBe(1)
+
+    vi.useFakeTimers()
+    act(() => { for (const listener of workspaceListeners) listener({ taskId: 'other', kind: 'vcs' }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    expect(changes).not.toHaveBeenCalled()
+
+    act(() => { for (const listener of workspaceListeners) listener({ taskId: 'task-1', kind: 'vcs' }) })
+    act(() => { for (const listener of workspaceListeners) listener({ taskId: 'task-1', kind: 'vcs' }) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(300) })
+    vi.useRealTimers()
+    await waitFor(() => expect(changes).toHaveBeenCalledTimes(1))
+  })
+
+  it('reports a published PR to the task workspace', async () => {
+    const onPullRequests = vi.fn()
+    render(<ChangesPanel taskId="task-1" repos={['peakflo/20x']} onPullRequests={onPullRequests} />)
+    await waitFor(() => expect(screen.getByTitle('Refresh')).not.toBeDisabled())
+    onPullRequests.mockClear()
+
+    act(() => { for (const listener of workspaceListeners) listener({
+      taskId: 'task-1', kind: 'published_change',
+      url: 'https://github.com/peakflo/20x/pull/699', repo: 'peakflo/20x'
+    }) })
+
+    expect(onPullRequests).toHaveBeenCalledWith([expect.objectContaining({
+      prUrl: 'https://github.com/peakflo/20x/pull/699', prNumber: 699
+    })])
+  })
+
   it('shows All files before the diff calculation finishes', async () => {
     let resolveChanges: (value: unknown) => void = () => undefined
     changes.mockReturnValueOnce(new Promise((resolve) => { resolveChanges = resolve }))

@@ -25,6 +25,7 @@ import { open, writeFile, type FileHandle } from 'fs/promises'
 import { StringDecoder } from 'string_decoder'
 import { join } from 'path'
 import type { ProviderUsageLimits } from '../../shared/usage'
+import type { AgentWorkspaceEvent } from '../../shared/agent-workspace-events'
 import { supportsUltrafast } from '../../shared/ultrafast'
 import {
   claudeRateLimitInfoToUpdate,
@@ -195,6 +196,9 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
    * latency of the fixed-interval polling heartbeat.
    */
   onDataAvailable?: (sessionId: string) => void
+
+  /** Workspace changes go to the Changes view, not the transcript. */
+  onWorkspaceEvent?: (event: AgentWorkspaceEvent) => void
 
   /** Set by agent-manager: receives cumulative token usage from `result` messages. */
   onUsage?: (report: AdapterUsageReport) => void
@@ -1431,6 +1435,32 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         // Log message with truncation for large content
         this.safeLogMessage(message)
 
+        if (msg.type === 'system' && session.config.taskId && this.onWorkspaceEvent) {
+          try {
+            if (msg.subtype === 'vcs_state_changed') {
+              this.onWorkspaceEvent({ taskId: session.config.taskId, kind: 'vcs' })
+            } else if (msg.subtype === 'code_change_published') {
+              const rawUrl = typeof msg.url === 'string' ? msg.url : ''
+              let publishedUrl: URL | null = null
+              try { publishedUrl = new URL(rawUrl) } catch { /* No usable URL in this event. */ }
+              if (publishedUrl && /^https?:$/.test(publishedUrl.protocol) &&
+                /\/(?:pull|merge_requests)\/\d+\/?$/.test(publishedUrl.pathname)) {
+                this.onWorkspaceEvent({
+                  taskId: session.config.taskId,
+                  kind: 'published_change',
+                  url: publishedUrl.toString(),
+                  ...(typeof msg.repo === 'string' ? { repo: msg.repo } : {}),
+                  ...(typeof msg.identifier === 'string' ? { identifier: msg.identifier } : {})
+                })
+              } else {
+                this.onWorkspaceEvent({ taskId: session.config.taskId, kind: 'vcs' })
+              }
+            }
+          } catch (error) {
+            console.warn('[ClaudeCodeAdapter] Failed to report workspace event:', error)
+          }
+        }
+
         // Extract real Claude Code session ID from first message
         if (!session.sessionId && 'session_id' in msg) {
           const realSessionId = msg.session_id as string
@@ -2493,21 +2523,6 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         return parts
       }
 
-      // ── Internal background-task bookkeeping — never rendered ──
-      // `task_updated` carries wire-level status patches and `background_tasks_changed`
-      // carries the in-flight list. Both are consumed by trackBackgroundTask(); the
-      // user-visible progress is already covered by task_started / task_progress /
-      // task_notification. Without this they fall through to the generic system
-      // handler below, which pushes the raw subtype string as a text bubble —
-      // spamming the transcript with literal "task_updated" /
-      // "background_tasks_changed" messages between every subagent update.
-      if (
-        msgWithProps.subtype === ClaudeSystemSubtype.TASK_UPDATED ||
-        msgWithProps.subtype === ClaudeSystemSubtype.BACKGROUND_TASKS_CHANGED
-      ) {
-        return parts
-      }
-
       // SDKStatusMessage — transient status indicators (e.g. 'compacting')
       if (msgWithProps.subtype === ClaudeSystemSubtype.STATUS) {
         // null status means "cleared" — skip
@@ -2554,17 +2569,49 @@ export class ClaudeCodeAdapter implements CodingAgentAdapter {
         return parts
       }
 
-      const partId = `system-${msgWithProps.uuid || Date.now()}`
-      if (!seenPartIds.has(partId)) {
-        seenPartIds.add(partId)
+      // Only show system events that carry user-facing text. The SDK also emits
+      // bookkeeping events (VCS, commands, hooks, task state, checkpoints, etc.)
+      // and may add new subtypes. Never display a raw subtype as a text bubble.
+      const systemMsg = msg as Record<string, unknown>
+      const subtype = msgWithProps.subtype
+      let content: string | undefined
+      switch (subtype) {
+        case 'notification':
+          content = typeof systemMsg.text === 'string' ? systemMsg.text : undefined
+          break
+        case 'informational':
+        case 'local_command_output':
+        case 'model_refusal_fallback':
+        case 'model_refusal_no_fallback':
+          content = typeof systemMsg.content === 'string' ? systemMsg.content : undefined
+          break
+        case 'permission_denied':
+          content = typeof systemMsg.message === 'string' ? systemMsg.message : undefined
+          break
+        case 'mirror_error':
+          content = typeof systemMsg.error === 'string' ? systemMsg.error : undefined
+          break
+        case 'plugin_install':
+          if (systemMsg.status === 'failed') {
+            content = typeof systemMsg.error === 'string' ? systemMsg.error : 'Plugin install failed'
+          }
+          break
+      }
 
-        const content = msgWithProps.subtype || 'System message'
-        partContentLengths.set(partId, String(content.length))
-        parts.push({
-          id: partId,
-          type: MessagePartType.TEXT,
-          content,
-        })
+      if (content?.trim()) {
+        const partId = `system-${msgWithProps.uuid || Date.now()}`
+        if (!seenPartIds.has(partId)) {
+          seenPartIds.add(partId)
+          partContentLengths.set(partId, String(content.length))
+          const isError = subtype === 'permission_denied' || subtype === 'mirror_error' ||
+            subtype === 'model_refusal_no_fallback' || subtype === 'plugin_install'
+          parts.push({
+            id: partId,
+            type: isError ? MessagePartType.ERROR : MessagePartType.TEXT,
+            content,
+            role: subtype === 'local_command_output' ? 'assistant' : 'system',
+          })
+        }
       }
     }
 

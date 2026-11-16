@@ -4,7 +4,7 @@ import {
   FilePlus2, FileMinus2, FilePen, FileSymlink, FolderGit2, GitPullRequest, ExternalLink,
   CheckCircle2, XCircle, File, Folder, FolderOpen, Files, ListTree,
 } from 'lucide-react'
-import { worktreeApi } from '@/lib/ipc-client'
+import { onAgentWorkspaceEvent, worktreeApi } from '@/lib/ipc-client'
 import { parseUnifiedDiff, wordDiff, type DiffFile, type DiffHunk, type DiffLine, type WordSegment, type FileStatus } from '@/lib/diff-parser'
 import { buildFileTree, type ChangeTreeDirectory, type ChangeTreeFile } from '@/lib/change-tree'
 import { DiffStatLabel } from './DiffStatLabel'
@@ -541,6 +541,29 @@ export function ChangesPanel({ taskId, repos, className, onSummary, onPullReques
   }, [taskId, reposKey, onSummary, onPullRequests])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined
+    const unsubscribe = onAgentWorkspaceEvent((event) => {
+      if (event.taskId !== taskId) return
+
+      if (event.kind === 'published_change') {
+        const prNumber = event.url.match(/\/(?:pull|merge_requests)\/(\d+)(?:[/?#]|$)/)?.[1]
+        onPullRequests?.([{
+          repo: event.repo || '',
+          prUrl: event.url,
+          prNumber: prNumber ? Number(prNumber) : undefined
+        }])
+      }
+
+      if (refreshTimer) clearTimeout(refreshTimer)
+      refreshTimer = setTimeout(() => { void load() }, 250)
+    })
+    return () => {
+      unsubscribe()
+      if (refreshTimer) clearTimeout(refreshTimer)
+    }
+  }, [taskId, load, onPullRequests])
 
   const setMode = (m: ViewMode) => { setViewMode(m); localStorage.setItem('diff-view-mode', m) }
   const setChangesMode = (mode: ChangesDisplayMode) => {
