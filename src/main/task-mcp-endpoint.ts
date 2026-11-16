@@ -16,8 +16,32 @@
  *   /mcp?task=<id>&parent=<id>                  subtask set, parent + siblings only
  *   /mcp?...&artifact=<id>                      pins artifact writes to one task
  *
- * The parameters are an address, not a credential. The Task API server they
- * reach has no authentication either, and it listens only on 127.0.0.1.
+ * `task`/`parent`/`artifact` are an address, not a credential — the Task API
+ * server they reach has no authentication, and it listens only on
+ * 127.0.0.1.
+ *
+ * The one exception is the memory token (see TaskMcpScope.memoryToken and
+ * task-api-server.ts's requireMemoryToken): it IS a credential. Memory is
+ * auto-injected into Mastermind's context on every session, so unlike the
+ * others, a caller must prove it was actually granted memory access before a
+ * /remember etc. call is allowed to do anything — the tool list alone is not
+ * enforcement, since every route here is also reachable by a plain HTTP POST
+ * that skips the tool list entirely.
+ *
+ * Deliberately NOT a URL query parameter, unlike the others above: this URL
+ * is written verbatim into each session's CLAUDE.md/AGENTS.md documentation
+ * (see AgentManager.describeMcpTransport) and logged by at least one adapter
+ * on every MCP registration (OpencodeAdapter.registerMcpServers). A query
+ * parameter would leak the token to disk and to logs, readable by any
+ * process in the workspace — undoing the whole point of gating memory
+ * access to trusted sessions. Instead it travels as the `MEMORY_TOKEN_HEADER`
+ * request header, which is never written to either: the adapters resolve
+ * `McpServerConfig.headers` into their harness's own MCP transport config
+ * (Claude Agent SDK, OpenCode's mcp.add, Codex's http_headers, ACP's
+ * `headers` array) without ever logging or persisting it in the human-facing
+ * docs. The token itself still travels the same way the secret broker's does
+ * (secret-broker.ts): a random value over loopback HTTP, matching this
+ * server's existing trust model.
  *
  * Each request is handled statelessly: one transport and one Server per request.
  * That needs no session table, so a resumed agent keeps working with the same
@@ -35,19 +59,40 @@ import {
 /** Path that serves MCP on the Task API server. */
 export const TASK_MCP_PATH = '/mcp'
 
-/** Reads the scope of a session from the request URL. */
-export function parseScopeFromUrl(url: URL): TaskMcpScope {
+/**
+ * Header that carries the memory token — see the module doc above for why
+ * this is a header and not a query parameter. Lowercase, matching how Node
+ * normalizes incoming request header names.
+ */
+export const MEMORY_TOKEN_HEADER = 'x-mastermind-memory-token'
+
+/** Reads a header case-insensitively from either a Node `IncomingMessage`
+ * header map or a Web `Headers` object. */
+function readHeader(headers: IncomingMessage['headers'] | Headers, name: string): string | null {
+  if (typeof (headers as Headers).get === 'function') return (headers as Headers).get(name)
+  const value = (headers as IncomingMessage['headers'])[name]
+  if (Array.isArray(value)) return value[0] ?? null
+  return value ?? null
+}
+
+/**
+ * Reads the scope of a session from the request URL and headers. The memory
+ * token is deliberately never read from the URL — see MEMORY_TOKEN_HEADER.
+ */
+export function parseScopeFromUrl(url: URL, headers: IncomingMessage['headers'] | Headers = {}): TaskMcpScope {
   const taskId = url.searchParams.get('task')
   return {
     parentTaskId: url.searchParams.get('parent') || null,
     taskId: taskId || null,
-    artifactTaskId: url.searchParams.get('artifact') || taskId || null
+    artifactTaskId: url.searchParams.get('artifact') || taskId || null,
+    memoryToken: readHeader(headers, MEMORY_TOKEN_HEADER)
   }
 }
 
 /**
- * Builds the MCP URL for a session. This is the whole session configuration:
- * there is no command to spawn and no port to inject into a child environment.
+ * Builds the MCP URL for a session. This is the whole session configuration
+ * besides the memory token (see buildTaskMcpHeaders): there is no command to
+ * spawn and no port to inject into a child environment.
  */
 export function buildTaskMcpUrl(
   port: number,
@@ -62,6 +107,62 @@ export function buildTaskMcpUrl(
   }
   const query = params.toString()
   return `http://127.0.0.1:${port}${TASK_MCP_PATH}${query ? `?${query}` : ''}`
+}
+
+/**
+ * Builds the header set for a session's memory token, or `undefined` when
+ * there is none — ready to assign straight to `McpServerConfig.headers`.
+ */
+export function buildTaskMcpHeaders(memoryToken?: string | null): Record<string, string> | undefined {
+  return memoryToken ? { [MEMORY_TOKEN_HEADER]: memoryToken } : undefined
+}
+
+/** Header names whose values must never be written to a log line or an
+ * on-disk doc. The memory token exactly, plus the common auth header shapes
+ * this process also injects into remote MCP configs (OAuth bearer tokens,
+ * enterprise JWTs) — belt and suspenders for whatever logs or documents a
+ * raw MCP server config next to its headers. */
+function isSensitiveHeaderName(name: string): boolean {
+  const lower = name.toLowerCase()
+  return lower === MEMORY_TOKEN_HEADER || lower === 'authorization' || lower.includes('token') || lower.includes('secret')
+}
+
+/**
+ * Redacts header values that must never reach a log line or an on-disk doc —
+ * returns a shallow copy with sensitive values masked. Use this at every
+ * place that logs or documents an MCP server's headers (e.g.
+ * OpencodeAdapter.registerMcpServers' registration log).
+ */
+export function redactSensitiveHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+  if (!headers) return headers
+  const out: Record<string, string> = {}
+  for (const [name, value] of Object.entries(headers)) {
+    out[name] = isSensitiveHeaderName(name) ? '[redacted]' : value
+  }
+  return out
+}
+
+/**
+ * Strips any credential-shaped query parameter from a URL before it is
+ * written to a doc or a log line. Defense in depth: nothing should put
+ * `memoryToken` (or anything else credential-shaped) in a URL anymore — it
+ * travels as a header instead — but this makes a future regression harmless
+ * instead of a leak, regardless of where that URL came from.
+ */
+export function sanitizeMcpUrlForDisplay(url: string): string {
+  try {
+    const parsed = new URL(url)
+    let changed = false
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (isSensitiveHeaderName(key)) {
+        parsed.searchParams.set(key, '[redacted]')
+        changed = true
+      }
+    }
+    return changed ? parsed.toString() : url
+  } catch {
+    return url
+  }
 }
 
 /** A fresh MCP server bound to one scope. */
@@ -134,7 +235,7 @@ export async function handleTaskMcpRequest(
   body: string,
   invoke: TaskApiInvoke
 ): Promise<void> {
-  const scope = parseScopeFromUrl(url)
+  const scope = parseScopeFromUrl(url, req.headers)
   const transport = new WebStandardStreamableHTTPServerTransport({
     // Stateless: no session table, so a resumed agent keeps the same URL.
     sessionIdGenerator: undefined,

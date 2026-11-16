@@ -12,7 +12,14 @@ import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
 import { startTaskApiServer, stopTaskApiServer, setTaskApiNotifier } from './task-api-server'
-import { buildTaskMcpUrl, parseScopeFromUrl } from './task-mcp-endpoint'
+import {
+  buildTaskMcpUrl,
+  buildTaskMcpHeaders,
+  parseScopeFromUrl,
+  MEMORY_TOKEN_HEADER,
+  sanitizeMcpUrlForDisplay,
+  redactSensitiveHeaders
+} from './task-mcp-endpoint'
 
 let db: DatabaseManager
 
@@ -25,9 +32,9 @@ afterEach(() => {
   stopTaskApiServer()
 })
 
-async function connect(url: string): Promise<Client> {
+async function connect(url: string, headers?: Record<string, string>): Promise<Client> {
   const client = new Client({ name: 'test-client', version: '1.0.0' })
-  await client.connect(new StreamableHTTPClientTransport(new URL(url)))
+  await client.connect(new StreamableHTTPClientTransport(new URL(url), headers ? { requestInit: { headers } } : undefined))
   return client
 }
 
@@ -41,7 +48,8 @@ describe('buildTaskMcpUrl and parseScopeFromUrl', () => {
     expect(parseScopeFromUrl(new URL(url))).toEqual({
       parentTaskId: null,
       taskId: null,
-      artifactTaskId: null
+      artifactTaskId: null,
+      memoryToken: null
     })
   })
 
@@ -51,8 +59,76 @@ describe('buildTaskMcpUrl and parseScopeFromUrl', () => {
       parentTaskId: 'task-parent',
       taskId: 'task-child',
       // Artifact writes fall back to the session's own task.
-      artifactTaskId: 'task-child'
+      artifactTaskId: 'task-child',
+      memoryToken: null
     })
+  })
+
+  // The memory token is deliberately NOT part of the URL (see
+  // MEMORY_TOKEN_HEADER's doc in task-mcp-endpoint.ts): this URL is written
+  // verbatim into CLAUDE.md/AGENTS.md and logged by at least one adapter, so
+  // a query parameter would leak it to disk and to logs. It travels as a
+  // request header instead.
+  it('never puts the memory token in the URL, for any scope', () => {
+    expect(buildTaskMcpUrl(1234)).not.toContain('memoryToken')
+    expect(buildTaskMcpUrl(1234, { taskId: 'task-child', parentTaskId: 'task-parent' })).not.toContain('memoryToken')
+  })
+
+  it('reads the memory token from the header, not the URL', () => {
+    const url = buildTaskMcpUrl(1234)
+    const headers = buildTaskMcpHeaders('tok-abc123')
+    expect(headers).toEqual({ [MEMORY_TOKEN_HEADER]: 'tok-abc123' })
+    expect(parseScopeFromUrl(new URL(url), headers)).toEqual({
+      parentTaskId: null,
+      taskId: null,
+      artifactTaskId: null,
+      memoryToken: 'tok-abc123'
+    })
+  })
+
+  it('reads the memory token together with a scoped subtask session (a trusted subtask agent)', () => {
+    const url = buildTaskMcpUrl(1234, { taskId: 'task-child', parentTaskId: 'task-parent' })
+    const headers = buildTaskMcpHeaders('tok-abc123')
+    expect(parseScopeFromUrl(new URL(url), headers)).toEqual({
+      parentTaskId: 'task-parent',
+      taskId: 'task-child',
+      artifactTaskId: 'task-child',
+      memoryToken: 'tok-abc123'
+    })
+  })
+
+  it('builds no headers at all when there is no memory token', () => {
+    expect(buildTaskMcpHeaders(null)).toBeUndefined()
+    expect(buildTaskMcpHeaders(undefined)).toBeUndefined()
+  })
+
+  it('ignores a memoryToken query parameter even if one is present — only the header counts', () => {
+    const smuggled = new URL(buildTaskMcpUrl(1234))
+    smuggled.searchParams.set('memoryToken', 'smuggled-token')
+    expect(parseScopeFromUrl(smuggled).memoryToken).toBeNull()
+    expect(parseScopeFromUrl(smuggled, { [MEMORY_TOKEN_HEADER]: 'real-token' }).memoryToken).toBe('real-token')
+  })
+
+  it('sanitizeMcpUrlForDisplay redacts a credential-shaped query parameter, defense in depth', () => {
+    const clean = 'http://127.0.0.1:1234/mcp?task=abc'
+    expect(sanitizeMcpUrlForDisplay(clean)).toBe(clean)
+
+    const leaky = 'http://127.0.0.1:1234/mcp?task=abc&memoryToken=tok-abc123'
+    const sanitized = sanitizeMcpUrlForDisplay(leaky)
+    expect(sanitized).not.toContain('tok-abc123')
+    expect(sanitized).toContain('task=abc')
+  })
+
+  it('redactSensitiveHeaders masks the memory token and auth-shaped headers, leaving the rest alone', () => {
+    expect(redactSensitiveHeaders(undefined)).toBeUndefined()
+    const redacted = redactSensitiveHeaders({
+      [MEMORY_TOKEN_HEADER]: 'tok-abc123',
+      Authorization: 'Bearer eyJhbGciOi...',
+      'X-Custom-Header': 'harmless-value'
+    })
+    expect(redacted?.[MEMORY_TOKEN_HEADER]).toBe('[redacted]')
+    expect(redacted?.Authorization).toBe('[redacted]')
+    expect(redacted?.['X-Custom-Header']).toBe('harmless-value')
   })
 
   it('carries a separate artifact scope only when it differs from the task', () => {
@@ -237,5 +313,25 @@ describe('MCP endpoint over HTTP', () => {
 
     expect(count()).toBe(before)
     await client.close()
+  })
+
+  // Real end-to-end proof that the memory token travels as a request header,
+  // over the real HTTP transport a harness actually uses — not just a unit
+  // test of parseScopeFromUrl. A URL-based `?memoryToken=` query parameter
+  // would show up here as a 401 from the real server (no header sent), even
+  // though the old code accepted it from the URL.
+  it('grants memory tools only to a connection that sends the header, over the real HTTP transport', async () => {
+    const port = await startTaskApiServer(db)
+    const url = buildTaskMcpUrl(port)
+
+    const withToken = await connect(url, buildTaskMcpHeaders('tok-e2e-123'))
+    const namesWithToken = (await withToken.listTools()).tools.map((t) => t.name)
+    expect(namesWithToken).toContain('remember')
+
+    const withoutToken = await connect(url)
+    const namesWithoutToken = (await withoutToken.listTools()).tools.map((t) => t.name)
+    expect(namesWithoutToken).not.toContain('remember')
+
+    await Promise.all([withToken.close(), withoutToken.close()])
   })
 })

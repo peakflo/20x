@@ -18,6 +18,7 @@ import type {
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 import type { AdapterUsageLimitsEvent, AdapterUsageReport } from './coding-agent-adapter'
+import { redactSensitiveHeaders } from '../task-mcp-endpoint'
 
 let OpenCodeSDK: typeof import('@opencode-ai/sdk') | null = null
 
@@ -327,7 +328,14 @@ export class OpencodeAdapter implements CodingAgentAdapter {
         const mcpAddConfig = mcpConfig.type === 'http'
           ? { type: 'remote' as const, url: mcpConfig.url ?? '', headers: mcpConfig.headers }
           : { type: 'local' as const, command: [mcpConfig.command ?? '', ...(mcpConfig.args ?? [])], environment: mcpConfig.env }
-        console.log(`[OpencodeAdapter] Registering MCP server: ${name}`, JSON.stringify(mcpAddConfig))
+        // Redact credential-shaped header values (the mastermind memory
+        // token, OAuth bearer tokens, enterprise JWTs) before this hits the
+        // log — the actual headers sent to OpenCode (mcpAddConfig, below)
+        // are untouched.
+        const logSafeConfig = mcpAddConfig.type === 'remote'
+          ? { ...mcpAddConfig, headers: redactSensitiveHeaders(mcpAddConfig.headers) }
+          : mcpAddConfig
+        console.log(`[OpencodeAdapter] Registering MCP server: ${name}`, JSON.stringify(logSafeConfig))
 
         // Add MCP server
         const addResult = await ocClient.mcp.add({

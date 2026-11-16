@@ -5,6 +5,7 @@ import { SubscriptionUsageSection } from '../components/SubscriptionUsageSection
 import { UsageHeroSection } from '../components/UsageHeroSection'
 import { AcpAgentsSection } from '../components/AcpAgentsSection'
 import { HarnessMaintenanceSection } from '../components/HarnessMaintenanceSection'
+import { MemorySection } from '../components/MemorySection'
 import { PushSettings } from '../components/PushSettings'
 import { applyGlassOpacity, GLASS_OPACITY_STORAGE_KEY, readGlassOpacity } from '@shared/glass-settings'
 
@@ -129,6 +130,7 @@ export function SettingsPage({ onNavigate }: SettingsPageProps) {
         <SubscriptionUsageSection />
         <AcpAgentsSection />
         <HarnessMaintenanceSection />
+        <MemorySection />
         <PushSettings />
 
         <div className="rounded-md border border-border/30 p-3">
