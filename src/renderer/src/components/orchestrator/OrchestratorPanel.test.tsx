@@ -20,21 +20,47 @@ const agentApi = vi.hoisted(() => ({
   ]),
 }))
 
+const attachmentApi = vi.hoisted(() => ({
+  pick: vi.fn(async () => [] as string[]),
+  save: vi.fn(async (_taskId: string, filePath: string) => ({
+    id: `att-${filePath.split('/').pop()}`,
+    filename: filePath.split('/').pop() as string,
+    size: 2048,
+    mime_type: 'image/png',
+    added_at: '2026-10-22T00:00:00.000Z',
+  })),
+}))
+
 vi.mock('@/lib/ipc-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/ipc-client')>()),
   agentApi,
   settingsApi,
   agentSessionApi,
+  attachmentApi,
 }))
 
 /**
  * The transcript is a large tree with its own IPC; this file is about the
  * session. Its send handler is captured so a test can send like a user.
  */
-const composer = vi.hoisted(() => ({ send: null as ((text: string) => void) | null }))
+type Attachment = { id: string; filename: string; size: number; mime_type: string }
+type SendFn = (text: string, options?: { attachments?: Attachment[] }) => unknown
+const composer = vi.hoisted(() => ({
+  send: null as SendFn | null,
+  addPaths: null as ((paths: string[]) => Promise<Attachment[]>) | null,
+  pick: null as (() => Promise<Attachment[]>) | null,
+}))
 vi.mock('@/components/agents/AgentTranscriptPanel', () => ({
-  AgentTranscriptPanel: ({ onSend, headerLeading, headerTrailing }: { onSend?: (text: string) => void; headerLeading?: ReactNode; headerTrailing?: ReactNode }) => {
+  AgentTranscriptPanel: ({ onSend, onAddAttachmentPaths, onPickAttachments, headerLeading, headerTrailing }: {
+    onSend?: SendFn
+    onAddAttachmentPaths?: (paths: string[]) => Promise<Attachment[]>
+    onPickAttachments?: () => Promise<Attachment[]>
+    headerLeading?: ReactNode
+    headerTrailing?: ReactNode
+  }) => {
     composer.send = onSend ?? null
+    composer.addPaths = onAddAttachmentPaths ?? null
+    composer.pick = onPickAttachments ?? null
     return <div>{headerLeading}{headerTrailing}</div>
   },
 }))
@@ -72,6 +98,8 @@ beforeEach(() => {
   settingsApi.get.mockResolvedValue(null)
   agentSessionApi.start.mockResolvedValue({ sessionId: 'session-1' })
   composer.send = null
+  composer.addPaths = null
+  composer.pick = null
 })
 
 describe('OrchestratorPanel — warming the session', () => {
@@ -167,5 +195,58 @@ describe('OrchestratorPanel — warming the session', () => {
     // No second start: the whole point of warming.
     expect(agentSessionApi.start).toHaveBeenCalledTimes(1)
     expect(agentSessionApi.send).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * Clipboard paste, drag-and-drop and the file picker all reach the composer
+ * through `onAddAttachmentPaths` / `onPickAttachments`. Mastermind used to pass
+ * neither, so a pasted screenshot did nothing there.
+ */
+describe('OrchestratorPanel — attachments', () => {
+  it('gives the composer an attachment handler, so paste and drop are enabled', async () => {
+    await act(async () => {
+      render(<OrchestratorPanel onClose={vi.fn()} />)
+    })
+    expect(composer.addPaths).toBeTypeOf('function')
+    expect(composer.pick).toBeTypeOf('function')
+  })
+
+  it('stores a pasted file under the Mastermind session and sends it with the message', async () => {
+    await act(async () => {
+      render(<OrchestratorPanel onClose={vi.fn()} />)
+    })
+    await waitFor(() => expect(agentSessionApi.start).toHaveBeenCalledTimes(1))
+
+    let added: Attachment[] = []
+    await act(async () => {
+      added = await (composer.addPaths as (paths: string[]) => Promise<Attachment[]>)(['/tmp/staged/pasted-image.png'])
+    })
+    expect(attachmentApi.save).toHaveBeenCalledWith(MASTERMIND, '/tmp/staged/pasted-image.png')
+    expect(added).toEqual([expect.objectContaining({ filename: 'pasted-image.png' })])
+
+    await act(async () => {
+      await (composer.send as SendFn)('what is in this screenshot', { attachments: added })
+    })
+    expect(agentSessionApi.send).toHaveBeenCalledWith(
+      'session-1',
+      'what is in this screenshot',
+      MASTERMIND,
+      'default-agent',
+      added
+    )
+  })
+
+  it('saves files chosen in the picker under the Mastermind session', async () => {
+    attachmentApi.pick.mockResolvedValue(['/Users/me/spec.pdf'])
+    await act(async () => {
+      render(<OrchestratorPanel onClose={vi.fn()} />)
+    })
+    let picked: Attachment[] = []
+    await act(async () => {
+      picked = await (composer.pick as () => Promise<Attachment[]>)()
+    })
+    expect(attachmentApi.save).toHaveBeenCalledWith(MASTERMIND, '/Users/me/spec.pdf')
+    expect(picked).toHaveLength(1)
   })
 })
