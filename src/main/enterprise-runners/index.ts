@@ -1,9 +1,10 @@
 import { execFile, spawn } from 'node:child_process'
-import { hostname, platform as osPlatform, arch as osArch, release } from 'node:os'
+import { homedir, hostname, platform as osPlatform, arch as osArch, release } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { BrowserWindow, ipcMain, shell } from 'electron'
 import {
-  buildUninstallCommand,
+  buildUninstallPlan,
+  type UninstallPlan,
   type ConnectProgress,
   type MachineActionResult,
   type MachinesResult,
@@ -15,6 +16,7 @@ import type { EnterpriseAuth } from '../enterprise-auth'
 import { EnterpriseRunnersApi, type EnterpriseRequester } from './api-client'
 import { ConnectRunner } from './connect-runner'
 import { createCommandRunner, runPreflight } from './preflight'
+import { resolveToolchain } from './toolchain'
 
 export { EnterpriseRunnersApi } from './api-client'
 export type { EnterpriseRequester } from './api-client'
@@ -24,6 +26,16 @@ export function requesterFromAuth(auth: EnterpriseAuth): EnterpriseRequester {
   return {
     apiRequest: (method, path, body) => auth.apiRequest(method, path, body),
     getApiUrl: () => auth.getApiUrl(),
+    getIdentity: async () => {
+      try {
+        const session = await auth.getSession()
+        return session.isAuthenticated && session.userId && session.currentTenant
+          ? { tenantId: session.currentTenant.id, userId: session.userId }
+          : null
+      } catch {
+        return null
+      }
+    },
     isSignedIn: async () => {
       try {
         const session = await auth.getSession()
@@ -41,6 +53,13 @@ function broadcast(channel: string, payload: unknown): void {
   }
 }
 
+let activeRunner: ConnectRunner | null = null
+
+/** Stop a running connect command. Called from the app's before-quit handler. */
+export function shutdownEnterpriseRunners(): void {
+  activeRunner?.shutdown()
+}
+
 export interface EnterpriseRunnersService {
   api: EnterpriseRunnersApi
   listMachines(): Promise<MachinesResult>
@@ -56,7 +75,7 @@ export function registerEnterpriseRunnersIpc(auth: EnterpriseAuth | undefined): 
   const api = new EnterpriseRunnersApi(requester)
   const runCommand = createCommandRunner(execFile)
 
-  const runner = new ConnectRunner({
+  const runner: ConnectRunner = new ConnectRunner({
     api,
     spawn: (command, args, options) => spawn(command, args as string[], options),
     platform: osPlatform(),
@@ -64,9 +83,14 @@ export function registerEnterpriseRunnersIpc(auth: EnterpriseAuth | undefined): 
     onProgress: (progress) => broadcast('enterprise-runners:connect-progress', progress),
     onConnected: () => broadcast('enterprise-runners:machines-changed', null),
     newId: randomUUID,
+    resolveToolchain: (env) => resolveToolchain(env),
+    cwd: homedir(),
+    computerInstance: () => api.getComputerInstance(),
     // Already redacted by the parser; never log raw child output.
     log: (message) => console.log(message)
   })
+
+  activeRunner = runner
 
   const listMachines = (): Promise<MachinesResult> => api.listMachines(hostname())
 
@@ -77,17 +101,18 @@ export function registerEnterpriseRunnersIpc(auth: EnterpriseAuth | undefined): 
   )
   ipcMain.handle(
     'enterprise-runners:remove',
-    async (_, runnerId: string): Promise<MachineActionResult & { uninstallCommand?: string }> => {
+    async (_, runnerId: string): Promise<MachineActionResult & { uninstall?: UninstallPlan }> => {
       const before = await listMachines()
-      const version = before.ok ? (before.snapshot.machines.find((m) => m.id === runnerId)?.version ?? null) : null
-      const pinned = before.ok ? before.snapshot.pinnedVersion : null
+      const machine = before.ok ? before.snapshot.machines.find((m) => m.id === runnerId) : undefined
+      const version = before.ok ? (before.snapshot.pinnedVersion ?? machine?.version ?? null) : null
       const result = await api.removeMachine(String(runnerId))
-      return result.ok ? { ...result, uninstallCommand: buildUninstallCommand(pinned ?? version) } : result
+      return result.ok ? { ...result, uninstall: buildUninstallPlan(version, machine?.serviceInstances ?? []) } : result
     }
   )
   ipcMain.handle('enterprise-runners:update', (_, runnerId: string): Promise<MachineActionResult> => api.updateMachine(String(runnerId)))
   ipcMain.handle('enterprise-runners:preflight', async (): Promise<PreflightResult> =>
     runPreflight({
+      toolchain: resolveToolchain(process.env),
       platform: osPlatform(),
       arch: osArch(),
       osVersion: osPlatform() === 'darwin' ? undefined : release(),

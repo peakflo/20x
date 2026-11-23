@@ -21,7 +21,20 @@ import { useConnectComputerStore } from '@/stores/connect-computer-store'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { useUIStore } from '@/stores/ui-store'
 import { SettingsTab } from '@/types'
-import { buildUninstallCommand, type MachineRow } from '@shared/enterprise-runners'
+import { buildUninstallPlan, type MachineRow, type UninstallPlan } from '@shared/enterprise-runners'
+
+function UninstallInstructions({ plan }: { plan: UninstallPlan }) {
+  return (
+    <div className="space-y-1.5">
+      {plan.commands.map((command) => (
+        <code key={command} className="block select-all rounded-md bg-muted px-3 py-2 font-mono text-xs">
+          {command}
+        </code>
+      ))}
+      {plan.note && <p className="text-xs text-muted-foreground">{plan.note}</p>}
+    </div>
+  )
+}
 
 /** Gentle polling: slow when idle, faster while something is changing. */
 const POLL_IDLE_MS = 30_000
@@ -111,7 +124,7 @@ export function MachinesSettings() {
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <code className="block select-all rounded-md bg-muted px-3 py-2 font-mono text-xs">{removed.uninstallCommand}</code>
+            <UninstallInstructions plan={removed.uninstall} />
           </div>
         )}
 
@@ -179,9 +192,7 @@ export function MachinesSettings() {
                   </p>
                 )}
                 <p>The background service keeps running on that machine until you uninstall it there:</p>
-                <code className="block select-all rounded-md bg-muted px-3 py-2 font-mono text-xs">
-                  {buildUninstallCommand(snapshot?.pinnedVersion ?? removing?.version ?? null)}
-                </code>
+                <UninstallInstructions plan={buildUninstallPlan(snapshot?.pinnedVersion ?? removing?.version ?? null, removing?.serviceInstances ?? [])} />
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -12,6 +12,7 @@ const ID = '3f6c2a9e-8b1d-4c7a-9e2f-5d4b1a0c7e63'
 const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r'
 
 class FakeChild extends EventEmitter {
+  pid: number | undefined = undefined
   stdout = new PassThrough()
   stderr = new PassThrough()
   killed = false
@@ -36,14 +37,18 @@ const SECRET_PARENT_ENV: NodeJS.ProcessEnv = {
   ENTERPRISE_JWT: JWT,
   PF_ENROLMENT_TOKEN: 'enrol-secret-value',
   CODEX_HOME: '/Users/test/.codex',
+  CLAUDE_CONFIG_DIR: '/Users/test/.claude',
+  NPM_CONFIG_REGISTRY: 'https://registry.corp.example/',
   SECRET_BROKER_URL: 'http://127.0.0.1:9999',
   HTTPS_PROXY: 'http://user:hunter2@proxy.corp:3128',
   AWS_SECRET_ACCESS_KEY: 'aws-secret',
   NPM_TOKEN: 'npm_abcdefghijklmnopqrstuvwxyz'
 }
 
-function setup(options: { platform?: NodeJS.Platform; version?: string | null; createConnection?: () => Promise<{ connectionId: string; expiresAt: string | null }> } = {}) {
+function setup(options: { platform?: NodeJS.Platform; version?: string | null; pid?: number; graceMs?: number; npx?: string | null; parentEnv?: NodeJS.ProcessEnv; createConnection?: () => Promise<{ connectionId: string; expiresAt: string | null }> } = {}) {
   const child = new FakeChild()
+  child.pid = options.pid
+  const killGroup = vi.fn()
   const spawn = vi.fn(() => child as unknown as ChildProcess)
   const progress: ConnectProgress[] = []
   const openExternal = vi.fn()
@@ -58,7 +63,12 @@ function setup(options: { platform?: NodeJS.Platform; version?: string | null; c
     api,
     spawn: spawn as never,
     platform: options.platform ?? 'darwin',
-    parentEnv: SECRET_PARENT_ENV,
+    parentEnv: options.parentEnv ?? SECRET_PARENT_ENV,
+    resolveToolchain: () => ({ node: '/opt/node/bin/node', npx: options.npx === undefined ? '/opt/node/bin/npx' : options.npx }),
+    cwd: '/Users/test',
+    killGroup,
+    graceMs: options.graceMs ?? 5000,
+    computerInstance: async () => 'computer-0123456789abcdef01234567',
     openExternal,
     onProgress: (p) => progress.push(p),
     onConnected,
@@ -67,7 +77,7 @@ function setup(options: { platform?: NodeJS.Platform; version?: string | null; c
   })
   const last = () => progress[progress.length - 1]
   const tick = () => new Promise((resolve) => setTimeout(resolve, 5))
-  return { child, spawn, runner, api, progress, last, tick, openExternal, onConnected, logs }
+  return { child, spawn, killGroup, runner, api, progress, last, tick, openExternal, onConnected, logs }
 }
 
 describe('ConnectRunner — spawn arguments', () => {
@@ -76,9 +86,10 @@ describe('ConnectRunner — spawn arguments', () => {
     const result = await t.runner.start({ vendor: 'all', ask: true })
     expect(result).toEqual({ ok: true, runId: 'run-1' })
     const [command, args, options] = t.spawn.mock.calls[0] as unknown as [string, string[], { env: NodeJS.ProcessEnv; shell: boolean; stdio: unknown }]
-    expect(command).toBe('npx')
+    expect(command).toBe('/opt/node/bin/npx')
     expect(args).toEqual(['--yes', '@peakflo/agent-harness@1.8.2', 'connect', '--ask', '--connection', ID, '--control-plane', 'https://api.peakflo.ai'])
     expect(options.shell).toBe(false)
+    expect(options).toMatchObject({ detached: true, cwd: '/Users/test' })
     expect(options.stdio).toEqual(['ignore', 'pipe', 'pipe'])
     const argv = args.join(' ')
     expect(argv).not.toMatch(/--token|--all/)
@@ -116,10 +127,10 @@ describe('ConnectRunner — spawn arguments', () => {
     const t = setup()
     await t.runner.start({ vendor: 'all', ask: false })
     const env = (t.spawn.mock.calls[0] as unknown as [string, string[], { env: NodeJS.ProcessEnv }])[2].env
-    expect(env.PATH).toBe('/usr/bin:/bin')
+    expect(env.PATH).toBe('/opt/node/bin:/usr/bin:/bin')
     expect(env.HOME).toBe('/Users/test')
     for (const key of Object.keys(SECRET_PARENT_ENV)) {
-      if (!['PATH', 'HOME', 'LANG'].includes(key)) expect(env).not.toHaveProperty(key)
+      if (!['PATH', 'HOME', 'LANG', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'NPM_CONFIG_REGISTRY'].includes(key)) expect(env).not.toHaveProperty(key)
     }
     expect(findSecretLookingKeys(env)).toEqual([])
     const values = Object.values(env).join('\n')
@@ -287,7 +298,7 @@ describe('failure states', () => {
       {},
       'Setting up the background service…\n'
     )
-    expect(p.failure).toMatchObject({ kind: 'service_failed', logPath: '~/.pf-agent-harness/logs' })
+    expect(p.failure).toMatchObject({ kind: 'service_failed', logPath: '~/.pf-agent-harness/logs/computer-0123456789abcdef01234567' })
     expect(p.steps.service).toBe('failed')
   })
 
@@ -335,12 +346,166 @@ describe('buildCleanEnv', () => {
   it('is an allowlist', () => {
     const env = buildCleanEnv({ ...SECRET_PARENT_ENV, SOMETHING_NEW: 'x' })
     expect(Object.keys(env).sort()).toEqual(
-      ['HOME', 'LANG', 'PATH', 'npm_config_audit', 'npm_config_fund', 'npm_config_update_notifier'].sort()
+      ['CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'HOME', 'LANG', 'NPM_CONFIG_REGISTRY', 'PATH', 'npm_config_audit', 'npm_config_fund', 'npm_config_update_notifier'].sort()
     )
+  })
+
+  it('passes npm registry and vendor config homes, but drops a registry URL with credentials', () => {
+    const env = buildCleanEnv({ PATH: '/bin', NPM_CONFIG_REGISTRY: 'https://registry.corp.example/', CODEX_HOME: '/h/.codex', CLAUDE_CONFIG_DIR: '/h/.claude' })
+    expect(env).toMatchObject({ NPM_CONFIG_REGISTRY: 'https://registry.corp.example/', CODEX_HOME: '/h/.codex', CLAUDE_CONFIG_DIR: '/h/.claude' })
+    expect(buildCleanEnv({ PATH: '/bin', NPM_CONFIG_REGISTRY: 'https://u:tok@registry.corp.example/' }).NPM_CONFIG_REGISTRY).toBeUndefined()
+  })
+
+  it('drops relative and empty PATH entries', () => {
+    expect(buildCleanEnv({ PATH: ':.:bin:/usr/bin::node_modules/.bin:/bin' }).PATH).toBe('/usr/bin:/bin')
+    expect(buildCleanEnv({ PATH: '.:bin' }).PATH).toBeUndefined()
   })
 
   it('keeps a credential-free proxy but drops one with a password', () => {
     expect(buildCleanEnv({ PATH: '/bin', HTTPS_PROXY: 'http://proxy.corp:3128' }).HTTPS_PROXY).toBe('http://proxy.corp:3128')
     expect(buildCleanEnv({ PATH: '/bin', HTTPS_PROXY: 'http://u:p@proxy.corp:3128' }).HTTPS_PROXY).toBeUndefined()
+  })
+})
+
+describe('concurrency, cancel and quit', () => {
+  it('two simultaneous start() calls spawn once', async () => {
+    const t = setup()
+    const [a, b] = await Promise.all([t.runner.start({ vendor: 'all', ask: false }), t.runner.start({ vendor: 'all', ask: false })])
+    expect([a.ok, b.ok].sort()).toEqual([false, true])
+    expect(t.spawn).toHaveBeenCalledTimes(1)
+    expect(t.api.createConnection).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed start does not block the next one', async () => {
+    const t = setup({ version: null })
+    expect((await t.runner.start({ vendor: 'all', ask: false })).ok).toBe(false)
+    expect((await t.runner.start({ vendor: 'all', ask: false })).ok).toBe(false)
+    expect(t.api.getHarnessVersion).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses to start without npx', async () => {
+    const t = setup({ npx: null })
+    expect(await t.runner.start({ vendor: 'all', ask: false })).toMatchObject({ ok: false, failure: { kind: 'node_missing' } })
+    expect(t.spawn).not.toHaveBeenCalled()
+  })
+
+  it('kills the whole process group, not just the child', async () => {
+    const t = setup({ pid: 4242 })
+    await t.runner.start({ vendor: 'all', ask: false })
+    t.runner.cancel('run-1')
+    expect(t.killGroup).toHaveBeenCalledWith(4242, 'SIGTERM')
+    expect(t.child.kill).not.toHaveBeenCalled()
+  })
+
+  it('escalates to SIGKILL and still finishes if close never fires', async () => {
+    const t = setup({ pid: 4242, graceMs: 10 })
+    t.child.kill.mockImplementation(() => true)
+    await t.runner.start({ vendor: 'all', ask: false })
+    t.runner.cancel('run-1')
+    await new Promise((r) => setTimeout(r, 60))
+    expect(t.killGroup).toHaveBeenCalledWith(4242, 'SIGKILL')
+    expect(t.last().phase).toBe('cancelled')
+    // A later start is not blocked forever.
+    const again = await t.runner.start({ vendor: 'all', ask: false })
+    expect(again.ok).toBe(true)
+  })
+
+  it('early cancel: nothing was installed', async () => {
+    const t = setup()
+    await t.runner.start({ vendor: 'all', ask: false })
+    t.child.out('Approve this computer in your browser:\nWaiting for approval… (Ctrl-C to cancel)\n')
+    await t.tick()
+    expect(t.runner.isPastPointOfNoReturn()).toBe(false)
+    t.runner.cancel('run-1')
+    await t.tick()
+    expect(t.last().failure).toMatchObject({ kind: 'denied' })
+    expect(t.last().failure?.message).toMatch(/Nothing was installed/)
+  })
+
+  it('cancel after register started says it may be partly installed', async () => {
+    const t = setup()
+    await t.runner.start({ vendor: 'all', ask: false })
+    t.child.out('✓ Approved for Acme.\n')
+    await t.tick()
+    expect(t.runner.isPastPointOfNoReturn()).toBe(true)
+    t.runner.cancel('run-1')
+    await t.tick()
+    expect(t.last().phase).toBe('cancelled')
+    expect(t.last().failure).toMatchObject({ kind: 'cancelled_partial', logPath: '~/.pf-agent-harness/logs/computer-0123456789abcdef01234567' })
+    expect(t.last().failure?.message).toMatch(/partly connected/)
+    expect(t.last().failure?.message).toMatch(/Reconnect/)
+  })
+
+  it('shutdown (app quit) kills the child group', async () => {
+    const t = setup({ pid: 99 })
+    await t.runner.start({ vendor: 'all', ask: false })
+    t.runner.shutdown()
+    expect(t.killGroup).toHaveBeenCalledWith(99, 'SIGTERM')
+  })
+})
+
+describe('failure classification uses error lines, exit code and step state only', () => {
+  it('"Waiting for approval… (Ctrl-C to cancel)" is not a cancellation', async () => {
+    const t = setup()
+    await t.runner.start({ vendor: 'all', ask: false })
+    t.child.out('Approve this computer in your browser:\nWaiting for approval… (Ctrl-C to cancel)\n')
+    await t.tick()
+    t.child.end(1)
+    await t.tick()
+    expect(t.last().phase).toBe('failed')
+    // approve step active, no error text, non-zero exit: the browser step ended without approval
+    expect(t.last().failure?.kind).toBe('denied')
+    expect(t.last().failure?.message).not.toMatch(/Ctrl-C/)
+  })
+
+  it('"Setting up the background service…" alone is not a service failure message', async () => {
+    const t = setup()
+    await t.runner.start({ vendor: 'all', ask: false })
+    t.child.out('✓ This computer is registered as your personal runner.\nConnecting\nSetting up the background service…\n')
+    await t.tick()
+    t.child.err('✗ Could not reach https://api.peakflo.ai. Check your internet connection and try again.\n')
+    await t.tick()
+    t.child.end(1)
+    await t.tick()
+    // The error line wins over the step name; the failure message is the error.
+    expect(t.last().failure?.message).toMatch(/Could not reach/)
+  })
+
+  it('does not scan ordinary output for failure words', async () => {
+    const t = setup()
+    await t.runner.start({ vendor: 'all', ask: false })
+    t.child.out('Connecting this computer on studio-mac…\nnote: you can cancel or retry; token expired links are refused\n')
+    await t.tick()
+    t.child.end(3)
+    await t.tick()
+    expect(t.last().failure?.kind).toBe('unknown')
+  })
+
+  it('keeps the install and sign-in help after a ✗ line', async () => {
+    const t = setup()
+    await t.runner.start({ vendor: 'codex', ask: false })
+    t.child.err('\n✗ Codex is not installed on this computer.\n')
+    t.child.err('  Install it:  npm install -g @openai/codex\n')
+    t.child.err('  Sign in:     codex login\n')
+    t.child.err('Then run this command again.\n')
+    await t.tick()
+    t.child.end(1)
+    await t.tick()
+    const failure = t.last().failure
+    expect(failure?.kind).toBe('vendor_missing')
+    expect(failure?.help).toContain('npm install -g @openai/codex')
+    expect(failure?.help).toContain('codex login')
+    expect(failure?.help).toContain('Then run this command again.')
+  })
+
+  it('service failure logs to the per-instance directory', async () => {
+    const t = setup()
+    await t.runner.start({ vendor: 'cursor', ask: false })
+    t.child.out('Setting up the background service…\n')
+    t.child.err('✗ The runner is registered, but its service has not started.\n')
+    await t.tick()
+    t.child.end(1)
+    await t.tick()
+    expect(t.last().failure).toMatchObject({ kind: 'service_failed', logPath: '~/.pf-agent-harness/logs/cursor' })
   })
 })

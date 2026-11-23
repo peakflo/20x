@@ -79,6 +79,7 @@ export function FailurePanel({
     service_failed: "Registered, but the service didn't start",
     vendor_missing: 'Harness not ready',
     rate_limited: 'Too many attempts',
+    cancelled_partial: 'Cancelled — may be partly set up',
     unknown: 'Connection failed'
   }
   const recheck = failure.kind === 'node_missing' || failure.kind === 'git_missing' || failure.kind === 'version_unavailable'
@@ -194,10 +195,19 @@ export function ConnectComputerModal() {
     void runPreflight()
   }, [runPreflight])
 
+  // Once register or service has started, Esc / an outside click must not
+  // cancel the run: only the explicit Cancel button does.
+  const pastPointOfNoReturn =
+    progress?.phase === 'running' && (progress.steps.register !== 'pending' || progress.steps.service !== 'pending')
+
   const cancelAndClose = useCallback(() => {
     if (progress?.phase === 'running') void enterpriseRunnersApi.connectCancel(progress.runId)
     close()
   }, [progress, close])
+
+  const cancelRun = useCallback(() => {
+    if (progress?.phase === 'running') void enterpriseRunnersApi.connectCancel(progress.runId)
+  }, [progress])
 
   const viewInMachines = useCallback(() => {
     useUIStore.getState().setSettingsTab(SettingsTab.MACHINES)
@@ -225,7 +235,7 @@ export function ConnectComputerModal() {
   const canStart = preflight?.ok === true && !starting && !running && !checking
 
   return (
-    <Dialog open={open} onOpenChange={(next) => { if (!next) cancelAndClose() }}>
+    <Dialog open={open} onOpenChange={(next) => { if (!next && !pastPointOfNoReturn) cancelAndClose() }}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>{replacesName ? `Reconnect ${replacesName}` : 'Connect this computer'}</DialogTitle>
@@ -289,7 +299,7 @@ export function ConnectComputerModal() {
                 </div>
                 {running && (
                   <div className="flex justify-end">
-                    <Button variant="ghost" onClick={cancelAndClose}>Cancel</Button>
+                    <Button variant="ghost" onClick={cancelRun}>Cancel</Button>
                   </div>
                 )}
               </div>

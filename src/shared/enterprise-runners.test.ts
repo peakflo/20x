@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   buildConnectCommand,
   buildUninstallCommand,
+  buildUninstallPlan,
+  serviceLogPath,
   compareHarnessVersions,
   deriveVersionState,
   machinesNeedingUpdate,
@@ -81,10 +83,45 @@ describe('buildConnectCommand', () => {
   })
 })
 
-describe('buildUninstallCommand', () => {
-  it('names the pinned version', () => {
-    expect(buildUninstallCommand('1.8.2')).toBe('npx --yes @peakflo/agent-harness@1.8.2 service uninstall')
-    expect(buildUninstallCommand(null)).toBe('npx --yes @peakflo/agent-harness service uninstall')
+describe('uninstall commands', () => {
+  const INSTANCE = 'computer-0123456789abcdef01234567'
+
+  it('always targets the per-instance service that connect installed', () => {
+    expect(buildUninstallCommand('1.8.2', 'codex')).toBe('npx --yes @peakflo/agent-harness@1.8.2 service uninstall --vendor codex')
+    expect(buildUninstallCommand('1.8.2', INSTANCE)).toBe(`npx --yes @peakflo/agent-harness@1.8.2 service uninstall --vendor ${INSTANCE}`)
+    expect(buildUninstallCommand(null, 'cursor')).toBe('npx --yes @peakflo/agent-harness service uninstall --vendor cursor')
+  })
+
+  it('refuses anything that is not a known instance name', () => {
+    for (const bad of ['', 'base', 'computer-xyz', 'codex; rm -rf /', 'computer-0123456789ABCDEF01234567']) {
+      expect(() => buildUninstallCommand('1.8.2', bad)).toThrow()
+    }
+  })
+
+  it('plans one command per instance, deduplicated', () => {
+    const plan = buildUninstallPlan('1.8.2', ['codex', 'codex', 'claude-code', 'junk'])
+    expect(plan.commands.map((c) => c.split('--vendor ')[1])).toEqual(['codex', 'claude-code'])
+    expect(plan.note).toBeNull()
+  })
+
+  it('says so when the instance is unknown, instead of printing a command that misses the service', () => {
+    const plan = buildUninstallPlan('1.8.2', [])
+    expect(plan.commands).toEqual([])
+    expect(plan.note).toMatch(/service status/)
+    expect(plan.note).toMatch(/--vendor <name>/)
+  })
+
+  it('logs per instance', () => {
+    expect(serviceLogPath(INSTANCE)).toBe(`~/.pf-agent-harness/logs/${INSTANCE}`)
+    expect(serviceLogPath(null)).toBe('~/.pf-agent-harness/logs')
+  })
+
+  it('takes the instance from the server, else from the machine kind', () => {
+    const mk = (m: RawByoMachine) =>
+      normaliseMachines({ machines: [{ runnerId: 'r', name: 'n', personal: true, isOwner: true, registered: true, ...m }], runners: null, pinnedVersion: null, computerInstance: INSTANCE })[0].serviceInstances
+    expect(mk({ serviceInstance: 'computer-aaaaaaaaaaaaaaaaaaaaaaaa' })).toEqual(['computer-aaaaaaaaaaaaaaaaaaaaaaaa'])
+    expect(mk({ discovery: true })).toEqual([INSTANCE])
+    expect(mk({ discovery: false, vendors: ['codex', 'cursor'] })).toEqual(['codex', 'cursor'])
   })
 })
 
@@ -140,6 +177,33 @@ describe('versions', () => {
     expect(satisfiesNodeRange('27.0.0', range)).toBe(false)
     expect(satisfiesNodeRange('20.0.0', null)).toBe(true)
     expect(satisfiesNodeRange('garbage', range)).toBe(false)
+  })
+
+  it('does not fail open on "operator space version"', () => {
+    expect(satisfiesNodeRange('22.0.0', '>= 24')).toBe(false)
+    expect(satisfiesNodeRange('24.1.0', '>= 24')).toBe(true)
+    expect(satisfiesNodeRange('23.9.0', '>=  24.0.0 < 26')).toBe(false)
+    expect(satisfiesNodeRange('25.0.0', '>= 24.0.0 < 26')).toBe(true)
+    expect(satisfiesNodeRange('26.0.0', '>= 24.0.0 < 26')).toBe(false)
+    expect(satisfiesNodeRange('21.0.0', '^ 22.1.0')).toBe(false)
+  })
+
+  it('treats a partial version as the whole line', () => {
+    for (const range of ['22', '22.x', '22.*', '~22', '^22', '=22']) {
+      expect(satisfiesNodeRange('22.0.0', range)).toBe(true)
+      expect(satisfiesNodeRange('22.99.3', range)).toBe(true)
+      expect(satisfiesNodeRange('21.9.9', range)).toBe(false)
+      expect(satisfiesNodeRange('23.0.0', range)).toBe(false)
+    }
+    expect(satisfiesNodeRange('22.4.9', '22.4')).toBe(true)
+    expect(satisfiesNodeRange('22.5.0', '22.4')).toBe(false)
+    expect(satisfiesNodeRange('22.4.9', '~22.4')).toBe(true)
+    expect(satisfiesNodeRange('22.5.0', '~22.4')).toBe(false)
+    expect(satisfiesNodeRange('22.9.0', '<=22')).toBe(true)
+    expect(satisfiesNodeRange('23.0.0', '<=22')).toBe(false)
+    expect(satisfiesNodeRange('22.9.0', '>22')).toBe(false)
+    expect(satisfiesNodeRange('23.0.0', '>22')).toBe(true)
+    expect(satisfiesNodeRange('5.0.0', '*')).toBe(true)
   })
 })
 

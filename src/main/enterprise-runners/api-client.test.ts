@@ -74,14 +74,19 @@ describe('EnterpriseRunnersApi', () => {
 
 describe('runPreflight', () => {
   const ok = { getHarnessVersion: async () => ({ version: '1.8.2', nodeEngines: '^22.23.5 || ^24.22.3 || >=26.13.1 <27' }), getApiUrl: () => 'https://api.peakflo.ai' }
-  const run = (node: string | null, git: string | null) => async (command: string) =>
-    command === 'node' ? { ok: node !== null, stdout: node ?? '' } : { ok: git !== null, stdout: git ?? '' }
-  const base = { platform: 'darwin' as const, arch: 'arm64', api: ok, isSignedIn: async () => true }
+  const tools = { node: '/opt/node/bin/node', npx: '/opt/node/bin/npx', git: '/usr/bin/git', dirs: ['/opt/node/bin', '/usr/bin'] }
+  const run = (node: string | null, git: string | null, npx: string | null = '10.9.2') => async (command: string) =>
+    command.endsWith('/node')
+      ? { ok: node !== null, stdout: node ?? '' }
+      : command.endsWith('/npx')
+        ? { ok: npx !== null, stdout: npx ?? '' }
+        : { ok: git !== null, stdout: git ?? '' }
+  const base = { platform: 'darwin' as const, arch: 'arm64', api: ok, isSignedIn: async () => true, toolchain: tools }
 
   it('passes with OS, Node in range, Git and sign-in', async () => {
     const result = await runPreflight({ ...base, run: run('v22.23.5\n', 'git version 2.45.1') })
     expect(result.ok).toBe(true)
-    expect(result.checks.map((c) => [c.id, c.ok])).toEqual([['os', true], ['signed_in', true], ['node', true], ['git', true]])
+    expect(result.checks.map((c) => [c.id, c.ok])).toEqual([['os', true], ['signed_in', true], ['node', true], ['npx', true], ['git', true]])
     expect(result).toMatchObject({ pinnedVersion: '1.8.2', controlPlane: 'https://api.peakflo.ai' })
   })
 
@@ -94,6 +99,22 @@ describe('runPreflight', () => {
   it('fails on Node or Git missing', async () => {
     expect((await runPreflight({ ...base, run: run(null, 'git version 2.45.1') })).failure?.kind).toBe('node_missing')
     expect((await runPreflight({ ...base, run: run('v22.23.5', null) })).failure).toMatchObject({ kind: 'git_missing', help: 'xcode-select --install' })
+  })
+
+  it('fails when Node is present but npx (npm) is not', async () => {
+    const result = await runPreflight({ ...base, run: run('v22.23.5', 'git version 2.45.1', null) })
+    expect(result.ok).toBe(false)
+    expect(result.checks.find((c) => c.id === 'npx')).toMatchObject({ ok: false, help: 'brew reinstall node' })
+    expect(result.failure).toMatchObject({ kind: 'node_missing' })
+    expect(result.failure?.message).toMatch(/npx/)
+    const unresolved = await runPreflight({ ...base, toolchain: { ...tools, npx: null }, run: run('v22.23.5', 'git version 2.45.1') })
+    expect(unresolved.checks.find((c) => c.id === 'npx')?.ok).toBe(false)
+  })
+
+  it('runs the binaries it resolved, by absolute path', async () => {
+    const seen: string[] = []
+    await runPreflight({ ...base, run: async (c) => { seen.push(c); return { ok: true, stdout: 'v22.23.5 1.2.3 2.45.1' } } })
+    expect(seen).toEqual(['/opt/node/bin/node', '/opt/node/bin/npx', '/usr/bin/git'])
   })
 
   it('fails on Windows and when signed out', async () => {

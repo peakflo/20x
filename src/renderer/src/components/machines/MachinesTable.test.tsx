@@ -18,6 +18,7 @@ const row = (patch: Partial<MachineRow> & { id: string; name: string }): Machine
   maxSessions: 1,
   canManage: true,
   unavailableReason: null,
+  serviceInstances: ['claude-code'],
   update: { supported: true, selfUpdate: true, available: false, targetVersion: null, state: null, reason: null, nowRequested: false },
   ...patch
 })

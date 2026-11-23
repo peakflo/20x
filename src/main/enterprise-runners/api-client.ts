@@ -1,3 +1,4 @@
+import { computerServiceInstance } from './service-instance'
 import {
   isPublishedHarnessVersion,
   normaliseMachines,
@@ -18,6 +19,8 @@ export interface EnterpriseRequester {
   apiRequest(method: string, path: string, body?: unknown): Promise<unknown>
   getApiUrl(): string
   isSignedIn(): Promise<boolean>
+  /** Tenant and user ids of the signed-in session (not secrets). */
+  getIdentity?(): Promise<{ tenantId: string; userId: string } | null>
 }
 
 export class EnterpriseRunnersApiError extends Error {
@@ -80,6 +83,17 @@ export class EnterpriseRunnersApi {
     return this.requester.getApiUrl()
   }
 
+  /** `computer-<scope>` for the signed-in user on this control plane, if it can be computed. */
+  async getComputerInstance(): Promise<string | null> {
+    try {
+      const identity = await this.requester.getIdentity?.()
+      if (!identity) return null
+      return computerServiceInstance(this.requester.getApiUrl(), identity.tenantId, identity.userId)
+    } catch {
+      return null
+    }
+  }
+
   async getHarnessVersion(): Promise<HarnessVersionInfo> {
     const raw = (await this.requester.apiRequest('GET', '/api/onboarding/byo/harness-version')) as {
       version?: unknown
@@ -133,10 +147,11 @@ export class EnterpriseRunnersApi {
     if (!(await this.requester.isSignedIn())) {
       return { ok: false, error: { kind: 'not_signed_in', message: 'Sign in to Peakflo Enterprise to manage machines.' } }
     }
-    const [machines, runners, version] = await Promise.allSettled([
+    const [machines, runners, version, instance] = await Promise.allSettled([
       this.listMachinesRaw(),
       this.listRunnersRaw(),
-      this.getHarnessVersion()
+      this.getHarnessVersion(),
+      this.getComputerInstance()
     ])
     if (machines.status === 'rejected' && runners.status === 'rejected') {
       return { ok: false, error: toFailure(machines.reason) }
@@ -152,7 +167,8 @@ export class EnterpriseRunnersApi {
           machines: machines.status === 'fulfilled' ? machines.value : null,
           runners: runners.status === 'fulfilled' ? runners.value : null,
           pinnedVersion: pinned.version,
-          hostname
+          hostname,
+          computerInstance: instance.status === 'fulfilled' ? instance.value : null
         })
       }
     }

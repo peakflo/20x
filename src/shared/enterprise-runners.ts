@@ -111,10 +111,45 @@ export function previewConnectCommand(input: Omit<ConnectCommandInput, 'connecti
   return buildConnectCommand({ ...input, connectionId: nil }).display.replace(nil, '<connection-id>')
 }
 
-/** The command shown after "Remove machine". The service stays until uninstalled. */
-export function buildUninstallCommand(version: string | null): string {
+const SERVICE_INSTANCE_RE = /^(?:claude-code|codex|cursor|computer-[a-f0-9]{24})$/
+
+export function isServiceInstance(value: unknown): value is string {
+  return typeof value === 'string' && SERVICE_INSTANCE_RE.test(value)
+}
+
+/**
+ * `connect` installs one service per instance (`ai.peakflo.agent-harness.<instance>` /
+ * `pf-agent-harness-<instance>.service`). `service uninstall` without `--vendor`
+ * only targets the base service, so the instance is always named.
+ */
+export function buildUninstallCommand(version: string | null, instance: string): string {
+  if (!isServiceInstance(instance)) throw new ConnectCommandError('Unknown service instance.')
   const pkg = isPublishedHarnessVersion(version) ? `${HARNESS_PACKAGE}@${version}` : HARNESS_PACKAGE
-  return `npx --yes ${pkg} service uninstall`
+  return `npx --yes ${pkg} service uninstall --vendor ${instance}`
+}
+
+export interface UninstallPlan {
+  commands: string[]
+  /** Set when the exact service could not be determined. */
+  note: string | null
+}
+
+/** One command per installed service; an honest note when the instance is unknown. */
+export function buildUninstallPlan(version: string | null, instances: readonly string[]): UninstallPlan {
+  const valid = Array.from(new Set(instances.filter(isServiceInstance)))
+  if (valid.length > 0) return { commands: valid.map((i) => buildUninstallCommand(version, i)), note: null }
+  return {
+    commands: [],
+    note:
+      'The background service on that computer could not be identified from here. On that computer run ' +
+      `\`npx --yes ${HARNESS_PACKAGE} service status\` to see its name, then uninstall it with ` +
+      '`service uninstall --vendor <name>`. Without --vendor, uninstall only removes the base service, not the one connect installed.'
+  }
+}
+
+/** Where connect-installed services write logs (macOS and Linux). */
+export function serviceLogPath(instance: string | null): string {
+  return isServiceInstance(instance) ? `~/.pf-agent-harness/logs/${instance}` : '~/.pf-agent-harness/logs'
 }
 
 // ── Redaction ─────────────────────────────────────────────────────
@@ -179,72 +214,77 @@ export function compareHarnessVersions(a: string | null | undefined, b: string |
   return x.rc - y.rc
 }
 
-interface Triple {
+interface Partial3 {
   major: number
-  minor: number
-  patch: number
+  minor: number | null
+  patch: number | null
 }
 
-function parseTriple(value: string): Triple | null {
-  const match = /^v?(\d+)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?/.exec(value.trim())
-  if (!match) return null
-  return { major: +match[1], minor: match[2] && /^\d+$/.test(match[2]) ? +match[2] : 0, patch: match[3] && /^\d+$/.test(match[3]) ? +match[3] : 0 }
+function parsePartial(value: string): Partial3 | null {
+  const match = /^v?(\d+|x|\*)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?$/i.exec(value.trim())
+  if (!match || /^[x*]$/i.test(match[1])) return null
+  const num = (v: string | undefined): number | null => (v !== undefined && /^\d+$/.test(v) ? +v : null)
+  return { major: +match[1], minor: num(match[2]), patch: num(match[3]) }
 }
 
-function cmpTriple(a: Triple, b: Triple): number {
-  return a.major - b.major || a.minor - b.minor || a.patch - b.patch
-}
+type Triple = [number, number, number]
+const cmp = (a: Triple, b: Triple): number => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]
+const floor = (p: Partial3): Triple => [p.major, p.minor ?? 0, p.patch ?? 0]
+/** The first version above everything the partial covers: 22 → 23.0.0, 22.4 → 22.5.0, 22.4.1 → 22.4.2. */
+const ceil = (p: Partial3): Triple =>
+  p.minor === null ? [p.major + 1, 0, 0] : p.patch === null ? [p.major, p.minor + 1, 0] : [p.major, p.minor, p.patch + 1]
 
 /**
  * Does `version` satisfy a Node `engines` range such as
  * `^22.23.5 || ^24.22.3 || >=26.13.1 <27`? Supports `||`, `^`, `~`, `>=`, `>`,
- * `<=`, `<`, `=` and bare versions. An unparseable range is treated as
- * satisfied: this is advice before running the CLI, which makes its own check.
+ * `<=`, `<`, `=`, bare/partial versions (`22`, `22.x`, `~22`), `*`, and spaces
+ * between an operator and its version (`>= 24`). A range that cannot be parsed
+ * at all is treated as satisfied: the CLI makes its own check.
  */
 export function satisfiesNodeRange(version: string, range: string | null | undefined): boolean {
-  const current = parseTriple(version)
+  const current = /^v?(\d+)\.(\d+)\.(\d+)/.exec(version.trim())
   if (!current) return false
+  const v: Triple = [+current[1], +current[2], +current[3]]
   if (!range || !range.trim()) return true
-  const alternatives = range.split('||')
-  for (const alt of alternatives) {
-    const comparators = alt.trim().split(/\s+/).filter(Boolean)
-    if (comparators.length === 0) return true
+  for (const alt of range.split('||')) {
+    const tokens = alt
+      .trim()
+      .replace(/(\^|~|>=|<=|>|<|=)\s+/g, '$1')
+      .split(/\s+/)
+      .filter(Boolean)
+    if (tokens.length === 0 || tokens.every((t) => t === '*' || /^x$/i.test(t))) return true
     let ok = true
-    for (const comparator of comparators) {
-      const match = /^(\^|~|>=|<=|>|<|=)?\s*(.+)$/.exec(comparator)
-      const target = match ? parseTriple(match[2]) : null
-      if (!match || !target) return true
-      const op = match[1] ?? '='
-      const diff = cmpTriple(current, target)
+    for (const token of tokens) {
+      const match = /^(\^|~|>=|<=|>|<|=)?(.+)$/.exec(token)
+      if (!match) return true
+      if (/^[x*]$/i.test(match[2])) continue
+      const p = parsePartial(match[2])
+      if (!p) return true
       let pass: boolean
-      switch (op) {
+      switch (match[1] ?? '=') {
         case '^': {
           const upper: Triple =
-            target.major > 0
-              ? { major: target.major + 1, minor: 0, patch: 0 }
-              : target.minor > 0
-                ? { major: 0, minor: target.minor + 1, patch: 0 }
-                : { major: 0, minor: 0, patch: target.patch + 1 }
-          pass = diff >= 0 && cmpTriple(current, upper) < 0
+            p.major > 0 ? [p.major + 1, 0, 0] : (p.minor ?? 0) > 0 || p.patch === null ? [0, (p.minor ?? 0) + 1, 0] : [0, 0, (p.patch ?? 0) + 1]
+          pass = cmp(v, floor(p)) >= 0 && cmp(v, upper) < 0
           break
         }
         case '~':
-          pass = diff >= 0 && cmpTriple(current, { major: target.major, minor: target.minor + 1, patch: 0 }) < 0
+          pass = cmp(v, floor(p)) >= 0 && cmp(v, p.minor === null ? [p.major + 1, 0, 0] : [p.major, p.minor + 1, 0]) < 0
           break
         case '>=':
-          pass = diff >= 0
+          pass = cmp(v, floor(p)) >= 0
           break
         case '>':
-          pass = diff > 0
+          pass = cmp(v, ceil(p)) >= 0
           break
         case '<=':
-          pass = diff <= 0
+          pass = cmp(v, ceil(p)) < 0
           break
         case '<':
-          pass = diff < 0
+          pass = cmp(v, floor(p)) < 0
           break
         default:
-          pass = diff === 0
+          pass = cmp(v, floor(p)) >= 0 && cmp(v, ceil(p)) < 0
       }
       if (!pass) {
         ok = false
@@ -317,6 +357,8 @@ export interface MachineRow {
   /** The server's own reason a row cannot take work right now. */
   unavailableReason: string | null
   update: MachineUpdateInfo | null
+  /** Service instances `connect` installed on that computer (for the uninstall command). */
+  serviceInstances: string[]
 }
 
 export interface MachinesSnapshot {
@@ -355,6 +397,9 @@ export interface RawByoMachine {
   harnessVersion?: string | null
   lastSeenAt?: string | null
   vendors?: string[]
+  /** The service instance the server knows for this machine (preferred over a local guess). */
+  serviceInstance?: string | null
+  discovery?: boolean
   harnesses?: Array<{ name?: string; usable?: boolean; installed?: boolean | null }>
   agents?: Array<{ agentId?: string; name?: string; backend?: string }>
   update?: Partial<MachineUpdateInfo> & { autoUpdate?: boolean }
@@ -461,6 +506,13 @@ function statusOf(
   return 'online'
 }
 
+function serviceInstancesOf(machine: RawByoMachine | undefined, computerInstance: string | null): string[] {
+  if (!machine) return []
+  if (isServiceInstance(machine.serviceInstance)) return [machine.serviceInstance]
+  if (machine.discovery === true) return computerInstance && machine.isOwner !== false ? [computerInstance] : []
+  return (machine.vendors ?? []).filter(isServiceInstance)
+}
+
 export interface NormaliseOptions {
   machines: RawByoMachine[] | null
   runners: RawRunner[] | null
@@ -468,6 +520,8 @@ export interface NormaliseOptions {
   /** Used to flag "this computer". */
   hostname?: string | null
   now?: number
+  /** `computer-<scope>` for the signed-in user on this control plane, when computable. */
+  computerInstance?: string | null
 }
 
 function sameHost(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -528,7 +582,8 @@ export function normaliseMachines(options: NormaliseOptions): MachineRow[] {
       maxSessions: runner?.maxConcurrentSessions ?? null,
       canManage: machine?.canManage === true,
       unavailableReason,
-      update
+      update,
+      serviceInstances: serviceInstancesOf(machine, options.computerInstance ?? null)
     })
   }
 
@@ -587,6 +642,7 @@ export type ConnectFailureKind =
   | 'service_failed'
   | 'vendor_missing'
   | 'rate_limited'
+  | 'cancelled_partial'
   | 'unknown'
 
 export interface ConnectFailure {
@@ -599,7 +655,7 @@ export interface ConnectFailure {
 }
 
 export interface PreflightCheck {
-  id: 'os' | 'node' | 'git' | 'signed_in'
+  id: 'os' | 'node' | 'npx' | 'git' | 'signed_in'
   ok: boolean
   /** What was found, for display ("Node 22.4.0", "macOS 15 arm64"). */
   detail: string

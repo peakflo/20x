@@ -35,6 +35,8 @@ export function cleanLine(raw: string): string {
  */
 export class ConnectOutputParser {
   private buffers: Record<'stdout' | 'stderr', string> = { stdout: '', stderr: '' }
+  /** After a `✗` line, everything that follows is part of the error (install/sign-in help). */
+  private inError = false
 
   feed(stream: 'stdout' | 'stderr', chunk: string): ConnectEvent[] {
     const events: ConnectEvent[] = []
@@ -100,15 +102,14 @@ export class ConnectOutputParser {
       for (const id of ALL_STEPS) events.push({ type: 'step', id, state: 'done' })
       events.push({ type: 'success' })
     }
-    if (/^✗ /.test(text) || (stream === 'stderr' && /^(?:Error|npm error|npm ERR!)\b/.test(text))) {
+    if (/^✗ /.test(text)) this.inError = true
+    // Error lines: everything after a `✗`, and stderr (minus npm's warn/notice chatter).
+    if (this.inError || (stream === 'stderr' && !/^npm (?:warn|notice|http|info)\b/i.test(text))) {
       events.push({ type: 'error-line', text: redactSecrets(text.replace(/^✗\s*/, '')) })
     }
     return events
   }
 }
-
-/** Where the harness writes service logs on macOS and Linux. */
-export const SERVICE_LOG_PATH = '~/.pf-agent-harness/logs'
 
 /**
  * Decide which failure screen to show from the CLI's last error text and exit
@@ -121,6 +122,8 @@ export function classifyFailure(input: {
   platform: NodeJS.Platform
   /** Which step was active when the process ended. */
   activeStep: ConnectStepId | null
+  /** Where this connect's service logs (per instance). */
+  logPath: string
 }): ConnectFailure {
   const text = redactSecrets(input.errorText).trim()
   const spawnError = input.spawnError ?? ''
@@ -163,7 +166,7 @@ export function classifyFailure(input: {
     return { kind: 'vendor_missing', message: first || 'The selected harness is not ready on this computer.', help: text }
   }
   if (input.activeStep === 'service' || /service|launchctl|systemctl|bootstrap|launchd/i.test(text)) {
-    return { kind: 'service_failed', message: first || 'The background service did not start.', logPath: SERVICE_LOG_PATH }
+    return { kind: 'service_failed', message: first || 'The background service did not start.', logPath: input.logPath }
   }
   if (input.activeStep === 'approve' && !text) {
     return { kind: 'denied', message: 'Approval was cancelled. Nothing was installed on this computer.' }

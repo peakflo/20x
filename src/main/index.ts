@@ -52,6 +52,7 @@ import { installProcessStreamErrorHandlers } from './process-stream-errors'
 import { startMacosSwapWatchdog } from './macos-swap-watchdog'
 import { getWindowsPathEntries, prependMissingWindowsPaths } from './windows-runtime-paths'
 import { initAnalytics, shutdownAnalytics } from './analytics-service'
+import { shutdownEnterpriseRunners } from './enterprise-runners'
 import {
   recordFocusGained,
   recordFocusLost,
@@ -1401,6 +1402,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', async (event) => {
+  // A running "Connect this computer" command must not outlive the app.
+  shutdownEnterpriseRunners()
   if (isShuttingDown) {
     return
   }

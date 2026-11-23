@@ -7,7 +7,8 @@ import type {
   MachinesResult,
   PreflightResult,
   StartConnectRequest,
-  StartConnectResult
+  StartConnectResult,
+  UninstallPlan
 } from '../shared/enterprise-runners'
 import { createBrandFlagCache } from './brand-cache'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, CanvasArtifactPanelRegistration, PullRequestDetails } from '../shared/artifacts'
@@ -639,7 +640,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: (): Promise<MachinesResult> => ipcRenderer.invoke('enterprise-runners:list'),
     rename: (runnerId: string, name: string): Promise<MachineActionResult> =>
       ipcRenderer.invoke('enterprise-runners:rename', runnerId, name),
-    remove: (runnerId: string): Promise<MachineActionResult & { uninstallCommand?: string }> =>
+    remove: (runnerId: string): Promise<MachineActionResult & { uninstall?: UninstallPlan }> =>
       ipcRenderer.invoke('enterprise-runners:remove', runnerId),
     update: (runnerId: string): Promise<MachineActionResult> => ipcRenderer.invoke('enterprise-runners:update', runnerId),
     preflight: (): Promise<PreflightResult> => ipcRenderer.invoke('enterprise-runners:preflight'),

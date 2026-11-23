@@ -1,7 +1,9 @@
 import { create } from 'zustand'
 import { enterpriseRunnersApi } from '@/lib/ipc-client'
 import {
+  buildUninstallPlan,
   machinesNeedingUpdate,
+  type UninstallPlan,
   type MachinesFailure,
   type MachinesSnapshot
 } from '@shared/enterprise-runners'
@@ -17,7 +19,7 @@ interface MachinesState {
   /** Last action error, shown inline. */
   actionError: string | null
   /** Set after Remove so the uninstall command can be shown. */
-  removed: { name: string; uninstallCommand: string } | null
+  removed: { name: string; uninstall: UninstallPlan } | null
 
   refresh: (options?: { quiet?: boolean }) => Promise<void>
   rename: (id: string, name: string) => Promise<boolean>
@@ -75,7 +77,7 @@ export const useMachinesStore = create<MachinesState>((set, get) => ({
         set({ actionError: result.error.message })
         return false
       }
-      set({ removed: { name: machine?.name ?? 'Machine', uninstallCommand: result.uninstallCommand ?? '' } })
+      set({ removed: { name: machine?.name ?? 'Machine', uninstall: result.uninstall ?? buildUninstallPlan(null, []) } })
       await get().refresh({ quiet: true })
       return true
     } finally {

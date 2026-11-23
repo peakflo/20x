@@ -6,7 +6,8 @@ import type {
   MachinesResult,
   PreflightResult,
   StartConnectRequest,
-  StartConnectResult
+  StartConnectResult,
+  UninstallPlan
 } from '@shared/enterprise-runners'
 import type { UiCommandAck, UiCommandEnvelope } from '@shared/ui-commands'
 import type { TaskRunDuration } from '@shared/task-run-duration'
@@ -515,7 +516,7 @@ interface ElectronAPI {
   enterpriseRunners: {
     list: () => Promise<MachinesResult>
     rename: (runnerId: string, name: string) => Promise<MachineActionResult>
-    remove: (runnerId: string) => Promise<MachineActionResult & { uninstallCommand?: string }>
+    remove: (runnerId: string) => Promise<MachineActionResult & { uninstall?: UninstallPlan }>
     update: (runnerId: string) => Promise<MachineActionResult>
     preflight: () => Promise<PreflightResult>
     connectStart: (request: StartConnectRequest) => Promise<StartConnectResult>

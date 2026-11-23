@@ -209,6 +209,22 @@ describe('ConnectComputerModal — running', () => {
     expect(screen.getByTestId('connect-log').textContent).toContain('[redacted]')
   })
 
+  it('Esc does not cancel once register has started; the Cancel button does', async () => {
+    await startRun()
+    push(progress({ steps: { connection: 'done', approve: 'done', register: 'active', service: 'pending' } }))
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(connectCancel).not.toHaveBeenCalled()
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(connectCancel).toHaveBeenCalledWith('run-1')
+  })
+
+  it('partial cancel explains the machine may be partly set up', async () => {
+    await startRun()
+    push(progress({ phase: 'cancelled', steps: { connection: 'done', approve: 'done', register: 'done', service: 'active' }, failure: { kind: 'cancelled_partial', message: 'Cancelled while setting up. This computer may be partly connected: use Reconnect.', logPath: '~/.pf-agent-harness/logs/codex' } }))
+    expect(screen.getByText('Cancelled — may be partly set up')).toBeTruthy()
+  })
+
   it('Cancel stops the run', async () => {
     await startRun()
     push(progress())

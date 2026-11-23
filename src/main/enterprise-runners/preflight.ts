@@ -1,3 +1,4 @@
+import { homedir } from 'node:os'
 import {
   satisfiesNodeRange,
   type ConnectFailure,
@@ -6,6 +7,7 @@ import {
 } from '../../shared/enterprise-runners'
 import type { EnterpriseRunnersApi } from './api-client'
 import { buildCleanEnv } from './clean-env'
+import type { Toolchain } from './toolchain'
 
 export interface CommandResult {
   ok: boolean
@@ -19,6 +21,8 @@ export interface PreflightDeps {
   /** e.g. "15.1" — only used for display. */
   osVersion?: string
   run: CommandRunner
+  /** Absolute paths of node / npx / git, found on absolute PATH entries only. */
+  toolchain: Toolchain
   api: Pick<EnterpriseRunnersApi, 'getHarnessVersion' | 'getApiUrl'>
   isSignedIn: () => Promise<boolean>
 }
@@ -72,7 +76,8 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
     }
   }
 
-  const node = await deps.run('node', ['--version'])
+  const { node: nodePath, npx: npxPath, git: gitPath } = deps.toolchain
+  const node = nodePath ? await deps.run(nodePath, ['--version']) : { ok: false, stdout: '' }
   const nodeVersion = node.ok ? node.stdout.trim().replace(/^v/, '') : ''
   if (!nodeVersion) {
     const help = deps.platform === 'darwin' ? 'brew install node' : 'Install Node.js from nodejs.org'
@@ -86,7 +91,18 @@ export async function runPreflight(deps: PreflightDeps): Promise<PreflightResult
     checks.push({ id: 'node', ok: true, detail: `Node ${nodeVersion}` })
   }
 
-  const git = await deps.run('git', ['--version'])
+  // The connect command is `npx …`: Node alone is not enough.
+  const npx = npxPath ? await deps.run(npxPath, ['--version']) : { ok: false, stdout: '' }
+  const npxVersion = npx.ok ? /(\d+\.\d+\.\d+)/.exec(npx.stdout)?.[1] : null
+  if (!npxVersion) {
+    const help = deps.platform === 'darwin' ? 'brew reinstall node' : 'Reinstall Node.js with npm included (nodejs.org)'
+    checks.push({ id: 'npx', ok: false, detail: 'npx (npm) — none found', help })
+    fail({ kind: 'node_missing', message: 'npx (npm) was not found. Node is installed without npm.', help })
+  } else {
+    checks.push({ id: 'npx', ok: true, detail: `npx ${npxVersion}` })
+  }
+
+  const git = gitPath ? await deps.run(gitPath, ['--version']) : { ok: false, stdout: '' }
   const gitVersion = git.ok ? /(\d+\.\d+(?:\.\d+)?)/.exec(git.stdout)?.[1] : null
   if (!gitVersion) {
     const help = deps.platform === 'darwin' ? 'xcode-select --install' : 'Install Git with your package manager'
@@ -104,7 +120,7 @@ export function createCommandRunner(execFile: typeof import('node:child_process'
   return (command, args) =>
     new Promise<CommandResult>((resolve) => {
       try {
-        execFile(command, args, { env: buildCleanEnv(), timeout: 8000, windowsHide: true }, (error, stdout) => {
+        execFile(command, args, { env: buildCleanEnv(), cwd: homedir(), timeout: 8000, windowsHide: true }, (error, stdout) => {
           resolve({ ok: !error, stdout: String(stdout ?? '') })
         })
       } catch {

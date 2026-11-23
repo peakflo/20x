@@ -4,6 +4,7 @@ import {
   ConnectCommandError,
   buildConnectCommand,
   redactSecrets,
+  serviceLogPath,
   type ConnectFailure,
   type ConnectProgress,
   type ConnectStepId,
@@ -33,6 +34,16 @@ export interface ConnectRunnerDeps {
   /** Hard stop: the CLI itself waits up to 30 minutes for the browser. */
   timeoutMs?: number
   log?: (message: string) => void
+  /** Absolute node/npx on absolute PATH entries. `npx` null → Node/npm missing. */
+  resolveToolchain: (env: NodeJS.ProcessEnv) => { node: string | null; npx: string | null }
+  /** Working directory for the child (never a project folder). */
+  cwd: string
+  /** `computer-<scope>` for this user and control plane, when computable. */
+  computerInstance?: () => Promise<string | null>
+  /** Kill a whole process group (the child is detached). Defaults to process.kill(-pid). */
+  killGroup?: (pid: number, signal: NodeJS.Signals) => void
+  /** SIGTERM → SIGKILL delay, then the forced `finish`. */
+  graceMs?: number
 }
 
 const MAX_LINES = 200
@@ -62,9 +73,13 @@ export class ConnectRunner {
     successSeen: boolean
     cancelled: boolean
     timer: ReturnType<typeof setTimeout> | null
+    killTimer: ReturnType<typeof setTimeout> | null
     spawnError: string | null
     finished: boolean
+    logPath: string
   } | null = null
+  /** Set synchronously on entry to start(), so two calls cannot both pass the checks. */
+  private starting = false
 
   constructor(private readonly deps: ConnectRunnerDeps) {}
 
@@ -75,6 +90,18 @@ export class ConnectRunner {
   }
 
   async start(request: StartConnectRequest): Promise<StartConnectResult> {
+    if (this.starting || (this.current && !this.current.finished)) {
+      return { ok: false, failure: { kind: 'unknown', message: 'A connection is already in progress.' } }
+    }
+    this.starting = true
+    try {
+      return await this.startInner(request)
+    } finally {
+      this.starting = false
+    }
+  }
+
+  private async startInner(request: StartConnectRequest): Promise<StartConnectResult> {
     const platform = this.deps.platform
     if (platform !== 'darwin' && platform !== 'linux') {
       return {
@@ -82,10 +109,6 @@ export class ConnectRunner {
         failure: { kind: 'unsupported_os', message: 'Runners need macOS or Linux. Use a Mac/Linux machine or a shared runner.' }
       }
     }
-    if (this.current && !this.current.finished) {
-      return { ok: false, failure: { kind: 'unknown', message: 'A connection is already in progress.' } }
-    }
-
     if (request.replacesRunnerId !== undefined && !isUuid(request.replacesRunnerId)) {
       return { ok: false, failure: { kind: 'unknown', message: 'The machine id is invalid.' } }
     }
@@ -131,6 +154,20 @@ export class ConnectRunner {
       }
     }
 
+    const tools = this.deps.resolveToolchain(this.deps.parentEnv ?? process.env)
+    if (!tools.npx) {
+      return {
+        ok: false,
+        failure: {
+          kind: 'node_missing',
+          message: 'npx (npm) was not found, so the connect command cannot run.',
+          help: this.deps.platform === 'darwin' ? 'brew install node' : 'Install Node.js (with npm) from nodejs.org, then re-check.'
+        }
+      }
+    }
+    const npxPath = tools.npx
+    const instance = request.vendor === 'all' ? await this.deps.computerInstance?.().catch(() => null) ?? null : request.vendor
+    const logPath = serviceLogPath(instance)
     const runId = this.deps.newId ? this.deps.newId() : `run_${Date.now().toString(36)}`
     const progress: ConnectProgress = {
       runId,
@@ -153,18 +190,25 @@ export class ConnectRunner {
       successSeen: false,
       cancelled: false,
       timer: null,
+      killTimer: null,
       spawnError: null,
-      finished: false
+      finished: false,
+      logPath
     }
     this.current = state
     this.emit()
 
     try {
       // argv holds the pinned package and a UUID; env is an allowlist.
-      const child = this.deps.spawn(command.command, command.args, {
-        env: buildCleanEnv(this.deps.parentEnv),
+      // `npx` is the absolute path next to the node we checked, the child runs
+      // from the home directory (never a project folder with its own .npmrc)
+      // and in its own process group so Cancel/quit can stop the whole tree.
+      const child = this.deps.spawn(npxPath, command.args, {
+        env: buildCleanEnv(this.deps.parentEnv, [npxPath.slice(0, npxPath.lastIndexOf('/'))]),
+        cwd: this.deps.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         shell: false,
+        detached: true,
         windowsHide: true
       })
       state.child = child
@@ -179,7 +223,7 @@ export class ConnectRunner {
       child.on('close', (code) => this.finish(state, code))
       state.timer = setTimeout(() => {
         state.errorLines.push('Timed out waiting for approval in the browser.')
-        child.kill('SIGTERM')
+        this.terminate(state)
       }, this.deps.timeoutMs ?? DEFAULT_TIMEOUT_MS)
     } catch (error) {
       state.spawnError = error instanceof Error ? error.message : String(error)
@@ -188,13 +232,60 @@ export class ConnectRunner {
     return { ok: true, runId }
   }
 
+  /** True once register or service has started: the machine may be partly set up. */
+  isPastPointOfNoReturn(): boolean {
+    const p = this.current?.progress
+    return !!p && p.phase === 'running' && (p.steps.register !== 'pending' || p.steps.service !== 'pending')
+  }
+
   cancel(runId?: string): void {
     const state = this.current
     if (!state || state.finished) return
     if (runId && state.progress.runId !== runId) return
     state.cancelled = true
-    state.child?.kill('SIGTERM')
-    if (!state.child) this.finish(state, null)
+    this.terminate(state)
+  }
+
+  /** Stop the child on app quit. Synchronous: the app is exiting. */
+  shutdown(): void {
+    const state = this.current
+    if (!state || state.finished) return
+    state.cancelled = true
+    this.signal(state, 'SIGTERM')
+  }
+
+  private signal(state: NonNullable<ConnectRunner['current']>, signal: NodeJS.Signals): void {
+    const child = state.child
+    if (!child) return
+    try {
+      if (child.pid && this.deps.platform !== 'win32') {
+        ;(this.deps.killGroup ?? ((pid, sig) => process.kill(-pid, sig)))(child.pid, signal)
+      } else {
+        child.kill(signal)
+      }
+    } catch {
+      try {
+        child.kill(signal)
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  /** SIGTERM now, SIGKILL after the grace period, and `finish` even if `close` never comes. */
+  private terminate(state: NonNullable<ConnectRunner['current']>): void {
+    if (!state.child) {
+      this.finish(state, null)
+      return
+    }
+    this.signal(state, 'SIGTERM')
+    if (state.killTimer) return
+    const grace = this.deps.graceMs ?? 5000
+    state.killTimer = setTimeout(() => {
+      if (state.finished) return
+      this.signal(state, 'SIGKILL')
+      state.killTimer = setTimeout(() => this.finish(state, null), Math.min(grace, 2000))
+    }, grace)
   }
 
   /** Re-open the approval page the CLI printed. Only Peakflo (or localhost) pages. */
@@ -260,13 +351,22 @@ export class ConnectRunner {
   private finish(state: NonNullable<ConnectRunner['current']>, code: number | null): void {
     if (state.finished) return
     if (state.timer) clearTimeout(state.timer)
+    if (state.killTimer) clearTimeout(state.killTimer)
     // Last partial lines first, while handle() still accepts events.
     this.handle(state, state.parser.flush())
     state.finished = true
     const p = state.progress
     if (state.cancelled) {
       p.phase = 'cancelled'
-      p.failure = { kind: 'denied', message: 'Connection cancelled. Nothing was installed on this computer.' }
+      const partial = p.steps.register !== 'pending' || p.steps.service !== 'pending'
+      p.failure = partial
+        ? {
+            kind: 'cancelled_partial',
+            message:
+              'Cancelled while setting up. This computer may be partly connected: use Reconnect on the machine, or run the uninstall command from Remove machine.',
+            logPath: state.logPath
+          }
+        : { kind: 'denied', message: 'Connection cancelled. Nothing was installed on this computer.' }
       this.emit()
       return
     }
@@ -278,11 +378,12 @@ export class ConnectRunner {
     }
     const activeStep = (Object.keys(p.steps) as ConnectStepId[]).find((id) => p.steps[id] === 'active') ?? null
     const failure: ConnectFailure = classifyFailure({
-      errorText: state.errorLines.join('\n') || p.lines.slice(-3).join('\n'),
+      errorText: state.errorLines.join('\n'),
       exitCode: code,
       spawnError: state.spawnError,
       platform: this.deps.platform,
-      activeStep
+      activeStep,
+      logPath: state.logPath
     })
     if (activeStep) p.steps[activeStep] = 'failed'
     p.phase = 'failed'

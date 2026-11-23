@@ -36,6 +36,7 @@ const machine = (patch: Partial<MachineRow> & { id: string; name: string }): Mac
   maxSessions: 4,
   canManage: true,
   unavailableReason: null,
+  serviceInstances: ['claude-code'],
   update: { supported: true, selfUpdate: true, available: true, targetVersion: '1.8.2', state: null, reason: null, nowRequested: false },
   ...patch
 })
@@ -76,7 +77,7 @@ describe('MachinesSettings', () => {
   })
 
   it('Remove asks first, names the consequences, and then shows the uninstall command', async () => {
-    remove.mockResolvedValue({ ok: true, uninstallCommand: 'npx --yes @peakflo/agent-harness@1.8.2 service uninstall' })
+    remove.mockResolvedValue({ ok: true, uninstall: { commands: ['npx --yes @peakflo/agent-harness@1.8.2 service uninstall --vendor claude-code'], note: null } })
     render(<MachinesSettings />)
     await screen.findByText('build-box-01')
     fireEvent.click(screen.getByRole('button', { name: 'More actions for build-box-01' }))
@@ -84,13 +85,13 @@ describe('MachinesSettings', () => {
     expect(await screen.findByText('Remove build-box-01?')).toBeTruthy()
     expect(screen.getByText(/2 running sessions will stop/)).toBeTruthy()
     expect(screen.getByRole('alertdialog').textContent).toContain('Backend dev')
-    expect(screen.getByRole('alertdialog').textContent).toContain('npx --yes @peakflo/agent-harness@1.8.2 service uninstall')
+    expect(screen.getByRole('alertdialog').textContent).toContain('npx --yes @peakflo/agent-harness@1.8.2 service uninstall --vendor claude-code')
     expect(remove).not.toHaveBeenCalled()
     list.mockResolvedValue(ok([]))
     fireEvent.click(screen.getAllByRole('button', { name: 'Remove machine' }).at(-1)!)
     await waitFor(() => expect(remove).toHaveBeenCalledWith('m2'))
     const notice = await screen.findByTestId('removed-notice')
-    expect(notice.textContent).toContain('npx --yes @peakflo/agent-harness@1.8.2 service uninstall')
+    expect(notice.textContent).toContain('service uninstall --vendor claude-code')
   })
 
   it('cancelling the confirm removes nothing', async () => {
