@@ -49,6 +49,7 @@ function setup(options: { platform?: NodeJS.Platform; version?: string | null; p
   const child = new FakeChild()
   child.pid = options.pid
   const killGroup = vi.fn()
+  const records: Array<{ instance: string; machineName: string | null; controlPlane: string; connectedAt: number }> = []
   const spawn = vi.fn(() => child as unknown as ChildProcess)
   const progress: ConnectProgress[] = []
   const openExternal = vi.fn()
@@ -69,6 +70,7 @@ function setup(options: { platform?: NodeJS.Platform; version?: string | null; p
     killGroup,
     graceMs: options.graceMs ?? 5000,
     computerInstance: async () => 'computer-0123456789abcdef01234567',
+    recordConnection: (r) => records.push(r),
     openExternal,
     onProgress: (p) => progress.push(p),
     onConnected,
@@ -77,7 +79,7 @@ function setup(options: { platform?: NodeJS.Platform; version?: string | null; p
   })
   const last = () => progress[progress.length - 1]
   const tick = () => new Promise((resolve) => setTimeout(resolve, 5))
-  return { child, spawn, killGroup, runner, api, progress, last, tick, openExternal, onConnected, logs }
+  return { child, spawn, killGroup, records, runner, api, progress, last, tick, openExternal, onConnected, logs }
 }
 
 describe('ConnectRunner — spawn arguments', () => {
@@ -507,5 +509,37 @@ describe('failure classification uses error lines, exit code and step state only
     t.child.end(1)
     await t.tick()
     expect(t.last().failure).toMatchObject({ kind: 'service_failed', logPath: '~/.pf-agent-harness/logs/cursor' })
+  })
+})
+
+describe('remembering the connection for the uninstall command', () => {
+  it('stores the instance with the machine name only after success', async () => {
+    const t = setup()
+    await t.runner.start({ vendor: 'all', ask: false })
+    t.child.out('Connecting this computer on studio-mac…\n')
+    await t.tick()
+    expect(t.records).toEqual([])
+    t.child.out('✓ Computer is connected to Acme on studio-mac. Return to Spaces.\n')
+    await t.tick()
+    t.child.end(0)
+    await t.tick()
+    expect(t.records).toEqual([{ instance: 'computer-0123456789abcdef01234567', machineName: 'studio-mac', controlPlane: 'https://api.peakflo.ai', connectedAt: expect.any(Number) }])
+  })
+
+  it('uses the vendor name for a single-vendor connect, and stores nothing on failure', async () => {
+    const t = setup()
+    await t.runner.start({ vendor: 'codex', ask: false })
+    t.child.out('Connecting Codex on box…\n✓ Codex is connected to Acme on box. Return to Spaces.\n')
+    await t.tick()
+    t.child.end(0)
+    await t.tick()
+    expect(t.records[0]).toMatchObject({ instance: 'codex', machineName: 'box' })
+    const bad = setup()
+    await bad.runner.start({ vendor: 'all', ask: false })
+    bad.child.err('✗ nope\n')
+    await bad.tick()
+    bad.child.end(1)
+    await bad.tick()
+    expect(bad.records).toEqual([])
   })
 })

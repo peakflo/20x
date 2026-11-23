@@ -1,5 +1,6 @@
 import { computerServiceInstance } from './service-instance'
 import {
+  type ConnectionRecord,
   isPublishedHarnessVersion,
   normaliseMachines,
   type ConnectVendor,
@@ -88,7 +89,8 @@ export class EnterpriseRunnersApi {
     try {
       const identity = await this.requester.getIdentity?.()
       if (!identity) return null
-      return computerServiceInstance(this.requester.getApiUrl(), identity.tenantId, identity.userId)
+      // The exact string 20x passes as --control-plane (see buildConnectCommand: the origin).
+      return computerServiceInstance(new URL(this.requester.getApiUrl()).origin, identity.tenantId, identity.userId)
     } catch {
       return null
     }
@@ -143,15 +145,14 @@ export class EnterpriseRunnersApi {
    * machines list (and the other way round) rather than failing the page; a
    * permission or sign-in problem on both is reported as such.
    */
-  async listMachines(hostname?: string | null): Promise<MachinesResult> {
+  async listMachines(hostname?: string | null, connectionRecords: readonly ConnectionRecord[] = []): Promise<MachinesResult> {
     if (!(await this.requester.isSignedIn())) {
       return { ok: false, error: { kind: 'not_signed_in', message: 'Sign in to Peakflo Enterprise to manage machines.' } }
     }
-    const [machines, runners, version, instance] = await Promise.allSettled([
+    const [machines, runners, version] = await Promise.allSettled([
       this.listMachinesRaw(),
       this.listRunnersRaw(),
-      this.getHarnessVersion(),
-      this.getComputerInstance()
+      this.getHarnessVersion()
     ])
     if (machines.status === 'rejected' && runners.status === 'rejected') {
       return { ok: false, error: toFailure(machines.reason) }
@@ -168,7 +169,7 @@ export class EnterpriseRunnersApi {
           runners: runners.status === 'fulfilled' ? runners.value : null,
           pinnedVersion: pinned.version,
           hostname,
-          computerInstance: instance.status === 'fulfilled' ? instance.value : null
+          connectionRecords
         })
       }
     }

@@ -6,6 +6,7 @@ import {
   redactSecrets,
   serviceLogPath,
   type ConnectFailure,
+  type ConnectionRecord,
   type ConnectProgress,
   type ConnectStepId,
   type ConnectStepState,
@@ -40,6 +41,8 @@ export interface ConnectRunnerDeps {
   cwd: string
   /** `computer-<scope>` for this user and control plane, when computable. */
   computerInstance?: () => Promise<string | null>
+  /** Called on success with the service instance 20x itself started, to remember it. */
+  recordConnection?: (record: ConnectionRecord) => void
   /** Kill a whole process group (the child is detached). Defaults to process.kill(-pid). */
   killGroup?: (pid: number, signal: NodeJS.Signals) => void
   /** SIGTERM → SIGKILL delay, then the forced `finish`. */
@@ -77,6 +80,8 @@ export class ConnectRunner {
     spawnError: string | null
     finished: boolean
     logPath: string
+    instance: string | null
+    controlPlane: string
   } | null = null
   /** Set synchronously on entry to start(), so two calls cannot both pass the checks. */
   private starting = false
@@ -193,7 +198,9 @@ export class ConnectRunner {
       killTimer: null,
       spawnError: null,
       finished: false,
-      logPath
+      logPath,
+      instance,
+      controlPlane: this.deps.api.getApiUrl()
     }
     this.current = state
     this.emit()
@@ -372,6 +379,13 @@ export class ConnectRunner {
     }
     if (state.successSeen && (code === 0 || code === null)) {
       p.phase = 'success'
+      if (state.instance) {
+        try {
+          this.deps.recordConnection?.({ instance: state.instance, machineName: p.machineName, controlPlane: state.controlPlane, connectedAt: Date.now() })
+        } catch {
+          /* remembering is best effort */
+        }
+      }
       this.emit()
       this.deps.onConnected?.()
       return

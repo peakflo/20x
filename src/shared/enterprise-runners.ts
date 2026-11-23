@@ -134,16 +134,54 @@ export interface UninstallPlan {
   note: string | null
 }
 
-/** One command per installed service; an honest note when the instance is unknown. */
-export function buildUninstallPlan(version: string | null, instances: readonly string[]): UninstallPlan {
-  const valid = Array.from(new Set(instances.filter(isServiceInstance)))
-  if (valid.length > 0) return { commands: valid.map((i) => buildUninstallCommand(version, i)), note: null }
+/**
+ * First harness version whose `service uninstall --runner <runnerId>` picks the
+ * service by the runner's credential.
+ * TODO(harness): set this once the server subtask reports the version. Until
+ * then (null) the per-instance `--vendor` form is used.
+ */
+export const RUNNER_SCOPED_UNINSTALL_MIN_VERSION: string | null = null
+
+export function supportsRunnerScopedUninstall(version: string | null, min: string | null = RUNNER_SCOPED_UNINSTALL_MIN_VERSION): boolean {
+  if (!min) return false
+  const cmp = compareHarnessVersions(version, min)
+  return cmp !== null && cmp >= 0
+}
+
+export function buildRunnerUninstallCommand(version: string, runnerId: string): string {
+  if (!isUuid(runnerId)) throw new ConnectCommandError('The machine id must be a UUID.')
+  if (!isPublishedHarnessVersion(version)) throw new ConnectCommandError('Unknown harness version.')
+  return `npx --yes ${HARNESS_PACKAGE}@${version} service uninstall --runner ${runnerId}`
+}
+
+export interface UninstallPlanInput {
+  /** The server-pinned harness version the command will run. */
+  version: string | null
+  runnerId: string
+  /** Instances 20x itself recorded when it connected this machine (never guessed). */
+  instances: readonly string[]
+  /** Overridable for tests. */
+  minRunnerScopedVersion?: string | null
+}
+
+/**
+ * - New enough harness: one scoped command, `service uninstall --runner <id>`.
+ * - Otherwise: the per-instance `--vendor` command for machines this 20x
+ *   connected; for any other machine, `service status` guidance, never a guess.
+ * `--all` is never shown.
+ */
+export function buildUninstallPlan(input: UninstallPlanInput): UninstallPlan {
+  if (isPublishedHarnessVersion(input.version) && isUuid(input.runnerId) && supportsRunnerScopedUninstall(input.version, input.minRunnerScopedVersion ?? RUNNER_SCOPED_UNINSTALL_MIN_VERSION)) {
+    return { commands: [buildRunnerUninstallCommand(input.version, input.runnerId)], note: null }
+  }
+  const valid = Array.from(new Set(input.instances.filter(isServiceInstance)))
+  if (valid.length > 0) return { commands: valid.map((i) => buildUninstallCommand(input.version, i)), note: null }
   return {
     commands: [],
     note:
-      'The background service on that computer could not be identified from here. On that computer run ' +
-      `\`npx --yes ${HARNESS_PACKAGE} service status\` to see its name, then uninstall it with ` +
-      '`service uninstall --vendor <name>`. Without --vendor, uninstall only removes the base service, not the one connect installed.'
+      'This machine was not connected from this 20x, so its background service name is not known here. On that computer run ' +
+      `\`npx --yes ${HARNESS_PACKAGE} service status\` to see its name, then \`service uninstall --vendor <name>\`. ` +
+      'Without --vendor, uninstall only removes the base service, not the one connect installed.'
   }
 }
 
@@ -506,11 +544,30 @@ function statusOf(
   return 'online'
 }
 
-function serviceInstancesOf(machine: RawByoMachine | undefined, computerInstance: string | null): string[] {
+/** What this 20x remembers about a connection it started: the service name `connect` installed. */
+export interface ConnectionRecord {
+  /** `claude-code` | `codex` | `cursor` | `computer-<24hex>`, from the exact control-plane string 20x passed. */
+  instance: string
+  /** The host name the CLI printed; how the machine is matched once it shows up. */
+  machineName: string | null
+  controlPlane: string
+  connectedAt: number
+}
+
+/**
+ * Instances are known only for machines this 20x connected (matched by host
+ * name, newest record first) or that the server names. A `computer-<hex>` is
+ * never guessed for a machine connected elsewhere.
+ */
+function serviceInstancesOf(machine: RawByoMachine | undefined, name: string, records: readonly ConnectionRecord[]): string[] {
   if (!machine) return []
   if (isServiceInstance(machine.serviceInstance)) return [machine.serviceInstance]
-  if (machine.discovery === true) return computerInstance && machine.isOwner !== false ? [computerInstance] : []
-  return (machine.vendors ?? []).filter(isServiceInstance)
+  if (machine.isOwner === false) return []
+  const mine = records
+    .filter((r) => r.machineName && r.machineName.toLowerCase().replace(/\.local$/, '') === name.toLowerCase().replace(/\.local$/, ''))
+    .sort((a, b) => b.connectedAt - a.connectedAt)
+  const out = mine.map((r) => r.instance)
+  return Array.from(new Set(out.filter(isServiceInstance)))
 }
 
 export interface NormaliseOptions {
@@ -520,8 +577,8 @@ export interface NormaliseOptions {
   /** Used to flag "this computer". */
   hostname?: string | null
   now?: number
-  /** `computer-<scope>` for the signed-in user on this control plane, when computable. */
-  computerInstance?: string | null
+  /** Connections this 20x started (see `ConnectionRecord`). */
+  connectionRecords?: readonly ConnectionRecord[]
 }
 
 function sameHost(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -583,7 +640,7 @@ export function normaliseMachines(options: NormaliseOptions): MachineRow[] {
       canManage: machine?.canManage === true,
       unavailableReason,
       update,
-      serviceInstances: serviceInstancesOf(machine, options.computerInstance ?? null)
+      serviceInstances: serviceInstancesOf(machine, name, options.connectionRecords ?? [])
     })
   }
 

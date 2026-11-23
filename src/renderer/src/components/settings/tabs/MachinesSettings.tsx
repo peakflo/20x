@@ -192,7 +192,7 @@ export function MachinesSettings() {
                   </p>
                 )}
                 <p>The background service keeps running on that machine until you uninstall it there:</p>
-                <UninstallInstructions plan={buildUninstallPlan(snapshot?.pinnedVersion ?? removing?.version ?? null, removing?.serviceInstances ?? [])} />
+                <UninstallInstructions plan={buildUninstallPlan({ version: snapshot?.pinnedVersion ?? removing?.version ?? null, runnerId: removing?.id ?? '', instances: removing?.serviceInstances ?? [] })} />
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>

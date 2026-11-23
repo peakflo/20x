@@ -1,9 +1,13 @@
 import { execFile, spawn } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { homedir, hostname, platform as osPlatform, arch as osArch, release } from 'node:os'
 import { randomUUID } from 'node:crypto'
-import { BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import {
   buildUninstallPlan,
+  isServiceInstance,
+  type ConnectionRecord,
   type UninstallPlan,
   type ConnectProgress,
   type MachineActionResult,
@@ -60,6 +64,39 @@ export function shutdownEnterpriseRunners(): void {
   activeRunner?.shutdown()
 }
 
+const MAX_RECORDS = 50
+
+/**
+ * Connections this 20x started: the service name `connect` installed, kept so
+ * Remove machine can print the right uninstall command. Ids and host names
+ * only; no tokens.
+ */
+export function createConnectionRecordStore(file: string): { load(): ConnectionRecord[]; add(record: ConnectionRecord): void } {
+  const load = (): ConnectionRecord[] => {
+    try {
+      if (!existsSync(file)) return []
+      const raw = JSON.parse(readFileSync(file, 'utf8')) as unknown
+      if (!Array.isArray(raw)) return []
+      return raw.filter(
+        (r): r is ConnectionRecord =>
+          !!r && typeof r === 'object' && isServiceInstance((r as ConnectionRecord).instance) && typeof (r as ConnectionRecord).connectedAt === 'number'
+      )
+    } catch {
+      return []
+    }
+  }
+  return {
+    load,
+    add(record) {
+      const next = [...load(), record].slice(-MAX_RECORDS)
+      mkdirSync(dirname(file), { recursive: true })
+      const tmp = `${file}.tmp`
+      writeFileSync(tmp, JSON.stringify(next), { mode: 0o600 })
+      renameSync(tmp, file)
+    }
+  }
+}
+
 export interface EnterpriseRunnersService {
   api: EnterpriseRunnersApi
   listMachines(): Promise<MachinesResult>
@@ -74,6 +111,7 @@ export function registerEnterpriseRunnersIpc(auth: EnterpriseAuth | undefined): 
   const requester = requesterFromAuth(auth)
   const api = new EnterpriseRunnersApi(requester)
   const runCommand = createCommandRunner(execFile)
+  const records = createConnectionRecordStore(join(app.getPath('userData'), 'enterprise-runner-connections.json'))
 
   const runner: ConnectRunner = new ConnectRunner({
     api,
@@ -86,13 +124,14 @@ export function registerEnterpriseRunnersIpc(auth: EnterpriseAuth | undefined): 
     resolveToolchain: (env) => resolveToolchain(env),
     cwd: homedir(),
     computerInstance: () => api.getComputerInstance(),
+    recordConnection: (record) => records.add(record),
     // Already redacted by the parser; never log raw child output.
     log: (message) => console.log(message)
   })
 
   activeRunner = runner
 
-  const listMachines = (): Promise<MachinesResult> => api.listMachines(hostname())
+  const listMachines = (): Promise<MachinesResult> => api.listMachines(hostname(), records.load())
 
   ipcMain.handle('enterprise-runners:list', (): Promise<MachinesResult> => listMachines())
   ipcMain.handle(
@@ -106,7 +145,7 @@ export function registerEnterpriseRunnersIpc(auth: EnterpriseAuth | undefined): 
       const machine = before.ok ? before.snapshot.machines.find((m) => m.id === runnerId) : undefined
       const version = before.ok ? (before.snapshot.pinnedVersion ?? machine?.version ?? null) : null
       const result = await api.removeMachine(String(runnerId))
-      return result.ok ? { ...result, uninstall: buildUninstallPlan(version, machine?.serviceInstances ?? []) } : result
+      return result.ok ? { ...result, uninstall: buildUninstallPlan({ version, runnerId: String(runnerId), instances: machine?.serviceInstances ?? [] }) } : result
     }
   )
   ipcMain.handle('enterprise-runners:update', (_, runnerId: string): Promise<MachineActionResult> => api.updateMachine(String(runnerId)))

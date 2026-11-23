@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildConnectCommand,
   buildUninstallCommand,
+  buildRunnerUninstallCommand,
   buildUninstallPlan,
   serviceLogPath,
   compareHarnessVersions,
@@ -98,17 +99,42 @@ describe('uninstall commands', () => {
     }
   })
 
-  it('plans one command per instance, deduplicated', () => {
-    const plan = buildUninstallPlan('1.8.2', ['codex', 'codex', 'claude-code', 'junk'])
-    expect(plan.commands.map((c) => c.split('--vendor ')[1])).toEqual(['codex', 'claude-code'])
-    expect(plan.note).toBeNull()
+  const RUNNER = '5b1f3c2a-9d4e-4f6a-8c7b-0a1b2c3d4e5f'
+  const plan = (patch: Partial<Parameters<typeof buildUninstallPlan>[0]> = {}) =>
+    buildUninstallPlan({ version: '1.8.2', runnerId: RUNNER, instances: [], ...patch })
+
+  it('plans one --vendor command per recorded instance, deduplicated', () => {
+    const p = plan({ instances: ['codex', 'codex', 'claude-code', 'junk'] })
+    expect(p.commands.map((c) => c.split('--vendor ')[1])).toEqual(['codex', 'claude-code'])
+    expect(p.note).toBeNull()
   })
 
-  it('says so when the instance is unknown, instead of printing a command that misses the service', () => {
-    const plan = buildUninstallPlan('1.8.2', [])
-    expect(plan.commands).toEqual([])
-    expect(plan.note).toMatch(/service status/)
-    expect(plan.note).toMatch(/--vendor <name>/)
+  it('uses the scoped --runner command when the pinned harness supports it', () => {
+    const p = plan({ version: '1.9.0', instances: ['codex'], minRunnerScopedVersion: '1.9.0' })
+    expect(p).toEqual({ commands: [`npx --yes @peakflo/agent-harness@1.9.0 service uninstall --runner ${RUNNER}`], note: null })
+    expect(plan({ version: '1.10.0', minRunnerScopedVersion: '1.9.0' }).commands[0]).toContain('--runner')
+    expect(plan({ version: '1.9.0-rc.1', minRunnerScopedVersion: '1.9.0' }).commands).toEqual([])
+  })
+
+  it('falls back to --vendor when the pinned harness is older or the minimum is not known yet', () => {
+    expect(plan({ version: '1.8.2', instances: ['cursor'], minRunnerScopedVersion: '1.9.0' }).commands[0]).toContain('--vendor cursor')
+    expect(plan({ version: '1.9.0', instances: ['cursor'], minRunnerScopedVersion: null }).commands[0]).toContain('--vendor cursor')
+    expect(plan({ version: null, instances: ['cursor'], minRunnerScopedVersion: '1.9.0' }).commands[0]).toContain('--vendor cursor')
+  })
+
+  it('never shows --all, and the scoped form needs a uuid', () => {
+    for (const p of [plan({ instances: ['codex'] }), plan({ version: '1.9.0', minRunnerScopedVersion: '1.9.0' }), plan()]) {
+      expect(JSON.stringify(p)).not.toMatch(/--all/)
+    }
+    expect(() => buildRunnerUninstallCommand('1.9.0', 'not-a-uuid')).toThrow()
+  })
+
+  it('for a machine connected elsewhere, shows service status guidance instead of a guessed name', () => {
+    const p = plan()
+    expect(p.commands).toEqual([])
+    expect(p.note).toMatch(/not connected from this 20x/)
+    expect(p.note).toMatch(/service status/)
+    expect(p.note).toMatch(/--vendor <name>/)
   })
 
   it('logs per instance', () => {
@@ -116,12 +142,29 @@ describe('uninstall commands', () => {
     expect(serviceLogPath(null)).toBe('~/.pf-agent-harness/logs')
   })
 
-  it('takes the instance from the server, else from the machine kind', () => {
-    const mk = (m: RawByoMachine) =>
-      normaliseMachines({ machines: [{ runnerId: 'r', name: 'n', personal: true, isOwner: true, registered: true, ...m }], runners: null, pinnedVersion: null, computerInstance: INSTANCE })[0].serviceInstances
-    expect(mk({ serviceInstance: 'computer-aaaaaaaaaaaaaaaaaaaaaaaa' })).toEqual(['computer-aaaaaaaaaaaaaaaaaaaaaaaa'])
-    expect(mk({ discovery: true })).toEqual([INSTANCE])
-    expect(mk({ discovery: false, vendors: ['codex', 'cursor'] })).toEqual(['codex', 'cursor'])
+  it('knows instances only for machines this 20x connected, matched by host name', () => {
+    const records = [
+      { instance: INSTANCE, machineName: 'studio-mac', controlPlane: 'https://api.peakflo.ai', connectedAt: 1 },
+      { instance: 'codex', machineName: 'build-box-01', controlPlane: 'https://api.peakflo.ai', connectedAt: 2 }
+    ]
+    const rows = normaliseMachines({
+      machines: [
+        { runnerId: 'a', name: 'studio-mac.local', personal: true, isOwner: true, registered: true, discovery: true },
+        { runnerId: 'b', name: 'elsewhere', personal: true, isOwner: true, registered: true, discovery: true },
+        { runnerId: 'c', name: 'build-box-01', personal: true, isOwner: true, registered: true, vendors: ['codex'] }
+      ],
+      runners: null,
+      pinnedVersion: null,
+      connectionRecords: records
+    })
+    expect(rows.find((r) => r.id === 'a')?.serviceInstances).toEqual([INSTANCE])
+    expect(rows.find((r) => r.id === 'b')?.serviceInstances).toEqual([]) // never guessed
+    expect(rows.find((r) => r.id === 'c')?.serviceInstances).toEqual(['codex'])
+  })
+
+  it('a server-reported instance still wins', () => {
+    const [row] = normaliseMachines({ machines: [{ runnerId: 'r', name: 'n', personal: true, isOwner: true, registered: true, serviceInstance: 'computer-aaaaaaaaaaaaaaaaaaaaaaaa' }], runners: null, pinnedVersion: null, connectionRecords: [] })
+    expect(row.serviceInstances).toEqual(['computer-aaaaaaaaaaaaaaaaaaaaaaaa'])
   })
 })
 

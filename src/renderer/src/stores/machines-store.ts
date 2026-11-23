@@ -77,7 +77,7 @@ export const useMachinesStore = create<MachinesState>((set, get) => ({
         set({ actionError: result.error.message })
         return false
       }
-      set({ removed: { name: machine?.name ?? 'Machine', uninstall: result.uninstall ?? buildUninstallPlan(null, []) } })
+      set({ removed: { name: machine?.name ?? 'Machine', uninstall: result.uninstall ?? buildUninstallPlan({ version: null, runnerId: id, instances: machine?.serviceInstances ?? [] }) } })
       await get().refresh({ quiet: true })
       return true
     } finally {

@@ -127,3 +127,17 @@ describe('runPreflight', () => {
     expect(result.failure?.kind).toBe('version_unavailable')
   })
 })
+
+describe('computer service instance', () => {
+  it('hashes the exact --control-plane origin 20x passes, with tenant and user ids', async () => {
+    const { createHash } = await import('node:crypto')
+    const client = new EnterpriseRunnersApi({
+      apiRequest: async () => ({}),
+      getApiUrl: () => 'https://api.peakflo.ai',
+      isSignedIn: async () => true,
+      getIdentity: async () => ({ tenantId: 'T', userId: 'U' })
+    })
+    const expected = 'computer-' + createHash('sha256').update('https://api.peakflo.ai:T:U').digest('hex').slice(0, 24)
+    expect(await client.getComputerInstance()).toBe(expected)
+  })
+})
