@@ -1029,3 +1029,20 @@ export const browserRecordingApi = {
     ? window.electronAPI.browser.recordingStatus(panelId)
     : Promise.resolve({ recording: null }),
 }
+
+/** Settings → Machines and "Connect this computer" (enterprise runners). */
+export const enterpriseRunnersApi = {
+  list: () => window.electronAPI.enterpriseRunners.list(),
+  rename: (runnerId: string, name: string) => window.electronAPI.enterpriseRunners.rename(runnerId, name),
+  remove: (runnerId: string) => window.electronAPI.enterpriseRunners.remove(runnerId),
+  update: (runnerId: string) => window.electronAPI.enterpriseRunners.update(runnerId),
+  preflight: () => window.electronAPI.enterpriseRunners.preflight(),
+  connectStart: (request: import('@shared/enterprise-runners').StartConnectRequest) =>
+    window.electronAPI.enterpriseRunners.connectStart(request),
+  connectCancel: (runId?: string) => window.electronAPI.enterpriseRunners.connectCancel(runId),
+  connectProgress: (runId?: string) => window.electronAPI.enterpriseRunners.connectProgress(runId),
+  openApproval: (runId: string) => window.electronAPI.enterpriseRunners.openApproval(runId),
+  onConnectProgress: (callback: (progress: import('@shared/enterprise-runners').ConnectProgress) => void) =>
+    window.electronAPI.enterpriseRunners.onConnectProgress(callback),
+  onMachinesChanged: (callback: () => void) => window.electronAPI.enterpriseRunners.onMachinesChanged(callback)
+}

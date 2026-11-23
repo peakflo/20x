@@ -3,6 +3,7 @@
  * In production the SPA is served by the mobile-api-server (same origin).
  * In dev mode (Vite on a different port), we point directly at the Electron server.
  */
+import type { MachinesResult } from '@shared/enterprise-runners'
 import { getAuthToken } from './auth'
 import type { Artifact, ArtifactContent, PullRequestDetails } from '@shared/artifacts'
 import type { VoiceCapabilities } from '@shared/voice'
@@ -134,6 +135,10 @@ export const api = {
     refresh: (fresh = false) => post<HarnessMaintenanceStatus[]>('/api/harness-maintenance/refresh', { fresh }),
     update: (harness: HarnessKey) => post<HarnessUpdateResult>('/api/harness-maintenance/update', { harness }),
     updateAll: () => post<HarnessUpdateAllResult>('/api/harness-maintenance/update-all')
+  },
+  /** Enterprise runners, read-only. Managing machines is desktop only. */
+  machines: {
+    list: () => get<MachinesResult>('/api/machines')
   },
   usage: {
     limits: () => get<ProviderUsageLimits[]>('/api/usage/limits'),

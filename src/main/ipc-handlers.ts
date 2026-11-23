@@ -10,7 +10,8 @@ import { brandSpacesEnabled, desktopBrandName, findStoredWorkspaceServer, STORED
 import type { ArtifactMcpCall } from '../shared/artifact-mcp'
 import WebSocket from 'ws'
 import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
-import { getPendingPin, broadcastToMobileClients } from './mobile-api-server'
+import { getPendingPin, broadcastToMobileClients, setMobileMachinesProvider } from './mobile-api-server'
+import { registerEnterpriseRunnersIpc } from './enterprise-runners'
 import { sendMobilePush } from './mobile-push'
 import { resolveTaskApiUiCommand, setTaskApiUiState } from './task-api-server'
 import { UI_COMMAND_RESULT_CHANNEL, type UiCommandAck } from '../shared/ui-commands'
@@ -1877,6 +1878,10 @@ export function registerIpcHandlers(
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     return await enterpriseAuth.apiRequest(method, path, body)
   })
+
+  // Settings → Machines and "Connect this computer" (enterprise runners).
+  const enterpriseRunners = registerEnterpriseRunnersIpc(enterpriseAuth)
+  setMobileMachinesProvider(enterpriseRunners ? () => enterpriseRunners.listMachines() : null)
 
   ipcMain.handle('enterprise:getApiUrl', () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')

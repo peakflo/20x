@@ -46,6 +46,12 @@ let artifactMcpCaller: ((input: ArtifactMcpCall) => Promise<unknown>) | null = n
 export function setMobileArtifactMcpCaller(caller: ((input: ArtifactMcpCall) => Promise<unknown>) | null): void {
   artifactMcpCaller = caller
 }
+let machinesProvider: (() => Promise<unknown>) | null = null
+
+/** Read-only machines/runners list for mobile (same data as Settings → Machines). */
+export function setMobileMachinesProvider(provider: (() => Promise<unknown>) | null): void {
+  machinesProvider = provider
+}
 let pendingPin: { pin: string; pairCodeId: string; expiresAt: number } | null = null
 
 export function getPendingPin(): { pin: string; pairCodeId: string; expiresAt: number } | null {
@@ -561,6 +567,11 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
   // GET /api/usage/limits — subscription plan limits per harness instance (Claude Code, Codex)
   if (pathname === '/api/usage/limits') {
     return agentRef!.getUsageLimits()
+  }
+
+  // GET /api/machines — enterprise runners, read-only (managing them is desktop only)
+  if (pathname === '/api/machines') {
+    return machinesProvider ? machinesProvider() : { ok: false, error: { kind: 'not_signed_in', message: 'Machines are not available.' } }
   }
 
   // GET /api/harness-maintenance — version-check status per harness CLI (read-only on mobile)
