@@ -11,7 +11,7 @@
  */
 
 import type { RawRunnerSummary } from '../../shared/enterprise-runners'
-import { assertRequestBodySafe, scrubForLog } from './scrub'
+import { assertRequestBodySafe, redactLocalServices, scrubForLog } from './scrub'
 
 // ── Wire types ───────────────────────────────────────────────────────
 
@@ -114,13 +114,22 @@ export interface RunnerApi {
   /**
    * Starts a chat on a runner and links it to a Spaces task.
    *
-   * TODO(server): `POST /api/tasks/:taskId/session` does not accept `runnerId`,
-   * `runtime` or `clientRequestId` yet (companion server task). Until it does
-   * this is `POST /sessions` (which takes `runnerId`) followed by
-   * `POST /sessions/:id/task` (attach). A crash between the two calls can leave
-   * an unlinked session; the adapter re-attaches on the next start.
+   * Uses the task-linked route `POST /api/tasks/:taskId/session` with
+   * `runnerId` and `clientRequestId` (idempotent: a retry returns the same
+   * chat, and reusing the id on another task is 409 CLIENT_REQUEST_ID_REUSED).
+   * A server that predates it refuses the extra keys; then this falls back to
+   * `POST /sessions` followed by `POST /sessions/:id/task`.
+   *
+   * `onCreated` runs as soon as the session id is known (`attached` is false on
+   * the fallback path, before the attach call), so the caller can persist it and
+   * repair a crash between the two calls.
    */
-  startTaskSession(taskId: string, input: StartSessionInput): Promise<{ session: WireSession }>
+  startTaskSession(
+    taskId: string,
+    input: StartSessionInput,
+    onCreated?: (session: WireSession, attached: boolean) => void
+  ): Promise<{ session: WireSession }>
+  attachTask(sessionId: string, taskId: string): Promise<void>
   getSession(sessionId: string): Promise<WireSession | null>
   sendMessage(sessionId: string, input: { content: string; clientMessageId: string; delivery?: 'auto' | 'stop-and-send' }): Promise<void>
   answer(sessionId: string, input: { partId: string; answer: string; optionId?: string }): Promise<void>
@@ -133,6 +142,8 @@ export interface RunnerApi {
   listArtifacts(sessionId: string): Promise<WireArtifact[]>
   /** Local secret values that must never appear in a request body. */
   setKnownSecrets(values: Iterable<string>): void
+  /** Ports of local services (broker, local MCP): their URLs are removed from message text. */
+  setLocalServicePorts?(ports: Iterable<number>): void
 }
 
 // ── SSE parsing ──────────────────────────────────────────────────────
@@ -212,11 +223,23 @@ function classify(error: unknown): RunnerHttpError {
 
 export class HttpRunnerApi implements RunnerApi {
   private knownSecrets = new Set<string>()
+  private localPorts = new Set<number>()
 
   constructor(private readonly auth: RunnerAuth, private readonly fetchImpl: typeof fetch = fetch) {}
 
+  /** Adds to the guard: the set only grows for the life of the runtime. */
   setKnownSecrets(values: Iterable<string>): void {
-    this.knownSecrets = new Set([...values].filter(Boolean))
+    for (const v of values) if (v) this.knownSecrets.add(v)
+  }
+
+  private async callAbsolute<T>(method: string, path: string, body?: unknown): Promise<T> {
+    assertRequestBodySafe(body, this.knownSecrets)
+    try {
+      return (await this.auth.apiRequest(method, path, body)) as T
+    } catch (error) {
+      console.warn(`[EnterpriseRunner] ${method} ${path} failed: ${scrubForLog(error, this.knownSecrets)}`)
+      throw classify(error)
+    }
   }
 
   private async call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -240,18 +263,48 @@ export class HttpRunnerApi implements RunnerApi {
     return Array.isArray(res) ? res : res?.agents ?? []
   }
 
-  async startTaskSession(taskId: string, input: StartSessionInput): Promise<{ session: WireSession }> {
+  setLocalServicePorts(ports: Iterable<number>): void {
+    this.localPorts = new Set(ports)
+  }
+
+  async attachTask(sessionId: string, taskId: string): Promise<void> {
+    await this.call('POST', `/sessions/${encodeURIComponent(sessionId)}/task`, { taskId })
+  }
+
+  async startTaskSession(
+    taskId: string,
+    input: StartSessionInput,
+    onCreated?: (session: WireSession, attached: boolean) => void
+  ): Promise<{ session: WireSession }> {
     // Explicit allowlist: nothing from the local session config is copied.
+    const message = redactLocalServices(input.message, this.localPorts)
     const body = {
       agentId: input.agentId,
       ...(input.runnerId ? { runnerId: input.runnerId } : {}),
       ...(input.title ? { title: input.title } : {}),
-      message: input.message,
+      message,
       ...(input.repositories?.length ? { repositories: input.repositories } : {}),
       clientRequestId: input.clientRequestId
     }
+    try {
+      const linked = await this.callAbsolute<{ sessionId: string }>('POST', `/api/tasks/${encodeURIComponent(taskId)}/session`, {
+        agentId: input.agentId,
+        ...(input.runnerId ? { runnerId: input.runnerId } : {}),
+        message,
+        ...(input.repositories?.length ? { repositories: input.repositories } : {}),
+        clientRequestId: input.clientRequestId
+      })
+      const session = (await this.getSession(linked.sessionId)) ?? { id: linked.sessionId, status: 'queued' as const, runnerId: input.runnerId ?? null }
+      onCreated?.(session, true)
+      return { session }
+    } catch (error) {
+      const text = error instanceof Error ? error.message : String(error)
+      // Never fall back on a real refusal (reused id, policy, auth): only on a server that predates the route.
+      if (/CLIENT_REQUEST_ID_REUSED/.test(text) || !/unrecognized|unknown key|\(400\)|\(404\)|not found|invalid (request|body)/i.test(text)) throw error
+    }
     const created = await this.call<{ session: WireSession }>('POST', '/sessions', body)
-    await this.call('POST', `/sessions/${encodeURIComponent(created.session.id)}/task`, { taskId })
+    onCreated?.(created.session, false)
+    await this.attachTask(created.session.id, taskId)
     return created
   }
 
@@ -267,7 +320,7 @@ export class HttpRunnerApi implements RunnerApi {
 
   async sendMessage(sessionId: string, input: { content: string; clientMessageId: string; delivery?: 'auto' | 'stop-and-send' }): Promise<void> {
     await this.call('POST', `/sessions/${encodeURIComponent(sessionId)}/messages`, {
-      content: input.content,
+      content: redactLocalServices(input.content, this.localPorts),
       clientMessageId: input.clientMessageId,
       ...(input.delivery ? { delivery: input.delivery } : {})
     })

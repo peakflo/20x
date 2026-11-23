@@ -275,6 +275,28 @@ export function approvalCountdown(requestedAtMs: number, answered: boolean, now 
     : { state: 'pending', remainingMs, label: formatCountdown(remainingMs) }
 }
 
+export type ApprovalOptionKind = 'allow' | 'reject'
+
+const ALLOW_IDS = new Set(['approved', 'allow', 'allow_once', 'allow-once', 'yes', 'accept'])
+const REJECT_IDS = new Set(['abort', 'reject', 'reject_once', 'reject-once', 'deny', 'denied', 'no', 'decline', 'cancel'])
+const NEGATED = /^\s*(don.?t|do not|dont|never|no\b|not\b|reject|deny|decline|cancel|abort|stop)/i
+const AFFIRMATIVE = /^\s*(allow|approve|approved|yes|accept)\b/i
+
+/**
+ * Allow or reject? The server's option id decides when it is known; otherwise
+ * the label. Anything unclear is a reject: a wrong guess must never approve.
+ */
+export function classifyApprovalOption(option: { id?: string; kind?: string; label: string }): ApprovalOptionKind {
+  const kind = (option.kind ?? '').toLowerCase()
+  if (kind.startsWith('allow')) return 'allow'
+  if (kind.startsWith('reject')) return 'reject'
+  const id = (option.id ?? '').toLowerCase()
+  if (REJECT_IDS.has(id)) return 'reject'
+  if (ALLOW_IDS.has(id)) return 'allow'
+  if (NEGATED.test(option.label)) return 'reject'
+  return AFFIRMATIVE.test(option.label) ? 'allow' : 'reject'
+}
+
 /** Approvals offer allow / reject only. "Always allow" style options are dropped. */
 export function filterApprovalOptions<T extends { id?: string; label: string }>(options: T[]): T[] {
   const bad = /always|don.?t ask again|remember/i
@@ -432,12 +454,16 @@ export interface EnterpriseAgentRunnerInfo {
   runnerPin: string | null
   /** False when the agent is not shared with the caller in Spaces. */
   usable: boolean
+  /** The agent only runs on runners ("This Mac" is not an option). */
+  runnerOnly: boolean
 }
 
 export interface TaskRunOn {
   choice: RunOnChoice
   /** True once a session has started: the choice is fixed. */
   locked: boolean
+  /** The task's agent only runs on a runner: "This Mac" is not offered. */
+  runnerOnly?: boolean
 }
 
 export type SpacesArtifactsStatus = 'ok' | 'empty' | 'offline' | 'loading' | 'error' | 'signed-out'
@@ -463,6 +489,11 @@ export interface OpenLocallyResult {
   ok: boolean
   /** Local worktree path the branch was fetched into. */
   worktreePath?: string
+  /** The ref the branch can be checked out from (`spaces/<branch>` or `origin/<branch>`). */
+  branchRef?: string
+  /** No local clone: ask the user, then call again with `clone: true`. */
+  needsClone?: boolean
+  repository?: string
   error?: string
 }
 
@@ -481,7 +512,7 @@ export interface EnterpriseRunnersApi {
   getTaskState: (taskId: string) => Promise<RemoteTaskState | null>
   /** Context handoff / restart on another runner. Offered when the runner is offline. */
   reassign: (taskId: string, runnerId: string) => Promise<{ ok: boolean; error?: string }>
-  openLocally: (taskId: string) => Promise<OpenLocallyResult>
+  openLocally: (taskId: string, opts?: { clone?: boolean }) => Promise<OpenLocallyResult>
   listSpacesArtifacts: (taskId: string, opts?: { refresh?: boolean }) => Promise<SpacesArtifactsResult>
   readSpacesArtifact: (taskId: string, id: string) => Promise<SpacesArtifactContent>
   onTaskState: (callback: (event: RemoteTaskStateEvent) => void) => () => void

@@ -29,7 +29,8 @@ describe('security: nothing local reaches a runner request', () => {
     const auth: RunnerAuth = {
       apiRequest: vi.fn(async (method: string, path: string, body?: unknown) => {
         captured.push({ method, path, body })
-        if (path.endsWith('/sessions')) return { session: { id: 's1', status: 'running', runnerId: 'r1' } }
+        if (path.endsWith('/session')) return { sessionId: 's1' }
+        if (path.endsWith('/sessions/s1') && method === 'GET') return { session: { id: 's1', status: 'running', runnerId: 'r1' } }
         return {}
       }),
       getJwt: async () => 'jwt',
@@ -65,8 +66,8 @@ describe('security: nothing local reaches a runner request', () => {
       expect(wire).not.toContain(fragment)
     }
     // The start request carries exactly the allow-listed fields.
-    const start = captured.find((c) => c.path === '/api/coding-agents/sessions')!
-    expect(Object.keys(start.body as object).sort()).toEqual(['agentId', 'clientRequestId', 'message', 'repositories', 'runnerId', 'title'])
+    const start = captured.find((c) => c.path === '/api/tasks/srv-task/session')!
+    expect(Object.keys(start.body as object).sort()).toEqual(['agentId', 'clientRequestId', 'message', 'repositories', 'runnerId'])
   })
 
   it('refuses a body that would carry a local secret value, even in a field the builders do not know', async () => {
@@ -75,6 +76,36 @@ describe('security: nothing local reaches a runner request', () => {
     })
     api.setKnownSecrets(['super-secret-value-42'])
     await expect(api.sendMessage('s', { content: 'my key is super-secret-value-42', clientMessageId: 'c' })).rejects.toBeInstanceOf(UnsafeRunnerRequestError)
+  })
+})
+
+describe('guard fills and limits', () => {
+  const mkApi = () => new HttpRunnerApi({ apiRequest: vi.fn(async () => ({})), getJwt: async () => 'j', getApiUrl: () => 'x', refreshToken: async () => ({ token: 'j' }) })
+
+  it('keeps secrets from earlier sessions: the guard only grows', async () => {
+    const api = mkApi()
+    api.setKnownSecrets(['first-secret-value'])
+    api.setKnownSecrets(['second-secret-value'])
+    await expect(api.sendMessage('s', { content: 'x first-secret-value y', clientMessageId: 'c' })).rejects.toBeInstanceOf(UnsafeRunnerRequestError)
+    await expect(api.sendMessage('s', { content: 'x second-secret-value y', clientMessageId: 'c' })).rejects.toBeInstanceOf(UnsafeRunnerRequestError)
+  })
+
+  it('throws on a body nested too deeply to inspect instead of skipping it', () => {
+    let deep: Record<string, unknown> = { leaf: 'x' }
+    for (let i = 0; i < 12; i++) deep = { next: deep }
+    expect(() => assertRequestBodySafe(deep)).toThrow(UnsafeRunnerRequestError)
+  })
+
+  it('removes local broker / MCP service URLs from message text, but keeps other localhost URLs', async () => {
+    const api = mkApi()
+    api.setLocalServicePorts([54321, 61234])
+    const sent: unknown[] = []
+    ;(api as unknown as { auth: { apiRequest: (...a: unknown[]) => unknown } }).auth.apiRequest = async (...a: unknown[]) => { sent.push(a[2]); return {} }
+    await api.sendMessage('s', { content: 'call http://127.0.0.1:54321/secrets and http://localhost:61234/mcp but test http://localhost:3000', clientMessageId: 'c' })
+    const content = (sent[0] as { content: string }).content
+    expect(content).not.toContain('54321')
+    expect(content).not.toContain('61234')
+    expect(content).toContain('http://localhost:3000')
   })
 })
 

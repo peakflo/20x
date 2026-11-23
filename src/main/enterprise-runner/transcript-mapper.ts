@@ -8,7 +8,7 @@
  */
 
 import { MessagePartType, type MessagePart } from '../adapters/coding-agent-adapter'
-import { filterApprovalOptions } from '../../shared/enterprise-runners'
+import { classifyApprovalOption, filterApprovalOptions } from '../../shared/enterprise-runners'
 import type { WirePart } from './runner-api'
 
 const PART_TYPES = new Set<string>(Object.values(MessagePartType))
@@ -79,8 +79,6 @@ export function isAnswered(part: WirePart): boolean {
   return ANSWERED_STATUSES.has(status) || (tool?.output !== undefined && tool.output !== null && tool.output !== '')
 }
 
-const REJECT = /reject|deny|no\b|decline|abort|cancel/i
-
 /**
  * Allow / Reject only. Options come from the server; anything that looks like
  * "always allow" is dropped, and when the server sent none we offer exactly the
@@ -97,7 +95,7 @@ export function parseApproval(part: WirePart): ParsedApproval | null {
   let options: ApprovalOption[] = offered.map((o) => ({
     optionId: o.id ?? o.label,
     name: o.label,
-    kind: REJECT.test(o.label) ? 'reject_once' : 'allow_once'
+    kind: classifyApprovalOption(o) === 'reject' ? 'reject_once' : 'allow_once'
   }))
   if (options.length === 0) {
     options = [

@@ -297,6 +297,12 @@ export interface CodingAgentAdapter {
   destroySession(sessionId: string, config: SessionConfig): Promise<void>
 
   /**
+   * Explicitly end the session on its backend (user Stop / Reassign). Optional:
+   * `destroySession` only detaches, so quitting never ends remote work.
+   */
+  endSession?(sessionId: string, config: SessionConfig): Promise<void>
+
+  /**
    * Register an MCP server with the adapter
    */
   registerMcpServer(

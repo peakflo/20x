@@ -88,6 +88,10 @@ export interface EnterpriseRunnerHost {
   getRunnerId(taskId: string, agentId: string): string | null
   getTaskInfo(taskId: string): { title: string; repositories: string[] } | null
   currentUserId(): string | null
+  /** False once the user signed out or access was revoked: the stream stops until sign-in. */
+  isSignedIn?(): boolean
+  /** Values of the user's local secrets, loaded into the request guard. */
+  localSecretValues?(): string[]
   /** Called whenever the sync snapshot changes (connection, status, parts). */
   onSnapshot?(snapshot: RunnerSyncSnapshot): void
   /** Test seams. */
@@ -120,9 +124,13 @@ interface SessionState {
   reconnectAttempts: number
   lastEventAt: number | null
   lastForeignMessageAt: number | null
+  /** `clientMessageId`s we sent whose echo has not come back yet (each is consumed once). */
   sentMessageIds: Set<string>
-  /** Texts we sent that the server has not echoed yet (consumed once each). */
-  pendingEchoes: Array<{ clientMessageId: string; content: string }>
+  attached: boolean
+  /** Stream/polling stopped because the session is no longer authorised. */
+  authPaused: boolean
+  /** Aborts backoff sleeps and the stream on detach. */
+  loopAbort: AbortController
   approvals: Map<string, ParsedApproval>
   usage: { tokens: number; costUsd: number; credits: number }
   usageSeen: Set<string>
@@ -184,7 +192,7 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
       localId, remoteId, config, taskId: config.taskId, serverTaskId: null, runnerId: null, clientRequestId,
       parts: new Map(), emitted: new Map(), buffer: [], rev: 0, persistedRev: 0, session: null, connected: false, streaming: false,
       closed: false, controller: null, reconnectAttempts: 0, lastEventAt: null, lastForeignMessageAt: null,
-      sentMessageIds: new Set(), pendingEchoes: [], approvals: new Map(), usage: { tokens: 0, costUsd: 0, credits: 0 },
+      sentMessageIds: new Set(), attached: false, authPaused: false, loopAbort: new AbortController(), approvals: new Map(), usage: { tokens: 0, costUsd: 0, credits: 0 },
       usageSeen: new Set(), noteSent: false, lastDeltaAt: 0, startPromise: null
     }
   }
@@ -197,7 +205,7 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
    */
   async createSession(config: SessionConfig): Promise<string> {
     const stored = this.host.store.get(this.sessionKey(config.taskId))
-    let record: { clientRequestId: string; remoteSessionId: string | null; runnerId: string | null } | null = null
+    let record: { clientRequestId: string; remoteSessionId: string | null; runnerId: string | null; attached?: boolean } | null = null
     if (stored) {
       try { record = JSON.parse(stored) } catch { record = null }
     }
@@ -207,10 +215,12 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
     // Local secrets stay local: remember them only so the request guard can
     // refuse a body that would contain one.
     this.host.api.setKnownSecrets([
+      ...(this.host.localSecretValues?.() ?? []),
       ...Object.values(config.secretEnvVars ?? {}),
       ...Object.values(config.apiKeys ?? {}).filter((v): v is string => typeof v === 'string'),
       ...(config.secretSessionToken ? [config.secretSessionToken] : [])
     ])
+    this.host.api.setLocalServicePorts?.(localServicePorts(config))
     const serverTaskId = await this.host.ensureServerTask(config.taskId)
     const clientRequestId = record?.clientRequestId ?? `20x:${config.taskId}:${randomUUID()}`
     const remoteId = record?.remoteSessionId ?? null
@@ -218,9 +228,12 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
     const state = this.newState(localId, config, clientRequestId, remoteId)
     state.serverTaskId = serverTaskId
     state.runnerId = this.host.getRunnerId(config.taskId, config.agentId) ?? record?.runnerId ?? null
+    state.attached = record?.attached ?? false
     this.persistRecord(state)
     this.register(state)
     if (remoteId) {
+      // A crash between "session created" and "linked to the task": finish the link now.
+      if (!state.attached) void this.retryAttach(state)
       state.rev = Number(this.host.store.get(this.revKey(remoteId)) ?? 0) || 0
       state.persistedRev = state.rev
       void this.startStream(state)
@@ -238,8 +251,20 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
     this.host.store.set(this.sessionKey(state.taskId), JSON.stringify({
       clientRequestId: state.clientRequestId,
       remoteSessionId: state.remoteId,
-      runnerId: state.runnerId
+      runnerId: state.runnerId,
+      attached: state.attached
     }))
+  }
+
+  private async retryAttach(state: SessionState): Promise<void> {
+    if (!state.remoteId || state.attached || !state.serverTaskId) return
+    try {
+      await this.host.api.attachTask(state.remoteId, state.serverTaskId)
+      state.attached = true
+      this.persistRecord(state)
+    } catch (error) {
+      console.warn('[EnterpriseRunner] attach retry failed:', scrubForLog(error))
+    }
   }
 
   async resumeSession(sessionId: string, config: SessionConfig): Promise<SessionMessage[]> {
@@ -252,7 +277,7 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
     }
     const page = await this.host.api.transcript(state.remoteId ?? sessionId)
     state.remoteId = state.remoteId ?? sessionId
-    this.applyPage(state, page, { emit: false })
+    if (this.applyPage(state, page, { emit: false })) await this.catchUp(state)
     this.persistRecord(state)
     void this.startStream(state)
     return this.messagesFromState(state)
@@ -268,16 +293,30 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
     this.emitMcpNote(state, config)
 
     if (!state.remoteId) {
-      await this.startRemoteSession(state, content)
-      return
+      if (!state.startPromise) {
+        await this.startRemoteSession(state, content)
+        return
+      }
+      // A message that arrives while the session is still being created is
+      // not dropped: it goes through /messages as soon as the id is known.
+      await state.startPromise
     }
+    if (!state.remoteId) throw new Error('The runner session could not be created.')
     // Concurrent messages from the web and 20x are both sent; the server
     // orders them. Nothing is deduplicated by content.
     const clientMessageId = randomUUID()
     state.sentMessageIds.add(clientMessageId)
-    state.pendingEchoes.push({ clientMessageId, content })
-    state.session = state.session ? { ...state.session, status: 'queued' } : state.session
-    await this.host.api.sendMessage(state.remoteId, { content, clientMessageId })
+    const previous = state.session
+    state.session = previous ? { ...previous, status: 'queued' } : previous
+    try {
+      await this.host.api.sendMessage(state.remoteId, { content, clientMessageId })
+    } catch (error) {
+      // The send failed: do not stay BUSY waiting for a turn that never started.
+      state.sentMessageIds.delete(clientMessageId)
+      state.session = previous
+      this.publish(state)
+      throw error
+    }
     this.publish(state)
   }
 
@@ -298,7 +337,16 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
         message,
         repositories: info?.repositories,
         clientRequestId: state.clientRequestId
+      }, (created, attached) => {
+        // Persist the id the moment the server returns it, before the attach
+        // call, so a crash in between can be repaired on the next start.
+        state.remoteId = created.id
+        state.attached = attached
+        state.runnerId = created.runnerId ?? state.runnerId
+        this.aliases.set(created.id, state)
+        this.persistRecord(state)
       })
+      state.attached = true
       state.remoteId = session.id
       state.session = session
       state.runnerId = session.runnerId ?? state.runnerId
@@ -326,17 +374,28 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
     await this.host.api.abort(state.remoteId)
   }
 
+  /**
+   * Detach only: stop the stream and drop in-memory state, but keep the session
+   * record and the rev, so quitting the app (or an idle release) never ends the
+   * remote work and the next start resumes where it stopped.
+   */
   async destroySession(sessionId: string, _config: SessionConfig): Promise<void> {
     const state = this.lookup(sessionId)
     if (!state) return
     state.closed = true
     state.controller?.abort()
+    state.loopAbort.abort()
     this.sessions.delete(state.localId)
     for (const [k, v] of this.aliases) if (v === state) this.aliases.delete(k)
-    // The session is over: a later start must create a fresh one.
+  }
+
+  /** Explicit end (user Stop or Reassign): ends the server session and forgets it. */
+  async endSession(sessionId: string, _config: SessionConfig): Promise<void> {
+    const state = this.lookup(sessionId)
+    if (!state) return
     this.host.store.delete(this.sessionKey(state.taskId))
-    if (state.remoteId) this.host.store.delete(this.revKey(state.remoteId))
     if (state.remoteId) {
+      this.host.store.delete(this.revKey(state.remoteId))
       try { await this.host.api.end(state.remoteId) } catch (error) {
         console.warn('[EnterpriseRunner] end failed:', scrubForLog(error))
       }
@@ -434,15 +493,21 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
   async pollMessages(sessionId: string): Promise<MessagePart[]> {
     const state = this.lookup(sessionId)
     if (!state) return []
+    // Signed out or access revoked: nothing is polled until the user signs in again.
+    if (state.authPaused) {
+      if (this.host.isSignedIn?.() === false) return state.buffer.splice(0)
+      state.authPaused = false
+      void this.startStream(state)
+    }
     // Fallback while the stream is down: poll the delta endpoint (rate limited).
     if (state.remoteId && !state.connected && !state.closed && this.now() - state.lastDeltaAt >= 2000) {
       state.lastDeltaAt = this.now()
       try {
-        const page = await this.host.api.delta(state.remoteId, state.rev)
-        this.applyPage(state, page, { emit: true })
+        await this.catchUp(state)
         state.lastEventAt = this.now()
-      } catch {
-        // Offline: keep what we have; the stream loop keeps retrying.
+      } catch (error) {
+        if (error instanceof RunnerHttpError && error.kind === 'auth') { state.authPaused = true; this.publish(state) }
+        // Otherwise offline: keep what we have; the stream loop keeps retrying.
       }
     }
     return state.buffer.splice(0)
@@ -484,12 +549,27 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
 
   // ── transcript ingestion ───────────────────────────────────────────
 
-  private applyPage(state: SessionState, page: WireTranscriptPage, opts: { emit: boolean }): void {
+  /** Returns true when the page was truncated and more parts are waiting. */
+  private applyPage(state: SessionState, page: WireTranscriptPage, opts: { emit: boolean }): boolean {
     const ordered = [...page.parts].sort((a, b) => a.seq - b.seq || a.rev - b.rev)
     for (const part of ordered) this.upsert(state, part, opts.emit)
     if (page.session) state.session = page.session
-    this.bumpRev(state, page.maxRev)
+    // A truncated page only advances the cursor to the highest part actually
+    // applied (done per part in `upsert`); `maxRev` would skip the rest.
+    if (!page.truncated) this.bumpRev(state, page.maxRev)
     this.publish(state)
+    return page.truncated === true
+  }
+
+  /** Fetches deltas from the cursor until the server says nothing is left. */
+  private async catchUp(state: SessionState): Promise<void> {
+    if (!state.remoteId) return
+    for (let i = 0; i < 100; i++) {
+      const before = state.rev
+      const page = await this.host.api.delta(state.remoteId, state.rev)
+      const more = this.applyPage(state, page, { emit: true })
+      if (!more || state.rev === before) return
+    }
   }
 
   /** Advances the cursor and persists it, so a restart resumes from here. */
@@ -534,23 +614,21 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
       return
     }
 
-    if (part.role === 'user' && this.isOwnEcho(state, part)) return
+    if (part.role === 'user' && this.consumeOwnEcho(state, part)) return
     if (part.role === 'user' && part.userId && part.userId !== this.host.currentUserId()) {
       state.lastForeignMessageAt = this.now()
     }
     if (emit) state.buffer.push(wirePartToMessagePart(part, { update: !!prev }))
   }
 
-  /** Consumes one pending echo per own message, so identical texts never collapse. */
-  private isOwnEcho(state: SessionState, part: WirePart): boolean {
-    const payload = part.payload as { clientMessageId?: string } | null
-    if (payload?.clientMessageId && state.sentMessageIds.has(payload.clientMessageId)) return true
-    const me = this.host.currentUserId()
-    if (!me || part.userId !== me) return false
-    const idx = state.pendingEchoes.findIndex((e) => e.content === part.content)
-    if (idx < 0) return false
-    state.pendingEchoes.splice(idx, 1)
-    return true
+  /**
+   * Our own message comes back as a part carrying our `clientMessageId`; hide
+   * that one echo. Matching is by id only: identical text typed in Spaces is a
+   * different message and is always shown.
+   */
+  private consumeOwnEcho(state: SessionState, part: WirePart): boolean {
+    const id = (part.payload as { clientMessageId?: unknown } | null)?.clientMessageId
+    return typeof id === 'string' && state.sentMessageIds.delete(id)
   }
 
   // ── stream loop ────────────────────────────────────────────────────
@@ -568,13 +646,21 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
           for await (const event of this.host.api.stream(state.remoteId, state.rev, controller.signal)) {
             if (!state.connected) { state.connected = true; state.reconnectAttempts = 0; this.publish(state) }
             state.lastEventAt = this.now()
-            if (event.type === 'parts') this.applyPage(state, event.page, { emit: true })
-            else if (event.type === 'session') { state.session = event.session; this.publish(state); this.notify(state) }
-            if (event.id !== null) this.bumpRev(state, event.id)
+            if (event.type === 'parts') {
+              if (this.applyPage(state, event.page, { emit: true })) await this.catchUp(state)
+            } else if (event.type === 'session') { state.session = event.session; this.publish(state); this.notify(state) }
+            if (event.id !== null && !(event.type === 'parts' && event.page.truncated)) this.bumpRev(state, event.id)
             this.notify(state)
           }
         } catch (error) {
           if (state.closed) return
+          if (error instanceof RunnerHttpError && error.kind === 'auth') {
+            // Signed out or revoked: stop looping; `pollMessages` restarts after sign-in.
+            state.authPaused = true
+            state.connected = false
+            this.publish(state)
+            return
+          }
           if (error instanceof RunnerHttpError && (error.kind === 'forbidden' || error.kind === 'not-found')) {
             state.session = state.session ? { ...state.session, status: 'failed' } : state.session
             state.connected = false
@@ -586,7 +672,12 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
         state.connected = false
         this.publish(state)
         state.reconnectAttempts++
-        await this.sleep(Math.min(max, base * 2 ** Math.min(state.reconnectAttempts - 1, 10)))
+        // Abortable: detaching the session ends the wait at once.
+        const signal = state.loopAbort.signal
+        await Promise.race([
+          this.sleep(Math.min(max, base * 2 ** Math.min(state.reconnectAttempts - 1, 10))),
+          new Promise<void>((resolve) => { if (signal.aborted) resolve(); else signal.addEventListener('abort', () => resolve(), { once: true }) })
+        ])
       }
     } finally {
       state.streaming = false
@@ -618,6 +709,20 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
 
 function usageTotals(usage: TurnUsage): UsageTotals {
   return { ...ZERO_TOKEN_COUNTS, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, costUsd: usage.costUsd }
+}
+
+/** Ports of local services (secret broker, local MCP servers) whose URLs must never reach a runner. */
+function localServicePorts(config: SessionConfig): number[] {
+  const ports = new Set<number>()
+  if (config.secretBrokerPort) ports.add(config.secretBrokerPort)
+  for (const server of Object.values(config.mcpServers ?? {})) {
+    if (!server.url) continue
+    try {
+      const u = new URL(server.url)
+      if (u.port) ports.add(Number(u.port))
+    } catch { /* not a URL */ }
+  }
+  return [...ports]
 }
 
 export function providersFromRunners(runners: EnterpriseRunner[]): { providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } {

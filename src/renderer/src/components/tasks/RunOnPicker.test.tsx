@@ -41,7 +41,7 @@ async function openPicker(): Promise<void> {
 describe('RunOnPicker', () => {
   beforeEach(() => {
     auth.isAuthenticated = true
-    api.getAgentInfo.mockResolvedValue({ agentId: 'a1', enterpriseAgentId: 'e1', backend: 'claude-code', permissionLimit: 'ask', runnerPin: null, usable: true })
+    api.getAgentInfo.mockResolvedValue({ agentId: 'a1', enterpriseAgentId: 'e1', backend: 'claude-code', permissionLimit: 'ask', runnerPin: null, usable: true, runnerOnly: false })
     api.getTaskRunOn.mockResolvedValue({ choice: { kind: 'local' }, locked: false })
     api.setTaskRunOn.mockImplementation(async (_t: string, choice: unknown) => ({ choice, locked: false }))
   })
@@ -93,12 +93,20 @@ describe('RunOnPicker', () => {
     expect(screen.queryByTestId('run-on-reason-ok')).toBeNull()
   })
 
-  it('requires a [Workflo] agent for runner rows', async () => {
-    api.getAgentInfo.mockResolvedValue({ agentId: 'a1', enterpriseAgentId: null, backend: null, permissionLimit: 'ask', runnerPin: null, usable: true })
+  it('is hidden for an agent that cannot run on a runner', async () => {
+    api.getAgentInfo.mockResolvedValue({ agentId: 'a1', enterpriseAgentId: null, backend: null, permissionLimit: 'ask', runnerPin: null, usable: true, runnerOnly: false })
+    api.listRunners.mockResolvedValue(ok([runner({})]))
+    const { container } = render(<RunOnPicker taskId="t1" agentId="a1" />)
+    await waitFor(() => expect(container.firstChild).toBeNull())
+  })
+
+  it('disables This Mac for a runner-only agent', async () => {
+    api.getAgentInfo.mockResolvedValue({ agentId: 'a1', enterpriseAgentId: 'e1', backend: 'claude-code', permissionLimit: 'ask', runnerPin: null, usable: true, runnerOnly: true })
     api.listRunners.mockResolvedValue(ok([runner({})]))
     render(<RunOnPicker taskId="t1" agentId="a1" />)
     await openPicker()
-    expect((await screen.findByTestId('run-on-reason-r1')).textContent).toContain('Select a [Workflo] agent')
+    expect((screen.getByTestId('run-on-local') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('run-on-local').textContent).toContain('runs on a runner only')
   })
 
   it('shows permission denied and error with retry', async () => {

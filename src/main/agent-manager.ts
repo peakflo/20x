@@ -706,6 +706,8 @@ export class AgentManager extends EventEmitter {
       const task = this.db.getTask(session.taskId)
       // Pseudo-tasks (mastermind, heartbeat-*) have no DB row — leave them alone.
       if (!task) continue
+      // A runner session lives on the server; never release it from here.
+      if (this.runsOnRunner(session.agentId, session.taskId)) continue
       // No persisted resume anchor — releasing the runtime would lose the
       // conversation, so keep it in memory.
       if (!task.session_id) continue
@@ -830,9 +832,17 @@ export class AgentManager extends EventEmitter {
     this.enterpriseRunnerRuntime = runtime
   }
 
-  /** True when the agent runs on a Spaces enterprise runner instead of this machine. */
-  private isEnterpriseRunnerAgent(agentId: string): boolean {
-    return this.db.getAgent(agentId)?.config?.coding_agent === CodingAgentType.ENTERPRISE_RUNNER
+  /**
+   * True when this agent's work for the task runs on a Spaces enterprise runner
+   * instead of this machine. A runner-only agent always does; a synced
+   * `[Workflo]` agent does when the task's "Run on" choice is a runner.
+   */
+  private runsOnRunner(agentId: string, taskId?: string): boolean {
+    const config = this.db.getAgent(agentId)?.config
+    if (!config) return false
+    if (config.coding_agent === CodingAgentType.ENTERPRISE_RUNNER) return true
+    if (!taskId || !config.enterprise_agent_id || !this.enterpriseRunnerRuntime) return false
+    return this.enterpriseRunnerRuntime.service.getTaskRunOn(taskId).choice.kind === 'runner'
   }
 
   setSyncManager(syncManager: import('./sync-manager').SyncManager): void {
@@ -868,7 +878,7 @@ export class AgentManager extends EventEmitter {
     const task = this.db.getTask(taskId)
     if (!task) return undefined
     // The working tree lives on the runner; no local worktree for runner tasks.
-    if (task.agent_id && this.isEnterpriseRunnerAgent(task.agent_id)) return undefined
+    if (task.agent_id && this.runsOnRunner(task.agent_id, taskId)) return undefined
     if (!task.repos || !Array.isArray(task.repos) || task.repos.length === 0) return undefined
 
     const workspaceDir = this.db.getWorkspaceDir(taskId)
@@ -954,17 +964,20 @@ export class AgentManager extends EventEmitter {
    * Gets or creates the appropriate adapter for an agent based on its coding_agent config.
    * Returns null if agent uses OpenCode (handled by legacy code path).
    */
-  private getAdapter(agentId: string): CodingAgentAdapter | null {
+  private getAdapter(agentId: string, taskId?: string): CodingAgentAdapter | null {
     const agent = this.db.getAgent(agentId)
     if (!agent) return null
 
-    const backendType = (agent.config?.coding_agent as string) || CodingAgentType.OPENCODE
+    // The task's "Run on" choice decides where it runs, not only the agent's harness.
+    const backendType = this.runsOnRunner(agentId, taskId)
+      ? CodingAgentType.ENTERPRISE_RUNNER
+      : (agent.config?.coding_agent as string) || CodingAgentType.OPENCODE
     console.log('[AgentManager] getAdapter - backendType:', backendType)
 
     // Each subscription login gets its own adapter: the adapter's process and
     // environment (CODEX_HOME / CLAUDE_CONFIG_DIR) belong to that login, so two
     // instances of one harness can run in parallel.
-    const instance = this.resolveAgentInstance(agent)
+    const instance = backendType === CodingAgentType.ENTERPRISE_RUNNER ? null : this.resolveAgentInstance(agent)
     // An ACP agent's "instance" is which configured ACP agent it is (possibly
     // an entirely different program), not a subscription login — so it needs
     // its own id in the cache key too, distinct from resolveAgentInstance's
@@ -2358,7 +2371,7 @@ export class AgentManager extends EventEmitter {
   ): Promise<string> {
     // A task that runs on a runner is a Spaces task: sync it before the
     // local-help guard looks for a pending upload.
-    const onRunner = this.isEnterpriseRunnerAgent(agentId)
+    const onRunner = this.runsOnRunner(agentId, taskId)
     if (onRunner && this.enterpriseRunnerRuntime) await this.enterpriseRunnerRuntime.ensureServerTask(taskId)
     this.assertLocalHelpAllowed(taskId)
     // Helper: yield event loop between bursts of synchronous DB / FS calls
@@ -2652,7 +2665,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
       // A reassigned task's earlier conversation is prepared here, before the
       // prompt is shown, so the transcript note sits ahead of the prompt.
-      const handoff = this.prepareContextHandoff(taskId, agentId)
+      // A runner prompt never carries local transcripts (they can hold secrets or local URLs).
+      const handoff = onRunner ? null : this.prepareContextHandoff(taskId, agentId)
       if (handoff?.announce) this.announceContextHandoff(adapterSessionId, taskId, handoff)
 
       // Show the full prompt in the UI so the user can see the complete
@@ -4110,7 +4124,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       workspaceDir = await this.setupWorktreeIfNeeded(taskId)
     }
 
-    const adapter = this.getAdapter(agentId)
+    const adapter = this.getAdapter(agentId, taskId)
     if (!adapter) {
       throw new Error(`No adapter available for agent ${agentId}`)
     }
@@ -4487,7 +4501,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     const agentId = task?.agent_id
     if (!sessionId || !agentId) return
 
-    const adapter = this.getAdapter(agentId)
+    const adapter = this.getAdapter(agentId, taskId)
     if (!adapter || typeof adapter.getPersistedMessages !== 'function') return
 
     this.backfillInFlight.add(taskId)
@@ -4655,7 +4669,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       throw new Error(`Agent not found: ${agentId}`)
     }
 
-    const adapter = this.getAdapter(agentId)
+    const adapter = this.getAdapter(agentId, taskId)
     if (!adapter) {
       throw new Error(`No adapter available for agent ${agentId}`)
     }
@@ -5106,7 +5120,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     this.stopAdapterPolling(sessionId)
 
     // Abort via adapter
-    const adapter = this.getAdapter(session.agentId)
+    const adapter = this.getAdapter(session.agentId, session.taskId)
     if (adapter) {
       try {
         const sessionConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
@@ -5147,7 +5161,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     this.closeAgentRunInterval(sessionId, Date.now(), reason)
 
     this.stopAdapterPolling(sessionId)
-    const adapter = session.adapter ?? this.getAdapter(session.agentId)
+    const adapter = session.adapter ?? this.getAdapter(session.agentId, session.taskId)
     if (!adapter) return
     try {
       const sessionConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
@@ -5189,10 +5203,13 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     this.overloadRetryTracker.reset(sessionId)
 
     // Destroy via adapter
-    const adapter = this.getAdapter(session.agentId)
+    const adapter = this.getAdapter(session.agentId, session.taskId)
     if (adapter) {
       try {
         const sessionConfig = await this.buildSessionConfig(session.agentId, session.taskId, session.workspaceDir)
+        // A user Stop (resetTaskStatus) ends a runner session on the server.
+        // Quit and the idle release only detach, so it resumes after a restart.
+        if (resetTaskStatus && typeof adapter.endSession === 'function') await adapter.endSession(sessionId, sessionConfig)
         await adapter.destroySession(sessionId, sessionConfig)
       } catch (error) {
         console.error(`[AgentManager] Error destroying adapter session:`, error)
@@ -5312,7 +5329,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
           try {
             console.log(`[AgentManager] Session ${sessionId} not found, attempting resume from ${persistedSessionId} for task ${taskId}`)
             console.log(`[SessionTracker] RESUME_ATTEMPT old=${sessionId} persisted=${persistedSessionId} task=${taskId} reason=session_not_in_memory`)
-            const adapter = this.getAdapter(resolvedAgentId)
+            const adapter = this.getAdapter(resolvedAgentId, taskId)
             if (adapter) {
               // Resume the backend session for continuation. The transcript is
               // NOT pushed here — clients render the durable projection (snapshot
@@ -5513,7 +5530,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
 
     // Sync any attachments added mid-session into the workspace so
     // the agent can reference them immediately.
-    if (session.workspaceDir) {
+    if (session.workspaceDir && !this.runsOnRunner(session.agentId, session.taskId)) {
       this.syncAttachmentsToWorkspace(session.taskId, session.workspaceDir)
     }
 
@@ -5545,7 +5562,8 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // handoff is only sent if that prompt finds no session (see fallBackToHandoff).
     const nativeFirstPrompt = session.nativeResumeAwaitingAck === true
     // First message of a session that took over a reassigned task: announce the carried-over context.
-    const handoff = nativeFirstPrompt ? null : this.prepareContextHandoff(session.taskId, session.agentId)
+    const onRunnerSend = this.runsOnRunner(session.agentId, session.taskId)
+    const handoff = nativeFirstPrompt || onRunnerSend ? null : this.prepareContextHandoff(session.taskId, session.agentId)
     if (handoff?.announce) this.announceContextHandoff(sessionId, session.taskId, handoff)
 
     // Show user's message in UI
@@ -5588,8 +5606,10 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
     // systemPrompt which some adapters only consult when spawning a fresh
     // process). It's appended here, not shown in the UI (userFacingMessage
     // above), same treatment as the attachment-context block below.
-    let promptText = this.buildMessageWithAttachmentContext(session, message, attachments)
-    if (currentTask) {
+    // Runner follow-ups carry only the user's text: local tools, attachment
+    // paths and artifact instructions mean nothing there and web participants see them.
+    let promptText = onRunnerSend ? message : this.buildMessageWithAttachmentContext(session, message, attachments)
+    if (currentTask && !onRunnerSend) {
       promptText += this.buildTaskContextReminder(currentTask, liveTaskContextMode)
     }
     if (handoff) promptText = handoff.block + CONTEXT_HANDOFF_SEPARATOR + promptText
@@ -5651,7 +5671,7 @@ If a PR, deploy, or linked issue should be checked after this task, write \`hear
       decision: approved ? 'approved' : 'rejected'
     })
 
-    const adapter = this.getAdapter(session.agentId)
+    const adapter = this.getAdapter(session.agentId, session.taskId)
 
     const approvalAdapter = adapter && 'respondToApproval' in adapter
       && typeof (adapter as unknown as AcpAgentAdapter).respondToApproval === 'function'

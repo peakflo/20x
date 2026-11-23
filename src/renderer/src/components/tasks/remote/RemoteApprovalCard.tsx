@@ -1,12 +1,10 @@
-import { useState } from 'react'
+import { useContext, useState } from 'react'
 import { ShieldAlert, Timer } from 'lucide-react'
-import { approvalCountdown, filterApprovalOptions } from '@shared/enterprise-runners'
+import { approvalCountdown, classifyApprovalOption, filterApprovalOptions } from '@shared/enterprise-runners'
 import { useNow } from '@/hooks/use-now'
+import { RemoteDecisionContext } from '@/hooks/use-remote-task-state'
 import { cn } from '@/lib/utils'
 import type { AgentMessage } from '@/hooks/use-agent-session'
-
-const ALLOW = /allow|approve|yes|accept|run/i
-const REJECT = /reject|deny|no\b|decline|cancel/i
 
 /**
  * Approval / question card for a session that runs on a Spaces runner.
@@ -18,6 +16,7 @@ export function RemoteApprovalCard({ message, canAnswer, onAnswer }: {
   canAnswer: boolean
   onAnswer?: (answer: string) => void
 }) {
+  const decide = useContext(RemoteDecisionContext)
   const [submitted, setSubmitted] = useState<string | null>(null)
   const [answers, setAnswers] = useState<Record<number, string>>({})
   const questions = message.tool?.questions ?? []
@@ -38,8 +37,14 @@ export function RemoteApprovalCard({ message, canAnswer, onAnswer }: {
   if (isPermission) {
     const q = questions[0]
     const options = filterApprovalOptions(q?.options ?? [])
-    const allow = options.find((o) => ALLOW.test(o.label)) ?? options[0]
-    const reject = options.find((o) => o !== allow && REJECT.test(o.label)) ?? options.find((o) => o !== allow)
+    const allow = options.find((o) => classifyApprovalOption(o) === 'allow')
+    const reject = options.find((o) => classifyApprovalOption(o) === 'reject')
+    const decideWith = (approved: boolean, label: string): void => {
+      if (locked) return
+      setSubmitted(label)
+      if (decide) decide({ approved, requestId: message.tool?.requestId, label })
+      else onAnswer?.(label)
+    }
     const command = message.tool?.description || message.tool?.title || q?.question || message.content
     return (
       <div className={cn('overflow-hidden rounded-md border bg-card', expired ? 'border-red-500/30' : 'border-amber-500/40')} data-testid="remote-approval-card">
@@ -58,8 +63,8 @@ export function RemoteApprovalCard({ message, canAnswer, onAnswer }: {
             <p className="text-[11px] text-muted-foreground">Answered: <strong className="text-foreground">{submitted}</strong></p>
           ) : null}
           <div className="flex items-center gap-2">
-            <button type="button" disabled={locked || !allow} onClick={() => allow && send(allow.label)} className="rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40">Allow</button>
-            <button type="button" disabled={locked || !reject} onClick={() => reject && send(reject.label)} className="rounded-md border border-red-500/50 px-3 py-1 text-xs font-medium text-red-400 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40">Reject</button>
+            <button type="button" disabled={locked || !allow} onClick={() => allow && decideWith(true, allow.label)} className="rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-40">Allow</button>
+            <button type="button" disabled={locked || !reject} onClick={() => reject && decideWith(false, reject.label)} className="rounded-md border border-red-500/50 px-3 py-1 text-xs font-medium text-red-400 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-40">Reject</button>
             {countdown.state === 'pending' && (
               <span className="ml-auto inline-flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground" data-testid="approval-countdown">
                 <Timer className="h-3 w-3" />auto-denied in {countdown.label}

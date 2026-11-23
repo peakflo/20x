@@ -6,6 +6,10 @@ import { EnterpriseRunnerService, isSafeBranchName, sessionRecordKey, spacesWebU
 import { RunnerHttpError, type RunnerApi, type WireArtifact } from './runner-api'
 import type { RemoteTaskStateEvent } from '../../shared/enterprise-runners'
 
+const R1 = '11111111-1111-4111-8111-111111111111'
+const R2 = '22222222-2222-4222-8222-222222222222'
+const R3 = '33333333-3333-4333-8333-333333333333'
+
 function deps(over: Partial<EnterpriseRunnerServiceDeps> = {}) {
   const data = new Map<string, string>()
   const events: RemoteTaskStateEvent[] = []
@@ -23,6 +27,7 @@ function deps(over: Partial<EnterpriseRunnerServiceDeps> = {}) {
     getApiUrl: () => 'https://api.peakflo.ai',
     currentUserId: () => 'me',
     getRepoDir: () => null,
+    git: undefined,
     restartOnRunner: vi.fn(async () => undefined),
     emitState: (e) => void events.push(e),
     ...over
@@ -40,9 +45,9 @@ describe('Run on: choice and lock', () => {
   it('stores the choice and locks it once a session has started', () => {
     const { d, data } = deps()
     const svc = new EnterpriseRunnerService(d)
-    expect(svc.getTaskRunOn('t1')).toEqual({ choice: { kind: 'local' }, locked: false })
-    svc.setTaskRunOn('t1', { kind: 'runner', runnerId: 'r1', runnerName: 'studio-mac' })
-    expect(svc.getTaskRunOn('t1').choice).toMatchObject({ runnerId: 'r1' })
+    expect(svc.getTaskRunOn('t1')).toMatchObject({ choice: { kind: 'local' }, locked: false })
+    svc.setTaskRunOn('t1', { kind: 'runner', runnerId: R1, runnerName: 'studio-mac' })
+    expect(svc.getTaskRunOn('t1').choice).toMatchObject({ runnerId: R1 })
     data.set(sessionRecordKey('t1'), JSON.stringify({ remoteSessionId: 's1' }))
     expect(svc.getTaskRunOn('t1').locked).toBe(true)
     expect(() => svc.setTaskRunOn('t1', { kind: 'local' })).toThrow(/locked/i)
@@ -58,23 +63,23 @@ describe('Run on: choice and lock', () => {
     const { d } = deps()
     const svc = new EnterpriseRunnerService(d)
     expect(svc.runnerForSession('t1', 'a1')).toBe('r-pin')
-    svc.setTaskRunOn('t1', { kind: 'runner', runnerId: 'r2', runnerName: 'x' })
-    expect(svc.runnerForSession('t1', 'a1')).toBe('r2')
+    svc.setTaskRunOn('t1', { kind: 'runner', runnerId: R2, runnerName: 'x' })
+    expect(svc.runnerForSession('t1', 'a1')).toBe(R2)
   })
 
   it('reassign restarts on the new runner and unlocks; an unavailable runner is refused', async () => {
     const { d, data, api } = deps()
     ;(api.listRunners as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { id: 'r2', name: 'build-box', selectable: true, personal: true, capabilities: { backends: [{ name: 'claude-code' }] } },
-      { id: 'r3', name: 'old-laptop', selectable: false, unselectableReason: 'offline', unselectableLabel: 'not beating — last heartbeat 3h ago' }
+      { id: R2, name: 'build-box', selectable: true, personal: true, capabilities: { backends: [{ name: 'claude-code' }] } },
+      { id: R3, name: 'old-laptop', selectable: false, unselectableReason: 'offline', unselectableLabel: 'not beating — last heartbeat 3h ago' }
     ])
     const svc = new EnterpriseRunnerService(d)
     data.set(sessionRecordKey('t1'), JSON.stringify({ remoteSessionId: 's1' }))
-    expect(await svc.reassign('t1', 'r3')).toMatchObject({ ok: false })
+    expect(await svc.reassign('t1', R3)).toMatchObject({ ok: false })
     expect(d.restartOnRunner).not.toHaveBeenCalled()
-    expect(await svc.reassign('t1', 'r2')).toEqual({ ok: true })
+    expect(await svc.reassign('t1', R2)).toEqual({ ok: true })
     expect(d.restartOnRunner).toHaveBeenCalledWith('t1')
-    expect(JSON.parse(data.get('enterprise-runner:runon:t1')!)).toMatchObject({ runnerId: 'r2', runnerName: 'build-box' })
+    expect(JSON.parse(data.get('enterprise-runner:runon:t1')!)).toMatchObject({ runnerId: R2, runnerName: 'build-box' })
   })
 })
 
@@ -187,10 +192,100 @@ describe('Spaces artifacts: cache, offline and read-only', () => {
   })
 })
 
+describe('Run on: routing inputs and validation', () => {
+  it('rejects malformed IPC choices and bounds the runner name', () => {
+    const { d } = deps()
+    const svc = new EnterpriseRunnerService(d)
+    expect(() => svc.setTaskRunOn('t1', { kind: 'runner', runnerId: 'not-a-uuid', runnerName: 'x' })).toThrow(/Invalid/)
+    expect(() => svc.setTaskRunOn('t1', { kind: 'other' })).toThrow(/Invalid/)
+    expect(() => svc.setTaskRunOn('t1', null)).toThrow(/Invalid/)
+    const ok = svc.setTaskRunOn('t1', { kind: 'runner', runnerId: R1, runnerName: 'x'.repeat(500) + '\u0000' })
+    expect((ok.choice as { runnerName: string }).runnerName).toHaveLength(80)
+  })
+
+  it('a runner-only agent cannot be set to This Mac; a local-only agent cannot be set to a runner', () => {
+    const runnerOnly = deps({ getAgent: () => ({ id: 'a1', config: { coding_agent: 'enterprise-runner', enterprise_agent_id: 'srv' } }) })
+    expect(() => new EnterpriseRunnerService(runnerOnly.d).setTaskRunOn('t1', { kind: 'local' })).toThrow(/runner only/)
+    expect(new EnterpriseRunnerService(runnerOnly.d).getTaskRunOn('t1').runnerOnly).toBe(true)
+    const localOnly = deps({ getAgent: () => ({ id: 'a1', config: { coding_agent: 'claude-code' } }) })
+    expect(() => new EnterpriseRunnerService(localOnly.d).setTaskRunOn('t1', { kind: 'runner', runnerId: R1, runnerName: 'x' })).toThrow(/not synced/)
+  })
+
+  it('the locked chip reports where the session really runs', () => {
+    const { d, data, tasks } = deps()
+    const svc = new EnterpriseRunnerService(d)
+    svc.setTaskRunOn('t1', { kind: 'runner', runnerId: R1, runnerName: 'studio-mac' })
+    data.set(sessionRecordKey('t1'), JSON.stringify({ remoteSessionId: 's1', runnerId: R2 }))
+    expect(svc.getTaskRunOn('t1')).toMatchObject({ locked: true, choice: { kind: 'runner', runnerId: R2 } })
+    data.delete(sessionRecordKey('t1'))
+    tasks.get('t1')!.session_id = 'local-session'
+    expect(svc.getTaskRunOn('t1')).toMatchObject({ locked: true, choice: { kind: 'local' } })
+  })
+
+  it('does not end the live session unless the target runner was verified selectable', async () => {
+    const { d, api } = deps()
+    ;(api.listRunners as ReturnType<typeof vi.fn>).mockRejectedValue(new RunnerHttpError('offline', null, 'network'))
+    expect(await new EnterpriseRunnerService(d).reassign('t1', R2)).toMatchObject({ ok: false })
+    expect(d.restartOnRunner).not.toHaveBeenCalled()
+    expect(await new EnterpriseRunnerService(d).reassign('t1', 'not-a-uuid')).toMatchObject({ ok: false })
+    expect(d.restartOnRunner).not.toHaveBeenCalled()
+  })
+
+  it('reads an artifact live when nothing usable is cached', async () => {
+    const { d, api } = deps()
+    const svc = new EnterpriseRunnerService(d)
+    ;(api.listArtifacts as ReturnType<typeof vi.fn>).mockResolvedValueOnce([{
+      artifactId: 'img', title: 'chart.png', type: 'image', previewFilename: 'chart.png', fileCount: 1, totalBytes: 4, createdAt: null, updatedAt: null,
+      files: [{ filename: 'chart.png', encoding: 'base64', sizeBytes: 4, updatedAt: null, content: 'AAAA' }]
+    }])
+    expect(await svc.readSpacesArtifact('t1', 'spaces:s1:img')).toMatchObject({ availability: 'live', encoding: 'base64', content: 'AAAA' })
+  })
+})
+
 describe('Open locally (fetch branch)', () => {
   it('rejects unsafe branch names so they can never be read as git options', () => {
     expect(isSafeBranchName('fix/invoice-sync-race')).toBe(true)
     for (const bad of ['--upload-pack=evil', '-x', 'a..b', 'a b', 'x;rm', '', 'a.lock']) expect(isSafeBranchName(bad)).toBe(false)
+  })
+
+  it('only fetches: never checks out or resets, creates a namespaced ref without -f, and never touches main', async () => {
+    const calls: string[][] = []
+    const { d } = deps({
+      getRepoDir: () => ({ dir: '/work/api', exists: true, repository: 'acme/api' }),
+      git: async (args) => { calls.push(args) }
+    })
+    const svc = new EnterpriseRunnerService(d)
+    svc.onSnapshot(snap({ session: { id: 's1', status: 'idle', runnerId: 'r1', metadata: { branch: 'fix/race' }, repositories: [{ fullName: 'acme/api', status: 'checkedOut' }] } }))
+    const res = await svc.openLocally('t1')
+    expect(res).toMatchObject({ ok: true, branchRef: 'spaces/fix/race' })
+    expect(calls.map((a) => a[0])).toEqual(['fetch', 'branch'])
+    const flat = calls.flat().join(' ')
+    expect(flat).not.toMatch(/checkout|reset|-B|-f\b|--force|main/)
+    expect(calls[1]).toEqual(['branch', '--no-track', '--', 'spaces/fix/race', 'refs/remotes/origin/fix/race'])
+  })
+
+  it('leaves an existing spaces/ ref alone', async () => {
+    const { d } = deps({
+      getRepoDir: () => ({ dir: '/work/api', exists: true, repository: 'acme/api' }),
+      git: async (args) => { if (args[0] === 'branch') throw new Error('already exists') }
+    })
+    const svc = new EnterpriseRunnerService(d)
+    svc.onSnapshot(snap({ session: { id: 's1', status: 'idle', runnerId: 'r1', metadata: { branch: 'fix/race' } } }))
+    expect(await svc.openLocally('t1')).toMatchObject({ ok: true, branchRef: 'origin/fix/race' })
+  })
+
+  it('asks before cloning when there is no local clone, then clones and fetches', async () => {
+    const calls: string[][] = []
+    const { d } = deps({
+      getRepoDir: () => ({ dir: '/work/api', exists: false, repository: 'acme/api' }),
+      git: async (args) => { calls.push(args) }
+    })
+    const svc = new EnterpriseRunnerService(d)
+    svc.onSnapshot(snap({ session: { id: 's1', status: 'idle', runnerId: 'r1', metadata: { branch: 'fix/race' } } }))
+    expect(await svc.openLocally('t1')).toMatchObject({ ok: false, needsClone: true, repository: 'acme/api' })
+    expect(calls).toHaveLength(0)
+    expect(await svc.openLocally('t1', { clone: true })).toMatchObject({ ok: true })
+    expect(calls.map((a) => a[0])).toEqual(['clone', 'fetch', 'branch'])
   })
 
   it('fails clearly when the runner has published no branch', async () => {

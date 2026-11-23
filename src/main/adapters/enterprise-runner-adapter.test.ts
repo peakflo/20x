@@ -29,12 +29,14 @@ class FakeApi implements RunnerApi {
 
   async listRunners() { this.log('listRunners'); return [] }
   async listAgents() { return [] }
-  async startTaskSession(taskId: string, input: StartSessionInput) {
+  async startTaskSession(taskId: string, input: StartSessionInput, cb?: (s: WireSession, attached: boolean) => void) {
     this.log('startTaskSession', taskId, input)
     if (this.startFailures > 0) { this.startFailures--; throw new RunnerHttpError('network down', null, 'network') }
+    cb?.(this.session, true)
     return { session: this.session }
   }
   async getSession() { return this.session }
+  async attachTask(sessionId: string, taskId: string) { this.log('attachTask', sessionId, taskId) }
   async sendMessage(sessionId: string, input: { content: string; clientMessageId: string }) { this.log('sendMessage', sessionId, input) }
   async answer(sessionId: string, input: unknown) { this.log('answer', sessionId, input) }
   async abort(sessionId: string) { this.log('abort', sessionId) }
@@ -176,10 +178,11 @@ describe('EnterpriseRunnerAdapter: concurrent messages', () => {
     const gate = new Promise<void>(() => undefined) // stay offline: parts arrive via the delta fallback
     const { adapter, local } = await started(api, { sleep: () => gate })
     await adapter.sendPrompt(local, [{ type: MessagePartType.TEXT, text: 'ship it' }], config)
+    const sentIds = api.called('sendMessage').map((a) => (a[1] as { clientMessageId: string }).clientMessageId)
     api.deltaPage = {
       maxRev: 6,
       parts: [
-        part('e1', { role: 'user', content: 'ship it', userId: 'me', seq: 5, rev: 5 }),
+        part('e1', { role: 'user', content: 'ship it', userId: 'me', seq: 5, rev: 5, payload: { clientMessageId: sentIds[0] } }),
         part('w1', { role: 'user', content: 'ship it', userId: 'priya', seq: 6, rev: 6 })
       ]
     }
@@ -318,15 +321,33 @@ describe('EnterpriseRunnerAdapter: approvals', () => {
 })
 
 describe('EnterpriseRunnerAdapter: abort, destroy, MCP', () => {
-  it('abort calls /abort; destroy calls /end, closes the stream and clears the record', async () => {
+  it('abort calls /abort; endSession calls /end and forgets the session', async () => {
     const api = new FakeApi()
     const { adapter, local, data } = await started(api)
     await adapter.abortPrompt(local, config)
     expect(api.called('abort')).toEqual([['sess-1']])
-    await adapter.destroySession(local, config)
+    await adapter.endSession(local, config)
     expect(api.called('end')).toEqual([['sess-1']])
     expect(data.get('enterprise-runner:session:task-1')).toBeUndefined()
+    expect(data.get('enterprise-runner:rev:sess-1')).toBeUndefined()
+  })
+
+  it('destroySession only detaches: no /end, record and rev kept, and a restart resumes from the saved rev', async () => {
+    const api = new FakeApi()
+    api.connections = [[partsEvent([part('p1', { rev: 7 })], 7)]]
+    const { adapter, local, data, host } = await started(api)
+    await adapter.destroySession(local, config) // what quit and the idle release call
+    expect(api.called('end')).toHaveLength(0)
+    expect(JSON.parse(data.get('enterprise-runner:session:task-1')!)).toMatchObject({ remoteSessionId: 'sess-1' })
+    expect(data.get('enterprise-runner:rev:sess-1')).toBe('7')
     expect(await adapter.pollMessages(local)).toEqual([])
+
+    const api2 = new FakeApi()
+    const restarted = new EnterpriseRunnerAdapter({ ...host, api: api2 })
+    expect(await restarted.createSession(config)).toBe('sess-1')
+    await flush()
+    expect(api2.streamStarts[0]).toBe(7)
+    expect(api2.called('end')).toHaveLength(0)
   })
 
   it('registerMcpServer is a no-op and a visible note is shown once', async () => {
@@ -405,5 +426,105 @@ describe('EnterpriseRunnerAdapter: status and completion', () => {
     expect(reports).toHaveLength(1)
     expect(reports[0]).toMatchObject({ kind: 'discrete', provider: 'enterprise-runner', items: [{ sourceKey: 'sess-1:sum1', model: 'claude-x' }] })
     expect(adapter.getSnapshot(local)!.usage).toMatchObject({ tokens: 48000, costUsd: 0.61 })
+  })
+})
+
+describe('EnterpriseRunnerAdapter: creation races and repair', () => {
+  it('sends a message that arrives while the session is being created, instead of dropping it', async () => {
+    const api = new FakeApi()
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => { release = r })
+    const original = api.startTaskSession.bind(api)
+    api.startTaskSession = async (t: string, i: StartSessionInput, cb?: Parameters<RunnerApi['startTaskSession']>[2]) => { await gate; return original(t, i, cb) }
+    const ctx = makeHost(api)
+    const adapter = new EnterpriseRunnerAdapter(ctx.host)
+    const local = await adapter.createSession(config)
+    const first = adapter.sendPrompt(local, [{ type: MessagePartType.TEXT, text: 'first' }], config)
+    const second = adapter.sendPrompt(local, [{ type: MessagePartType.TEXT, text: 'second' }], config)
+    release()
+    await Promise.all([first, second])
+    expect(api.called('startTaskSession')).toHaveLength(1)
+    expect(api.called('sendMessage').map((a) => (a[1] as { content: string }).content)).toEqual(['second'])
+  })
+
+  it('persists the session id as soon as it is created and re-attaches an unlinked session on the next start', async () => {
+    const api = new FakeApi()
+    api.startTaskSession = async (_t: string, _i: StartSessionInput, cb?: Parameters<RunnerApi['startTaskSession']>[2]) => {
+      cb?.(api.session, false) // session created, attach not done yet
+      throw new RunnerHttpError('network down', null, 'network') // crash before attach
+    }
+    const ctx = makeHost(api)
+    const adapter = new EnterpriseRunnerAdapter(ctx.host)
+    const local = await adapter.createSession(config)
+    await expect(adapter.sendPrompt(local, [{ type: MessagePartType.TEXT, text: 'go' }], config)).rejects.toThrow()
+    expect(JSON.parse(ctx.data.get('enterprise-runner:session:task-1')!)).toMatchObject({ remoteSessionId: 'sess-1', attached: false })
+
+    const api2 = new FakeApi()
+    const restarted = new EnterpriseRunnerAdapter({ ...ctx.host, api: api2 })
+    expect(await restarted.createSession(config)).toBe('sess-1')
+    await flush()
+    expect(api2.called('attachTask')).toEqual([['sess-1', 't-server']])
+    expect(JSON.parse(ctx.data.get('enterprise-runner:session:task-1')!)).toMatchObject({ attached: true })
+    expect(api2.called('startTaskSession')).toHaveLength(0)
+  })
+
+  it('reverts to the previous status when a follow-up send fails', async () => {
+    const api = new FakeApi()
+    api.session = { ...api.session, status: 'idle' }
+    const { adapter, local } = await started(api)
+    expect((await adapter.getStatus(local, config)).type).toBe(SessionStatusType.IDLE)
+    api.sendMessage = async () => { throw new RunnerHttpError('boom', 500, 'server') }
+    await expect(adapter.sendPrompt(local, [{ type: MessagePartType.TEXT, text: 'x' }], config)).rejects.toThrow()
+    expect((await adapter.getStatus(local, config)).type).toBe(SessionStatusType.IDLE)
+  })
+})
+
+describe('EnterpriseRunnerAdapter: echo matching', () => {
+  it('hides only the echo carrying our clientMessageId, once, and shows identical text typed on the web', async () => {
+    const api = new FakeApi()
+    api.connections = [[new RunnerHttpError('fetch failed', null, 'network')]]
+    const { adapter, local } = await started(api, { sleep: () => new Promise(() => undefined) })
+    await adapter.sendPrompt(local, [{ type: MessagePartType.TEXT, text: 'same' }], config)
+    const id = (api.called('sendMessage')[0][1] as { clientMessageId: string }).clientMessageId
+    api.deltaPage = { maxRev: 9, parts: [
+      part('own', { role: 'user', content: 'same', userId: 'me', seq: 7, rev: 7, payload: { clientMessageId: id } }),
+      part('web', { role: 'user', content: 'same', userId: 'me', seq: 8, rev: 8 }), // same user, same text, from the web
+      part('own2', { role: 'user', content: 'same', userId: 'me', seq: 9, rev: 9, payload: { clientMessageId: id } }) // id already consumed
+    ] }
+    const ids = (await adapter.pollMessages(local)).filter((p) => p.role === 'user').map((p) => p.id)
+    expect(ids).toEqual(['web', 'own2'])
+  })
+})
+
+describe('EnterpriseRunnerAdapter: truncated pages', () => {
+  it('advances only to the highest applied rev and fetches the next delta', async () => {
+    const api = new FakeApi()
+    api.connections = [[{ type: 'parts', id: 100, page: { parts: [part('a', { rev: 3, seq: 1 }), part('b', { rev: 4, seq: 2 })], maxRev: 100, truncated: true } }]]
+    api.delta = async (_id: string, since: number) => {
+      api.calls.push({ name: 'delta', args: ['sess-1', since] })
+      return since < 10 ? { parts: [part('c', { rev: 50, seq: 3 })], maxRev: 100, truncated: true } : { parts: [part('d', { rev: 100, seq: 4 })], maxRev: 100 }
+    }
+    const { adapter, local } = await started(api)
+    const ids = (await adapter.pollMessages(local)).filter((p) => !p.realSessionId).map((p) => p.id)
+    expect(ids).toEqual(['a', 'b', 'c', 'd'])
+    expect(api.called('delta').map((a) => a[1])).toEqual([4, 50])
+    expect(adapter.getSnapshot(local)!.rev).toBe(100)
+  })
+})
+
+describe('EnterpriseRunnerAdapter: signed out or revoked', () => {
+  it('stops the stream and the delta polling on an auth error, and resumes after sign-in', async () => {
+    const api = new FakeApi()
+    api.connections = [[new RunnerHttpError('Session expired', 401, 'auth')]]
+    let signedIn = false
+    const { adapter, local } = await started(api, { isSignedIn: () => signedIn })
+    await flush()
+    expect(api.streamStarts).toHaveLength(1) // no reconnect loop
+    await adapter.pollMessages(local)
+    expect(api.called('delta')).toHaveLength(0) // no 2s polling either
+    signedIn = true
+    await adapter.pollMessages(local)
+    await flush()
+    expect(api.streamStarts.length).toBeGreaterThan(1)
   })
 })

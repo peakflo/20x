@@ -52,7 +52,9 @@ export class UnsafeRunnerRequestError extends Error {
 }
 
 function* walk(value: unknown, path: string, depth = 0): Generator<{ path: string; key?: string; value: unknown }> {
-  if (depth > 8 || value === null || typeof value !== 'object') return
+  if (value === null || typeof value !== 'object') return
+  // Too deep to inspect is too deep to trust: refuse rather than skip.
+  if (depth > 8) throw new UnsafeRunnerRequestError(`field ${path} is nested too deeply to verify`)
   if (Array.isArray(value)) {
     for (let i = 0; i < value.length; i++) {
       yield { path: `${path}[${i}]`, value: value[i] }
@@ -88,4 +90,18 @@ export function assertRequestBodySafe(body: unknown, knownSecrets: Iterable<stri
   if (typeof body === 'string') {
     for (const s of secrets) if (body.includes(s)) throw new UnsafeRunnerRequestError('body contains a local secret value')
   }
+}
+
+/**
+ * Removes URLs of local services (secret broker, local MCP servers) from text
+ * that is sent to a runner. Only the given ports are touched, so a user can
+ * still mention `localhost:3000`.
+ */
+export function redactLocalServices(text: string, ports: Iterable<number>): string {
+  let out = text
+  for (const port of ports) {
+    const re = new RegExp(`(?:https?:\\/\\/)?(?:127\\.0\\.0\\.1|localhost|\\[::1\\]):${port}\\b[^\\s"')\\]]*`, 'gi')
+    out = out.replace(re, '[local service removed]')
+  }
+  return out
 }

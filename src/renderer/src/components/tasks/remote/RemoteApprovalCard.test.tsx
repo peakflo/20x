@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APPROVAL_TTL_MS } from '@shared/enterprise-runners'
 import type { AgentMessage } from '@/hooks/use-agent-session'
 import { RemoteApprovalCard } from './RemoteApprovalCard'
+import { RemoteDecisionContext } from '@/hooks/use-remote-task-state'
 
 function permission(createdAt: number): AgentMessage {
   return {
@@ -28,11 +29,27 @@ describe('RemoteApprovalCard', () => {
     expect(screen.getAllByRole('button')).toHaveLength(2)
   })
 
-  it('answers with the server option label', () => {
+  it('Reject decides approved=false and Allow approved=true, never via free-text', () => {
+    const decide = vi.fn()
     const onAnswer = vi.fn()
-    render(<RemoteApprovalCard message={permission(Date.now())} canAnswer onAnswer={onAnswer} />)
+    const msg = { ...permission(Date.now()), tool: { ...permission(Date.now()).tool!, requestId: 'perm-1' } } as AgentMessage
+    const { unmount } = render(<RemoteDecisionContext.Provider value={decide}><RemoteApprovalCard message={msg} canAnswer onAnswer={onAnswer} /></RemoteDecisionContext.Provider>)
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
-    expect(onAnswer).toHaveBeenCalledWith('Reject')
+    expect(decide).toHaveBeenCalledWith({ approved: false, requestId: 'perm-1', label: 'Reject' })
+    unmount()
+    render(<RemoteDecisionContext.Provider value={decide}><RemoteApprovalCard message={msg} canAnswer onAnswer={onAnswer} /></RemoteDecisionContext.Provider>)
+    fireEvent.click(screen.getByRole('button', { name: 'Allow' }))
+    expect(decide).toHaveBeenLastCalledWith({ approved: true, requestId: 'perm-1', label: 'Allow' })
+    expect(onAnswer).not.toHaveBeenCalled()
+  })
+
+  it("treats \"Don't allow\" and unknown labels as reject", () => {
+    const decide = vi.fn()
+    const msg = { ...permission(Date.now()), tool: { name: 'permission', requestId: 'p', questions: [{ header: '', question: 'q', options: [{ label: "Don't allow" }, { label: 'Maybe' }] }] } } as unknown as AgentMessage
+    render(<RemoteDecisionContext.Provider value={decide}><RemoteApprovalCard message={msg} canAnswer /></RemoteDecisionContext.Provider>)
+    expect((screen.getByRole('button', { name: 'Allow' }) as HTMLButtonElement).disabled).toBe(true) // no allow option offered
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+    expect(decide).toHaveBeenCalledWith(expect.objectContaining({ approved: false }))
   })
 
   it('counts down every second and expires after 30 minutes', () => {

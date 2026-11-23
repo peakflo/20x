@@ -574,7 +574,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setTaskRunOn: (taskId: string, choice: unknown) => ipcRenderer.invoke('enterpriseRunners:setRunOn', taskId, choice),
     getTaskState: (taskId: string) => ipcRenderer.invoke('enterpriseRunners:taskState', taskId),
     reassign: (taskId: string, runnerId: string) => ipcRenderer.invoke('enterpriseRunners:reassign', taskId, runnerId),
-    openLocally: (taskId: string) => ipcRenderer.invoke('enterpriseRunners:openLocally', taskId),
+    openLocally: (taskId: string, opts?: { clone?: boolean }) => ipcRenderer.invoke('enterpriseRunners:openLocally', taskId, opts),
     listSpacesArtifacts: (taskId: string, opts?: { refresh?: boolean }) => ipcRenderer.invoke('enterpriseRunners:listArtifacts', taskId, opts),
     readSpacesArtifact: (taskId: string, id: string) => ipcRenderer.invoke('enterpriseRunners:readArtifact', taskId, id),
     onTaskState: (callback: (event: unknown) => void): (() => void) => {

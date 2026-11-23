@@ -10,13 +10,15 @@ export function RemoteBranchPanel({ taskId, state, className }: { taskId: string
   const branch = state.branch
   const [fetching, setFetching] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const [cloneRepo, setCloneRepo] = useState<string | null>(null)
 
-  const openLocally = async (): Promise<void> => {
+  const openLocally = async (clone = false): Promise<void> => {
     setFetching(true)
     setResult(null)
     try {
-      const res = await enterpriseRunnersApi.openLocally(taskId)
-      setResult(res.ok ? { ok: true, text: `Fetched into ${res.worktreePath ?? 'a local worktree'}. The task stays on the runner.` } : { ok: false, text: res.error ?? 'Could not fetch the branch.' })
+      const res = await enterpriseRunnersApi.openLocally(taskId, clone ? { clone: true } : undefined)
+      setCloneRepo(res.needsClone ? res.repository ?? 'this repository' : null)
+      setResult(res.ok ? { ok: true, text: `Fetched into ${res.worktreePath ?? 'your local clone'} as ${res.branchRef ?? 'a spaces/ branch'}. Nothing was checked out and the task stays on the runner.` } : { ok: false, text: res.error ?? 'Could not fetch the branch.' })
     } catch (e) {
       setResult({ ok: false, text: e instanceof Error ? e.message : String(e) })
     } finally {
@@ -61,8 +63,8 @@ export function RemoteBranchPanel({ taskId, state, className }: { taskId: string
         No local diff — the working tree lives on the runner.
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={() => void openLocally()} disabled={fetching || !branch?.branch}>
-          {fetching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5" />}Open locally (fetch branch)
+        <Button size="sm" onClick={() => void openLocally(cloneRepo !== null)} disabled={fetching || !branch?.branch}>
+          {fetching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CloudDownload className="h-3.5 w-3.5" />}{cloneRepo !== null ? `Clone ${cloneRepo} and fetch` : 'Open locally (fetch branch)'}
         </Button>
         {branch?.prUrl && (
           <Button size="sm" variant="outline" onClick={() => openInSpaces(branch.prUrl)}>
@@ -71,7 +73,7 @@ export function RemoteBranchPanel({ taskId, state, className }: { taskId: string
         )}
       </div>
       <p className="mt-2 text-[11px] text-muted-foreground">
-        Runs <code className="font-mono">git fetch origin {branch?.branch ?? '<branch>'}</code> into a local worktree. The task stays on the runner.
+        Runs <code className="font-mono">git fetch origin {branch?.branch ?? '<branch>'}</code> into your local clone as a <code className="font-mono">spaces/</code> branch. It never checks out or changes your existing branches, and the task stays on the runner.
       </p>
       {result && <p role={result.ok ? 'status' : 'alert'} className={`mt-2 text-[11px] ${result.ok ? 'text-emerald-500' : 'text-red-400'}`}>{result.text}</p>}
       <div className="mt-auto flex items-center gap-3 pt-4 text-[11px] text-muted-foreground">

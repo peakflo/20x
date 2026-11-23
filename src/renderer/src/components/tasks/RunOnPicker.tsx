@@ -109,6 +109,9 @@ export function RunOnPicker({ taskId, agentId, sessionStarted = false, value, on
   )
 
   if (!signedIn) return null
+  // An agent with no Spaces counterpart can only run on this Mac: nothing to choose.
+  if (agentInfo && !agentInfo.enterpriseAgentId && !agentInfo.runnerOnly) return null
+  const runnerOnly = agentInfo?.runnerOnly === true
 
   if (locked) {
     return (
@@ -192,7 +195,7 @@ export function RunOnPicker({ taskId, agentId, sessionStarted = false, value, on
       >
         <Server className="h-3 w-3 text-muted-foreground" aria-hidden />
         <span className="text-muted-foreground">Run on:</span>
-        <span className="font-medium">{chipLabel(choice)}</span>
+        <span className="font-medium">{runnerOnly && choice.kind === 'local' ? 'Choose a runner' : chipLabel(choice)}</span>
         <ChevronDown className="h-3 w-3 text-muted-foreground" aria-hidden />
       </button>
       {open && (
@@ -218,17 +221,18 @@ export function RunOnPicker({ taskId, agentId, sessionStarted = false, value, on
               role="option"
               aria-selected={choice.kind === 'local'}
               data-testid="run-on-local"
+              disabled={runnerOnly}
               onClick={() => void select(RUN_ON_LOCAL)}
-              className="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left text-xs hover:bg-accent"
+              className={`flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left text-xs hover:bg-accent ${runnerOnly ? 'cursor-not-allowed opacity-50' : ''}`}
             >
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-1.5">
                   <span className="font-medium text-foreground">This Mac</span>
                   <span className="rounded border bg-muted/50 px-1 py-px text-[10px] text-muted-foreground">local</span>
                 </span>
-                <span className="mt-0.5 block text-[11px] text-muted-foreground">Local worktree · not synced to Spaces</span>
+                <span className="mt-0.5 block text-[11px] text-muted-foreground">{runnerOnly ? 'This agent runs on a runner only' : 'Local worktree · not synced to Spaces'}</span>
               </span>
-              {choice.kind === 'local' && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />}
+              {choice.kind === 'local' && !runnerOnly && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />}
             </button>
 
             {loading && !runners && (

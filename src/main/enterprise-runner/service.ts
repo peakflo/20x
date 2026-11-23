@@ -68,7 +68,13 @@ export interface EnterpriseRunnerServiceDeps {
   getApiUrl(): string
   currentUserId(): string | null
   /** Where a local worktree for the task lives, or null when none is set up. */
-  getRepoDir(taskId: string): string | null
+  /**
+   * Local clone directory for the repository the runner worked in (`owner/name`),
+   * and whether it exists. Null when the task has no such repository.
+   */
+  getRepoDir(taskId: string, repository: string | null): { dir: string; exists: boolean; repository: string } | null
+  /** Test seam for git. */
+  git?(args: string[], cwd: string | undefined): Promise<void>
   /** Ends the current remote session and clears the task's session id. */
   restartOnRunner(taskId: string): Promise<void>
   emitState(event: RemoteTaskStateEvent): void
@@ -90,6 +96,20 @@ export function spacesWebUrl(apiUrl: string, path: string): string | null {
   }
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** IPC input is untrusted: only a known shape with a bounded name is stored. */
+export function validateRunOnChoice(input: unknown): RunOnChoice {
+  const o = input as { kind?: unknown; runnerId?: unknown; runnerName?: unknown } | null
+  if (o?.kind === 'local') return RUN_ON_LOCAL
+  if (o?.kind === 'runner' && typeof o.runnerId === 'string' && UUID.test(o.runnerId)) {
+    const name = typeof o.runnerName === 'string' ? o.runnerName.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 80) : ''
+    return { kind: 'runner', runnerId: o.runnerId, runnerName: name || o.runnerId }
+  }
+  throw new Error('Invalid "Run on" choice.')
+}
+
+const REPO_SLUG = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const BRANCH_RE = /^[A-Za-z0-9._/-]{1,200}$/
 
 export function isSafeBranchName(branch: string): boolean {
@@ -148,7 +168,8 @@ export class EnterpriseRunnerService {
     return {
       agentId, enterpriseAgentId, backend, permissionLimit: limit,
       runnerPin: typeof cfg.runner_id === 'string' ? cfg.runner_id : null,
-      usable
+      usable,
+      runnerOnly: cfg.coding_agent === ENTERPRISE_RUNNER_AGENT_TYPE
     }
   }
 
@@ -170,12 +191,35 @@ export class EnterpriseRunnerService {
     if (raw) {
       try { choice = JSON.parse(raw) as RunOnChoice } catch { choice = RUN_ON_LOCAL }
     }
-    return { choice, locked: this.sessionStarted(taskId) }
+    const locked = this.sessionStarted(taskId)
+    const task = this.deps.getTask(taskId)
+    const runnerOnly = !!task?.agent_id && this.deps.getAgent(task.agent_id)?.config?.coding_agent === ENTERPRISE_RUNNER_AGENT_TYPE
+    // Report where the session really runs, so the locked chip never names a
+    // different place than the one the task is running on.
+    const record = this.deps.store.get(sessionRecordKey(taskId))
+    if (locked && record) {
+      try {
+        const r = JSON.parse(record) as { runnerId?: string | null }
+        const rid = r.runnerId ?? (choice.kind === 'runner' ? choice.runnerId : null)
+        if (rid) choice = { kind: 'runner', runnerId: rid, runnerName: choice.kind === 'runner' && choice.runnerId === rid ? choice.runnerName : rid }
+      } catch { /* keep the stored choice */ }
+    } else if (locked) {
+      choice = RUN_ON_LOCAL
+    }
+    return { choice, locked, runnerOnly }
   }
 
-  setTaskRunOn(taskId: string, choice: RunOnChoice): TaskRunOn {
+  setTaskRunOn(taskId: string, input: unknown): TaskRunOn {
     if (this.sessionStarted(taskId)) throw new Error('The runner is locked: a session has already started on it.')
-    if (choice.kind === 'runner' && !choice.runnerId) throw new Error('A runner id is required.')
+    const choice = validateRunOnChoice(input)
+    const task = this.deps.getTask(taskId)
+    const agent = task?.agent_id ? this.deps.getAgent(task.agent_id) : undefined
+    if (choice.kind === 'local' && agent?.config?.coding_agent === ENTERPRISE_RUNNER_AGENT_TYPE) {
+      throw new Error('This agent runs on a runner only.')
+    }
+    if (choice.kind === 'runner' && !agent?.config?.enterprise_agent_id) {
+      throw new Error('This agent is not synced from Spaces, so it cannot run on a runner.')
+    }
     this.deps.store.set(runOnKey(taskId), JSON.stringify(choice))
     return this.getTaskRunOn(taskId)
   }
@@ -190,14 +234,17 @@ export class EnterpriseRunnerService {
 
   async reassign(taskId: string, runnerId: string): Promise<{ ok: boolean; error?: string }> {
     try {
+      if (typeof runnerId !== 'string' || !UUID.test(runnerId)) return { ok: false, error: 'Invalid runner.' }
       const runners = await this.listRunners()
-      const target = runners.ok ? runners.runners.find((r) => r.id === runnerId) : undefined
-      if (runners.ok && !target) return { ok: false, error: 'That runner is not available to you.' }
-      if (target && !target.selectable) return { ok: false, error: target.serverReason ?? 'That runner is unavailable.' }
+      // The live session is only ended once the target is verified selectable.
+      if (!runners.ok) return { ok: false, error: `Could not verify the runner: ${runners.error}` }
+      const target = runners.runners.find((r) => r.id === runnerId)
+      if (!target) return { ok: false, error: 'That runner is not available to you.' }
+      if (!target.selectable) return { ok: false, error: target.serverReason ?? 'That runner is unavailable.' }
       // Restart on the new runner: the transcript stays on Spaces; the next
       // message starts a fresh session on the chosen runner.
       await this.deps.restartOnRunner(taskId)
-      this.deps.store.set(runOnKey(taskId), JSON.stringify({ kind: 'runner', runnerId, runnerName: target?.name ?? runnerId }))
+      this.deps.store.set(runOnKey(taskId), JSON.stringify({ kind: 'runner', runnerId, runnerName: target.name }))
       this.states.delete(taskId)
       return { ok: true }
     } catch (error) {
@@ -319,7 +366,7 @@ export class EnterpriseRunnerService {
         const file = a.files.find((f) => f.filename === a.previewFilename) ?? a.files[0]
         const text = file?.content ?? null
         this.cache.put({
-          key: summary.id, taskId, meta: summary, content: file && typeof text === 'string' && file.encoding !== 'base64' ? text : null,
+          key: summary.id, taskId, meta: summary, content: file && typeof text === 'string' ? text : null,
           encoding: file && typeof text === 'string' ? (file.encoding === 'base64' ? 'base64' : 'utf8') : 'none',
           mimeType: mimeFor(summary.kind, summary.filename), sizeBytes: a.totalBytes
         })
@@ -345,6 +392,19 @@ export class EnterpriseRunnerService {
     if (cached && cached.content !== null) {
       return { availability: 'cached', encoding: cached.encoding, mimeType: cached.mimeType, content: cached.content, sizeBytes: cached.sizeBytes, webUrl: url }
     }
+    // Nothing usable cached (never fetched, too large to cache, or looked
+    // secret): read it live so an image or a fresh artifact still displays.
+    const [, sessionId, artifactId] = /^spaces:([^:]+):(.+)$/.exec(id) ?? []
+    if (sessionId && artifactId && this.deps.isSignedIn()) {
+      try {
+        const art = (await this.deps.api.listArtifacts(sessionId)).find((a) => a.artifactId === artifactId)
+        const file = art?.files.find((f) => f.filename === art.previewFilename) ?? art?.files[0]
+        if (art && file && typeof file.content === 'string') {
+          const summary = this.toSummary(sessionId, art, 'live')
+          return { availability: 'live', encoding: file.encoding === 'base64' ? 'base64' : 'utf8', mimeType: mimeFor(summary.kind, summary.filename), content: file.content, sizeBytes: art.totalBytes, webUrl: summary.webUrl }
+        }
+      } catch { /* offline: fall through to not-cached */ }
+    }
     return { availability: 'not-cached', encoding: 'none', mimeType: cached?.mimeType ?? 'application/octet-stream', content: null, sizeBytes: cached?.sizeBytes ?? 0, webUrl: url }
   }
 
@@ -359,21 +419,36 @@ export class EnterpriseRunnerService {
   // ── Open locally (fetch branch) ────────────────────────────────────
 
   /**
-   * Fetch only. The branch is fetched into the task's local worktree; the task
-   * stays on the runner and Spaces still owns it.
+   * Fetch only. The runner's branch is fetched into the task's local clone as
+   * `refs/remotes/origin/<branch>` and a namespaced `spaces/<branch>` ref is
+   * created when it does not exist. No checkout, no reset, and no existing
+   * branch (for example `main`) is ever touched. The task stays on the runner.
+   * With no local clone the caller is asked to confirm a clone first.
    */
-  async openLocally(taskId: string): Promise<OpenLocallyResult> {
+  async openLocally(taskId: string, opts: { clone?: boolean } = {}): Promise<OpenLocallyResult> {
     const state = this.getTaskState(taskId)
     const branch = state?.branch?.branch
     if (!branch) return { ok: false, error: 'The runner has not published a branch yet.' }
     if (!isSafeBranchName(branch)) return { ok: false, error: 'The branch name is not safe to fetch.' }
-    const dir = this.deps.getRepoDir(taskId)
-    if (!dir || !existsSync(dir)) return { ok: false, error: 'No local checkout of this repository. Add the repository to the task first.' }
+    const repo = this.deps.getRepoDir(taskId, state?.branch?.repository ?? null)
+    if (!repo) return { ok: false, error: 'The runner did not report which repository it worked in.' }
+    if (!REPO_SLUG.test(repo.repository)) return { ok: false, error: 'The repository name is not safe to clone.' }
+    const git = this.deps.git ?? ((args: string[], cwd: string | undefined) => execFileAsync('git', args, { cwd, timeout: 180_000 }).then(() => undefined))
     try {
-      // Argument array + `--`: the branch name can never be read as an option.
-      await execFileAsync('git', ['fetch', 'origin', '--', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], { cwd: dir, timeout: 120_000 })
-      await execFileAsync('git', ['checkout', '-B', branch, `refs/remotes/origin/${branch}`], { cwd: dir, timeout: 60_000 })
-      return { ok: true, worktreePath: dir }
+      if (!repo.exists) {
+        if (!opts.clone) return { ok: false, needsClone: true, repository: repo.repository, error: `There is no local clone of ${repo.repository}.` }
+        await git(['clone', '--no-checkout', '--', `https://github.com/${repo.repository}.git`, repo.dir], undefined)
+      }
+      // Argument arrays and `--`: the branch name can never be read as an option.
+      await git(['fetch', 'origin', '--', `+refs/heads/${branch}:refs/remotes/origin/${branch}`], repo.dir)
+      const ref = `spaces/${branch}`
+      let created = false
+      try {
+        // Without -f this fails when the ref already exists; that ref is left alone.
+        await git(['branch', '--no-track', '--', ref, `refs/remotes/origin/${branch}`], repo.dir)
+        created = true
+      } catch { /* already exists: keep the user's branch */ }
+      return { ok: true, worktreePath: repo.dir, branchRef: created ? ref : `origin/${branch}` }
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message.split('\n')[0] : String(error) }
     }

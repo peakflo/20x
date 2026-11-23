@@ -2,6 +2,7 @@ import { useProgressToastStore } from '@/stores/progress-toast-store'
 import { useTaskSourceStore } from '@/stores/task-source-store'
 import { useTaskStore } from '@/stores/task-store'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { useRemoteTaskStore } from '@/stores/remote-task-store'
 import { render, act, fireEvent, screen, waitFor, cleanup } from '@testing-library/react'
 import { clampTranscriptWidth, TaskWorkspace } from './TaskWorkspace'
 import { useAgentStore, SessionStatus, __clearProjectionsForTest } from '@/stores/agent-store'
@@ -809,6 +810,56 @@ describe('TaskWorkspace – stale triage session cleanup', () => {
     })
     expect(window.electronAPI.agentSession.approve).toHaveBeenCalledTimes(1)
     expect(window.electronAPI.agentSession.send).not.toHaveBeenCalled()
+  })
+
+  it('on a runner, composer text never answers a pending permission request', async () => {
+    const taskId = 'task-1'
+    const agentId = 'agent-1'
+
+    useAgentStore.getState().initSession(taskId, 'session-1', agentId)
+    useAgentStore.setState((state) => {
+      const session = state.sessions.get(taskId)!
+      return {
+        sessions: new Map(state.sessions).set(taskId, {
+          ...session,
+          status: SessionStatus.IDLE,
+          messages: [
+            {
+              id: 'question-1',
+              role: 'assistant' as const,
+              content: 'Need approval',
+              timestamp: new Date(),
+              partType: 'question',
+              tool: {
+                name: 'permission',
+                status: 'pending',
+                requestId: 'pi-request-1',
+                questions: [
+                  {
+                    header: 'Permission',
+                    question: 'Allow write?',
+                    options: [{ label: 'Yes', description: 'Allow once' }]
+                  }
+                ]
+              }
+            }
+          ]
+        })
+      }
+    })
+
+    useRemoteTaskStore.setState({ states: { [taskId]: { taskId, sync: 'live', runnerName: 'studio-mac' } as never } })
+    const task = makeRendererTask({ id: taskId, status: TaskStatus.AgentWorking, session_id: 'session-1' })
+    renderWorkspace(task)
+
+    fireEvent.click(screen.getByTestId('mock-send'))
+    fireEvent.click(screen.getByTestId('mock-send'))
+
+    await waitFor(() => {
+      expect(window.electronAPI.agentSession.send).toHaveBeenCalled()
+    })
+    expect(window.electronAPI.agentSession.approve).not.toHaveBeenCalled()
+    useRemoteTaskStore.setState({ states: {} })
   })
 
   it('resumes a lost session before it answers a persisted Pi question', async () => {

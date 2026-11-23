@@ -6,6 +6,13 @@ import { requestRemoteTaskState, useRemoteTaskStore } from '@/stores/remote-task
 export const RemoteTaskContext = createContext<RemoteTaskState | null>(null)
 
 /**
+ * Decision handler for permission cards of remote sessions. Allow and Reject
+ * call it with an explicit boolean; composer text never answers a permission.
+ */
+export type RemoteDecision = (decision: { approved: boolean; requestId?: string; label: string }) => void
+export const RemoteDecisionContext = createContext<RemoteDecision | null>(null)
+
+/**
  * Live remote (runner) state of a task, or null when the task does not run on
  * a runner. One shared IPC subscription serves every caller.
  */

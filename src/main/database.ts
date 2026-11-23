@@ -55,6 +55,8 @@ export interface AgentConfigRecord {
    * Required when coding_agent is 'acp'; ignored otherwise.
    */
   acp_instance_id?: string
+  /** Spaces agent id of a synced `[Workflo]` agent; it can run on an enterprise runner. */
+  enterprise_agent_id?: string
   model?: string
   reasoning_effort?: ReasoningEffort
   speed_mode?: SpeedMode

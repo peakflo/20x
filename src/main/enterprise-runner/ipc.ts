@@ -22,7 +22,7 @@ export function registerEnterpriseRunnerIpc(getRuntime: () => EnterpriseRunnerRu
   ipcMain.handle('enterpriseRunners:setRunOn', (_, taskId: string, choice: RunOnChoice) => need().service.setTaskRunOn(String(taskId), choice))
   ipcMain.handle('enterpriseRunners:taskState', (_, taskId: string) => getRuntime()?.service.getTaskState(String(taskId)) ?? null)
   ipcMain.handle('enterpriseRunners:reassign', (_, taskId: string, runnerId: string) => need().service.reassign(String(taskId), String(runnerId)))
-  ipcMain.handle('enterpriseRunners:openLocally', (_, taskId: string) => need().service.openLocally(String(taskId)))
+  ipcMain.handle('enterpriseRunners:openLocally', (_, taskId: string, opts?: { clone?: boolean }) => need().service.openLocally(String(taskId), { clone: opts?.clone === true }))
   ipcMain.handle('enterpriseRunners:listArtifacts', (_, taskId: string) => {
     const rt = getRuntime()
     return rt ? rt.service.listSpacesArtifacts(String(taskId)) : { status: 'signed-out', artifacts: [], syncedAt: null }

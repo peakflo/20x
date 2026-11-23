@@ -4,6 +4,7 @@
  * and the IPC layer.
  */
 
+import { existsSync } from 'fs'
 import { join } from 'path'
 import type { DatabaseManager } from '../database'
 import type { EnterpriseAuth } from '../enterprise-auth'
@@ -45,6 +46,8 @@ export function createEnterpriseRunnerRuntime(deps: RuntimeDeps): EnterpriseRunn
     delete: (key: string) => db.deleteSetting(key)
   }
 
+  const isSignedIn = (): boolean => !!db.getSetting('enterprise_tenant_id') && !!db.getSetting('enterprise_user_id')
+
   const ensureServerTask = async (taskId: string): Promise<string> => {
     const existing = db.getTask(taskId)
     if (!existing) throw new Error('Task not found.')
@@ -70,12 +73,15 @@ export function createEnterpriseRunnerRuntime(deps: RuntimeDeps): EnterpriseRunn
       return a ? { id: a.id, config: (a.config ?? {}) as Record<string, unknown> } : undefined
     },
     getServerTaskStatus: (id) => serverTaskSnapshot(db, id)?.status ?? null,
-    isSignedIn: () => !!db.getSetting('enterprise_tenant_id') && !!db.getSetting('enterprise_user_id'),
+    isSignedIn,
     getApiUrl: () => auth.getApiUrl(),
     currentUserId: () => db.getSetting('enterprise_user_id') ?? null,
-    getRepoDir: (id) => {
-      const repo = db.getTask(id)?.repos?.find((r) => REPO_SLUG.test(r))
-      return repo ? join(db.getWorkspaceDir(id), repo.split('/')[1]) : null
+    getRepoDir: (id, repository) => {
+      const repos = (db.getTask(id)?.repos ?? []).filter((r) => REPO_SLUG.test(r))
+      const full = (repository && REPO_SLUG.test(repository) ? repos.find((r) => r.toLowerCase() === repository.toLowerCase()) ?? repository : repos[0]) ?? null
+      if (!full) return null
+      const dir = join(db.getWorkspaceDir(id), full.split('/')[1])
+      return { dir, exists: existsSync(join(dir, '.git')), repository: full }
     },
     restartOnRunner: async (taskId) => {
       await deps.endTaskSession(taskId)
@@ -101,6 +107,12 @@ export function createEnterpriseRunnerRuntime(deps: RuntimeDeps): EnterpriseRunn
       return t ? { title: t.title, repositories: (t.repos ?? []).filter((r) => REPO_SLUG.test(r)) } : null
     },
     currentUserId: () => db.getSetting('enterprise_user_id') ?? null,
+    isSignedIn: () => isSignedIn(),
+    // Every local secret value goes into the request guard, once per runtime
+    // (the guard only grows), not just the ones the current agent uses.
+    localSecretValues: () => {
+      try { return db.getSecretsWithValues(db.getSecrets().map((x) => x.id)).map((x) => x.value).filter((v) => typeof v === 'string' && v.length >= 6) } catch { return [] }
+    },
     onSnapshot: (snapshot) => service.onSnapshot(snapshot)
   }
 

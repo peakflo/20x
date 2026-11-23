@@ -71,8 +71,16 @@ describe('RemoteBranchPanel', () => {
     expect(screen.getByRole('button', { name: /Open PR/ })).toBeTruthy()
     expect(screen.getByTestId('usage-line').textContent).toContain('48k tokens')
     fireEvent.click(screen.getByRole('button', { name: /Open locally \(fetch branch\)/ }))
-    await waitFor(() => expect(api.openLocally).toHaveBeenCalledWith('task-1'))
-    expect(await screen.findByText(/The task stays on the runner\./, { selector: '[role=status]' })).toBeTruthy()
+    await waitFor(() => expect(api.openLocally).toHaveBeenCalledWith('task-1', undefined))
+    expect(await screen.findByText(/the task stays on the runner\./, { selector: '[role=status]' })).toBeTruthy()
+  })
+
+  it('offers to clone when there is no local clone, then fetches', async () => {
+    api.openLocally.mockResolvedValueOnce({ ok: false, needsClone: true, repository: 'acme/api', error: 'no clone' })
+    render(<RemoteBranchPanel taskId="task-1" state={makeRemote()} />)
+    fireEvent.click(screen.getByRole('button', { name: /Open locally/ }))
+    fireEvent.click(await screen.findByRole('button', { name: /Clone acme\/api and fetch/ }))
+    await waitFor(() => expect(api.openLocally).toHaveBeenLastCalledWith('task-1', { clone: true }))
   })
 
   it('shows the fetch error', async () => {

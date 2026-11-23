@@ -11,7 +11,7 @@ import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { ChangesPanel } from './ChangesPanel'
 import { RemoteBranchPanel } from './remote/RemoteBranchPanel'
 import { RemoteStateBanner } from './remote/RemoteChips'
-import { RemoteTaskContext, useRemoteTaskState } from '@/hooks/use-remote-task-state'
+import { RemoteDecisionContext, RemoteTaskContext, useRemoteTaskState } from '@/hooks/use-remote-task-state'
 import { SpacesArtifactsPanel } from '@/components/artifacts/SpacesArtifactsPanel'
 import { OutputFieldsDisplay } from './OutputFieldsDisplay'
 import { TaskHeaderBar, TaskPrimaryAction } from './TaskHeaderBar'
@@ -566,6 +566,15 @@ function TaskWorkspaceComponent({
     [approve]
   )
 
+  // Remote permission cards answer with an explicit boolean. Reject really rejects.
+  const handleRemoteDecision = useCallback(
+    ({ approved, requestId, label }: { approved: boolean; requestId?: string; label: string }) => {
+      approve(approved, label, 'permission', requestId).catch(console.error)
+    },
+    [approve]
+  )
+  const isRemoteTask = !!remote
+
   /**
    * Gives the composer a session to talk to, starting or resuming one if the
    * task has none live.
@@ -616,7 +625,10 @@ function TaskWorkspaceComponent({
       }
       const hasActiveQuestion = questionIndex >= 0
         && !messages.slice(questionIndex + 1).some((m) => m.role === 'user')
-      if (hasActiveQuestion) {
+      // On a runner, composer text is a normal message and never answers a
+      // permission request: only the card's Allow / Reject can.
+      const pendingIsPermission = hasActiveQuestion && messages[questionIndex].tool?.name === 'permission'
+      if (hasActiveQuestion && !(isRemoteTask && pendingIsPermission)) {
         const question = messages[questionIndex]
         const questionKey = question.tool?.requestId || question.id
         if (submittedQuestionIdsRef.current.has(questionKey)) return
@@ -643,7 +655,7 @@ function TaskWorkspaceComponent({
       if (!readySessionId) throw new Error('Could not start an agent session for this task')
       await sendMessage(message, options)
     },
-    [approve, ensureChatSession, sendMessage, task?.id]
+    [approve, ensureChatSession, sendMessage, task?.id, isRemoteTask]
   )
 
   const handleAddAttachmentPaths = useCallback(async (filePaths: string[]) => {
@@ -1122,6 +1134,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
   const showRemoteBanner = !!remote && remote.sync !== 'live'
   const transcriptView = (
     <RemoteTaskContext.Provider value={remote}>
+    <RemoteDecisionContext.Provider value={handleRemoteDecision}>
     <div className="native-backdrop-page flex h-full min-h-0 flex-col bg-background">
       {showRemoteBanner && remote && <div className={hasSession && panelLayout !== 'task-only' ? 'pt-12' : ''}><RemoteStateBanner taskId={task.id} state={remote} /></div>}
       <AgentApprovalBanner request={session.pendingApproval} onApprove={handleApprove} onReject={handleReject} />
@@ -1146,6 +1159,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
         className="native-backdrop-page h-full min-h-0 border-0 bg-background"
       />
     </div>
+    </RemoteDecisionContext.Provider>
     </RemoteTaskContext.Provider>
   )
 

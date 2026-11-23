@@ -107,13 +107,31 @@ describe('HttpRunnerApi: commands', () => {
     ])
   })
 
-  it('creates a session on the chosen runner, then links it to the Spaces task', async () => {
-    const a = auth({ apiRequest: vi.fn(async (_m, path) => (path.endsWith('/sessions') ? { session: { id: 's9', status: 'queued', runnerId: 'r1' } } : {})) })
-    const api = new HttpRunnerApi(a)
-    await api.startTaskSession('task-srv', { agentId: 'ag', runnerId: 'r1', message: 'go', clientRequestId: 'crid', repositories: ['acme/api'] })
+  it('prefers the task-linked route with runnerId and clientRequestId (idempotent)', async () => {
+    const a = auth({ apiRequest: vi.fn(async (_m, path) => (path.endsWith('/session') ? { sessionId: 's9' } : { session: { id: 's9', status: 'queued', runnerId: 'r1' } })) })
+    const created = vi.fn()
+    await new HttpRunnerApi(a).startTaskSession('task-srv', { agentId: 'ag', runnerId: 'r1', message: 'go', clientRequestId: 'crid', repositories: ['acme/api'] }, created)
     const calls = (a.apiRequest as ReturnType<typeof vi.fn>).mock.calls
-    expect(calls[0][1]).toBe('/api/coding-agents/sessions')
-    expect(calls[0][2]).toEqual({ agentId: 'ag', runnerId: 'r1', message: 'go', repositories: ['acme/api'], clientRequestId: 'crid' })
-    expect(calls[1]).toEqual(['POST', '/api/coding-agents/sessions/s9/task', { taskId: 'task-srv' }])
+    expect(calls[0]).toEqual(['POST', '/api/tasks/task-srv/session', { agentId: 'ag', runnerId: 'r1', message: 'go', repositories: ['acme/api'], clientRequestId: 'crid' }])
+    expect(created).toHaveBeenCalledWith(expect.objectContaining({ id: 's9' }), true)
+  })
+
+  it('falls back to sessions + attach on an older server, reporting the id before the attach', async () => {
+    const order: string[] = []
+    const a = auth({ apiRequest: vi.fn(async (_m, path) => {
+      order.push(path)
+      if (path === '/api/tasks/task-srv/session') throw new Error('Unrecognized key(s) in object: runnerId')
+      return path.endsWith('/sessions') ? { session: { id: 's9', status: 'queued', runnerId: 'r1' } } : {}
+    }) })
+    const created = vi.fn(() => order.push('onCreated'))
+    await new HttpRunnerApi(a).startTaskSession('task-srv', { agentId: 'ag', runnerId: 'r1', message: 'go', clientRequestId: 'crid' }, created)
+    expect(order).toEqual(['/api/tasks/task-srv/session', '/api/coding-agents/sessions', 'onCreated', '/api/coding-agents/sessions/s9/task'])
+    expect(created).toHaveBeenCalledWith(expect.objectContaining({ id: 's9' }), false)
+  })
+
+  it('does not fall back when the server refuses the client request id', async () => {
+    const a = auth({ apiRequest: vi.fn(async () => { throw new Error('CLIENT_REQUEST_ID_REUSED (409)') }) })
+    await expect(new HttpRunnerApi(a).startTaskSession('t', { agentId: 'ag', message: 'go', clientRequestId: 'c' })).rejects.toThrow(/REUSED/)
+    expect((a.apiRequest as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1)
   })
 })
