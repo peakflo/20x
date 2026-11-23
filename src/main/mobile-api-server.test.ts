@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { createTestDb } from '../../test/helpers/db-test-helper'
 import { makeTask } from '../../test/helpers/task-fixtures'
 import type { DatabaseManager } from './database'
-import { startMobileApiServer, stopMobileApiServer } from './mobile-api-server'
+import { startMobileApiServer, stopMobileApiServer, setMobileRemoteStateProvider, broadcastRemoteState } from './mobile-api-server'
 import webpush from 'web-push'
 import { TaskStatus } from '../shared/constants'
 
@@ -427,5 +427,40 @@ describe('mobile API: all four feedback/source combinations', () => {
     expect(sourceAction).toHaveBeenCalledTimes(completeAtSource ? 1 : 0)
     expect(notionRecord.status).toBe(completeAtSource ? 'closed' : 'open')
     db.close()
+  })
+})
+
+describe('mobile remote task state', () => {
+  it('serves GET /api/tasks/:id/remote-state and null when the provider has nothing', async () => {
+    const { db } = createTestDb()
+    const token = 'remote-state-token'
+    db.createMobileSession('remote-phone', createHash('sha256').update(token).digest('hex'), 'Phone')
+    const state = { taskId: 't1', runnerName: 'studio-mac', sync: 'live' }
+    setMobileRemoteStateProvider((id) => (id === 't1' ? (state as never) : null))
+    const port = await startMobileApiServer(db, {} as never, {} as never, 21000 + Math.floor(Math.random() * 40000))
+    const headers = { Authorization: `Bearer ${token}` }
+    try {
+      const base = `http://127.0.0.1:${port}/api/tasks`
+      expect(await (await fetch(`${base}/t1/remote-state`, { headers })).json()).toEqual(state)
+      expect(await (await fetch(`${base}/other/remote-state`, { headers })).json()).toBeNull()
+      expect((await fetch(`${base}/t1/remote-state`)).status).toBe(401)
+    } finally { setMobileRemoteStateProvider(null); stopMobileApiServer(); db.close() }
+  })
+
+  it('broadcasts enterprise-runner:state to connected WebSocket clients', async () => {
+    const { db } = createTestDb()
+    const token = 'remote-ws-token'
+    db.createMobileSession('remote-ws-phone', createHash('sha256').update(token).digest('hex'), 'Phone')
+    const port = await startMobileApiServer(db, {} as never, {} as never, 21000 + Math.floor(Math.random() * 40000))
+    const { WebSocket: WS } = await import('ws')
+    const ws = new WS(`ws://127.0.0.1:${port}/ws?token=${token}`)
+    try {
+      const received = new Promise<{ type: string; payload: unknown }>((resolve) => ws.on('message', (d) => resolve(JSON.parse(String(d)))))
+      await new Promise((r) => ws.on('open', r))
+      await new Promise((r) => setTimeout(r, 50))
+      const event = { taskId: 't1', state: { taskId: 't1', sync: 'runner-offline' } }
+      broadcastRemoteState(event as never)
+      expect(await received).toEqual({ type: 'enterprise-runner:state', payload: event })
+    } finally { ws.close(); stopMobileApiServer(); db.close() }
   })
 })

@@ -69,6 +69,7 @@ export const api = {
     test: () => post<{ success: boolean }>('/api/push/test')
   },
   tasks: {
+    remoteState: (taskId: string) => get<import('@shared/enterprise-runners').RemoteTaskState | null>(`/api/tasks/${encodeURIComponent(taskId)}/remote-state`),
     open: () => get<unknown[]>('/api/tasks/open'),
     completedPage: (params: { offset: number; limit: number; query?: string }) =>
       get<{ tasks: unknown[]; total: number }>(`/api/tasks/completed?${new URLSearchParams({

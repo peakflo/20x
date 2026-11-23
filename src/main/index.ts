@@ -44,7 +44,9 @@ import { UI_COMMAND_CHANNEL } from '../shared/ui-commands'
 import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiCommandSender, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
-import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
+import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger, broadcastRemoteState, setMobileRemoteStateProvider } from './mobile-api-server'
+import { createEnterpriseRunnerRuntime, type EnterpriseRunnerRuntime } from './enterprise-runner/runtime'
+import { registerEnterpriseRunnerIpc } from './enterprise-runner/ipc'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
 import { logMainThreadPerfReport, startMainThreadPerf } from './perf/main-thread-perf'
@@ -1082,6 +1084,28 @@ app.whenReady().then(async () => {
 
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
   agentManager.setSyncManager(syncManager)
+
+  // Enterprise runners: a task's chat can run on a Spaces runner. The runtime
+  // only exists while enterprise auth does; every call re-checks sign-in.
+  let enterpriseRunnerRuntime: EnterpriseRunnerRuntime | undefined
+  if (enterpriseAuth) {
+    const syncForRunners = syncManager
+    enterpriseRunnerRuntime = createEnterpriseRunnerRuntime({
+      db,
+      auth: enterpriseAuth,
+      getSyncManager: () => syncForRunners,
+      emitState: (event) => {
+        mainWindow?.webContents.send('enterprise-runner:state', event)
+        broadcastRemoteState(event)
+      },
+      endTaskSession: async (taskId) => { await agentManager!.stopByTaskId(taskId) },
+      userDataDir: app.getPath('userData')
+    })
+    agentManager!.setEnterpriseRunnerRuntime(enterpriseRunnerRuntime)
+    const runtimeForMobile = enterpriseRunnerRuntime
+    setMobileRemoteStateProvider((taskId) => runtimeForMobile.service.getTaskState(taskId))
+  }
+  registerEnterpriseRunnerIpc(() => enterpriseRunnerRuntime)
   // Continue tasks that stopped on a usage limit once it resets (incl. overdue ones from before a restart).
   agentManager.startUsageLimitRecovery()
 

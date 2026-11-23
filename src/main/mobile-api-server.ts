@@ -1,4 +1,5 @@
 import { updateTaskFromUser } from './session-feedback'
+import type { RemoteTaskState, RemoteTaskStateEvent } from '../shared/enterprise-runners'
 import { desktopBrandName } from './brand'
 import { getTaskCompletionAction } from '../shared/task-completion'
 /**
@@ -208,6 +209,21 @@ export function broadcastToMobileClients(channel: string, data: unknown): void {
       ws.send(message)
     }
   }
+}
+
+// ── Enterprise runners: remote task state ────────────────────
+
+export const REMOTE_STATE_CHANNEL = 'enterprise-runner:state'
+let remoteStateProvider: ((taskId: string) => RemoteTaskState | null | Promise<RemoteTaskState | null>) | null = null
+
+/** Source for `GET /api/tasks/:id/remote-state`. Set by main; null clears it. */
+export function setMobileRemoteStateProvider(fn: typeof remoteStateProvider): void {
+  remoteStateProvider = fn
+}
+
+/** Forwards a remote task state change over the same WebSocket as other events. */
+export function broadcastRemoteState(event: RemoteTaskStateEvent): void {
+  broadcastToMobileClients(REMOTE_STATE_CHANNEL, event)
 }
 
 /** Pushes a review seen/unseen change to every mobile client and the desktop. */
@@ -421,6 +437,12 @@ async function routeGet(pathname: string, url: URL, req?: IncomingMessage): Prom
     if (!session) throw Object.assign(new Error('Unauthorized'), { status: 401 })
     const row = db.getMobilePushSubscription(session.id)
     return { subscription: row ? JSON.parse(row.subscription) : null }
+  }
+
+  // GET /api/tasks/:taskId/remote-state — enterprise runner sync state, or null.
+  const remoteStateMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/remote-state$/)
+  if (remoteStateMatch) {
+    return (await remoteStateProvider?.(decodeURIComponent(remoteStateMatch[1]))) ?? null
   }
 
   // GET /api/tasks/:taskId/transcript — full durable transcript snapshot.

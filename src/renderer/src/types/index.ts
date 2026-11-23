@@ -41,7 +41,9 @@ export enum CodingAgentType {
   CURSOR = 'cursor',
   PI = 'pi',
   /** A configured ACP (Agent Client Protocol) registry or local-command agent instance. */
-  ACP = 'acp'
+  ACP = 'acp',
+  /** A synced `[Workflo]` agent that runs on a Spaces enterprise runner. */
+  ENTERPRISE_RUNNER = 'enterprise-runner'
 }
 
 export type AgentPermissionMode = 'ask' | 'allow'
@@ -222,6 +224,12 @@ export interface AgentConfig {
   harness_instance_id?: string
   /** ACP agent instance this agent runs (one row of `acp_agent_instances`). Required when coding_agent is 'acp'. */
   acp_instance_id?: string
+  /** Spaces agent id of a synced `[Workflo]` agent. */
+  enterprise_agent_id?: string
+  /** Optional runner pin of an enterprise-runner agent. */
+  runner_id?: string
+  /** Narrowed permission mode of an enterprise-runner agent (never above the Spaces limit). */
+  runner_permission_mode?: 'ask' | 'accept-edits' | 'bypass'
   permission_mode?: AgentPermissionMode
   sandbox_mode?: AgentSandboxMode
   system_prompt?: string

@@ -26,6 +26,9 @@ export interface ArtifactsPanelProps {
   hasSubtasks?: boolean
   subtaskCounts?: { working: number; review: number }
   hasOutput: boolean
+  /** Tasks on a runner: show the combined Local + Spaces artifact list. */
+  hasSpacesArtifacts?: boolean
+  spacesArtifacts?: ReactNode
   changesCount?: number
   onSelectTab: (tabId: string) => void
   onCloseTab: (artifactId: string) => void
@@ -40,7 +43,7 @@ export interface ArtifactsPanelProps {
   onOpenArtifactInWindow?: (artifact: Artifact) => void
 }
 
-export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubtasks = false, subtaskCounts, hasOutput, changesCount, onSelectTab, onCloseTab, onToggleOpen, details, subtasks, changes, output, className, onOpenArtifactInWindow }: ArtifactsPanelProps) {
+export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubtasks = false, subtaskCounts, hasOutput, hasSpacesArtifacts = false, spacesArtifacts, changesCount, onSelectTab, onCloseTab, onToggleOpen, details, subtasks, changes, output, className, onOpenArtifactInWindow }: ArtifactsPanelProps) {
   const active = ui.activeTabId === PinnedArtifactTabId.SUBTASKS && !hasSubtasks ? PinnedArtifactTabId.DETAILS : ui.activeTabId || PinnedArtifactTabId.DETAILS
   const activeArtifact = artifacts.find((artifact) => artifact.id === active)
   const navigation = useArtifactNavigation(activeArtifact)
@@ -58,7 +61,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubt
   return (
     <section className={cn('flex h-full min-h-0 min-w-0 flex-col bg-background', className)} data-task-artifacts>
       <div className="relative">
-        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasSubtasks={hasSubtasks} subtaskCounts={subtaskCounts} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? (onOpenArtifactInWindow ? 'pr-60' : 'pr-52') : 'pr-11'} />
+        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasSubtasks={hasSubtasks} subtaskCounts={subtaskCounts} hasOutput={hasOutput} hasSpacesArtifacts={hasSpacesArtifacts} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? (onOpenArtifactInWindow ? 'pr-60' : 'pr-52') : 'pr-11'} />
         <div className="absolute right-2 top-1.5 flex items-center gap-1 glass-control">
           {activeArtifact && <ArtifactCopyActions key={`${activeArtifact.id}:${selectedArtifact?.path}`} artifact={selectedArtifact!} artifactApi={artifactApi} />}
           {activeArtifact && onOpenArtifactInWindow && (
@@ -74,6 +77,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubt
         {hasSubtasks && active === PinnedArtifactTabId.SUBTASKS && <div className="h-full">{subtasks}</div>}
         {hasChanges && active === PinnedArtifactTabId.CHANGES && <div className="h-full">{changes}</div>}
         {hasOutput && <div className={active === PinnedArtifactTabId.OUTPUT ? 'h-full overflow-y-auto p-4' : 'hidden'}>{output}</div>}
+        {hasSpacesArtifacts && active === PinnedArtifactTabId.SPACES && <div className="h-full">{spacesArtifacts}</div>}
         {artifacts.map((artifact) => (
           <div key={artifact.id} className={active === artifact.id ? 'h-full' : 'hidden'}>
             {active === artifact.id ? <ArtifactViewer artifact={selectedArtifact!} artifactApi={artifactApi} refreshTrigger={refreshTrigger} onLinkClick={navigation.openLink} /> : null}

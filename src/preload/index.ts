@@ -567,6 +567,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onDeviceConnected: (fn: (data: { sessionId: string; deviceName: string }) => void) =>
       ipcRenderer.on('mobile:device-connected', (_, data) => fn(data))
   },
+  enterpriseRunners: {
+    listRunners: () => ipcRenderer.invoke('enterpriseRunners:list'),
+    getAgentInfo: (agentId: string) => ipcRenderer.invoke('enterpriseRunners:agentInfo', agentId),
+    getTaskRunOn: (taskId: string) => ipcRenderer.invoke('enterpriseRunners:getRunOn', taskId),
+    setTaskRunOn: (taskId: string, choice: unknown) => ipcRenderer.invoke('enterpriseRunners:setRunOn', taskId, choice),
+    getTaskState: (taskId: string) => ipcRenderer.invoke('enterpriseRunners:taskState', taskId),
+    reassign: (taskId: string, runnerId: string) => ipcRenderer.invoke('enterpriseRunners:reassign', taskId, runnerId),
+    openLocally: (taskId: string) => ipcRenderer.invoke('enterpriseRunners:openLocally', taskId),
+    listSpacesArtifacts: (taskId: string, opts?: { refresh?: boolean }) => ipcRenderer.invoke('enterpriseRunners:listArtifacts', taskId, opts),
+    readSpacesArtifact: (taskId: string, id: string) => ipcRenderer.invoke('enterpriseRunners:readArtifact', taskId, id),
+    onTaskState: (callback: (event: unknown) => void): (() => void) => {
+      const handler = (_: unknown, data: unknown): void => callback(data)
+      ipcRenderer.on('enterprise-runner:state', handler)
+      return () => ipcRenderer.removeListener('enterprise-runner:state', handler)
+    }
+  },
   enterprise: {
     signupInBrowser: (mode: 'register' | 'login'): Promise<{
       userId: string

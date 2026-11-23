@@ -504,6 +504,7 @@ interface ElectronAPI {
     onPairingInitiated: (fn: (data: { pin: string; pairCodeId: string; expiresAt: number }) => void) => void
     onDeviceConnected: (fn: (data: { sessionId: string; deviceName: string }) => void) => void
   }
+  enterpriseRunners: import('@shared/enterprise-runners').EnterpriseRunnersApi
   enterprise: {
     signupInBrowser: (mode: 'register' | 'login') => Promise<{
       userId: string

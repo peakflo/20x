@@ -15,9 +15,9 @@
  */
 
 /** Every coding-agent harness 20x runs. Ids match `coding_agent` on agent configs. */
-export type UsageProvider = 'claude-code' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'acp'
+export type UsageProvider = 'claude-code' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'acp' | 'enterprise-runner'
 
-export const USAGE_PROVIDERS: readonly UsageProvider[] = ['claude-code', 'codex', 'opencode', 'cursor', 'pi', 'acp'] as const
+export const USAGE_PROVIDERS: readonly UsageProvider[] = ['claude-code', 'codex', 'opencode', 'cursor', 'pi', 'acp', 'enterprise-runner'] as const
 
 export const USAGE_PROVIDER_LABELS: Record<UsageProvider, string> = {
   'claude-code': 'Claude Code',
@@ -25,7 +25,8 @@ export const USAGE_PROVIDER_LABELS: Record<UsageProvider, string> = {
   opencode: 'OpenCode',
   cursor: 'Cursor',
   pi: 'Pi',
-  acp: 'ACP agent'
+  acp: 'ACP agent',
+  'enterprise-runner': 'Enterprise runner'
 }
 
 // ── Chart colours ─────────────────────────────────────────────

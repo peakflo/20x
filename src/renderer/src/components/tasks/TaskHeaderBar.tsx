@@ -9,8 +9,11 @@ import { TaskPriorityBadge } from './TaskPriorityBadge'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { CodingAgentType, TASK_STATUSES, TaskStatus } from '@/types'
 import type { Agent, WorkfloTask } from '@/types'
+import type { RemoteTaskState } from '@shared/enterprise-runners'
+import { RemoteHeaderCluster, ReassignPicker } from './remote/RemoteChips'
 import { isTaskClosed } from '@shared/constants'
 import { desktopBrandName } from '@/lib/brand'
+import { RunOnPicker } from './RunOnPicker'
 
 export enum TaskPrimaryAction {
   START = 'start',
@@ -48,6 +51,8 @@ function getHarnessLogo(agent?: Agent | null): React.FC<{ className?: string }> 
 interface TaskHeaderBarProps {
   floating?: boolean
   task: WorkfloTask
+  /** Set when the task runs on a Spaces runner: the server owns completion and status. */
+  remote?: RemoteTaskState | null
   agent?: Agent | null
   agents?: Agent[]
   onAssignAgent?: (agentId: string | null) => void | Promise<void>
@@ -74,6 +79,7 @@ interface TaskHeaderBarProps {
 export function TaskHeaderBar({
   floating = false,
   task,
+  remote = null,
   agent,
   agents,
   onAssignAgent,
@@ -112,6 +118,7 @@ export function TaskHeaderBar({
   }
 
   const [statusMenuOpen, setStatusMenuOpen] = useState(false)
+  const [reassignOpen, setReassignOpen] = useState(false)
   const [agentMenuOpen, setAgentMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const statusMenuRef = useRef<HTMLDivElement>(null)
@@ -156,7 +163,7 @@ export function TaskHeaderBar({
   const actionMeta = action ? ACTION_META[action] : null
   const ActionIcon = actionMeta?.icon
   const HarnessIcon = getHarnessLogo(agent)
-  const showStandaloneComplete = !isTaskClosed(task.status)
+  const showStandaloneComplete = !remote && !isTaskClosed(task.status)
     && !!onComplete
     && (action !== TaskPrimaryAction.COMPLETE || !onAction)
   return (
@@ -187,18 +194,20 @@ export function TaskHeaderBar({
           </button>
         )}
       </div>
+      {remote && <RemoteHeaderCluster state={remote} />}
       <div ref={statusMenuRef} className="relative shrink-0">
         <button
           type="button"
           onClick={() => setStatusMenuOpen((open) => !open)}
-          disabled={task.server_managed && isTaskClosed(task.status)}
+          disabled={!!remote || (task.server_managed && isTaskClosed(task.status))}
+          title={remote ? 'Completed on Spaces only — server owns completion' : undefined}
           className="group inline-flex items-center gap-0.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1"
           aria-label="Change task status"
           aria-haspopup="menu"
           aria-expanded={statusMenuOpen}
         >
           <TaskStatusBadge status={task.status} />
-          {!(task.server_managed && isTaskClosed(task.status)) && <ChevronDown className="h-3 w-3 text-muted-foreground transition-colors group-hover:text-foreground" />}
+          {!remote && !(task.server_managed && isTaskClosed(task.status)) && <ChevronDown className="h-3 w-3 text-muted-foreground transition-colors group-hover:text-foreground" />}
         </button>
         {statusMenuOpen && (
           <div role="menu" aria-label="Task status" className="absolute right-0 top-7 z-50 w-48 overflow-hidden rounded-lg glass-popover border p-1 shadow-xl">
@@ -221,6 +230,7 @@ export function TaskHeaderBar({
           </div>
         )}
       </div>
+      <RunOnPicker taskId={task.id} agentId={task.agent_id} sessionStarted={!!task.session_id} placement="below" className="hidden lg:inline-block" />
       <div className="flex items-center gap-1.5">
         <TaskPriorityBadge priority={task.priority} />
         {onAssignAgent && agents ? (
@@ -336,6 +346,7 @@ export function TaskHeaderBar({
           <div className="absolute right-0 top-9 z-50 w-44 overflow-hidden rounded-lg glass-popover border p-1 shadow-xl">
             {[
               { label: 'Restart session', icon: RotateCcw, action: onRestartSession },
+              { label: 'Start new session on another runner', icon: RotateCcw, action: remote ? () => setReassignOpen(true) : undefined },
               { label: `Send to ${desktopBrandName()}`, icon: ExternalLink, action: enterpriseConnected && !task.source_id ? () => uploadToWorkflo(false) : undefined },
               { label: `Run agent in ${desktopBrandName()}`, icon: HarnessIcon, action: enterpriseConnected && !task.source_id && task.agent_id ? () => uploadToWorkflo(true) : undefined },
               { label: 'Edit task', icon: Pencil, action: onEdit },
@@ -355,6 +366,8 @@ export function TaskHeaderBar({
           </div>
         )}
       </div>
+      {remote && reassignOpen && <div className="absolute right-3 top-11 z-50"><ReassignPicker taskId={task.id} currentRunnerId={remote.runnerId} onDone={() => setReassignOpen(false)} /></div>}
+      {remote && <span className="sr-only">Completed on Spaces only — server owns completion</span>}
       {task.server_execution_mode === 'autonomous' && <span className="text-xs">Agent runs in {desktopBrandName()}</span>}
       {task.server_cron && <span className="text-xs">{desktopBrandName()} schedule: {task.server_cron}</span>}
       {task.server_pending_edits && <details className="text-xs"><summary>Unsaved edits</summary><pre className="whitespace-pre-wrap">{JSON.stringify(task.server_pending_edits, null, 2)}</pre></details>}

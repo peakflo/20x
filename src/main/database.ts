@@ -44,7 +44,7 @@ export interface AgentMcpServerEntry {
 }
 
 export interface AgentConfigRecord {
-  coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor' | 'pi' | 'acp'
+  coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor' | 'pi' | 'acp' | 'enterprise-runner'
   /**
    * Harness instance (one subscription login of the coding_agent). Unset means
    * the default instance of the coding_agent. Ignored for API-key agents.

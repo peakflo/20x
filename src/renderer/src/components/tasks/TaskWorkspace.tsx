@@ -9,8 +9,13 @@ import { IncompatibleSessionDialog } from './IncompatibleSessionDialog'
 import { TaskDetailView } from './TaskDetailView'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { ChangesPanel } from './ChangesPanel'
+import { RemoteBranchPanel } from './remote/RemoteBranchPanel'
+import { RemoteStateBanner } from './remote/RemoteChips'
+import { RemoteTaskContext, useRemoteTaskState } from '@/hooks/use-remote-task-state'
+import { SpacesArtifactsPanel } from '@/components/artifacts/SpacesArtifactsPanel'
 import { OutputFieldsDisplay } from './OutputFieldsDisplay'
 import { TaskHeaderBar, TaskPrimaryAction } from './TaskHeaderBar'
+import { RunOnPicker } from './RunOnPicker'
 import { SubtasksTab } from './SubtasksTab'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
 import { UsageLimitRecoveryBanner } from '@/components/usage/UsageLimitRecoveryBanner'
@@ -116,6 +121,8 @@ function TaskWorkspaceComponent({
   panelLayout = 'both'
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
+  // Non-null when the task's chats run on a Spaces runner. The server owns completion.
+  const remote = useRemoteTaskState(task?.id)
   // Per-field selectors: a selector-less useStore() subscribes to the whole
   // store, re-rendering this entire workspace on every streamed delta of every
   // task's session (agent store) or any settings change. Action identities are
@@ -1050,7 +1057,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
   let primaryAction: TaskPrimaryAction | null = null
   let handlePrimaryAction: (() => void) | undefined
   if (task.status === TaskStatus.ReadyForReview || isTaskClosed(task.status)) {
-    if (!isTaskClosed(task.status)) {
+    // Remote tasks are completed on Spaces only; never offer a local Complete.
+    if (!isTaskClosed(task.status) && !remote) {
       primaryAction = TaskPrimaryAction.COMPLETE
       handlePrimaryAction = () => void handleCompleteTask()
     }
@@ -1111,13 +1119,16 @@ Update existing skills that were helpful or create new ones for patterns worth r
     />
   )
 
+  const showRemoteBanner = !!remote && remote.sync !== 'live'
   const transcriptView = (
+    <RemoteTaskContext.Provider value={remote}>
     <div className="native-backdrop-page flex h-full min-h-0 flex-col bg-background">
+      {showRemoteBanner && remote && <div className={hasSession && panelLayout !== 'task-only' ? 'pt-12' : ''}><RemoteStateBanner taskId={task.id} state={remote} /></div>}
       <AgentApprovalBanner request={session.pendingApproval} onApprove={handleApprove} onReject={handleReject} />
       <UsageLimitRecoveryBanner taskId={task.id} floatingHeader={hasSession && panelLayout !== 'task-only'} />
       <AgentTranscriptPanel
         embeddedHeader
-        externalHeaderHeight={hasSession && panelLayout !== 'task-only' ? 48 : 0}
+        externalHeaderHeight={hasSession && panelLayout !== 'task-only' && !showRemoteBanner ? 48 : 0}
         searchRequest={transcriptSearchRequest}
         messages={session.messages}
         status={session.status}
@@ -1135,6 +1146,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
         className="native-backdrop-page h-full min-h-0 border-0 bg-background"
       />
     </div>
+    </RemoteTaskContext.Provider>
   )
 
   const openDetails = () => {
@@ -1155,6 +1167,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
       hasSubtasks={subtasks.length > 0}
       subtaskCounts={{ working: workingSubtaskCount, review: reviewSubtaskCount }}
       hasOutput={task.output_fields.length > 0}
+      hasSpacesArtifacts={!!remote}
+      spacesArtifacts={remote ? <SpacesArtifactsPanel taskId={task.id} localArtifacts={artifacts} onOpenLocal={(id) => selectArtifactTab(task.id, id, true)} /> : undefined}
       changesCount={changesSummary?.files}
       onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
       onCloseTab={(artifactId) => removeArtifact(task.id, artifactId)}
@@ -1162,8 +1176,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
       onToggleRail={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
       details={detailsView}
       subtasks={<SubtasksTab subtasks={subtasks} onNavigateToTask={onNavigateToTask} onOpenSubtaskInWindow={onOpenSubtaskInWindow} />}
-      changes={<ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} onPullRequests={handlePullRequests} />}
-      output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={!isTaskClosed(task.status)} onComplete={handleCompleteTask} taskUpdatedAt={task.updated_at} />}
+      changes={remote ? <RemoteBranchPanel taskId={task.id} state={remote} className="h-full" /> : <ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} onPullRequests={handlePullRequests} />}
+      output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={!isTaskClosed(task.status)} onComplete={remote ? undefined : handleCompleteTask} taskUpdatedAt={task.updated_at} />}
       className="min-w-[320px] flex-1 border-l border-border/50 pt-12"
       onOpenArtifactInWindow={onOpenArtifactInWindow}
     />
@@ -1178,6 +1192,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
       hasChanges
       hasSubtasks={subtasks.length > 0}
       hasOutput={task.output_fields.length > 0}
+      hasSpacesArtifacts={!!remote}
       changesCount={changesSummary?.files}
       onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
       onToggleExpanded={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
@@ -1195,7 +1210,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
           onAssignAgent={handleAssignAgent}
           action={primaryAction}
           onAction={handlePrimaryAction}
-          onComplete={() => void handleCompleteTask()}
+          onComplete={remote ? undefined : () => void handleCompleteTask()}
+          remote={remote}
           onSearchTranscript={hasSession && panelLayout !== 'task-only' ? () => setTranscriptSearchRequest((request) => request + 1) : undefined}
           onRestartSession={hasSession && session.messages.length > 0 ? handleStartFreshSession : undefined}
           onStopSession={hasSession && (session.status === SessionStatus.WORKING || session.status === SessionStatus.WAITING_APPROVAL) ? handleAbort : undefined}
@@ -1219,6 +1235,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
               <div className="min-h-0 flex-1">{detailsView}</div>
               {!hasSession && panelLayout === 'both' && !isTaskClosed(task.status) && (
                 <div className="sticky bottom-0 z-10 mx-auto w-full max-w-[780px] shrink-0 px-6 py-4">
+                  {task.agent_id && <RunOnPicker taskId={task.id} agentId={task.agent_id} sessionStarted={!!task.session_id} className="mb-2" />}
                   <div className="flex items-end gap-2 glass-composer rounded-[28px] p-2">
                     <textarea
                       value={kickoffMessage}

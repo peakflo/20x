@@ -8,6 +8,8 @@ import { TaskStatus } from '@/types'
 import { isTaskClosed } from '@shared/constants'
 import { isReviewSeen, isReviewUnseen } from '@shared/review-seen'
 import type { WorkfloTask, RecurrencePattern, RecurrencePatternObject } from '@/types'
+import { useRemoteTaskState } from '@/hooks/use-remote-task-state'
+import { RunnerChip } from './remote/RemoteChips'
 import type { TaskRunDuration } from '@shared/task-run-duration'
 import { formatTaskRunDuration } from '@/hooks/use-task-run-durations'
 
@@ -97,6 +99,8 @@ export const UNSEEN_REVIEW_HALO_CLASS = 'shadow-[0_0_0_3px_rgba(244,114,182,0.22
 export const SEEN_REVIEW_DIM_CLASS = 'opacity-[0.55]'
 
 export const TaskListItem = memo(function TaskListItem({ task, runDuration, isSelected, onSelect, subtaskCount, isSubtask, isExpanded, onToggleExpand, onContextMenu }: TaskListItemProps) {
+  // Only server-synced tasks can run on a runner; avoid a lookup for plain local ones.
+  const remote = useRemoteTaskState(task.id, !!task.external_id)
   const isActive = !isTaskClosed(task.status)
   const overdue = isActive && isOverdue(task.due_date)
   const dueSoon = isActive && !overdue && isDueSoon(task.due_date)
@@ -214,6 +218,7 @@ export const TaskListItem = memo(function TaskListItem({ task, runDuration, isSe
                 {subtaskCount}
               </span>
             )}
+            {remote && (remote.sync === 'completed-on-spaces' ? <span className="text-[10px] text-violet-500">on Spaces</span> : <RunnerChip state={remote} className="max-w-28 border-0 bg-transparent px-0" />)}
             {task.source !== 'local' && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent text-muted-foreground">{task.source}</span>
             )}

@@ -208,6 +208,10 @@ Spawns `claude` CLI process with MCP config injected via the `--mcp-servers` fla
 
 Implements the Agent Communication Protocol (ACP) — the same protocol used by Zed's Codex integration. Communicates via WebSocket with OpenAI's Codex backend.
 
+### Enterprise Runner Adapter (`src/main/adapters/enterprise-runner-adapter.ts`)
+
+Runs a task's chat on a Spaces enterprise runner (`coding_agent: 'enterprise-runner'`, a synced `[Workflo]` agent). The task becomes a Spaces task and the chat a task-linked coding-agent session, so it can continue on the Spaces web while 20x mirrors it live. Transport is REST plus SSE (`/stream?sinceRev`, `Last-Event-ID`, fresh JWT per connection; `/transcript/delta` while offline). Parts are upserted by `partId` and `rev` is persisted so a restart resumes. The server owns completion: 20x never completes a runner task. Local secrets, broker/proxy URLs and local MCP servers are never sent (`src/main/enterprise-runner/scrub.ts` guards every body). Approvals are Allow / Reject only and expire after 30 minutes. The routes live behind `RunnerApi` (`src/main/enterprise-runner/runner-api.ts`); `startTaskSession` has a TODO until `/tasks/:taskId/session` accepts `runnerId` and `clientRequestId`. Spaces artifacts are read-only and cached with an LRU cap and TTL (`spaces-artifact-cache.ts`). Renderer: `RunOnPicker`, the Enterprise runner group in the agent form, the remote task banner/branch panel, and the Spaces artifacts tab; mobile gets the same state over the WebSocket event `enterprise-runner:state`.
+
 ## Polling Coordinator
 
 Instead of independent timers per session (which would cause event-loop starvation under load), a single centralized timer polls all active sessions sequentially every 2 seconds:

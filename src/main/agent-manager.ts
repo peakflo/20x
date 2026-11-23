@@ -98,7 +98,9 @@ enum CodingAgentType {
   CURSOR = 'cursor',
   PI = 'pi',
   /** A configured ACP (Agent Client Protocol) registry or local-command agent instance. */
-  ACP = 'acp'
+  ACP = 'acp',
+  /** A Spaces enterprise runner (task and chat synced to Spaces). */
+  ENTERPRISE_RUNNER = 'enterprise-runner'
 }
 
 /** Handoff block ready to send with the next prompt of a session. */
@@ -822,6 +824,17 @@ export class AgentManager extends EventEmitter {
    */
   private syncManager?: import('./sync-manager').SyncManager
 
+  private enterpriseRunnerRuntime?: import('./enterprise-runner/runtime').EnterpriseRunnerRuntime
+
+  setEnterpriseRunnerRuntime(runtime: import('./enterprise-runner/runtime').EnterpriseRunnerRuntime | undefined): void {
+    this.enterpriseRunnerRuntime = runtime
+  }
+
+  /** True when the agent runs on a Spaces enterprise runner instead of this machine. */
+  private isEnterpriseRunnerAgent(agentId: string): boolean {
+    return this.db.getAgent(agentId)?.config?.coding_agent === CodingAgentType.ENTERPRISE_RUNNER
+  }
+
   setSyncManager(syncManager: import('./sync-manager').SyncManager): void {
     this.syncManager = syncManager
   }
@@ -854,6 +867,8 @@ export class AgentManager extends EventEmitter {
 
     const task = this.db.getTask(taskId)
     if (!task) return undefined
+    // The working tree lives on the runner; no local worktree for runner tasks.
+    if (task.agent_id && this.isEnterpriseRunnerAgent(task.agent_id)) return undefined
     if (!task.repos || !Array.isArray(task.repos) || task.repos.length === 0) return undefined
 
     const workspaceDir = this.db.getWorkspaceDir(taskId)
@@ -1015,6 +1030,13 @@ export class AgentManager extends EventEmitter {
         })
         break
       }
+      case CodingAgentType.ENTERPRISE_RUNNER:
+        if (!this.enterpriseRunnerRuntime) {
+          console.warn('[AgentManager] Enterprise runner agent used while signed out')
+          return null
+        }
+        adapter = this.enterpriseRunnerRuntime.createAdapter()
+        break
       default:
         console.warn(`[AgentManager] Unknown coding agent type: ${backendType}`)
         return null
@@ -2334,6 +2356,10 @@ export class AgentManager extends EventEmitter {
     workspaceDir?: string,
     skipInitialPrompt?: boolean
   ): Promise<string> {
+    // A task that runs on a runner is a Spaces task: sync it before the
+    // local-help guard looks for a pending upload.
+    const onRunner = this.isEnterpriseRunnerAgent(agentId)
+    if (onRunner && this.enterpriseRunnerRuntime) await this.enterpriseRunnerRuntime.ensureServerTask(taskId)
     this.assertLocalHelpAllowed(taskId)
     // Helper: yield event loop between bursts of synchronous DB / FS calls
     // so the renderer can process IPC and paint frames during session setup.
@@ -2382,12 +2408,13 @@ export class AgentManager extends EventEmitter {
       harnessHome: this.resolveAgentInstance(agent)?.home,
       permissionMode: agent.config?.permission_mode,
       sandboxMode: agent.config?.sandbox_mode,
-      apiKeys: agent.config?.api_keys,
+      apiKeys: onRunner ? undefined : agent.config?.api_keys,
       tillDone: this.shouldEnableTillDone(taskId, task)
     }
 
     // Setup secret broker session if agent has secrets
-    const secretToken = this.setupSecretSession(agentId)
+    // Never for a runner: local secrets and the broker are 127.0.0.1-only.
+    const secretToken = onRunner ? undefined : this.setupSecretSession(agentId)
     if (secretToken) {
       const brokerPort = getSecretBrokerPort()
       if (brokerPort) {
@@ -2398,7 +2425,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Populate secret env vars + system prompt awareness
-    const secretIds = secretIdsForAgent(agent)
+    const secretIds = onRunner ? undefined : secretIdsForAgent(agent)
     if (secretIds && secretIds.length > 0) {
       const secretRecords = this.db.getSecretsByIds(secretIds)
       const secretsWithValues = this.db.getSecretsWithValues(secretIds)
@@ -2536,6 +2563,10 @@ export class AgentManager extends EventEmitter {
         })
         // Use triage-specific prompt
         promptText = this.buildTriagePrompt(task)
+      } else if (onRunner) {
+        // The runner has no local MCP, skills files or attachments: send only the task.
+        const runnerTask = task || this.db.getTask(taskId)
+        promptText = runnerTask ? `Work on task: "${runnerTask.title}"\n\n${runnerTask.description || ''}` : `Work on task: ${taskId}`
       } else {
         // Reuse the task we already fetched above instead of hitting the DB again
         const currentTask = task || this.db.getTask(taskId)
@@ -2607,15 +2638,17 @@ export class AgentManager extends EventEmitter {
         }
       }
 
-      // Append heartbeat monitoring instructions
-      promptText += `\n\n## Heartbeat Monitoring (Optional)
+      if (!onRunner) {
+        // Append heartbeat monitoring instructions
+        promptText += `\n\n## Heartbeat Monitoring (Optional)
 
 If a PR, deploy, or linked issue should be checked after this task, write \`heartbeat.md\` in the working directory as a checklist that includes the URLs. Skip it when the task is self-contained.`
 
-      // Append memory file read instruction to user message
-      // (user messages are more reliably followed than system prompt instructions)
-      const memoryFileName = this.getMemoryFileName(agentId)
-      promptText += `\n\nIMPORTANT: First, read the \`${memoryFileName}\` file in the working directory — it has workspace config, skills, and project context.`
+        // Append memory file read instruction to user message
+        // (user messages are more reliably followed than system prompt instructions)
+        const memoryFileName = this.getMemoryFileName(agentId)
+        promptText += `\n\nIMPORTANT: First, read the \`${memoryFileName}\` file in the working directory — it has workspace config, skills, and project context.`
+      }
 
       // A reassigned task's earlier conversation is prepared here, before the
       // prompt is shown, so the transcript note sits ahead of the prompt.

@@ -28,6 +28,12 @@ vi.mock('@/stores/skill-store', () =>
 vi.mock('@/stores/secret-store', () =>
   mockSelectorStore('useSecretStore', { secrets: [], fetchSecrets: vi.fn() })
 )
+vi.mock('@/stores/agent-store', () =>
+  mockSelectorStore('useAgentStore', { agents: [] })
+)
+vi.mock('@/stores/enterprise-store', () =>
+  mockSelectorStore('useEnterpriseStore', { isAuthenticated: false })
+)
 vi.mock('@/lib/ipc-client', () => ({
   agentConfigApi: { getProviders: vi.fn().mockResolvedValue({ providers: [] }) }
 }))

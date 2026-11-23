@@ -1,4 +1,4 @@
-import { FileDiff, List, ListTree, PackageOpen, X } from 'lucide-react'
+import { Cloud, FileDiff, List, ListTree, PackageOpen, X } from 'lucide-react'
 import type { Artifact } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
@@ -11,6 +11,7 @@ export interface ArtifactTabStripProps {
   hasSubtasks?: boolean
   subtaskCounts?: { working: number; review: number }
   hasOutput: boolean
+  hasSpacesArtifacts?: boolean
   changesCount?: number
   onSelectTab: (tabId: string) => void
   onCloseTab: (artifactId: string) => void
@@ -24,6 +25,7 @@ export function ArtifactTabStrip({
   hasSubtasks = false,
   subtaskCounts,
   hasOutput,
+  hasSpacesArtifacts = false,
   changesCount = 0,
   onSelectTab,
   onCloseTab,
@@ -33,7 +35,8 @@ export function ArtifactTabStrip({
     { id: PinnedArtifactTabId.DETAILS, label: 'Details', icon: List, visible: true, dimmed: false },
     { id: PinnedArtifactTabId.SUBTASKS, label: 'Subtasks', icon: ListTree, visible: hasSubtasks, dimmed: false },
     { id: PinnedArtifactTabId.CHANGES, label: 'Changes', icon: FileDiff, visible: hasChanges, dimmed: changesCount === 0 },
-    { id: PinnedArtifactTabId.OUTPUT, label: 'Output', icon: PackageOpen, visible: hasOutput, dimmed: false }
+    { id: PinnedArtifactTabId.OUTPUT, label: 'Output', icon: PackageOpen, visible: hasOutput, dimmed: false },
+    { id: PinnedArtifactTabId.SPACES, label: 'Artifacts', icon: Cloud, visible: hasSpacesArtifacts, dimmed: false }
   ]
 
   return (
