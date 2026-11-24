@@ -1,12 +1,13 @@
 import { ArtifactFileSelector } from './ArtifactFileSelector'
 import { useArtifactNavigation } from './use-artifact-navigation'
 import { useEffect, useState, type ReactNode } from 'react'
-import { PanelRightClose, SquareArrowOutUpRight } from 'lucide-react'
+import { ArrowUpRight, PanelRightClose, SquareArrowOutUpRight } from 'lucide-react'
 import { ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
 import { ArtifactCopyActions } from './ArtifactCopyActions'
 import { ArtifactTabStrip } from './ArtifactTabStrip'
+import { SpacesBadge } from './SpacesBadge'
 import { MarkdownArtifactView } from './viewers/MarkdownArtifactView'
 import { ImageArtifactView } from './viewers/ImageArtifactView'
 import { HtmlArtifactView } from './viewers/HtmlArtifactView'
@@ -26,9 +27,6 @@ export interface ArtifactsPanelProps {
   hasSubtasks?: boolean
   subtaskCounts?: { working: number; review: number }
   hasOutput: boolean
-  /** Tasks on a runner: show the combined Local + Spaces artifact list. */
-  hasSpacesArtifacts?: boolean
-  spacesArtifacts?: ReactNode
   changesCount?: number
   onSelectTab: (tabId: string) => void
   onCloseTab: (artifactId: string) => void
@@ -43,7 +41,7 @@ export interface ArtifactsPanelProps {
   onOpenArtifactInWindow?: (artifact: Artifact) => void
 }
 
-export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubtasks = false, subtaskCounts, hasOutput, hasSpacesArtifacts = false, spacesArtifacts, changesCount, onSelectTab, onCloseTab, onToggleOpen, details, subtasks, changes, output, className, onOpenArtifactInWindow }: ArtifactsPanelProps) {
+export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubtasks = false, subtaskCounts, hasOutput, changesCount, onSelectTab, onCloseTab, onToggleOpen, details, subtasks, changes, output, className, onOpenArtifactInWindow }: ArtifactsPanelProps) {
   const active = ui.activeTabId === PinnedArtifactTabId.SUBTASKS && !hasSubtasks ? PinnedArtifactTabId.DETAILS : ui.activeTabId || PinnedArtifactTabId.DETAILS
   const activeArtifact = artifacts.find((artifact) => artifact.id === active)
   const navigation = useArtifactNavigation(activeArtifact)
@@ -61,7 +59,7 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubt
   return (
     <section className={cn('flex h-full min-h-0 min-w-0 flex-col bg-background', className)} data-task-artifacts>
       <div className="relative">
-        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasSubtasks={hasSubtasks} subtaskCounts={subtaskCounts} hasOutput={hasOutput} hasSpacesArtifacts={hasSpacesArtifacts} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? (onOpenArtifactInWindow ? 'pr-60' : 'pr-52') : 'pr-11'} />
+        <ArtifactTabStrip artifacts={artifacts} activeTabId={active} hasChanges={hasChanges} hasSubtasks={hasSubtasks} subtaskCounts={subtaskCounts} hasOutput={hasOutput} changesCount={changesCount} onSelectTab={onSelectTab} onCloseTab={onCloseTab} className={activeArtifact ? (onOpenArtifactInWindow ? 'pr-60' : 'pr-52') : 'pr-11'} />
         <div className="absolute right-2 top-1.5 flex items-center gap-1 glass-control">
           {activeArtifact && <ArtifactCopyActions key={`${activeArtifact.id}:${selectedArtifact?.path}`} artifact={selectedArtifact!} artifactApi={artifactApi} />}
           {activeArtifact && onOpenArtifactInWindow && (
@@ -70,6 +68,17 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubt
           <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
         </div>
       </div>
+      {selectedArtifact?.source === 'spaces' && (
+        <div data-testid="spaces-artifact-header" className="flex items-center gap-2 border-b border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
+          <SpacesBadge />
+          <span className="min-w-0 flex-1 truncate">Read-only · edit it in Spaces</span>
+          {selectedArtifact.webUrl && (
+            <button type="button" onClick={() => void window.electronAPI.shell.openExternal(selectedArtifact.webUrl!)} className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-foreground hover:bg-accent">
+              Open in Spaces <ArrowUpRight className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      )}
       <ArtifactFileSelector files={navigation.files} path={selectedArtifact?.path} onSelect={navigation.selectFile} />
       {navigation.linkError && <div role="alert" className="px-3 py-2 text-sm text-red-400">{navigation.linkError}</div>}
       <div className="relative min-h-0 flex-1">
@@ -77,7 +86,6 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubt
         {hasSubtasks && active === PinnedArtifactTabId.SUBTASKS && <div className="h-full">{subtasks}</div>}
         {hasChanges && active === PinnedArtifactTabId.CHANGES && <div className="h-full">{changes}</div>}
         {hasOutput && <div className={active === PinnedArtifactTabId.OUTPUT ? 'h-full overflow-y-auto p-4' : 'hidden'}>{output}</div>}
-        {hasSpacesArtifacts && active === PinnedArtifactTabId.SPACES && <div className="h-full">{spacesArtifacts}</div>}
         {artifacts.map((artifact) => (
           <div key={artifact.id} className={active === artifact.id ? 'h-full' : 'hidden'}>
             {active === artifact.id ? <ArtifactViewer artifact={selectedArtifact!} artifactApi={artifactApi} refreshTrigger={refreshTrigger} onLinkClick={navigation.openLink} /> : null}
@@ -94,7 +102,8 @@ export function ArtifactViewer({ artifact, artifactApi, refreshTrigger, onLinkCl
     case ArtifactType.MARKDOWN: return <MarkdownArtifactView onLinkClick={onLinkClick} artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
     case ArtifactType.IMAGE: return <ImageArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
     case ArtifactType.HTML: return <HtmlArtifactView onLinkClick={onLinkClick} artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} onMessage={(html, data, reply) => {
-      if (!artifact.path || !artifactApi.mcpCall) return
+      // Spaces HTML is read-only content: no tool bridge.
+      if (artifact.source === 'spaces' || !artifact.path || !artifactApi.mcpCall) return
       void handleArtifactMcpMessage(html, { taskId: artifact.taskId, path: artifact.path }, data, reply, artifactApi.mcpCall)
     }} />
     case ArtifactType.PR: return <PrArtifactView artifact={artifact} refreshTrigger={refreshTrigger} />

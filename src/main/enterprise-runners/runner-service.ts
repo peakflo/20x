@@ -479,11 +479,11 @@ export class EnterpriseRunnerService {
   }
 }
 
+const IMAGE_MIME: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp', avif: 'image/avif' }
+
 function mimeFor(kind: SpacesArtifactSummary['kind'], filename: string | null): string {
   if (kind === 'markdown') return 'text/markdown'
   if (kind === 'html') return 'text/html'
-  if (kind === 'image') return filename?.endsWith('.svg') ? 'image/svg+xml' : 'image/*'
+  if (kind === 'image') return IMAGE_MIME[(filename ?? '').split('.').pop()?.toLowerCase() ?? ''] ?? 'image/png'
   return 'application/octet-stream'
 }
-
-export { ENTERPRISE_RUNNER_AGENT_TYPE }

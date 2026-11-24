@@ -14,9 +14,7 @@ export enum PinnedArtifactTabId {
   DETAILS = 'details',
   SUBTASKS = 'subtasks',
   CHANGES = 'changes',
-  OUTPUT = 'output',
-  /** Local + Spaces artifact list; only for tasks that run on a runner. */
-  SPACES = 'spaces-artifacts'
+  OUTPUT = 'output'
 }
 
 // v1 could persist hundreds of repository source files from an over-broad

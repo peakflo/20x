@@ -8,6 +8,8 @@
  * derives display state from it.
  */
 
+import { ArtifactType, type Artifact } from './artifacts'
+
 /** `config.coding_agent` value of a `[Workflo]` agent that runs on a runner. */
 export const ENTERPRISE_RUNNER_AGENT_TYPE = 'enterprise-runner'
 
@@ -1247,4 +1249,27 @@ export interface EnterpriseRunnersApi extends MachinesApi {
   listSpacesArtifacts: (taskId: string, opts?: { refresh?: boolean }) => Promise<SpacesArtifactsResult>
   readSpacesArtifact: (taskId: string, id: string) => Promise<SpacesArtifactContent>
   onTaskState: (callback: (event: RemoteTaskStateEvent) => void) => () => void
+}
+
+// ── Spaces artifacts in the existing artifact model ──────────────────
+
+/**
+ * A Spaces artifact as a normal 20x `Artifact`: it becomes a tab in the
+ * existing rail and strip and is rendered by the existing viewers. `path` is
+ * the Spaces id (`spaces:<session>:<artifact>`); the main process serves its
+ * content through the same `artifacts:read` call local files use.
+ */
+export function spacesSummaryToArtifact(taskId: string, s: SpacesArtifactSummary): Omit<Artifact, 'id' | 'reloadTrigger'> {
+  const type = s.kind === 'markdown' ? ArtifactType.MARKDOWN : s.kind === 'html' ? ArtifactType.HTML : s.kind === 'image' ? ArtifactType.IMAGE : ArtifactType.FILE
+  return {
+    taskId,
+    type,
+    title: s.title,
+    path: s.id,
+    updatedAt: s.updatedAt ? Date.parse(s.updatedAt) || 0 : 0,
+    source: 'spaces',
+    readOnly: true,
+    ...(s.webUrl ? { webUrl: s.webUrl } : {}),
+    remoteId: s.artifactId
+  }
 }

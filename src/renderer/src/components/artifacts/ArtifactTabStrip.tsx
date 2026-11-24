@@ -1,8 +1,9 @@
-import { Cloud, FileDiff, List, ListTree, PackageOpen, X } from 'lucide-react'
+import { FileDiff, List, ListTree, PackageOpen, X } from 'lucide-react'
 import type { Artifact } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
 import { ARTIFACT_ICONS } from './artifact-icons'
+import { SpacesBadge } from './SpacesBadge'
 
 export interface ArtifactTabStripProps {
   artifacts: Artifact[]
@@ -11,7 +12,6 @@ export interface ArtifactTabStripProps {
   hasSubtasks?: boolean
   subtaskCounts?: { working: number; review: number }
   hasOutput: boolean
-  hasSpacesArtifacts?: boolean
   changesCount?: number
   onSelectTab: (tabId: string) => void
   onCloseTab: (artifactId: string) => void
@@ -25,7 +25,6 @@ export function ArtifactTabStrip({
   hasSubtasks = false,
   subtaskCounts,
   hasOutput,
-  hasSpacesArtifacts = false,
   changesCount = 0,
   onSelectTab,
   onCloseTab,
@@ -35,8 +34,7 @@ export function ArtifactTabStrip({
     { id: PinnedArtifactTabId.DETAILS, label: 'Details', icon: List, visible: true, dimmed: false },
     { id: PinnedArtifactTabId.SUBTASKS, label: 'Subtasks', icon: ListTree, visible: hasSubtasks, dimmed: false },
     { id: PinnedArtifactTabId.CHANGES, label: 'Changes', icon: FileDiff, visible: hasChanges, dimmed: changesCount === 0 },
-    { id: PinnedArtifactTabId.OUTPUT, label: 'Output', icon: PackageOpen, visible: hasOutput, dimmed: false },
-    { id: PinnedArtifactTabId.SPACES, label: 'Artifacts', icon: Cloud, visible: hasSpacesArtifacts, dimmed: false }
+    { id: PinnedArtifactTabId.OUTPUT, label: 'Output', icon: PackageOpen, visible: hasOutput, dimmed: false }
   ]
 
   return (
@@ -82,6 +80,7 @@ export function ArtifactTabStrip({
             <button type="button" onClick={() => onSelectTab(artifact.id)} className="flex min-w-0 items-center gap-1.5 py-1 pl-2">
               <Icon className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">{artifact.title}</span>
+              {artifact.source === 'spaces' && <SpacesBadge />}
             </button>
             <button
               type="button"

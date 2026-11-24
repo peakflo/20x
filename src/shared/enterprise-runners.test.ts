@@ -333,3 +333,18 @@ describe('normaliseMachines', () => {
     expect(machinesNeedingUpdate(rows).map((r) => r.id)).toEqual(['m2', 'm3'])
   })
 })
+
+describe('spacesSummaryToArtifact', () => {
+  it('maps a Spaces artifact into the existing artifact model, read-only', async () => {
+    const { spacesSummaryToArtifact } = await import('./enterprise-runners')
+    const artifact = spacesSummaryToArtifact('task-1', {
+      id: 'spaces:s1:a1', artifactId: 'a1', sessionId: 's1', title: 'flake-chart.html', kind: 'html', filename: 'flake-chart.html',
+      sizeBytes: 10, updatedAt: '2026-11-23T10:00:00Z', webUrl: 'https://app.peakflo.ai/coding-agents/s1', availability: 'live', readOnly: true
+    })
+    expect(artifact).toMatchObject({
+      taskId: 'task-1', type: 'html', title: 'flake-chart.html', path: 'spaces:s1:a1', source: 'spaces', readOnly: true,
+      webUrl: 'https://app.peakflo.ai/coding-agents/s1', remoteId: 'a1', updatedAt: Date.parse('2026-11-23T10:00:00Z')
+    })
+    expect(artifact.files).toBeUndefined()
+  })
+})

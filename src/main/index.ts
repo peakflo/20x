@@ -47,6 +47,7 @@ import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger, broadcastRemoteState, setMobileRemoteStateProvider } from './mobile-api-server'
 import { createEnterpriseRunnerRuntime, type EnterpriseRunnerRuntime } from './enterprise-runners/runner-runtime'
 import { getEnterpriseRunnersApi } from './enterprise-runners'
+import { setSpacesArtifactReader } from './enterprise-runners/spaces-artifacts'
 import { registerEnterpriseRunnerIpc } from './enterprise-runners/runner-ipc'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
@@ -1105,6 +1106,8 @@ app.whenReady().then(async () => {
       userDataDir: app.getPath('userData')
     })
     agentManager!.setEnterpriseRunnerRuntime(enterpriseRunnerRuntime)
+    const runtimeForArtifacts = enterpriseRunnerRuntime
+    setSpacesArtifactReader((taskId, id) => runtimeForArtifacts.service.readSpacesArtifact(taskId, id))
     const runtimeForMobile = enterpriseRunnerRuntime
     setMobileRemoteStateProvider((taskId) => runtimeForMobile.service.getTaskState(taskId))
   }

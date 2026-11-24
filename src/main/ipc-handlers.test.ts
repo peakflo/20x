@@ -1,3 +1,4 @@
+import { setSpacesArtifactReader } from './enterprise-runners/spaces-artifacts'
 import { beforeEach, describe, it, expect, vi } from 'vitest'
 
 vi.mock('electron', () => ({
@@ -93,6 +94,22 @@ describe('registerIpcHandlers', () => {
     const getAll = handlers.find(([channel]) => channel === 'settings:getAll')![1]
     expect(get({}, 'mobile_push_vapid_private')).toBeNull()
     expect(getAll({})).toEqual({ mobile_push_preferences: '{}' })
+  })
+
+  it('serves Spaces artifacts through artifacts:read and refuses every write-like artifact call for them', async () => {
+    const db = { getWorkspaceDir: vi.fn(() => '/tmp/ws') } as unknown as Parameters<typeof registerIpcHandlers>[0]
+    registerIpcHandlers(db, {} as never, {} as never, {} as never, {} as never, {} as never)
+    const handlers = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls as [string, (...args: unknown[]) => unknown][]
+    const h = (channel: string) => handlers.filter(([c]) => c === channel).pop()![1]
+    const id = 'spaces:s1:a1'
+    setSpacesArtifactReader(async () => ({ availability: 'live', encoding: 'utf8', mimeType: 'text/markdown', content: '# Root cause', sizeBytes: 12, webUrl: null }))
+    await expect(h('artifacts:read')({}, 'task-1', id)).resolves.toMatchObject({ content: '# Root cause' })
+    await expect(h('artifacts:saveScad')({}, 'task-1', id, 'x', 'y')).rejects.toThrow(/read-only/)
+    await expect(h('artifacts:renderScad')({}, 'task-1', id)).rejects.toThrow(/read-only/)
+    await expect(h('artifacts:saveAs')({}, 'task-1', id, 'x.html')).rejects.toThrow(/read-only/)
+    await expect(h('artifact:mcp-call')({}, { taskId: 'task-1', path: id, name: 'x', arguments: {}, contentHash: '', consented: true, approved: true })).rejects.toThrow(/read-only/)
+    await expect(h('artifacts:copyFile')({}, 'task-1', id)).resolves.toMatchObject({ mode: 'unavailable' })
+    setSpacesArtifactReader(null)
   })
 
   it('keeps a newly created source-less task local', async () => {

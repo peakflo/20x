@@ -12,7 +12,7 @@ import { ChangesPanel } from './ChangesPanel'
 import { RemoteBranchPanel } from './remote/RemoteBranchPanel'
 import { RemoteStateBanner } from './remote/RemoteChips'
 import { RemoteDecisionContext, RemoteTaskContext, useRemoteTaskState } from '@/hooks/use-remote-task-state'
-import { SpacesArtifactsPanel } from '@/components/artifacts/SpacesArtifactsPanel'
+import { useSpacesArtifacts } from '@/hooks/use-spaces-artifacts'
 import { OutputFieldsDisplay } from './OutputFieldsDisplay'
 import { TaskHeaderBar, TaskPrimaryAction } from './TaskHeaderBar'
 import { RunOnPicker } from './RunOnPicker'
@@ -123,6 +123,8 @@ function TaskWorkspaceComponent({
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
   // Non-null when the task's chats run on a Spaces runner. The server owns completion.
   const remote = useRemoteTaskState(task?.id)
+  // Spaces artifacts join the normal artifact store; no separate list.
+  useSpacesArtifacts(task?.id, !!remote, remote?.sessionStatus)
   // Per-field selectors: a selector-less useStore() subscribes to the whole
   // store, re-rendering this entire workspace on every streamed delta of every
   // task's session (agent store) or any settings change. Action identities are
@@ -1181,8 +1183,6 @@ Update existing skills that were helpful or create new ones for patterns worth r
       hasSubtasks={subtasks.length > 0}
       subtaskCounts={{ working: workingSubtaskCount, review: reviewSubtaskCount }}
       hasOutput={task.output_fields.length > 0}
-      hasSpacesArtifacts={!!remote}
-      spacesArtifacts={remote ? <SpacesArtifactsPanel taskId={task.id} localArtifacts={artifacts} onOpenLocal={(id) => selectArtifactTab(task.id, id, true)} /> : undefined}
       changesCount={changesSummary?.files}
       onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
       onCloseTab={(artifactId) => removeArtifact(task.id, artifactId)}
@@ -1206,7 +1206,6 @@ Update existing skills that were helpful or create new ones for patterns worth r
       hasChanges
       hasSubtasks={subtasks.length > 0}
       hasOutput={task.output_fields.length > 0}
-      hasSpacesArtifacts={!!remote}
       changesCount={changesSummary?.files}
       onSelectTab={(tabId) => selectArtifactTab(task.id, tabId, true)}
       onToggleExpanded={() => setRailExpanded(task.id, !artifactUI.railExpanded)}

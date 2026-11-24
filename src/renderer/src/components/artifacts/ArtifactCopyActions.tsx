@@ -77,7 +77,7 @@ export function ArtifactCopyActions({ artifact, artifactApi, className }: Artifa
     })
   }, [artifact.path, artifact.taskId, artifactApi, run])
 
-  const canCopyFile = !!artifact.path && !!artifactApi.copyFile && artifact.type !== ArtifactType.PR
+  const canCopyFile = !!artifact.path && !!artifactApi.copyFile && artifact.type !== ArtifactType.PR && artifact.source !== 'spaces'
   const contentLabel = artifact.path ? 'Copy content' : 'Copy link'
   const contentResult = result?.action === CopyAction.CONTENT ? result.outcome : null
   const fileResult = result?.action === CopyAction.FILE ? result.outcome : null

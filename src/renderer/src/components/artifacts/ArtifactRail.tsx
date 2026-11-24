@@ -1,8 +1,9 @@
-import { ChevronLeft, Cloud, ChevronRight, FileCheck2, GitCompareArrows, List, ListTree } from 'lucide-react'
+import { ChevronLeft, ChevronRight, FileCheck2, GitCompareArrows, List, ListTree } from 'lucide-react'
 import type { Artifact } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
 import { ARTIFACT_ICONS } from './artifact-icons'
+import { SpacesBadge } from './SpacesBadge'
 
 export interface ArtifactRailProps {
   artifacts: Artifact[]
@@ -12,14 +13,13 @@ export interface ArtifactRailProps {
   hasChanges?: boolean
   hasSubtasks?: boolean
   hasOutput?: boolean
-  hasSpacesArtifacts?: boolean
   changesCount?: number
   onSelectTab: (tabId: string) => void
   onToggleExpanded: () => void
   className?: string
 }
 
-export function ArtifactRail({ artifacts, expanded, activeTabId, agentActive, hasChanges, hasSubtasks, hasOutput, hasSpacesArtifacts, changesCount, onSelectTab, onToggleExpanded, className }: ArtifactRailProps) {
+export function ArtifactRail({ artifacts, expanded, activeTabId, agentActive, hasChanges, hasSubtasks, hasOutput, changesCount, onSelectTab, onToggleExpanded, className }: ArtifactRailProps) {
   return (
     <aside className={cn('flex h-full shrink-0 flex-col glass-panel border-l transition-[width] duration-200', expanded ? 'w-[220px]' : 'w-12', className)}>
       <div className="flex h-10 items-center border-b border-border/50 px-1.5">
@@ -33,20 +33,21 @@ export function ArtifactRail({ artifacts, expanded, activeTabId, agentActive, ha
         {hasSubtasks && <RailItem icon={ListTree} label="Subtasks" expanded={expanded} active={activeTabId === PinnedArtifactTabId.SUBTASKS} onClick={() => onSelectTab(PinnedArtifactTabId.SUBTASKS)} />}
         {hasChanges && <RailItem icon={GitCompareArrows} label={`Changes${changesCount ? ` · ${changesCount}` : ''}`} expanded={expanded} active={activeTabId === PinnedArtifactTabId.CHANGES} onClick={() => onSelectTab(PinnedArtifactTabId.CHANGES)} />}
         {hasOutput && <RailItem icon={FileCheck2} label="Output" expanded={expanded} active={activeTabId === PinnedArtifactTabId.OUTPUT} onClick={() => onSelectTab(PinnedArtifactTabId.OUTPUT)} />}
-        {hasSpacesArtifacts && <RailItem icon={Cloud} label="Artifacts" expanded={expanded} active={activeTabId === PinnedArtifactTabId.SPACES} onClick={() => onSelectTab(PinnedArtifactTabId.SPACES)} />}
         {artifacts.map((artifact) => (
-          <RailItem key={artifact.id} icon={ARTIFACT_ICONS[artifact.type]} label={artifact.title} expanded={expanded} active={activeTabId === artifact.id} activity={agentActive} onClick={() => onSelectTab(artifact.id)} />
+          <RailItem key={artifact.id} icon={ARTIFACT_ICONS[artifact.type]} label={artifact.title} badge={artifact.source === 'spaces'} expanded={expanded} active={activeTabId === artifact.id} activity={agentActive} onClick={() => onSelectTab(artifact.id)} />
         ))}
       </div>
     </aside>
   )
 }
 
-function RailItem({ icon: Icon, label, expanded, active, activity, onClick }: { icon: typeof List; label: string; expanded: boolean; active: boolean; activity?: boolean; onClick: () => void }) {
+function RailItem({ icon: Icon, label, expanded, active, activity, badge, onClick }: { icon: typeof List; label: string; expanded: boolean; active: boolean; activity?: boolean; badge?: boolean; onClick: () => void }) {
   return (
     <button type="button" title={label} aria-label={label} onClick={onClick} className={cn('relative flex h-8 w-full items-center rounded-md text-xs transition-colors', expanded ? 'gap-2 px-2' : 'justify-center', active ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground')}>
       <Icon className="h-4 w-4 shrink-0" />
       {expanded && <span className="truncate">{label}</span>}
+      {expanded && badge && <SpacesBadge className="ml-auto" />}
+      {!expanded && badge && <span aria-label="Spaces" className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-sky-500" />}
       {activity && <span aria-label="Agent activity" className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-400" />}
     </button>
   )
