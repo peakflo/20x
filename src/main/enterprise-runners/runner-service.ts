@@ -34,7 +34,7 @@ import {
   type TaskRunOn
 } from '../../shared/enterprise-runners'
 import type { RunnerSyncSnapshot } from '../adapters/enterprise-runner-adapter'
-import { RunnerHttpError, type RunnerApi, type WireArtifact } from './runner-api'
+import { RunnerHttpError, type RunnerApi, type WireArtifact } from './api-client'
 import { SpacesArtifactCache, type CachedArtifact } from './spaces-artifact-cache'
 
 const execFileAsync = promisify(execFile)

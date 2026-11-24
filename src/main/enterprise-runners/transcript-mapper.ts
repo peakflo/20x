@@ -9,7 +9,7 @@
 
 import { MessagePartType, type MessagePart } from '../adapters/coding-agent-adapter'
 import { classifyApprovalOption, filterApprovalOptions } from '../../shared/enterprise-runners'
-import type { WirePart } from './runner-api'
+import type { WirePart } from './api-client'
 
 const PART_TYPES = new Set<string>(Object.values(MessagePartType))
 

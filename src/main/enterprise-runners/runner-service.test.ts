@@ -3,7 +3,7 @@ import { createTestDb } from '../../../test/helpers/db-test-helper'
 import { serverTaskFields, serverTaskSnapshot, saveServerTaskSnapshot } from '../workflo-task-sync'
 import { TaskStatus } from '../../shared/constants'
 import { EnterpriseRunnerService, isSafeBranchName, sessionRecordKey, spacesWebUrl, type EnterpriseRunnerServiceDeps } from './runner-service'
-import { RunnerHttpError, type RunnerApi, type WireArtifact } from './runner-api'
+import { RunnerHttpError, type RunnerApi, type WireArtifact } from './api-client'
 import type { RemoteTaskStateEvent } from '../../shared/enterprise-runners'
 
 const R1 = '11111111-1111-4111-8111-111111111111'

@@ -9,7 +9,7 @@ import {
   type WirePart,
   type WireSession,
   type WireTranscriptPage
-} from '../enterprise-runners/runner-api'
+} from '../enterprise-runners/api-client'
 import { APPROVAL_TTL_MS } from '../../shared/enterprise-runners'
 
 // ── fakes ────────────────────────────────────────────────────────────
