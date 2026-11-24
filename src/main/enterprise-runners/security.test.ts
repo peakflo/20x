@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { MessagePartType, type SessionConfig } from '../adapters/coding-agent-adapter'
 import { EnterpriseRunnerAdapter } from '../adapters/enterprise-runner-adapter'
-import { EnterpriseRunnersApi as HttpRunnerApi, type EnterpriseRequester as RunnerAuth } from './api-client'
+import { EnterpriseRunnersApi, type EnterpriseRequester as RunnerAuth } from './api-client'
 import { assertRequestBodySafe, scrubForLog, UnsafeRunnerRequestError } from './scrub'
 
 const SECRET_VALUES = ['sk-live-AAAABBBBCCCCDDDD', 'hunter2-password-value', 'brk_session_token_123456', 'anthropic-key-xyz-987654']
@@ -38,7 +38,7 @@ describe('security: nothing local reaches a runner request', () => {
     isSignedIn: async () => true,
       refreshToken: async () => ({ token: 'jwt' })
     }
-    const api = new HttpRunnerApi(auth, vi.fn(async () => new Response('', { status: 500 })) as unknown as typeof fetch)
+    const api = new EnterpriseRunnersApi(auth, vi.fn(async () => new Response('', { status: 500 })) as unknown as typeof fetch)
     const data = new Map<string, string>()
     const adapter = new EnterpriseRunnerAdapter({
       api,
@@ -72,7 +72,7 @@ describe('security: nothing local reaches a runner request', () => {
   })
 
   it('refuses a body that would carry a local secret value, even in a field the builders do not know', async () => {
-    const api = new HttpRunnerApi({
+    const api = new EnterpriseRunnersApi({
       apiRequest: vi.fn(), getJwt: async () => 'j', getApiUrl: () => 'x', isSignedIn: async () => true, refreshToken: async () => ({ token: 'j' })
     })
     api.setKnownSecrets(['super-secret-value-42'])
@@ -81,7 +81,7 @@ describe('security: nothing local reaches a runner request', () => {
 })
 
 describe('guard fills and limits', () => {
-  const mkApi = () => new HttpRunnerApi({ apiRequest: vi.fn(async () => ({})), getJwt: async () => 'j', getApiUrl: () => 'x', isSignedIn: async () => true, refreshToken: async () => ({ token: 'j' }) })
+  const mkApi = () => new EnterpriseRunnersApi({ apiRequest: vi.fn(async () => ({})), getJwt: async () => 'j', getApiUrl: () => 'x', isSignedIn: async () => true, refreshToken: async () => ({ token: 'j' }) })
 
   it('keeps secrets from earlier sessions: the guard only grows', async () => {
     const api = mkApi()
