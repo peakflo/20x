@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createTestDb } from '../../../test/helpers/db-test-helper'
 import { serverTaskFields, serverTaskSnapshot, saveServerTaskSnapshot } from '../workflo-task-sync'
 import { TaskStatus } from '../../shared/constants'
-import { EnterpriseRunnerService, isSafeBranchName, sessionRecordKey, spacesWebUrl, type EnterpriseRunnerServiceDeps } from './service'
+import { EnterpriseRunnerService, isSafeBranchName, sessionRecordKey, spacesWebUrl, type EnterpriseRunnerServiceDeps } from './runner-service'
 import { RunnerHttpError, type RunnerApi, type WireArtifact } from './runner-api'
 import type { RemoteTaskStateEvent } from '../../shared/enterprise-runners'
 
@@ -15,7 +15,7 @@ function deps(over: Partial<EnterpriseRunnerServiceDeps> = {}) {
   const events: RemoteTaskStateEvent[] = []
   const tasks = new Map([['t1', { id: 't1', title: 'T', session_id: null as string | null, external_id: 'srv-1', agent_id: 'a1', repos: [] as string[] }]])
   const api = {
-    listRunners: vi.fn(async () => []), listAgents: vi.fn(async () => []), listArtifacts: vi.fn(async (): Promise<WireArtifact[]> => [])
+    listRunnersRaw: vi.fn(async () => []), listAgents: vi.fn(async () => []), listArtifacts: vi.fn(async (): Promise<WireArtifact[]> => [])
   } as unknown as RunnerApi
   const d: EnterpriseRunnerServiceDeps = {
     api,
@@ -69,8 +69,8 @@ describe('Run on: choice and lock', () => {
 
   it('reassign restarts on the new runner and unlocks; an unavailable runner is refused', async () => {
     const { d, data, api } = deps()
-    ;(api.listRunners as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { id: R2, name: 'build-box', selectable: true, personal: true, capabilities: { backends: [{ name: 'claude-code' }] } },
+    ;(api.listRunnersRaw as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: R2, name: 'build-box', selectable: true, personal: true, canSelect: true, capabilities: { backends: [{ name: 'claude-code' }] } },
       { id: R3, name: 'old-laptop', selectable: false, unselectableReason: 'offline', unselectableLabel: 'not beating — last heartbeat 3h ago' }
     ])
     const svc = new EnterpriseRunnerService(d)
@@ -224,7 +224,7 @@ describe('Run on: routing inputs and validation', () => {
 
   it('does not end the live session unless the target runner was verified selectable', async () => {
     const { d, api } = deps()
-    ;(api.listRunners as ReturnType<typeof vi.fn>).mockRejectedValue(new RunnerHttpError('offline', null, 'network'))
+    ;(api.listRunnersRaw as ReturnType<typeof vi.fn>).mockRejectedValue(new RunnerHttpError('offline', null, 'network'))
     expect(await new EnterpriseRunnerService(d).reassign('t1', R2)).toMatchObject({ ok: false })
     expect(d.restartOnRunner).not.toHaveBeenCalled()
     expect(await new EnterpriseRunnerService(d).reassign('t1', 'not-a-uuid')).toMatchObject({ ok: false })

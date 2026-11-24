@@ -826,9 +826,9 @@ export class AgentManager extends EventEmitter {
    */
   private syncManager?: import('./sync-manager').SyncManager
 
-  private enterpriseRunnerRuntime?: import('./enterprise-runner/runtime').EnterpriseRunnerRuntime
+  private enterpriseRunnerRuntime?: import('./enterprise-runners/runner-runtime').EnterpriseRunnerRuntime
 
-  setEnterpriseRunnerRuntime(runtime: import('./enterprise-runner/runtime').EnterpriseRunnerRuntime | undefined): void {
+  setEnterpriseRunnerRuntime(runtime: import('./enterprise-runners/runner-runtime').EnterpriseRunnerRuntime | undefined): void {
     this.enterpriseRunnerRuntime = runtime
   }
 

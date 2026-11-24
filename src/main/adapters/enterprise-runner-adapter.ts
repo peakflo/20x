@@ -30,7 +30,7 @@ import {
 import {
   APPROVAL_TTL_MS,
   type EnterpriseRunner,
-  toEnterpriseRunner
+  normaliseRunners
 } from '../../shared/enterprise-runners'
 import {
   RunnerHttpError,
@@ -38,7 +38,7 @@ import {
   type WirePart,
   type WireSession,
   type WireTranscriptPage
-} from '../enterprise-runner/runner-api'
+} from '../enterprise-runners/runner-api'
 import {
   extractTurnUsage,
   isAnswered,
@@ -47,8 +47,8 @@ import {
   wirePartToMessagePart,
   type ParsedApproval,
   type TurnUsage
-} from '../enterprise-runner/transcript-mapper'
-import { scrubForLog } from '../enterprise-runner/scrub'
+} from '../enterprise-runners/transcript-mapper'
+import { scrubForLog } from '../enterprise-runners/scrub'
 import { ZERO_TOKEN_COUNTS } from '../../shared/usage'
 import type { UsageTotals } from '../usage/usage-normalize'
 
@@ -173,7 +173,7 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
 
   async checkHealth(): Promise<{ available: boolean; reason?: string }> {
     try {
-      await this.host.api.listRunners()
+      await this.host.api.listRunnersRaw()
       return { available: true }
     } catch (error) {
       return { available: false, reason: scrubForLog(error) }
@@ -540,7 +540,7 @@ export class EnterpriseRunnerAdapter implements CodingAgentAdapter {
 
   async getProviders(): Promise<{ providers: { id: string; name: string; models: unknown }[]; default: Record<string, string> } | null> {
     try {
-      const runners = (await this.host.api.listRunners()).map((r) => toEnterpriseRunner(r, this.now()))
+      const runners = normaliseRunners(await this.host.api.listRunnersRaw(), this.now())
       return providersFromRunners(runners)
     } catch {
       return null

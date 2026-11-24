@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { HttpRunnerApi, SseParser, parseStreamFrame, RunnerHttpError, type RunnerAuth } from './runner-api'
+import { SseParser, parseStreamFrame, RunnerHttpError } from './runner-api'
+import { EnterpriseRunnersApi as HttpRunnerApi, type EnterpriseRequester as RunnerAuth } from './api-client'
 
 function sse(...frames: string[]): Response {
   const enc = new TextEncoder()
@@ -17,6 +18,7 @@ function auth(overrides: Partial<RunnerAuth> = {}): RunnerAuth & { jwt: string }
     apiRequest: vi.fn(async () => ({})),
     getJwt: vi.fn(async () => a.jwt),
     getApiUrl: () => 'https://api.peakflo.ai',
+    isSignedIn: async () => true,
     refreshToken: vi.fn(async () => { a.jwt = 'jwt-2'; return { token: 'jwt-2' } }),
     ...overrides
   }

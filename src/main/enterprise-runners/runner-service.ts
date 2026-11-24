@@ -20,7 +20,7 @@ import {
   normalizePermissionMode,
   RUN_ON_LOCAL,
   spacesArtifactId,
-  toEnterpriseRunner,
+  normaliseRunners,
   type EnterpriseAgentRunnerInfo,
   type OpenLocallyResult,
   type RemoteBranchInfo,
@@ -133,8 +133,8 @@ export class EnterpriseRunnerService {
   async listRunners(): Promise<RunnersResult> {
     if (!this.deps.isSignedIn()) return { ok: false, error: 'Sign in to Peakflo Enterprise to use runners.', code: 'signed-out' }
     try {
-      const raw = await this.deps.api.listRunners()
-      return { ok: true, runners: raw.map((r) => toEnterpriseRunner(r, this.now())), fetchedAt: this.now() }
+      const raw = await this.deps.api.listRunnersRaw()
+      return { ok: true, runners: normaliseRunners(raw, this.now()), fetchedAt: this.now() }
     } catch (error) {
       const kind = error instanceof RunnerHttpError ? error.kind : 'server'
       return {

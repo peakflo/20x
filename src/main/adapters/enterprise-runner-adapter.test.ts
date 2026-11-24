@@ -9,7 +9,7 @@ import {
   type WirePart,
   type WireSession,
   type WireTranscriptPage
-} from '../enterprise-runner/runner-api'
+} from '../enterprise-runners/runner-api'
 import { APPROVAL_TTL_MS } from '../../shared/enterprise-runners'
 
 // ── fakes ────────────────────────────────────────────────────────────
@@ -27,7 +27,7 @@ class FakeApi implements RunnerApi {
   private log(name: string, ...args: unknown[]): void { this.calls.push({ name, args }) }
   called(name: string): unknown[][] { return this.calls.filter((c) => c.name === name).map((c) => c.args) }
 
-  async listRunners() { this.log('listRunners'); return [] }
+  async listRunnersRaw() { this.log('listRunners'); return [] }
   async listAgents() { return [] }
   async startTaskSession(taskId: string, input: StartSessionInput, cb?: (s: WireSession, attached: boolean) => void) {
     this.log('startTaskSession', taskId, input)

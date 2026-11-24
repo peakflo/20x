@@ -829,11 +829,6 @@ export const onWorkspaceCleanupProgress = (callback: (event: WorkspaceCleanupPro
   return window.electronAPI.onWorkspaceCleanupProgress(callback)
 }
 
-/** Lazy: `window.electronAPI` is absent in some test environments at import time. */
-export const enterpriseRunnersApi: EnterpriseRunnersApi = new Proxy({} as EnterpriseRunnersApi, {
-  get: (_t, prop) => (window.electronAPI.enterpriseRunners as unknown as Record<string | symbol, unknown>)[prop]
-})
-
 export const enterpriseApi = {
   signupInBrowser: (mode: 'register' | 'login' = 'register'): Promise<{
     userId: string
@@ -1035,3 +1030,12 @@ export const browserRecordingApi = {
     ? window.electronAPI.browser.recordingStatus(panelId)
     : Promise.resolve({ recording: null }),
 }
+
+/**
+ * The one runners bridge: Settings → Machines, "Connect this computer" and
+ * running tasks on runners. Lazy, because `window.electronAPI` is absent in some
+ * test environments at import time.
+ */
+export const enterpriseRunnersApi: EnterpriseRunnersApi = new Proxy({} as EnterpriseRunnersApi, {
+  get: (_t, prop) => (window.electronAPI.enterpriseRunners as unknown as Record<string | symbol, unknown>)[prop]
+})

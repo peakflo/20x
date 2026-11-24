@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { MessagePartType, type SessionConfig } from '../adapters/coding-agent-adapter'
 import { EnterpriseRunnerAdapter } from '../adapters/enterprise-runner-adapter'
-import { HttpRunnerApi, type RunnerAuth } from './runner-api'
+import { EnterpriseRunnersApi as HttpRunnerApi, type EnterpriseRequester as RunnerAuth } from './api-client'
 import { assertRequestBodySafe, scrubForLog, UnsafeRunnerRequestError } from './scrub'
 
 const SECRET_VALUES = ['sk-live-AAAABBBBCCCCDDDD', 'hunter2-password-value', 'brk_session_token_123456', 'anthropic-key-xyz-987654']
@@ -35,6 +35,7 @@ describe('security: nothing local reaches a runner request', () => {
       }),
       getJwt: async () => 'jwt',
       getApiUrl: () => 'https://api.peakflo.ai',
+    isSignedIn: async () => true,
       refreshToken: async () => ({ token: 'jwt' })
     }
     const api = new HttpRunnerApi(auth, vi.fn(async () => new Response('', { status: 500 })) as unknown as typeof fetch)
@@ -72,7 +73,7 @@ describe('security: nothing local reaches a runner request', () => {
 
   it('refuses a body that would carry a local secret value, even in a field the builders do not know', async () => {
     const api = new HttpRunnerApi({
-      apiRequest: vi.fn(), getJwt: async () => 'j', getApiUrl: () => 'x', refreshToken: async () => ({ token: 'j' })
+      apiRequest: vi.fn(), getJwt: async () => 'j', getApiUrl: () => 'x', isSignedIn: async () => true, refreshToken: async () => ({ token: 'j' })
     })
     api.setKnownSecrets(['super-secret-value-42'])
     await expect(api.sendMessage('s', { content: 'my key is super-secret-value-42', clientMessageId: 'c' })).rejects.toBeInstanceOf(UnsafeRunnerRequestError)
@@ -80,7 +81,7 @@ describe('security: nothing local reaches a runner request', () => {
 })
 
 describe('guard fills and limits', () => {
-  const mkApi = () => new HttpRunnerApi({ apiRequest: vi.fn(async () => ({})), getJwt: async () => 'j', getApiUrl: () => 'x', refreshToken: async () => ({ token: 'j' }) })
+  const mkApi = () => new HttpRunnerApi({ apiRequest: vi.fn(async () => ({})), getJwt: async () => 'j', getApiUrl: () => 'x', isSignedIn: async () => true, refreshToken: async () => ({ token: 'j' }) })
 
   it('keeps secrets from earlier sessions: the guard only grows', async () => {
     const api = mkApi()
@@ -100,7 +101,7 @@ describe('guard fills and limits', () => {
     const api = mkApi()
     api.setLocalServicePorts([54321, 61234])
     const sent: unknown[] = []
-    ;(api as unknown as { auth: { apiRequest: (...a: unknown[]) => unknown } }).auth.apiRequest = async (...a: unknown[]) => { sent.push(a[2]); return {} }
+    ;(api as unknown as { requester: { apiRequest: (...a: unknown[]) => unknown } }).requester.apiRequest = async (...a: unknown[]) => { sent.push(a[2]); return {} }
     await api.sendMessage('s', { content: 'call http://127.0.0.1:54321/secrets and http://localhost:61234/mcp but test http://localhost:3000', clientMessageId: 'c' })
     const content = (sent[0] as { content: string }).content
     expect(content).not.toContain('54321')

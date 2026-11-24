@@ -1,5 +1,6 @@
 import { AppLayout } from '@/components/layout/AppLayout'
 import { useEffect, useState } from 'react'
+import { ConnectComputerModal } from '@/components/machines/ConnectComputerModal'
 import { CursorCliSetupDialog } from '@/components/agents/CursorCliSetupDialog'
 import { identifyAnalyticsUser, resetAnalyticsUser, setAnalyticsEnterpriseEmail } from '@/lib/analytics'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
@@ -50,6 +51,7 @@ export default function App() {
   return (
     <>
       <AppLayout />
+      <ConnectComputerModal />
       <CursorCliSetupDialog
         key={activeCursorRetry ? `${activeCursorRetry.taskId}:${activeCursorRetry.operation}` : 'cursor-cli'}
         open={!!activeCursorRetry}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, Lock, Search, Server } from 'lucide-react'
 import { enterpriseRunnersApi } from '@/lib/ipc-client'
 import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { useConnectComputerStore } from '@/stores/connect-computer-store'
 import { useUIStore } from '@/stores/ui-store'
 import {
   RUN_ON_LOCAL,
@@ -92,6 +93,16 @@ export function RunOnPicker({ taskId, agentId, sessionStarted = false, value, on
   }, [])
 
   useEffect(() => { if (open && signedIn) void load() }, [open, signedIn, load])
+
+  // A machine was connected, renamed, removed or updated (Settings → Machines or
+  // the Connect modal): refresh the list at once if it is showing, else drop it.
+  useEffect(() => {
+    if (!signedIn) return
+    return enterpriseRunnersApi.onMachinesChanged(() => {
+      if (open) void load()
+      else setRunners(null)
+    })
+  }, [signedIn, open, load])
 
   useEffect(() => {
     if (!open) return
@@ -268,7 +279,7 @@ export function RunOnPicker({ taskId, agentId, sessionStarted = false, value, on
             )}
           </div>
           <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-0.5 border-t px-2.5 py-1.5 text-[11px] text-muted-foreground">
-            <button type="button" className="hover:text-foreground" onClick={() => { setOpen(false); openSettings() }}>⚙ Manage machines…</button>
+            <button type="button" className="hover:text-foreground" onClick={() => { setOpen(false); useConnectComputerStore.getState().openConnect() }}>⚙ Manage machines…</button>
             <span>Not “This Mac” = synced to Spaces</span>
           </div>
         </div>

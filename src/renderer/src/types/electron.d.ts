@@ -1,5 +1,14 @@
 import type { BrowserRecordingManifest } from '@shared/browser-recording'
 import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '@shared/browser-session-import'
+import type {
+  ConnectProgress,
+  MachineActionResult,
+  MachinesResult,
+  PreflightResult,
+  StartConnectRequest,
+  StartConnectResult,
+  UninstallPlan
+} from '@shared/enterprise-runners'
 import type { UiCommandAck, UiCommandEnvelope } from '@shared/ui-commands'
 import type { TaskRunDuration } from '@shared/task-run-duration'
 import type { DataCategory, DataExportResult, DataImportPreview, DataImportResult } from '@shared/data-transfer'

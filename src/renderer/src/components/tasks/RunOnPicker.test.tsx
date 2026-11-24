@@ -6,8 +6,10 @@ const api = vi.hoisted(() => ({
   listRunners: vi.fn(),
   getAgentInfo: vi.fn(),
   getTaskRunOn: vi.fn(),
-  setTaskRunOn: vi.fn()
+  setTaskRunOn: vi.fn(),
+  onMachinesChanged: vi.fn()
 }))
+const machinesChanged = vi.hoisted(() => ({ fire: () => undefined as void }))
 const auth = vi.hoisted(() => ({ isAuthenticated: true }))
 
 vi.mock('@/lib/ipc-client', () => ({ enterpriseRunnersApi: api }))
@@ -19,6 +21,7 @@ vi.mock('@/stores/ui-store', () => ({
 }))
 
 import { RunOnPicker } from './RunOnPicker'
+import { useConnectComputerStore } from '@/stores/connect-computer-store'
 
 function runner(over: Partial<EnterpriseRunner>): EnterpriseRunner {
   return {
@@ -43,6 +46,7 @@ describe('RunOnPicker', () => {
     auth.isAuthenticated = true
     api.getAgentInfo.mockResolvedValue({ agentId: 'a1', enterpriseAgentId: 'e1', backend: 'claude-code', permissionLimit: 'ask', runnerPin: null, usable: true, runnerOnly: false })
     api.getTaskRunOn.mockResolvedValue({ choice: { kind: 'local' }, locked: false })
+    api.onMachinesChanged.mockImplementation((cb: () => void) => { machinesChanged.fire = cb as never; return () => undefined })
     api.setTaskRunOn.mockImplementation(async (_t: string, choice: unknown) => ({ choice, locked: false }))
   })
   afterEach(() => { cleanup(); vi.clearAllMocks() })
@@ -107,6 +111,26 @@ describe('RunOnPicker', () => {
     await openPicker()
     expect((screen.getByTestId('run-on-local') as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByTestId('run-on-local').textContent).toContain('runs on a runner only')
+  })
+
+  it('"Manage machines…" opens the Connect this computer modal', async () => {
+    api.listRunners.mockResolvedValue(ok([runner({})]))
+    useConnectComputerStore.getState().close()
+    render(<RunOnPicker taskId="t1" agentId="a1" />)
+    await openPicker()
+    fireEvent.click(screen.getByText(/Manage machines/))
+    expect(useConnectComputerStore.getState().open).toBe(true)
+    useConnectComputerStore.getState().close()
+  })
+
+  it('a newly connected machine shows up in the open picker', async () => {
+    api.listRunners.mockResolvedValueOnce(ok([runner({})]))
+    render(<RunOnPicker taskId="t1" agentId="a1" />)
+    await openPicker()
+    expect(screen.queryByText('new-box')).toBeNull()
+    api.listRunners.mockResolvedValue(ok([runner({}), runner({ id: 'r9', name: 'new-box' })]))
+    machinesChanged.fire()
+    expect(await screen.findByText('new-box')).toBeTruthy()
   })
 
   it('shows permission denied and error with retry', async () => {

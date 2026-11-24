@@ -45,8 +45,9 @@ import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiU
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
 import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger, broadcastRemoteState, setMobileRemoteStateProvider } from './mobile-api-server'
-import { createEnterpriseRunnerRuntime, type EnterpriseRunnerRuntime } from './enterprise-runner/runtime'
-import { registerEnterpriseRunnerIpc } from './enterprise-runner/ipc'
+import { createEnterpriseRunnerRuntime, type EnterpriseRunnerRuntime } from './enterprise-runners/runner-runtime'
+import { getEnterpriseRunnersApi } from './enterprise-runners'
+import { registerEnterpriseRunnerIpc } from './enterprise-runners/runner-ipc'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
 import { logMainThreadPerfReport, startMainThreadPerf } from './perf/main-thread-perf'
@@ -54,6 +55,7 @@ import { installProcessStreamErrorHandlers } from './process-stream-errors'
 import { startMacosSwapWatchdog } from './macos-swap-watchdog'
 import { getWindowsPathEntries, prependMissingWindowsPaths } from './windows-runtime-paths'
 import { initAnalytics, shutdownAnalytics } from './analytics-service'
+import { shutdownEnterpriseRunners } from './enterprise-runners'
 import {
   recordFocusGained,
   recordFocusLost,
@@ -1093,9 +1095,10 @@ app.whenReady().then(async () => {
     enterpriseRunnerRuntime = createEnterpriseRunnerRuntime({
       db,
       auth: enterpriseAuth,
+      api: getEnterpriseRunnersApi(enterpriseAuth),
       getSyncManager: () => syncForRunners,
       emitState: (event) => {
-        mainWindow?.webContents.send('enterprise-runner:state', event)
+        mainWindow?.webContents.send('enterprise-runners:task-state', event)
         broadcastRemoteState(event)
       },
       endTaskSession: async (taskId) => { await agentManager!.stopByTaskId(taskId) },
@@ -1425,6 +1428,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', async (event) => {
+  // A running "Connect this computer" command must not outlive the app.
+  shutdownEnterpriseRunners()
   if (isShuttingDown) {
     return
   }

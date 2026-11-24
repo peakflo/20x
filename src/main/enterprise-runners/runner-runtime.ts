@@ -10,8 +10,8 @@ import type { DatabaseManager } from '../database'
 import type { EnterpriseAuth } from '../enterprise-auth'
 import type { SyncManager } from '../sync-manager'
 import { EnterpriseRunnerAdapter, type EnterpriseRunnerHost } from '../adapters/enterprise-runner-adapter'
-import { HttpRunnerApi, type RunnerApi } from './runner-api'
-import { EnterpriseRunnerService } from './service'
+import type { RunnerApi } from './runner-api'
+import { EnterpriseRunnerService } from './runner-service'
 import type { RemoteTaskStateEvent } from '../../shared/enterprise-runners'
 import { serverTaskSnapshot } from '../workflo-task-sync'
 
@@ -32,14 +32,15 @@ export interface RuntimeDeps {
   endTaskSession: (taskId: string) => Promise<void>
   openExternal?: (url: string) => void
   userDataDir: string
-  api?: RunnerApi
+  /** The shared client (`getEnterpriseRunnersApi`). */
+  api: RunnerApi
 }
 
 const REPO_SLUG = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 
 export function createEnterpriseRunnerRuntime(deps: RuntimeDeps): EnterpriseRunnerRuntime {
   const { db, auth } = deps
-  const api = deps.api ?? new HttpRunnerApi(auth)
+  const api = deps.api
   const store = {
     get: (key: string) => db.getSetting(key),
     set: (key: string, value: string) => db.setSetting(key, value),

@@ -447,7 +447,7 @@ describe('mobile remote task state', () => {
     } finally { setMobileRemoteStateProvider(null); stopMobileApiServer(); db.close() }
   })
 
-  it('broadcasts enterprise-runner:state to connected WebSocket clients', async () => {
+  it('broadcasts enterprise-runners:task-state to connected WebSocket clients', async () => {
     const { db } = createTestDb()
     const token = 'remote-ws-token'
     db.createMobileSession('remote-ws-phone', createHash('sha256').update(token).digest('hex'), 'Phone')
@@ -460,7 +460,7 @@ describe('mobile remote task state', () => {
       await new Promise((r) => setTimeout(r, 50))
       const event = { taskId: 't1', state: { taskId: 't1', sync: 'runner-offline' } }
       broadcastRemoteState(event as never)
-      expect(await received).toEqual({ type: 'enterprise-runner:state', payload: event })
+      expect(await received).toEqual({ type: 'enterprise-runners:task-state', payload: event })
     } finally { ws.close(); stopMobileApiServer(); db.close() }
   })
 })

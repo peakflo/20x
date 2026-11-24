@@ -9,9 +9,9 @@ import { useRemoteTaskStore } from './remote-task-store'
 beforeEach(() => { useRemoteTaskStore.setState({ states: {} }); remoteState.mockReset() })
 
 describe('remote-task-store', () => {
-  it('updates from the enterprise-runner:state websocket event', () => {
+  it('updates from the enterprise-runners:task-state websocket event', () => {
     const state = { taskId: 't1', sync: 'runner-offline' }
-    handlers.get('enterprise-runner:state')!({ taskId: 't1', state })
+    handlers.get('enterprise-runners:task-state')!({ taskId: 't1', state })
     expect(useRemoteTaskStore.getState().states.t1).toEqual(state)
   })
   it('loads via REST and treats null as a local task', async () => {

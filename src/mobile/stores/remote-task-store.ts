@@ -12,7 +12,7 @@ interface RemoteTaskStore {
 
 export const useRemoteTaskStore = create<RemoteTaskStore>((set) => {
   // Same WebSocket path as every other mobile event.
-  onEvent('enterprise-runner:state', (payload) => {
+  onEvent('enterprise-runners:task-state', (payload) => {
     const event = payload as RemoteTaskStateEvent
     if (event?.taskId && event.state) set((s) => ({ states: { ...s.states, [event.taskId]: event.state } }))
   })

@@ -108,7 +108,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const skills = useAgentStore((s) => s.skills)
   const session = useAgentStore((s) => s.sessions.get(taskId))
   // Enterprise runner sync state (null for local tasks). Fed by the
-  // `enterprise-runner:state` WebSocket event and loaded once on open.
+  // `enterprise-runners:task-state` WebSocket event and loaded once on open.
   const remote = useRemoteTaskStore((s) => s.states[taskId]) ?? null
   const loadRemote = useRemoteTaskStore((s) => s.load)
   useEffect(() => { void loadRemote(taskId) }, [taskId, loadRemote])
