@@ -534,7 +534,7 @@ const ToolCallMessage = React.memo(function ToolCallMessage({ message, searchQue
     <div className="group/tool w-full min-w-0 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 text-xs font-mono text-muted-foreground hover:bg-white/5 hover:text-foreground transition-colors"
+        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 text-left text-xs font-mono text-muted-foreground hover:bg-white/5 hover:text-foreground transition-colors"
       >
         <ChevronRight className={`h-3 w-3 text-muted-foreground shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />
@@ -587,7 +587,7 @@ const ReasoningMessage = React.memo(function ReasoningMessage({ message, searchQ
     <div className="group/tool w-full min-w-0 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 text-xs font-mono text-teal-700/90 dark:text-teal-300/80 hover:bg-accent hover:text-teal-700 dark:hover:text-teal-200 transition-colors"
+        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 text-left text-xs font-mono text-teal-700/90 dark:text-teal-300/80 hover:bg-accent hover:text-teal-700 dark:hover:text-teal-200 transition-colors"
       >
         <ChevronRight className={`h-3 w-3 shrink-0 text-teal-600/70 dark:text-teal-300/60 transition-transform ${expanded ? 'rotate-90' : ''}`} />
         <span className="shrink-0 text-teal-700 dark:text-teal-300">Thinking</span>

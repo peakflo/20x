@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import {
   blockSummary,
   failureSummary,
+  notePlainText,
   unrecoveredFailure,
   type ActivityBlock as ActivityBlockModel,
   type ActivityMessageLike
@@ -81,7 +82,7 @@ export function ActivityBlock<M extends ActivityMessageLike>({
         )}
       </button>
       {failure && !open && (
-        <p data-testid="activity-failure" className="flex min-w-0 items-center gap-2 pl-6 text-[11px] text-red-400">
+        <p data-testid="activity-failure" className="flex min-w-0 items-center gap-2 pl-6 text-xs text-red-400">
           <span className="min-w-0 truncate">{failureSummary(failure)}</span>
           <button
             type="button"
@@ -100,7 +101,7 @@ export function ActivityBlock<M extends ActivityMessageLike>({
               <React.Fragment key={message.id}>
                 {block.noteIds.has(message.id) ? (
                   <p data-testid="activity-note" className="whitespace-pre-wrap break-words px-1 py-0.5 text-xs text-muted-foreground">
-                    {message.content}
+                    {notePlainText(message.content)}
                   </p>
                 ) : (
                   renderStep(message)

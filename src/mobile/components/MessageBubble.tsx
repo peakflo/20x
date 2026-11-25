@@ -12,6 +12,7 @@ import { api } from '../api/client'
 import {
   blockSummary,
   failureSummary,
+  notePlainText,
   unrecoveredFailure,
   type ActivityBlock as ActivityBlockModel
 } from '@shared/transcript-activity'
@@ -383,7 +384,7 @@ const ToolCallMessage = memo(function ToolCallMessage({ message, searchQuery }: 
     <div className="group/tool w-full min-w-0 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 font-mono text-xs text-muted-foreground active:text-foreground transition-colors"
+        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 text-left font-mono text-xs text-muted-foreground active:text-foreground transition-colors"
       >
         <span className={cn(
           'text-muted-foreground transition-transform text-[10px]',
@@ -450,7 +451,7 @@ const ReasoningMessage = memo(function ReasoningMessage({ message, searchQuery }
     <div className="group/tool w-full min-w-0 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 font-mono text-xs text-teal-700/90 dark:text-teal-300/80 active:text-teal-700 dark:active:text-teal-200 transition-colors"
+        className="flex h-6 w-full items-center gap-2 rounded-sm px-1 text-left font-mono text-xs text-teal-700/90 dark:text-teal-300/80 active:text-teal-700 dark:active:text-teal-200 transition-colors"
       >
         <span className={cn(
           'text-teal-600/70 dark:text-teal-300/60 transition-transform text-[10px]',
@@ -585,7 +586,7 @@ function ActivityBlockViewImpl({ block, open, onOpenChange, running, searchQuery
         {summary.elapsed && <span aria-hidden="true" className="shrink-0 tabular-nums">{summary.elapsed}</span>}
       </button>
       {failure && !open && (
-        <p data-testid="activity-failure" className="flex min-w-0 items-center gap-2 pl-5 text-[11px] text-red-400">
+        <p data-testid="activity-failure" className="flex min-w-0 items-center gap-2 pl-5 text-xs text-red-400">
           <span className="min-w-0 truncate">{failureSummary(failure)}</span>
           <button
             type="button"
@@ -604,7 +605,7 @@ function ActivityBlockViewImpl({ block, open, onOpenChange, running, searchQuery
               <div key={message.id}>
                 {block.noteIds.has(message.id) ? (
                   <p data-testid="activity-note" className="whitespace-pre-wrap break-words px-1 py-0.5 text-xs text-muted-foreground">
-                    {message.content}
+                    {notePlainText(message.content)}
                   </p>
                 ) : (
                   <ActivityStep message={message} searchQuery={searchQuery} />

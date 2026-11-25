@@ -8,6 +8,7 @@ import {
   groupActivity,
   lastActivityBlockId,
   noteSummary,
+  notePlainText,
   stepCountsText,
   stepFamily,
   unrecoveredFailure,
@@ -214,5 +215,11 @@ describe('summary text', () => {
     const [, fresh] = groupActivity([user('u'), tool('t1', 'Read', 0)])
     if (fresh.type !== 'activity') throw new Error('expected block')
     expect(blockSummary(fresh.block, { running: true, nowMs: T0 + 500 }).title).toBe('Working…')
+  })
+})
+
+describe('notePlainText', () => {
+  it('removes markdown markers but keeps lines and snake_case', () => {
+    expect(notePlainText('## Plan\nRun the **full** `test_suite` now')).toBe('Plan\nRun the full test_suite now')
   })
 })

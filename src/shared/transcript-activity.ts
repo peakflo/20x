@@ -284,15 +284,27 @@ export function stepCountsText(steps: readonly ActivityMessageLike[]): string {
   return [total, ...named].join(' · ')
 }
 
-/** First non-empty line of a note, without markdown markers. */
-export function noteSummary(text: string): string {
-  const line = text.split('\n').map((l) => l.trim()).find(Boolean) ?? ''
+/** Inline emphasis and code markers removed; snake_case underscores stay. */
+function stripInlineMarkdown(line: string): string {
   return line
-    .replace(/^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, '')
     .replace(/(\*\*|__)(.+?)\1/g, '$2')
     .replace(/\*(\S(?:.*?\S)?)\*/g, '$1')
     .replace(/`([^`]*)`/g, '$1')
+}
+
+/** A note as plain text: block and inline markdown markers removed, lines kept. */
+export function notePlainText(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => stripInlineMarkdown(line.replace(/^(\s*)(#{1,6}\s+|>\s*)/, '$1')))
+    .join('\n')
     .trim()
+}
+
+/** First non-empty line of a note, without markdown markers. */
+export function noteSummary(text: string): string {
+  const line = text.split('\n').map((l) => l.trim()).find(Boolean) ?? ''
+  return stripInlineMarkdown(line.replace(/^(#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, '')).trim()
 }
 
 /**
