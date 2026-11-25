@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, type ReactNode } from 'react'
+import { memo, useEffect, useId, useMemo, useState, type ReactNode } from 'react'
 import { Markdown } from '@/components/ui/Markdown'
 import { InlineHtmlRender } from '@/components/artifacts/InlineHtmlRender'
 import { findMessageArtifact } from '@/components/artifacts/find-message-artifact'
@@ -9,6 +9,12 @@ import type { AgentMessage } from '../stores/agent-store'
 import { findChatScadArtifact } from '@shared/scad-chat'
 import { InlineScadPreview } from '@/components/artifacts/viewers/InlineScadPreview'
 import { api } from '../api/client'
+import {
+  blockSummary,
+  failureSummary,
+  unrecoveredFailure,
+  type ActivityBlock as ActivityBlockModel
+} from '@shared/transcript-activity'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -514,6 +520,133 @@ export const MessageActivityGroup = memo(
     prev.onOpenArtifact === next.onOpenArtifact &&
     prev.messages.length === next.messages.length &&
     prev.messages.every((message, index) => message === next.messages[index])
+)
+
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [active])
+  return now
+}
+
+function ActivityStep({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
+  if (message.partType === 'reasoning') return <ReasoningMessage message={message} searchQuery={searchQuery} />
+  if (message.tool?.todos && message.tool.todos.length > 0) return <TodoList message={message} searchQuery={searchQuery} />
+  if (message.partType === 'task_progress' && message.taskProgress) return <TaskProgressMessage message={message} searchQuery={searchQuery} />
+  if (message.tool?.name) return <ToolCallMessage message={message} searchQuery={searchQuery} />
+  return null
+}
+
+interface ActivityBlockViewProps {
+  block: ActivityBlockModel<AgentMessage>
+  open: boolean
+  onOpenChange: (blockId: string, open: boolean) => void
+  running: boolean
+  searchQuery?: string
+  artifacts?: Artifact[]
+  onOpenArtifact?: (artifact: Artifact) => void
+}
+
+/**
+ * One agent turn's activity folded into a single line — mirrors the desktop
+ * `ActivityBlock`. Grouping rules live in `@shared/transcript-activity`.
+ * Files the agent made (SCAD previews, inline HTML) stay visible below the
+ * header even while the block is collapsed.
+ */
+function ActivityBlockViewImpl({ block, open, onOpenChange, running, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: ActivityBlockViewProps) {
+  const bodyId = useId()
+  const now = useNow(running)
+  const summary = blockSummary(block, { running, nowMs: now })
+  const failure = useMemo(() => unrecoveredFailure(block), [block])
+
+  return (
+    <div data-testid="activity-block" data-running={running || undefined} className="w-full min-w-0">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => onOpenChange(block.id, !open)}
+        className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-sm px-1 text-left text-xs text-muted-foreground active:text-foreground transition-colors"
+      >
+        <span aria-hidden="true" className={cn('text-[10px] transition-transform', open && 'rotate-90')}>▶</span>
+        {running && (
+          <svg aria-hidden="true" className="h-3 w-3 shrink-0 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+          </svg>
+        )}
+        <span className="min-w-0 flex-1 truncate">
+          <span className="text-foreground/80">{summary.title}</span>
+          {summary.detail && <span className="text-muted-foreground"> · {summary.detail}</span>}
+        </span>
+        {summary.elapsed && <span aria-hidden="true" className="shrink-0 tabular-nums">{summary.elapsed}</span>}
+      </button>
+      {failure && !open && (
+        <p data-testid="activity-failure" className="flex min-w-0 items-center gap-2 pl-5 text-[11px] text-red-400">
+          <span className="min-w-0 truncate">{failureSummary(failure)}</span>
+          <button
+            type="button"
+            onClick={() => onOpenChange(block.id, true)}
+            aria-controls={bodyId}
+            className="min-h-8 shrink-0 font-medium underline underline-offset-2"
+          >
+            Details
+          </button>
+        </p>
+      )}
+      <div id={bodyId} role="group" aria-label="Agent steps" hidden={!open}>
+        {open && (
+          <div className="ml-1.5 mt-0.5 border-l border-border/30 pl-2 py-0.5">
+            {block.messages.map((message) => (
+              <div key={message.id}>
+                {block.noteIds.has(message.id) ? (
+                  <p data-testid="activity-note" className="whitespace-pre-wrap break-words px-1 py-0.5 text-xs text-muted-foreground">
+                    {message.content}
+                  </p>
+                ) : (
+                  <ActivityStep message={message} searchQuery={searchQuery} />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {block.messages.map((message) => {
+        if (!message.tool) return null
+        const artifact = findMessageArtifact(message, artifacts) || findChatScadArtifact(message, artifacts)
+        if (!artifact) return null
+        if (artifact.type === ArtifactType.HTML && artifact.inline) {
+          return <InlineHtmlRender key={message.id} artifact={artifact} artifactApi={mobileArtifactApi} onLinkClick={openExternalLink} />
+        }
+        if (onOpenArtifact && artifact.path?.toLowerCase().endsWith('.scad')) {
+          return <InlineScadPreview key={message.id} artifact={artifact} renderModel={api.artifacts.renderScad} onOpen={() => onOpenArtifact(artifact)} />
+        }
+        return null
+      })}
+    </div>
+  )
+}
+
+// Compared by member identity: the block object is rebuilt on every transcript
+// delta, but message objects are stable per part (store projection cache).
+export const ActivityBlockView = memo(
+  ActivityBlockViewImpl,
+  (prev, next) =>
+    prev.open === next.open &&
+    prev.running === next.running &&
+    prev.onOpenChange === next.onOpenChange &&
+    prev.searchQuery === next.searchQuery &&
+    prev.artifacts === next.artifacts &&
+    prev.onOpenArtifact === next.onOpenArtifact &&
+    prev.block.id === next.block.id &&
+    prev.block.startedAtMs === next.block.startedAtMs &&
+    prev.block.endedAtMs === next.block.endedAtMs &&
+    prev.block.noteIds.size === next.block.noteIds.size &&
+    prev.block.messages.length === next.block.messages.length &&
+    prev.block.messages.every((message, index) => message === next.block.messages[index])
 )
 
 function TaskNotificationMessage({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {

@@ -8,6 +8,14 @@ import { ArtifactContentKind, ArtifactType, type Artifact } from '@shared/artifa
 
 const virtualizerOptions = vi.hoisted(() => vi.fn())
 
+/** Tool rows live inside collapsed activity blocks; open them all. */
+function openActivityBlocks() {
+  for (const block of screen.queryAllByTestId('activity-block')) {
+    const header = block.querySelector('button[aria-expanded="false"]')
+    if (header) fireEvent.click(header)
+  }
+}
+
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: (options: { count: number; paddingStart?: number; paddingEnd?: number }) => {
     virtualizerOptions(options)
@@ -409,6 +417,7 @@ describe('AgentTranscriptPanel message layout', () => {
       />
     )
 
+    openActivityBlocks()
     const toolButton = screen.getByRole('button', { name: /Bash pnpm test/i })
     const toolContainer = toolButton.parentElement
 
@@ -525,6 +534,7 @@ git push 2>&1 | tail -2`
       />
     )
 
+    openActivityBlocks()
     const toolButton = screen.getByRole('button', { name: /Bash Commit and push placement fix/i })
     expect(screen.queryByRole('button', { name: /workflow-builder/i })).toBeNull()
     expect(screen.queryByText('Command:')).toBeNull()
@@ -565,6 +575,7 @@ git push 2>&1 | tail -2`
       />
     )
 
+    openActivityBlocks()
     expect(screen.getByRole('button', { name: /Edit page\.tsx/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /workflow-builder/i })).toBeNull()
   })
@@ -703,7 +714,64 @@ git push 2>&1 | tail -2`
       />
     )
 
+    openActivityBlocks()
     expect(screen.getByRole('button', { name: /Read custom-dimensions\.js/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /workflow-builder/i })).toBeNull()
+  })
+
+  it('folds a turn of tool calls into one collapsed block, keeping questions and the answer outside', () => {
+    const t0 = new Date('2026-03-10T00:00:00.000Z').getTime()
+    render(
+      <AgentTranscriptPanel
+        messages={[
+          { id: 'u1', role: 'user', content: 'Fix the build', timestamp: new Date(t0), partType: 'text' },
+          { id: 'r1', role: 'assistant', content: 'Look at the error', timestamp: new Date(t0 + 1000), partType: 'reasoning' },
+          { id: 't1', role: 'assistant', content: 'Read', timestamp: new Date(t0 + 2000), partType: 'tool', tool: { name: 'Read', status: 'completed', title: 'src/app.ts' } },
+          { id: 'n1', role: 'assistant', content: 'Now running the tests', timestamp: new Date(t0 + 3000), partType: 'text' },
+          { id: 't2', role: 'assistant', content: 'Bash', timestamp: new Date(t0 + 45000), partType: 'tool', tool: { name: 'Bash', status: 'completed', title: 'pnpm test' } },
+          {
+            id: 'q1',
+            role: 'assistant',
+            content: 'Question',
+            timestamp: new Date(t0 + 46000),
+            partType: 'question',
+            tool: { name: 'AskUserQuestion', status: 'pending', questions: [{ header: 'Deploy', question: 'Ship it?', options: [] }] }
+          },
+          { id: 'a1', role: 'assistant', content: 'The build is fixed.', timestamp: new Date(t0 + 47000), partType: 'text' }
+        ]}
+        status={SessionStatus.IDLE}
+        onStop={() => undefined}
+      />
+    )
+
+    const header = screen.getByRole('button', { name: /Worked for 46s · 2 steps · 1 file read · 1 command/ })
+    expect(header).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getAllByTestId('activity-block')).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: /Bash pnpm test/ })).toBeNull()
+    expect(screen.queryByText('Now running the tests')).toBeNull()
+    expect(screen.getByText('Ship it?')).toBeInTheDocument()
+    expect(screen.getByText('The build is fixed.')).toBeInTheDocument()
+
+    fireEvent.click(header)
+    expect(header).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('button', { name: /Bash pnpm test/ })).toBeInTheDocument()
+    expect(screen.getByTestId('activity-note')).toHaveTextContent('Now running the tests')
+  })
+
+  it('marks the latest block as running while the agent works', () => {
+    render(
+      <AgentTranscriptPanel
+        messages={[
+          { id: 'u1', role: 'user', content: 'Go', timestamp: new Date(), partType: 'text' },
+          { id: 't1', role: 'assistant', content: 'Bash', timestamp: new Date(), partType: 'tool', tool: { name: 'Bash', status: 'running' } }
+        ]}
+        status={SessionStatus.WORKING}
+        onStop={() => undefined}
+      />
+    )
+
+    const block = screen.getByTestId('activity-block')
+    expect(block).toHaveAttribute('data-running', 'true')
+    expect(screen.getByRole('button', { name: /Working… · 1 command so far|Working… · 1 step so far/ })).toBeInTheDocument()
   })
 })

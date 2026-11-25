@@ -19,6 +19,8 @@ import { dispatchShortcutFeedback } from '@/lib/keyboard-shortcuts'
 import { useClipboardAttachmentPaste } from '@/hooks/use-clipboard-attachment-paste'
 import { InlineHtmlRender } from '@/components/artifacts/InlineHtmlRender'
 import { findMessageArtifact } from '@/components/artifacts/find-message-artifact'
+import { groupActivity, lastActivityBlockId, type ActivityBlock as ActivityBlockModel, type ActivityTranscriptItem } from '@shared/transcript-activity'
+import { ActivityBlock } from './ActivityBlock'
 
 const EMPTY_ARTIFACTS: Artifact[] = []
 
@@ -162,9 +164,7 @@ function isCompactActivityMessage(message: AgentMessage): boolean {
   return (message.partType === 'tool' && !!message.tool) || message.partType === 'reasoning'
 }
 
-type TranscriptItem =
-  | { type: 'message'; key: string; message: AgentMessage }
-  | { type: 'activity'; key: string; messages: AgentMessage[] }
+type TranscriptItem = ActivityTranscriptItem<AgentMessage>
 
 function collectSearchableText(value: unknown, output: string[]): void {
   if (value == null) return
@@ -203,7 +203,7 @@ function getMessageSearchText(message: AgentMessage): string {
 
 function getTranscriptItemSearchText(item: TranscriptItem): string {
   if (item.type === 'activity') {
-    return item.messages.map(getMessageSearchText).join('\n')
+    return item.block.messages.map(getMessageSearchText).join('\n')
   }
   return getMessageSearchText(item.message)
 }
@@ -215,7 +215,7 @@ function getMessageContentLength(message: AgentMessage): number {
 function getTranscriptItemContentLength(item: TranscriptItem | undefined): number {
   if (!item) return 0
   if (item.type === 'activity') {
-    return item.messages.reduce((total, message) => total + getMessageContentLength(message), 0)
+    return item.block.messages.reduce((total, message) => total + getMessageContentLength(message), 0)
   }
   return getMessageContentLength(item.message)
 }
@@ -766,19 +766,79 @@ const MemoizedMessageBubble = React.memo(MessageBubble)
 
 const EDITED_MESSAGE_PREFIX = '(Edited version of my previous message — please use this instead.)\n\n'
 
-// Activity groups are the majority of rows while an agent runs. Their
-// `messages` array is rebuilt (new identity) whenever the transcript changes,
-// so compare element identity instead — message objects are stable per part
-// thanks to the store's projection cache, letting untouched groups skip
-// re-rendering entirely during streaming.
-const MemoizedActivityGroup = React.memo(
-  ActivityMessageGroup,
+function ActivityStep({ message, searchQuery }: { message: AgentMessage; searchQuery?: string }) {
+  if (message.partType === 'reasoning') return <ReasoningMessage message={message} searchQuery={searchQuery} />
+  if (message.tool?.todos && message.tool.todos.length > 0) return <TodoWriteMessage message={message} searchQuery={searchQuery} />
+  if (message.partType === 'task_progress' && message.taskProgress) return <TaskProgressMessage message={message} searchQuery={searchQuery} />
+  if (message.tool) return <ToolCallMessage message={message} searchQuery={searchQuery} />
+  return null
+}
+
+interface ActivityBlockRowProps {
+  block: ActivityBlockModel<AgentMessage>
+  open: boolean
+  onOpenChange: (blockId: string, open: boolean) => void
+  running: boolean
+  searchQuery?: string
+  artifacts?: Artifact[]
+  onOpenArtifact?: (artifact: Artifact) => void
+}
+
+/**
+ * A turn's activity block. Files the agent made stay visible below the header
+ * even while the block is collapsed: an artifact card, a SCAD preview, or an
+ * inline HTML render (the agent's visual reply, shown at message level).
+ */
+function ActivityBlockRow({ block, open, onOpenChange, running, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact }: ActivityBlockRowProps) {
+  const renderStep = useCallback(
+    (message: AgentMessage) => <ActivityStep message={message} searchQuery={searchQuery} />,
+    [searchQuery]
+  )
+  return (
+    <ActivityBlock block={block} open={open} onOpenChange={onOpenChange} running={running} renderStep={renderStep}>
+      {block.messages.map((message) => {
+        if (!message.tool) return null
+        const artifact = findMessageArtifact(message, artifacts) || findChatScadArtifact(message, artifacts)
+        if (!artifact) return null
+        if (artifact.type === ArtifactType.HTML && artifact.inline) {
+          return (
+            <InlineHtmlRender
+              key={message.id}
+              artifact={artifact}
+              artifactApi={artifactApi}
+              onLinkClick={openExternalLink}
+            />
+          )
+        }
+        if (!onOpenArtifact) return null
+        const isScad = !!artifact.path?.toLowerCase().endsWith('.scad') && !!artifactApi.renderScad
+        return isScad
+          ? <InlineScadPreview key={message.id} artifact={artifact} renderModel={artifactApi.renderScad!} onOpen={() => onOpenArtifact(artifact)} />
+          : <ArtifactTranscriptCard key={message.id} artifact={artifact} onOpen={onOpenArtifact} />
+      })}
+    </ActivityBlock>
+  )
+}
+
+// Activity blocks are the majority of rows while an agent runs. The block
+// object is rebuilt (new identity) whenever the transcript changes, so compare
+// member identity instead — message objects are stable per part thanks to the
+// store's projection cache, letting untouched blocks skip re-rendering.
+const MemoizedActivityBlockRow = React.memo(
+  ActivityBlockRow,
   (prev, next) =>
+    prev.open === next.open &&
+    prev.running === next.running &&
+    prev.onOpenChange === next.onOpenChange &&
     prev.searchQuery === next.searchQuery &&
     prev.artifacts === next.artifacts &&
     prev.onOpenArtifact === next.onOpenArtifact &&
-    prev.messages.length === next.messages.length &&
-    prev.messages.every((message, index) => message === next.messages[index])
+    prev.block.id === next.block.id &&
+    prev.block.startedAtMs === next.block.startedAtMs &&
+    prev.block.endedAtMs === next.block.endedAtMs &&
+    prev.block.noteIds.size === next.block.noteIds.size &&
+    prev.block.messages.length === next.block.messages.length &&
+    prev.block.messages.every((message, index) => message === next.block.messages[index])
 )
 
 function TodoSummary({ todos }: { todos: NonNullable<AgentMessage['tool']>['todos'] }) {
@@ -1047,28 +1107,16 @@ export function AgentTranscriptPanel({
   const scrollRafRef = useRef<number | null>(null)
   const autoScrollRafRef = useRef<number | null>(null)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
-  const transcriptItems = useMemo<TranscriptItem[]>(() => {
-    const items: TranscriptItem[] = []
-    for (let index = 0; index < messages.length; index += 1) {
-      const message = messages[index]
-      if (!isCompactActivityMessage(message)) {
-        items.push({ type: 'message', key: message.id, message })
-        continue
-      }
-
-      const group: AgentMessage[] = [message]
-      while (index + 1 < messages.length && isCompactActivityMessage(messages[index + 1])) {
-        index += 1
-        group.push(messages[index])
-      }
-      // Key on the first member only: the trailing group grows as the agent
-      // streams tool calls, and a key built from all member ids would change on
-      // every addition — remounting the whole group (losing expanded state) and
-      // forcing the virtualizer to re-measure the row from scratch.
-      items.push({ type: 'activity', key: group[0].id, messages: group })
-    }
-    return items
-  }, [messages])
+  // One collapsible activity block per agent turn (tool calls, thinking, todo
+  // updates, notes). Blocks are keyed by their turn, so the trailing block keeps
+  // its key, measured height and open state while the agent streams steps.
+  const transcriptItems = useMemo<TranscriptItem[]>(() => groupActivity(messages), [messages])
+  const liveBlockId = status === SessionStatus.WORKING ? lastActivityBlockId(transcriptItems) : null
+  // Blocks start collapsed; a block the user opened or closed keeps that choice.
+  const [blockOpenState, setBlockOpenState] = useState<Record<string, boolean>>({})
+  const handleBlockOpenChange = useCallback((blockId: string, open: boolean) => {
+    setBlockOpenState((current) => ({ ...current, [blockId]: open }))
+  }, [])
 
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
   const searchResultIndexes = useMemo(() => {
@@ -1531,7 +1579,16 @@ export function AgentTranscriptPanel({
                       >
                         <div className="pb-2">
                           {item.type === 'activity' ? (
-                            <MemoizedActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} artifacts={taskArtifacts} onOpenArtifact={handleOpenArtifact} />
+                            <MemoizedActivityBlockRow
+                              block={item.block}
+                              // The active search hit opens its block so the match is visible.
+                              open={blockOpenState[item.key] ?? virtualRow.index === activeSearchItemIndex}
+                              onOpenChange={handleBlockOpenChange}
+                              running={item.key === liveBlockId}
+                              searchQuery={normalizedSearchQuery}
+                              artifacts={taskArtifacts}
+                              onOpenArtifact={handleOpenArtifact}
+                            />
                           ) : (
                             <MemoizedMessageBubble
                               message={item.message}

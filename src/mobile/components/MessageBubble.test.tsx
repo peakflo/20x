@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, fireEvent, cleanup, screen, waitFor } from '@testing-library/react'
-import { MessageActivityGroup, MessageBubble } from './MessageBubble'
+import { ActivityBlockView, MessageActivityGroup, MessageBubble } from './MessageBubble'
+import { groupActivity } from '@shared/transcript-activity'
 import type { AgentMessage } from '../stores/agent-store'
 import { ArtifactType, type Artifact } from '@shared/artifacts'
 
@@ -319,5 +320,68 @@ describe('MessageActivityGroup inline HTML renders', () => {
     )
 
     expect(screen.queryByTitle('Report')).toBeNull()
+  })
+})
+
+describe('ActivityBlockView', () => {
+  afterEach(() => {
+    cleanup()
+  })
+
+  const t0 = new Date('2026-03-10T00:00:00.000Z').getTime()
+  function msg(id: string, partial: Partial<AgentMessage>, seconds = 0): AgentMessage {
+    return { id, role: 'assistant', content: '', timestamp: new Date(t0 + seconds * 1000), ...partial }
+  }
+  const transcript: AgentMessage[] = [
+    msg('u1', { role: 'user', content: 'Fix it', partType: 'text' }),
+    msg('r1', { partType: 'reasoning', content: 'Plan the fix' }, 1),
+    msg('t1', { partType: 'tool', content: 'Read', tool: { name: 'Read', status: 'completed', title: 'src/app.ts' } }, 2),
+    msg('t2', { partType: 'tool', content: 'Bash', tool: { name: 'Bash', status: 'completed', title: 'pnpm test' } }, 72),
+    msg('a1', { partType: 'text', content: 'Done' }, 73)
+  ]
+
+  function firstBlock(messages: AgentMessage[]) {
+    const item = groupActivity(messages).find((entry) => entry.type === 'activity')
+    if (!item || item.type !== 'activity') throw new Error('expected a block')
+    return item.block
+  }
+
+  it('starts collapsed with a "Worked for" summary and opens to show the steps', () => {
+    const onOpenChange = vi.fn()
+    const block = firstBlock(transcript)
+    const { rerender } = render(<ActivityBlockView block={block} open={false} onOpenChange={onOpenChange} running={false} />)
+
+    const header = screen.getByRole('button', { name: /Worked for 1m 12s · 2 steps · 1 file read · 1 command/ })
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('Thinking')).toBeNull()
+
+    fireEvent.click(header)
+    expect(onOpenChange).toHaveBeenCalledWith(block.id, true)
+
+    rerender(<ActivityBlockView block={block} open onOpenChange={onOpenChange} running={false} />)
+    expect(screen.getByText('Thinking')).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Bash pnpm test/ })).toBeTruthy()
+  })
+
+  it('shows the live summary while running', () => {
+    const block = firstBlock([
+      ...transcript.slice(0, 3),
+      msg('n1', { partType: 'text', content: 'Running the **tests**' }, 3),
+      msg('t2', { partType: 'tool', content: 'Bash', tool: { name: 'Bash', status: 'running' } }, 4)
+    ])
+    render(<ActivityBlockView block={block} open={false} onOpenChange={vi.fn()} running />)
+    expect(screen.getByRole('button', { name: /Running the tests · 2 steps so far/ })).toBeTruthy()
+  })
+
+  it('keeps an unrecovered failure visible while collapsed', () => {
+    const onOpenChange = vi.fn()
+    const block = firstBlock([
+      transcript[0],
+      msg('t1', { partType: 'tool', content: 'Bash', tool: { name: 'Bash', status: 'error', error: 'Error: exit code 1' } }, 1)
+    ])
+    render(<ActivityBlockView block={block} open={false} onOpenChange={onOpenChange} running={false} />)
+    expect(screen.getByTestId('activity-failure').textContent).toContain('Bash: exit code 1')
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }))
+    expect(onOpenChange).toHaveBeenCalledWith(block.id, true)
   })
 })
