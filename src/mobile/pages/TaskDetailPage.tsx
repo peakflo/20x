@@ -1,7 +1,7 @@
 import { getSourceCompletionDescription, getTaskSourceName } from '@shared/task-completion'
 import { useMemo, useCallback, useEffect, useState, useRef } from 'react'
 import { isTaskClosed, TASK_STATUSES, TaskStatus } from '@shared/constants'
-import { filterSubtasks, SUBTASK_FILTERS, type SubtaskFilter } from '@shared/subtask-filter'
+import { countSubtasksByFilter, filterSubtasks, SUBTASK_FILTERS, type SubtaskFilter } from '@shared/subtask-filter'
 import { isAgentConfigured, getAgentConfigIssue } from '@shared/agent-utils'
 import { harnessInstanceDisplayName, type HarnessInstanceView } from '@shared/harness-instances'
 import { CollapsibleDescription } from '../components/CollapsibleDescription'
@@ -305,6 +305,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
     reviewSubtaskCount > 0 ? `${reviewSubtaskCount} in review` : null
   ].filter((label): label is string => label !== null)
   const visibleSubtasks = filterSubtasks(subtasks, subtaskFilter, subtaskQuery)
+  const subtaskFilterCounts = countSubtasksByFilter(subtasks)
 
   useEffect(() => {
     if (activeSection === 'subtasks' && subtasks.length === 0) setActiveSection('details')
@@ -916,7 +917,7 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
         <div className="space-y-3 pb-3">
           <input type="search" aria-label="Search subtasks" placeholder="Search subtasks" value={subtaskQuery} onChange={(event) => setSubtaskQuery(event.target.value)} className="glass-control h-10 w-full px-3 text-sm text-foreground outline-none placeholder:text-[var(--glass-placeholder)] focus:border-ring" />
           <div className="flex flex-wrap gap-1.5" aria-label="Filter subtasks">
-            {SUBTASK_FILTERS.map(({ id, label }) => <button key={id} type="button" aria-pressed={subtaskFilter === id} onClick={() => setSubtaskFilter(id)} className={cn('glass-filter-block rounded-full px-2.5 py-1.5 text-xs', subtaskFilter === id ? 'glass-filter-active' : 'text-muted-foreground')}>{label}</button>)}
+            {SUBTASK_FILTERS.map(({ id, label }) => <button key={id} type="button" aria-pressed={subtaskFilter === id} onClick={() => setSubtaskFilter(id)} className={cn('glass-filter-block rounded-full px-2.5 py-1.5 text-xs', subtaskFilter === id ? 'glass-filter-active' : 'text-muted-foreground')}>{label} <span className="tabular-nums">{subtaskFilterCounts[id]}</span></button>)}
           </div>
           <p className="text-xs text-muted-foreground">{visibleSubtasks.length} of {subtasks.length}</p>
         </div>

@@ -17,6 +17,12 @@ export function subtaskFilterForStatus(status: string): Exclude<SubtaskFilter, '
   return 'other'
 }
 
+export function countSubtasksByFilter<T extends { status: string }>(subtasks: T[]): Record<SubtaskFilter, number> {
+  const counts: Record<SubtaskFilter, number> = { all: subtasks.length, working: 0, review: 0, completed: 0, other: 0 }
+  for (const subtask of subtasks) counts[subtaskFilterForStatus(subtask.status)]++
+  return counts
+}
+
 export function filterSubtasks<T extends { title: string; status: string }>(subtasks: T[], filter: SubtaskFilter, query: string): T[] {
   const search = query.trim().toLocaleLowerCase()
   return subtasks.filter((subtask) =>
