@@ -19,7 +19,7 @@ describe('mobile task history endpoints', () => {
     db.updateTask(closed.id, { status: TaskStatus.Completed })
     const child = db.createTask(makeTask({ title: 'Closed child', parent_task_id: closed.id }))!
     db.updateTask(child.id, { status: TaskStatus.Completed })
-    const port = await startMobileApiServer(db, {} as never, {} as never, 21000 + Math.floor(Math.random() * 40000))
+    const port = await startMobileApiServer(db, {} as never, {} as never, 0)
     const headers = { Authorization: `Bearer ${token}` }
     try {
       const base = `http://127.0.0.1:${port}`
@@ -46,7 +46,7 @@ describe('mobile transcript sync endpoint', () => {
     const getTranscriptSync = vi.fn(async (taskId: string, sinceRev?: number) => ({
       taskId, epoch: 'e1', seq: 7, maxRev: 9, full: typeof sinceRev !== 'number', parts: []
     }))
-    const port = await startMobileApiServer(db, { getTranscriptSync } as never, {} as never, 21000 + Math.floor(Math.random() * 40000))
+    const port = await startMobileApiServer(db, { getTranscriptSync } as never, {} as never, 0)
     const headers = { Authorization: `Bearer ${token}` }
     try {
       const base = `http://127.0.0.1:${port}/api/tasks/task%2F1/transcript/sync`
@@ -69,7 +69,7 @@ describe('mobile push subscription endpoint', () => {
     const { db } = createTestDb()
     const token = 'push-device-token'
     db.createMobileSession('push-device', createHash('sha256').update(token).digest('hex'), 'Phone')
-    const port = await startMobileApiServer(db, {} as never, {} as never, 21000 + Math.floor(Math.random() * 40000))
+    const port = await startMobileApiServer(db, {} as never, {} as never, 0)
     try {
       const subscription = { endpoint: 'https://fcm.googleapis.com/fcm/send/endpoint', keys: { p256dh: 'abc', auth: 'def' } }
       const unauthorized = await fetch(`http://127.0.0.1:${port}/api/push/subscription`, {
@@ -94,7 +94,7 @@ describe('mobile push subscription endpoint', () => {
     db.createMobileSession('expired-phone', createHash('sha256').update(token).digest('hex'), 'Phone')
     db.setMobilePushSubscription('expired-phone', JSON.stringify({ endpoint: 'https://fcm.googleapis.com/fcm/send/expired', keys: { p256dh: 'abc', auth: 'def' } }))
     const send = vi.spyOn(webpush, 'sendNotification').mockRejectedValue({ statusCode: 410 })
-    const port = await startMobileApiServer(db, {} as never, {} as never, 21000 + Math.floor(Math.random() * 40000))
+    const port = await startMobileApiServer(db, {} as never, {} as never, 0)
     try {
       const response = await fetch(`http://127.0.0.1:${port}/api/push/test`, {
         method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}'
@@ -222,12 +222,10 @@ describe('mobile-api-server: auth', () => {
     const { db } = createTestDb()
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
 
-    await startMobileApiServer(
-      db,
-      {} as never,
-      {} as never,
-      0
-    )
+    const start = () => startMobileApiServer(db, {} as never, {} as never, 0)
+    const [port, samePort] = await Promise.all([start(), start()])
+    expect(port).toBeGreaterThan(0)
+    expect(samePort).toBe(port)
 
     // Old single-token auth is gone — no mobile_auth_token should be stored
     const legacyToken = db.getSetting('mobile_auth_token')
@@ -251,10 +249,7 @@ describe('mobile-api-server: POST /api/tasks/:id coordinator wake-up', () => {
   function startServer(agentManager: unknown) {
     const { db } = createTestDb()
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
-    // The server resolves the requested port, so pick a free-ish high port
-    // instead of 0 (which would make the caller resolve port 0).
-    const port = 21000 + Math.floor(Math.random() * 40000)
-    return { db, logSpy, portPromise: startMobileApiServer(db, agentManager as never, {} as never, port) }
+    return { db, logSpy, portPromise: startMobileApiServer(db, agentManager as never, {} as never, 0) }
   }
 
   function pairToken(db: DatabaseManager): string {
@@ -328,8 +323,7 @@ describe('mobile-api-server: source completion action', () => {
     const token = 'test-manual-token'
     db.createMobileSession('manual-session', createHash('sha256').update(token).digest('hex'), 'test-device')
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    const port = await startMobileApiServer(db, {} as never, {} as never,
-      21000 + Math.floor(Math.random() * 40000), { executeAction } as never)
+    const port = await startMobileApiServer(db, {} as never, {} as never, 0, { executeAction } as never)
     const response = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/complete`, {
       method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ completeAtSource: false })
@@ -351,8 +345,7 @@ describe('mobile-api-server: source completion action', () => {
     const token = 'test-completion-token'
     db.createMobileSession('completion-session', createHash('sha256').update(token).digest('hex'), 'test-device')
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    const port = await startMobileApiServer(db, {} as never, {} as never,
-      21000 + Math.floor(Math.random() * 40000), { executeAction } as never)
+    const port = await startMobileApiServer(db, {} as never, {} as never, 0, { executeAction } as never)
     const response = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/complete`, {
       method: 'POST', headers: { Authorization: `Bearer ${token}` }
     })
@@ -375,8 +368,7 @@ describe('mobile-api-server: source completion action', () => {
     const token = `learning-skip-${completeAtSource}`
     db.createMobileSession(`learning-skip-session-${completeAtSource}`, createHash('sha256').update(token).digest('hex'), 'test-device')
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    const port = await startMobileApiServer(db, {} as never, {} as never,
-      21000 + Math.floor(Math.random() * 40000), sync)
+    const port = await startMobileApiServer(db, {} as never, {} as never, 0, sync)
     const response = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}/complete`, {
       method: 'POST', headers: {Authorization: `Bearer ${token}`, 'Content-Type': 'application/json'},
       body: JSON.stringify({completeAtSource})
@@ -409,8 +401,7 @@ describe('mobile API: all four feedback/source combinations', () => {
     const token = 'four-cases-token'
     db.createMobileSession('four-cases-session', createHash('sha256').update(token).digest('hex'), 'test-device')
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    const port = await startMobileApiServer(db, {} as never, {} as never,
-      21000 + Math.floor(Math.random() * 40000), sync)
+    const port = await startMobileApiServer(db, {} as never, {} as never, 0, sync)
     const response = await fetch(`http://127.0.0.1:${port}/api/tasks/${task.id}${feedback === 'skip' ? '/complete' : ''}`, {
       method: 'POST', headers: {Authorization: `Bearer ${token}`, 'Content-Type': 'application/json'},
       body: JSON.stringify(feedback === 'skip' ? {completeAtSource} : {

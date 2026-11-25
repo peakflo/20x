@@ -9,6 +9,7 @@ import { getTaskCompletionAction } from '../shared/task-completion'
  * See docs/mobile-api-spec.md for the full API specification.
  */
 import { createServer, type IncomingMessage, type ServerResponse, type Server as HttpServer } from 'http'
+import type { AddressInfo } from 'net'
 import { join, sep } from 'path'
 import { existsSync, readFileSync, statSync } from 'fs'
 import { WebSocketServer, WebSocket } from 'ws'
@@ -33,6 +34,7 @@ import { parsePushPreferences, PUSH_EVENTS, type PushPreferences } from '../shar
 
 // ── State ────────────────────────────────────────────────────
 let server: HttpServer | null = null
+let listeningPort: Promise<number> | null = null
 let wss: WebSocketServer | null = null
 let dbRef: DatabaseManager | null = null
 let agentRef: AgentManager | null = null
@@ -86,7 +88,7 @@ export function startMobileApiServer(
   pluginRegistry?: PluginRegistry | null,
   gitlabManager?: GitLabManager | null
 ): Promise<number> {
-  if (server) return Promise.resolve(port)
+  if (listeningPort) return listeningPort
 
   dbRef = db
   agentRef = agentManager
@@ -95,13 +97,13 @@ export function startMobileApiServer(
   syncManagerRef = syncManager ?? null
   pluginRegistryRef = pluginRegistry ?? null
 
-  return new Promise((resolve, reject) => {
-    server = createServer(handleHttpRequest)
-
+  const listener = createServer(handleHttpRequest)
+  server = listener
+  listeningPort = new Promise<number>((resolve, reject) => {
     // WebSocket upgrade
     wss = new WebSocketServer({ noServer: true })
 
-    server.on('upgrade', (req, socket, head) => {
+    listener.on('upgrade', (req, socket, head) => {
       const url = new URL(req.url || '/', `http://localhost`)
       const token = url.searchParams.get('token')
       if (!validateSession(token)) {
@@ -147,13 +149,18 @@ export function startMobileApiServer(
       }
     })
 
-    server.listen(port, '0.0.0.0', () => {
-      console.log(`[MobileAPI] Started on port ${port} — http://0.0.0.0:${port}`)
-      resolve(port)
+    listener.listen(port, '0.0.0.0', () => {
+      const boundPort = (listener.address() as AddressInfo).port
+      console.log(`[MobileAPI] Started on port ${boundPort} — http://0.0.0.0:${boundPort}`)
+      resolve(boundPort)
     })
 
-    server.on('error', reject)
+    listener.on('error', reject)
+  }).catch((error) => {
+    if (server === listener) stopMobileApiServer()
+    throw error
   })
+  return listeningPort
 }
 
 /**
@@ -193,6 +200,7 @@ export function stopMobileApiServer(): void {
   wss = null
   server?.close()
   server = null
+  listeningPort = null
 }
 
 /**
