@@ -6,7 +6,8 @@ import { useTaskStore } from '../stores/task-store'
 import { useAgentStore, SessionStatus, type AgentMessage } from '../stores/agent-store'
 import { api } from '../api/client'
 import { useSessionControls } from '../hooks/useSessionControls'
-import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '../components/MessageBubble'
+import { ActivityBlockView, MessageBubble } from '../components/MessageBubble'
+import { groupActivity, lastActivityBlockId, type ActivityTranscriptItem } from '@shared/transcript-activity'
 import { ArtifactCard } from '../components/ArtifactCard'
 import { ChatInput, type ChatInputAttachment } from '../components/ChatInput'
 import { useArtifactStore } from '../stores/artifact-store'
@@ -59,13 +60,11 @@ function getMessageSearchText(message: AgentMessage): string {
   return text
 }
 
-type TranscriptItem =
-  | { type: 'message'; key: string; message: AgentMessage }
-  | { type: 'activity'; key: string; messages: AgentMessage[] }
+type TranscriptItem = ActivityTranscriptItem<AgentMessage>
 
 function getTranscriptItemSearchText(item: TranscriptItem): string {
   if (item.type === 'activity') {
-    return item.messages.map(getMessageSearchText).join('\n')
+    return item.block.messages.map(getMessageSearchText).join('\n')
   }
   return getMessageSearchText(item.message)
 }
@@ -77,7 +76,7 @@ function getMessageContentLength(message: AgentMessage): number {
 function getTranscriptItemContentLength(item: TranscriptItem | undefined): number {
   if (!item) return 0
   if (item.type === 'activity') {
-    return item.messages.reduce((total, message) => total + getMessageContentLength(message), 0)
+    return item.block.messages.reduce((total, message) => total + getMessageContentLength(message), 0)
   }
   return getMessageContentLength(item.message)
 }
@@ -88,7 +87,10 @@ const TranscriptRow = memo(function TranscriptRow({
   normalizedSearchQuery,
   onAnswer,
   artifacts,
-  onOpenArtifact
+  onOpenArtifact,
+  blockOpen,
+  blockRunning,
+  onBlockOpenChange
 }: {
   item: TranscriptItem
   activeQuestionId: string | null
@@ -96,9 +98,22 @@ const TranscriptRow = memo(function TranscriptRow({
   onAnswer: (answer: string) => void
   artifacts: Artifact[]
   onOpenArtifact: (artifact: Artifact) => void
+  blockOpen: boolean
+  blockRunning: boolean
+  onBlockOpenChange: (blockId: string, open: boolean) => void
 }) {
   if (item.type === 'activity') {
-    return <MessageActivityGroup messages={item.messages} searchQuery={normalizedSearchQuery} artifacts={artifacts} onOpenArtifact={onOpenArtifact} />
+    return (
+      <ActivityBlockView
+        block={item.block}
+        open={blockOpen}
+        onOpenChange={onBlockOpenChange}
+        running={blockRunning}
+        searchQuery={normalizedSearchQuery}
+        artifacts={artifacts}
+        onOpenArtifact={onOpenArtifact}
+      />
+    )
   }
 
   return (
@@ -156,24 +171,14 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
   const messages = session?.messages || EMPTY_MESSAGES
   const normalizedSearchQuery = searchQuery.trim().toLowerCase()
 
-  const transcriptItems = useMemo<TranscriptItem[]>(() => {
-    const items: TranscriptItem[] = []
-    for (let index = 0; index < messages.length; index += 1) {
-      const message = messages[index]
-      if (!isCompactActivityMessage(message)) {
-        items.push({ type: 'message', key: message.id, message })
-        continue
-      }
-
-      const group: AgentMessage[] = [message]
-      while (index + 1 < messages.length && isCompactActivityMessage(messages[index + 1])) {
-        index += 1
-        group.push(messages[index])
-      }
-      items.push({ type: 'activity', key: group[0].id, messages: group })
-    }
-    return items
-  }, [messages])
+  // One collapsible activity block per agent turn — same rules as desktop
+  // (see @shared/transcript-activity). Blocks start collapsed; a block the user
+  // opened or closed keeps that choice.
+  const transcriptItems = useMemo<TranscriptItem[]>(() => groupActivity(messages), [messages])
+  const [blockOpenState, setBlockOpenState] = useState<Record<string, boolean>>({})
+  const handleBlockOpenChange = useCallback((blockId: string, open: boolean) => {
+    setBlockOpenState((current) => ({ ...current, [blockId]: open }))
+  }, [])
 
   const searchResultIndexes = useMemo(() => {
     if (!normalizedSearchQuery) return []
@@ -192,6 +197,7 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
 
   // Determine if the agent is actively working
   const isWorking = session?.status === SessionStatus.WORKING
+  const liveBlockId = isWorking ? lastActivityBlockId(transcriptItems) : null
   const isWaitingApproval = session?.status === SessionStatus.WAITING_APPROVAL
   const hasSession = !!session?.sessionId
   // The user sent a message and the backend is still resuming the session.
@@ -761,6 +767,10 @@ export function ConversationPage({ taskId, onNavigate }: { taskId: string; onNav
                         onAnswer={handleAnswer}
                         artifacts={artifacts}
                         onOpenArtifact={openArtifact}
+                        // The active search hit opens its block so the match is visible.
+                        blockOpen={blockOpenState[item.key] ?? virtualRow.index === activeSearchItemIndex}
+                        blockRunning={item.key === liveBlockId}
+                        onBlockOpenChange={handleBlockOpenChange}
                       />
                     </div>
                   </div>
