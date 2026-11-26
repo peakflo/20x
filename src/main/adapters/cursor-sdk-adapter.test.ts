@@ -564,7 +564,12 @@ describe('CursorSdkAdapter model catalog', () => {
     sdkMocks.CursorModelsListMock.mockRejectedValueOnce(new Error('network down'))
 
     const first = await adapter.getProviders()
-    expect(first?.providers[0].models.map((m) => m.id)).toEqual(['composer-2.5', 'grok-4.5'])
+    expect(first?.providers[0].models.map((m) => m.id)).toEqual([
+      'composer-2.5',
+      'grok-4.7',
+      'grok-4.6',
+      'grok-4.5'
+    ])
 
     sdkMocks.CursorModelsListMock.mockResolvedValueOnce([{ id: 'grok-4.5', displayName: 'Grok 4.5' }])
     const second = await adapter.getProviders()
