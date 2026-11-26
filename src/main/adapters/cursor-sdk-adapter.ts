@@ -75,6 +75,8 @@ async function loadCursorSdk(): Promise<void> {
 /** Small, hardcoded fallback shown when the live model catalog hasn't loaded yet or fails. */
 const CURSOR_FALLBACK_MODELS: Array<{ id: string; name: string }> = [
   { id: 'composer-2.5', name: 'Composer 2.5' },
+  { id: 'grok-4.7', name: 'Grok 4.7' },
+  { id: 'grok-4.6', name: 'Grok 4.6' },
   { id: 'grok-4.5', name: 'Grok 4.5' }
 ]
 

@@ -6,8 +6,8 @@ type CodexAdapterWithArgs = {
 }
 
 describe('DEFAULT_CODEX_MODEL', () => {
-  it('defaults Codex sessions to GPT-6 Astra', () => {
-    expect(DEFAULT_CODEX_MODEL).toBe('gpt-6-astra')
+  it('defaults Codex sessions to GPT-6.2 Astra', () => {
+    expect(DEFAULT_CODEX_MODEL).toBe('gpt-6.2-astra')
   })
 })
 

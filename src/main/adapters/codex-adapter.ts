@@ -21,7 +21,7 @@ import type {
 } from './coding-agent-adapter'
 import { SessionStatusType, MessagePartType, MessageRole } from './coding-agent-adapter'
 
-export const DEFAULT_CODEX_MODEL = 'gpt-6-astra'
+export const DEFAULT_CODEX_MODEL = 'gpt-6.2-astra'
 
 interface JsonRpcRequest {
   jsonrpc: '2.0'

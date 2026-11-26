@@ -34,7 +34,7 @@ import {
 } from '../usage/usage-normalize'
 import { mergeUsageLimits } from '../../shared/usage'
 
-const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-6-astra'
+const DEFAULT_CODEX_APP_SERVER_MODEL = 'gpt-6.2-astra'
 const MAX_IPC_TOOL_INPUT_CHARS = 20_000
 const MAX_IPC_TOOL_OUTPUT_CHARS = 100_000
 const MIN_THREAD_LEVEL_ASSISTANT_DEDUPE_CHARS = 40

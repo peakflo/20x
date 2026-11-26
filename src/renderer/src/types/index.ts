@@ -74,10 +74,13 @@ export const CODING_AGENTS: { value: CodingAgentType; label: string }[] = [
  */
 export const CURSOR_MODELS: { id: string; name: string }[] = [
   { id: 'composer-2.5', name: 'Composer 2.5' },
+  { id: 'grok-4.7', name: 'Grok 4.7' },
+  { id: 'grok-4.6', name: 'Grok 4.6' },
   { id: 'grok-4.5', name: 'Grok 4.5' }
 ]
 
 export enum ClaudeModel {
+  FABLE_5_2 = 'claude-fable-5-2',
   FABLE_5_1 = 'claude-fable-5-1',
   FABLE_5 = 'claude-fable-5',
   OPUS_5_5 = 'claude-opus-5-5',
@@ -89,6 +92,7 @@ export enum ClaudeModel {
   SONNET_4_6 = 'claude-sonnet-4-6',
   SONNET_4_5 = 'claude-sonnet-4-5',
   OPUS_4_6 = 'claude-opus-4-6',
+  HAIKU_5_5 = 'claude-haiku-5-5',
   HAIKU_4_5 = 'claude-haiku-4-5',
   SONNET_3_7 = 'claude-3-7-sonnet-20250219',
   SONNET_3_5_OCT = 'claude-3-5-sonnet-20241022',
@@ -96,6 +100,7 @@ export enum ClaudeModel {
 }
 
 export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
+  { id: ClaudeModel.FABLE_5_2, name: 'Claude Fable 5.2' },
   { id: ClaudeModel.FABLE_5_1, name: 'Claude Fable 5.1' },
   { id: ClaudeModel.FABLE_5, name: 'Claude Fable 5' },
   { id: ClaudeModel.OPUS_5_5, name: 'Claude Opus 5.5' },
@@ -107,6 +112,7 @@ export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
   { id: ClaudeModel.SONNET_4_6, name: 'Claude Sonnet 4.6' },
   { id: ClaudeModel.SONNET_4_5, name: 'Claude Sonnet 4.5' },
   { id: ClaudeModel.OPUS_4_6, name: 'Claude Opus 4.6' },
+  { id: ClaudeModel.HAIKU_5_5, name: 'Claude Haiku 5.5' },
   { id: ClaudeModel.HAIKU_4_5, name: 'Claude Haiku 4.5' },
   { id: ClaudeModel.SONNET_3_7, name: 'Claude 3.7 Sonnet' },
   { id: ClaudeModel.SONNET_3_5_OCT, name: 'Claude 3.5 Sonnet (Oct)' },
@@ -114,6 +120,8 @@ export const CLAUDE_MODELS: { id: ClaudeModel; name: string }[] = [
 ]
 
 export enum CodexModel {
+  GPT_6_2_ASTRA = 'gpt-6.2-astra',
+  GPT_6_2_SOL = 'gpt-6.2-sol',
   GPT_6_ASTRA = 'gpt-6-astra',
   GPT_6_1_SOL = 'gpt-6.1-sol',
   GPT_6_SOL = 'gpt-6-sol',
@@ -128,7 +136,9 @@ export enum CodexModel {
 }
 
 export const CODEX_MODELS: { id: CodexModel; name: string }[] = [
-  { id: CodexModel.GPT_6_ASTRA, name: 'GPT-6 Astra (Recommended)' },
+  { id: CodexModel.GPT_6_2_ASTRA, name: 'GPT-6.2 Astra (Recommended)' },
+  { id: CodexModel.GPT_6_2_SOL, name: 'GPT-6.2 Sol' },
+  { id: CodexModel.GPT_6_ASTRA, name: 'GPT-6 Astra' },
   { id: CodexModel.GPT_6_1_SOL, name: 'GPT-6.1 Sol' },
   { id: CodexModel.GPT_6_SOL, name: 'GPT-6 Sol' },
   { id: CodexModel.GPT_6_LUNA, name: 'GPT-6 Luna' },
