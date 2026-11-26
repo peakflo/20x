@@ -171,7 +171,7 @@ describe('AgentForm speed mode', () => {
     expect(onSubmit.mock.calls[0][0].config.speed_mode).toBe('ultrafast')
 
     selectCodingAgent('codex')
-    selectModel('GPT-6 Astra (Recommended)')
+    selectModel('GPT-6 Astra')
     fireEvent.change(screen.getByLabelText('Speed'), { target: { value: 'ultrafast' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
     expect(onSubmit.mock.calls[1][0].config.speed_mode).toBe('ultrafast')
