@@ -44,7 +44,11 @@ import { UI_COMMAND_CHANNEL } from '../shared/ui-commands'
 import { handleRoute, setTaskApiAgentController, setTaskApiNotifier, setTaskApiUiCommandSender, setTaskApiUiState, setTaskAutomationTrigger, setTranscriptProvider, stopTaskApiServer } from './task-api-server'
 import { startSecretBroker, stopSecretBroker, writeSecretShellWrapper } from './secret-broker'
 import { startMcpAuthProxy, stopMcpAuthProxy } from './mcp-auth-proxy'
-import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger } from './mobile-api-server'
+import { startMobileApiServer, stopMobileApiServer, broadcastToMobileClients, setMobileApiNotifier, setMobileApiTaskAutomationTrigger, broadcastRemoteState, setMobileRemoteStateProvider } from './mobile-api-server'
+import { createEnterpriseRunnerRuntime, type EnterpriseRunnerRuntime } from './enterprise-runners/runner-runtime'
+import { getEnterpriseRunnersApi } from './enterprise-runners'
+import { setSpacesArtifactReader } from './enterprise-runners/spaces-artifacts'
+import { registerEnterpriseRunnerIpc } from './enterprise-runners/runner-ipc'
 import { registerUpdaterIpc, initAutoUpdater, isUpdateDownloaded, getPendingVersion } from './auto-updater'
 import { initCrashLogger } from './crash-logger'
 import { logMainThreadPerfReport, startMainThreadPerf } from './perf/main-thread-perf'
@@ -52,6 +56,7 @@ import { installProcessStreamErrorHandlers } from './process-stream-errors'
 import { startMacosSwapWatchdog } from './macos-swap-watchdog'
 import { getWindowsPathEntries, prependMissingWindowsPaths } from './windows-runtime-paths'
 import { initAnalytics, shutdownAnalytics } from './analytics-service'
+import { shutdownEnterpriseRunners } from './enterprise-runners'
 import {
   recordFocusGained,
   recordFocusLost,
@@ -1082,6 +1087,31 @@ app.whenReady().then(async () => {
 
   syncManager = new SyncManager(db, mcpToolCaller, pluginRegistry, oauthManager)
   agentManager.setSyncManager(syncManager)
+
+  // Enterprise runners: a task's chat can run on a Spaces runner. The runtime
+  // only exists while enterprise auth does; every call re-checks sign-in.
+  let enterpriseRunnerRuntime: EnterpriseRunnerRuntime | undefined
+  if (enterpriseAuth) {
+    const syncForRunners = syncManager
+    enterpriseRunnerRuntime = createEnterpriseRunnerRuntime({
+      db,
+      auth: enterpriseAuth,
+      api: getEnterpriseRunnersApi(enterpriseAuth),
+      getSyncManager: () => syncForRunners,
+      emitState: (event) => {
+        mainWindow?.webContents.send('enterprise-runners:task-state', event)
+        broadcastRemoteState(event)
+      },
+      endTaskSession: async (taskId) => { await agentManager!.stopByTaskId(taskId) },
+      userDataDir: app.getPath('userData')
+    })
+    agentManager!.setEnterpriseRunnerRuntime(enterpriseRunnerRuntime)
+    const runtimeForArtifacts = enterpriseRunnerRuntime
+    setSpacesArtifactReader((taskId, id) => runtimeForArtifacts.service.readSpacesArtifact(taskId, id))
+    const runtimeForMobile = enterpriseRunnerRuntime
+    setMobileRemoteStateProvider((taskId) => runtimeForMobile.service.getTaskState(taskId))
+  }
+  registerEnterpriseRunnerIpc(() => enterpriseRunnerRuntime)
   // Continue tasks that stopped on a usage limit once it resets (incl. overdue ones from before a restart).
   agentManager.startUsageLimitRecovery()
 
@@ -1401,6 +1431,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', async (event) => {
+  // A running "Connect this computer" command must not outlive the app.
+  shutdownEnterpriseRunners()
   if (isShuttingDown) {
     return
   }

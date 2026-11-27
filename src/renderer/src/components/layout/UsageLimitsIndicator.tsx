@@ -25,7 +25,8 @@ const SHORT_LABELS: Record<UsageProvider, string> = {
   opencode: 'OpenCode',
   cursor: 'Cursor',
   pi: 'Pi',
-  acp: 'ACP'
+  acp: 'ACP',
+  'enterprise-runner': 'Runner'
 }
 
 /** The window closest to its limit decides what the status bar shows. */

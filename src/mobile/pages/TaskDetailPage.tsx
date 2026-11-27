@@ -16,6 +16,9 @@ import { PriorityBadge } from '../components/PriorityBadge'
 import { TaskStatusDot } from '../components/TaskStatusDot'
 import { MessageActivityGroup, MessageBubble, isCompactActivityMessage } from '../components/MessageBubble'
 import { ArtifactCard } from '../components/ArtifactCard'
+import { RemoteTaskBanner } from '../components/RemoteTaskBanner'
+import { RemoteApprovalCard, type RemoteApprovalRequest } from '../components/RemoteApprovalCard'
+import { useRemoteTaskStore } from '../stores/remote-task-store'
 import { useArtifactStore } from '../stores/artifact-store'
 import { cn, formatDate, isOverdue, formatRelativeDate, formatRelativeFuture, STATUS_VARIANT, STATUS_DOT_COLORS } from '../lib/utils'
 import type { Route } from '../App'
@@ -104,6 +107,34 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   }
   const skills = useAgentStore((s) => s.skills)
   const session = useAgentStore((s) => s.sessions.get(taskId))
+  // Enterprise runner sync state (null for local tasks). Fed by the
+  // `enterprise-runners:task-state` WebSocket event and loaded once on open.
+  const remote = useRemoteTaskStore((s) => s.states[taskId]) ?? null
+  const loadRemote = useRemoteTaskStore((s) => s.load)
+  useEffect(() => { void loadRemote(taskId) }, [taskId, loadRemote])
+  const remoteApproval = useMemo<RemoteApprovalRequest | null>(() => {
+    if (!remote || !session) return null
+    const msgs = session.messages
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i]
+      if (m.partType !== 'question' || !m.tool?.questions) continue
+      if (msgs.slice(i + 1).some((x) => x.role === 'user')) return null
+      const q = m.tool.questions[0]
+      return {
+        requestId: m.tool.requestId,
+        kind: m.tool.name === 'permission' ? 'approval' : 'question',
+        text: q?.question || m.content,
+        options: q?.options?.map((o) => ({ label: o.label })),
+        runnerName: remote.runnerName,
+        requestedAtMs: m.timestamp instanceof Date ? m.timestamp.getTime() : Date.now()
+      }
+    }
+    return null
+  }, [remote, session])
+  const answerRemote = useCallback(async (approved: boolean, message?: string) => {
+    if (!session?.sessionId || !remoteApproval) return
+    await api.sessions.approve(session.sessionId, approved, message, remoteApproval.kind === 'approval' ? 'permission' : 'question', remoteApproval.requestId)
+  }, [session?.sessionId, remoteApproval])
   const initSession = useAgentStore((s) => s.initSession)
   const endSession = useAgentStore((s) => s.endSession)
 
@@ -339,7 +370,8 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
   const canResume = task.agent_id && task.session_id && !isSessionRunning && (!session?.sessionId) && (!session || session.status === SessionStatus.IDLE) && !isTaskClosed(task.status)
   const canStop = isSessionRunning
   const canTriage = !task.agent_id && agents.length > 0 && triageAgentConfigured && !isTaskClosed(task.status) && task.status !== TaskStatus.Triaging && !isSessionRunning
-  const canComplete = !isTaskClosed(task.status) && !isSessionRunning
+  // The server owns completion of a task that runs on a runner: no local Complete.
+  const canComplete = !isTaskClosed(task.status) && !isSessionRunning && !remote
   const hasMessages = session && session.messages.length > 0
 
   // Preview: last 3 messages
@@ -447,6 +479,15 @@ export function TaskDetailPage({ taskId, onNavigate }: { taskId: string; onNavig
       </div>
 
       <div className={cn('flex-1 overflow-y-auto pt-[9.5rem]', activeSection !== 'details' && 'hidden')}>
+        {remote && <RemoteTaskBanner state={remote} />}
+        {remote && remoteApproval && (
+          <RemoteApprovalCard
+            request={remoteApproval}
+            onAllow={() => void answerRemote(true)}
+            onReject={() => void answerRemote(false)}
+            onPick={(label) => void answerRemote(true, label)}
+          />
+        )}
         {/* Parent task context panel */}
         {parentTask && (
           <ParentTaskContextMobile parentTask={parentTask} onNavigate={onNavigate} />

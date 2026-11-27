@@ -1,4 +1,5 @@
-import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, Puzzle, Cable, Mic, Gauge, Terminal, X, Palette } from 'lucide-react'
+import { useEffect } from 'react'
+import { Settings, Users, Server, Workflow, Wrench, KeyRound, Building2, Monitor, Puzzle, Cable, Mic, Gauge, Terminal, X, Palette } from 'lucide-react'
 import * as Tabs from '@radix-ui/react-tabs'
 import { useUIStore } from '@/stores/ui-store'
 import { SettingsTab } from '@/types'
@@ -13,6 +14,8 @@ import { SecretsSettings } from './tabs/SecretsSettings'
 import { VoiceSettings } from './tabs/VoiceSettings'
 import { IntegrationsSettings } from './tabs/IntegrationsSettings'
 import { EnterpriseSettings } from './tabs/EnterpriseSettings'
+import { MachinesSettings } from './tabs/MachinesSettings'
+import { useEnterpriseStore } from '@/stores/enterprise-store'
 import { AdvancedSettings } from './tabs/AdvancedSettings'
 import { ConnectorsSettings } from './tabs/ConnectorsSettings'
 import { PluginsSettings } from './tabs/PluginsSettings'
@@ -28,6 +31,7 @@ const ICON_MAP = {
   Workflow,
   Cable,
   Building2,
+  Monitor,
   Puzzle,
   Gauge,
   Wrench,
@@ -36,6 +40,11 @@ const ICON_MAP = {
 
 export function SettingsWorkspace() {
   const { settingsTab, setSettingsTab, closeModal } = useUIStore()
+  const isEnterpriseAuthenticated = useEnterpriseStore((s) => s.isAuthenticated)
+  // Signing out while on Machines would leave an empty page.
+  useEffect(() => {
+    if (!isEnterpriseAuthenticated && settingsTab === SettingsTab.MACHINES) setSettingsTab(SettingsTab.ENTERPRISE)
+  }, [isEnterpriseAuthenticated, settingsTab, setSettingsTab])
 
   const tabs = [
     { value: SettingsTab.GENERAL, label: 'General', iconName: 'Settings' },
@@ -48,10 +57,13 @@ export function SettingsWorkspace() {
     { value: SettingsTab.INTEGRATIONS, label: 'Task sources', iconName: 'Workflow' },
     { value: SettingsTab.CONNECTORS, label: 'Connectors', iconName: 'Cable' },
     { value: SettingsTab.ENTERPRISE, label: 'Enterprise', iconName: 'Building2' },
+    { value: SettingsTab.MACHINES, label: 'Machines', iconName: 'Monitor' },
     { value: SettingsTab.PLUGINS, label: 'Plugins', iconName: 'Puzzle' },
     { value: SettingsTab.USAGE, label: 'Usage', iconName: 'Gauge' },
     { value: SettingsTab.ADVANCED, label: 'Advanced', iconName: 'Wrench' }
   ] as const
+  // Machines are managed in Spaces: the tab exists only when signed in to enterprise.
+  const visibleTabs = tabs.filter((tab) => tab.value !== SettingsTab.MACHINES || isEnterpriseAuthenticated)
 
   return (
     <div className="h-full flex flex-col min-h-0">
@@ -80,7 +92,7 @@ export function SettingsWorkspace() {
           aria-label="Settings sections"
           className="glass-panel m-3 mr-0 w-60 shrink-0 self-stretch overflow-y-auto rounded-2xl border border-border/60 p-2 shadow-sm"
         >
-          {tabs.map(({ value, label, iconName }) => {
+          {visibleTabs.map(({ value, label, iconName }) => {
             const Icon = ICON_MAP[iconName as keyof typeof ICON_MAP]
             return (
               <Tabs.Trigger
@@ -143,6 +155,12 @@ export function SettingsWorkspace() {
             <Tabs.Content value={SettingsTab.ENTERPRISE} className="focus-visible:outline-none space-y-6">
               <EnterpriseSettings />
             </Tabs.Content>
+
+            {isEnterpriseAuthenticated && (
+              <Tabs.Content value={SettingsTab.MACHINES} className="focus-visible:outline-none space-y-6">
+                <MachinesSettings />
+              </Tabs.Content>
+            )}
 
             <Tabs.Content value={SettingsTab.PLUGINS} className="focus-visible:outline-none space-y-6">
               <PluginsSettings />

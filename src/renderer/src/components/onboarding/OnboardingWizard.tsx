@@ -141,6 +141,9 @@ function getAgentToolKey(type: CodingAgentType): DetectKey {
       // ACP agents are configured in Settings → Harnesses (registry/local command),
       // never offered in the first-run onboarding list, so this is unreachable.
       throw new Error('ACP agents are not part of onboarding tool detection')
+    case CodingAgentType.ENTERPRISE_RUNNER:
+      // Runner agents come from Spaces and run on a runner, never in onboarding.
+      throw new Error('Enterprise runner agents are not part of onboarding tool detection')
   }
 }
 

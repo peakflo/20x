@@ -1,12 +1,13 @@
 import { ArtifactFileSelector } from './ArtifactFileSelector'
 import { useArtifactNavigation } from './use-artifact-navigation'
 import { useEffect, useState, type ReactNode } from 'react'
-import { PanelRightClose, SquareArrowOutUpRight } from 'lucide-react'
+import { ArrowUpRight, PanelRightClose, SquareArrowOutUpRight } from 'lucide-react'
 import { ArtifactType, type Artifact, type ArtifactApi, type ArtifactUIState } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
 import { ArtifactCopyActions } from './ArtifactCopyActions'
 import { ArtifactTabStrip } from './ArtifactTabStrip'
+import { SpacesBadge } from './SpacesBadge'
 import { MarkdownArtifactView } from './viewers/MarkdownArtifactView'
 import { ImageArtifactView } from './viewers/ImageArtifactView'
 import { HtmlArtifactView } from './viewers/HtmlArtifactView'
@@ -67,6 +68,17 @@ export function ArtifactsPanel({ artifacts, ui, artifactApi, hasChanges, hasSubt
           <button type="button" aria-label="Close artifacts" onClick={onToggleOpen} className="grid h-7 w-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"><PanelRightClose className="h-3.5 w-3.5" /></button>
         </div>
       </div>
+      {selectedArtifact?.source === 'spaces' && (
+        <div data-testid="spaces-artifact-header" className="flex items-center gap-2 border-b border-border/50 px-3 py-1.5 text-[11px] text-muted-foreground">
+          <SpacesBadge />
+          <span className="min-w-0 flex-1 truncate">Read-only · edit it in Spaces</span>
+          {selectedArtifact.webUrl && (
+            <button type="button" onClick={() => void window.electronAPI.shell.openExternal(selectedArtifact.webUrl!)} className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-foreground hover:bg-accent">
+              Open in Spaces <ArrowUpRight className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      )}
       <ArtifactFileSelector files={navigation.files} path={selectedArtifact?.path} onSelect={navigation.selectFile} />
       {navigation.linkError && <div role="alert" className="px-3 py-2 text-sm text-red-400">{navigation.linkError}</div>}
       <div className="relative min-h-0 flex-1">
@@ -90,7 +102,8 @@ export function ArtifactViewer({ artifact, artifactApi, refreshTrigger, onLinkCl
     case ArtifactType.MARKDOWN: return <MarkdownArtifactView onLinkClick={onLinkClick} artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
     case ArtifactType.IMAGE: return <ImageArtifactView artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} />
     case ArtifactType.HTML: return <HtmlArtifactView onLinkClick={onLinkClick} artifact={artifact} artifactApi={artifactApi} refreshTrigger={refreshTrigger} onMessage={(html, data, reply) => {
-      if (!artifact.path || !artifactApi.mcpCall) return
+      // Spaces HTML is read-only content: no tool bridge.
+      if (artifact.source === 'spaces' || !artifact.path || !artifactApi.mcpCall) return
       void handleArtifactMcpMessage(html, { taskId: artifact.taskId, path: artifact.path }, data, reply, artifactApi.mcpCall)
     }} />
     case ArtifactType.PR: return <PrArtifactView artifact={artifact} refreshTrigger={refreshTrigger} />

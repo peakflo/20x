@@ -3,6 +3,7 @@ import type { Artifact } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
 import { ARTIFACT_ICONS } from './artifact-icons'
+import { SpacesBadge } from './SpacesBadge'
 
 export interface ArtifactTabStripProps {
   artifacts: Artifact[]
@@ -79,6 +80,7 @@ export function ArtifactTabStrip({
             <button type="button" onClick={() => onSelectTab(artifact.id)} className="flex min-w-0 items-center gap-1.5 py-1 pl-2">
               <Icon className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">{artifact.title}</span>
+              {artifact.source === 'spaces' && <SpacesBadge />}
             </button>
             <button
               type="button"

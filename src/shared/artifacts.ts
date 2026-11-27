@@ -149,6 +149,14 @@ export interface Artifact {
   inline?: boolean
   /** Agent-requested height hint (px) from `html_render`. */
   heightHint?: number
+  /** Where it lives. Absent means a local workspace artifact. */
+  source?: 'local' | 'spaces'
+  /** Cannot be edited or saved from 20x (every Spaces artifact). */
+  readOnly?: boolean
+  /** Link to open it in the Spaces web app. */
+  webUrl?: string
+  /** Id of the artifact on the server (Spaces artifacts only). */
+  remoteId?: string
 }
 
 /** Registration of a canvas artifact panel with the main-process artifact

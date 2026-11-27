@@ -1,4 +1,6 @@
-import React, { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback } from 'react'
+import React, { useRef, useEffect, useLayoutEffect, useState, useMemo, useCallback, useContext } from 'react'
+import { RemoteApprovalCard } from '@/components/tasks/remote/RemoteApprovalCard'
+import { RemoteTaskContext } from '@/hooks/use-remote-task-state'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { StopCircle, Loader2, Terminal, Send, ChevronRight, ChevronDown, Wrench, AlertTriangle, CheckCircle2, Circle, Clock, RotateCcw, ListTodo, FileText, ArrowDown, ArrowUp, Paperclip, Pencil, Search, X, Image as ImageIcon, GitPullRequest, MonitorPlay } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
@@ -686,7 +688,9 @@ function ActivityMessageGroup({ messages, searchQuery, artifacts = EMPTY_ARTIFAC
 }
 
 function MessageBubble({ message, onAnswer, canAnswerQuestion = false, searchQuery, artifacts = EMPTY_ARTIFACTS, onOpenArtifact, onEdit }: { message: AgentMessage; onAnswer?: (answer: string) => void; canAnswerQuestion?: boolean; searchQuery?: string; artifacts?: Artifact[]; onOpenArtifact?: (artifact: Artifact) => void; onEdit?: (content: string) => void }) {
+  const remoteTask = useContext(RemoteTaskContext)
   if (message.partType === 'question' && message.tool?.questions) {
+    if (remoteTask) return <RemoteApprovalCard message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} />
     return <QuestionMessage message={message} onAnswer={onAnswer} canAnswer={canAnswerQuestion} searchQuery={searchQuery} />
   }
 

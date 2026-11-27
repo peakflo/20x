@@ -1,6 +1,7 @@
 import type { WorkfloTask, CreateTaskDTO, UpdateTaskDTO, FileAttachment, Agent, CreateAgentDTO, UpdateAgentDTO, McpServer, CreateMcpServerDTO, UpdateMcpServerDTO, Skill, CreateSkillDTO, UpdateSkillDTO, Secret, CreateSecretDTO, UpdateSecretDTO, TaskSource, CreateTaskSourceDTO, UpdateTaskSourceDTO, SyncResult, PluginMeta, ConfigFieldSchema, ConfigFieldOption, PluginAction, ActionResult, SourceUser, ReassignResult, MarketplaceSource, InstalledPlugin, DiscoverablePlugin, MarketplaceCatalog, PluginResources } from '@/types'
 import type { AgentOutputEvent, AgentOutputBatchEvent, AgentStatusEvent, AgentApprovalRequest, GhCliStatus, GlabCliStatus, GitHubRepo, GitHubCollaborator, WorktreeProgressEvent, WorkspaceCleanupProgressEvent, McpTestResult, SkillSyncResult, DepsStatus, AgentMessageAttachment, TranscriptChangedEvent, TranscriptSync } from '@/types/electron'
 import type { ArtifactApi } from '@shared/artifacts'
+import type { EnterpriseRunnersApi } from '@shared/enterprise-runners'
 import type { UsageLimitRecovery } from '@shared/usage-limit-recovery'
 import type { CustomModelPrice, ProviderUsageLimits, TokenUsageRecord, UsageLimitsRefreshResult, UsageParallelismResponse, UsageSummary, UsageSummaryQuery } from '@shared/usage'
 import type { HarnessInstanceView } from '@shared/harness-instances'
@@ -1029,3 +1030,12 @@ export const browserRecordingApi = {
     ? window.electronAPI.browser.recordingStatus(panelId)
     : Promise.resolve({ recording: null }),
 }
+
+/**
+ * The one runners bridge: Settings → Machines, "Connect this computer" and
+ * running tasks on runners. Lazy, because `window.electronAPI` is absent in some
+ * test environments at import time.
+ */
+export const enterpriseRunnersApi: EnterpriseRunnersApi = new Proxy({} as EnterpriseRunnersApi, {
+  get: (_t, prop) => (window.electronAPI.enterpriseRunners as unknown as Record<string | symbol, unknown>)[prop]
+})

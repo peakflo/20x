@@ -9,8 +9,13 @@ import { IncompatibleSessionDialog } from './IncompatibleSessionDialog'
 import { TaskDetailView } from './TaskDetailView'
 import { AgentTranscriptPanel } from '@/components/agents/AgentTranscriptPanel'
 import { ChangesPanel } from './ChangesPanel'
+import { RemoteBranchPanel } from './remote/RemoteBranchPanel'
+import { RemoteStateBanner } from './remote/RemoteChips'
+import { RemoteDecisionContext, RemoteTaskContext, useRemoteTaskState } from '@/hooks/use-remote-task-state'
+import { useSpacesArtifacts } from '@/hooks/use-spaces-artifacts'
 import { OutputFieldsDisplay } from './OutputFieldsDisplay'
 import { TaskHeaderBar, TaskPrimaryAction } from './TaskHeaderBar'
+import { RunOnPicker } from './RunOnPicker'
 import { SubtasksTab } from './SubtasksTab'
 import { AgentApprovalBanner } from '@/components/agents/AgentApprovalBanner'
 import { UsageLimitRecoveryBanner } from '@/components/usage/UsageLimitRecoveryBanner'
@@ -116,6 +121,10 @@ function TaskWorkspaceComponent({
   panelLayout = 'both'
 }: TaskWorkspaceProps) {
   const { session, start, resume, abort, stop, sendMessage, approve } = useAgentSession(task?.id)
+  // Non-null when the task's chats run on a Spaces runner. The server owns completion.
+  const remote = useRemoteTaskState(task?.id)
+  // Spaces artifacts join the normal artifact store; no separate list.
+  useSpacesArtifacts(task?.id, !!remote, remote?.sessionStatus)
   // Per-field selectors: a selector-less useStore() subscribes to the whole
   // store, re-rendering this entire workspace on every streamed delta of every
   // task's session (agent store) or any settings change. Action identities are
@@ -559,6 +568,15 @@ function TaskWorkspaceComponent({
     [approve]
   )
 
+  // Remote permission cards answer with an explicit boolean. Reject really rejects.
+  const handleRemoteDecision = useCallback(
+    ({ approved, requestId, label }: { approved: boolean; requestId?: string; label: string }) => {
+      approve(approved, label, 'permission', requestId).catch(console.error)
+    },
+    [approve]
+  )
+  const isRemoteTask = !!remote
+
   /**
    * Gives the composer a session to talk to, starting or resuming one if the
    * task has none live.
@@ -609,7 +627,10 @@ function TaskWorkspaceComponent({
       }
       const hasActiveQuestion = questionIndex >= 0
         && !messages.slice(questionIndex + 1).some((m) => m.role === 'user')
-      if (hasActiveQuestion) {
+      // On a runner, composer text is a normal message and never answers a
+      // permission request: only the card's Allow / Reject can.
+      const pendingIsPermission = hasActiveQuestion && messages[questionIndex].tool?.name === 'permission'
+      if (hasActiveQuestion && !(isRemoteTask && pendingIsPermission)) {
         const question = messages[questionIndex]
         const questionKey = question.tool?.requestId || question.id
         if (submittedQuestionIdsRef.current.has(questionKey)) return
@@ -636,7 +657,7 @@ function TaskWorkspaceComponent({
       if (!readySessionId) throw new Error('Could not start an agent session for this task')
       await sendMessage(message, options)
     },
-    [approve, ensureChatSession, sendMessage, task?.id]
+    [approve, ensureChatSession, sendMessage, task?.id, isRemoteTask]
   )
 
   const handleAddAttachmentPaths = useCallback(async (filePaths: string[]) => {
@@ -1050,7 +1071,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
   let primaryAction: TaskPrimaryAction | null = null
   let handlePrimaryAction: (() => void) | undefined
   if (task.status === TaskStatus.ReadyForReview || isTaskClosed(task.status)) {
-    if (!isTaskClosed(task.status)) {
+    // Remote tasks are completed on Spaces only; never offer a local Complete.
+    if (!isTaskClosed(task.status) && !remote) {
       primaryAction = TaskPrimaryAction.COMPLETE
       handlePrimaryAction = () => void handleCompleteTask()
     }
@@ -1111,13 +1133,17 @@ Update existing skills that were helpful or create new ones for patterns worth r
     />
   )
 
+  const showRemoteBanner = !!remote && remote.sync !== 'live'
   const transcriptView = (
+    <RemoteTaskContext.Provider value={remote}>
+    <RemoteDecisionContext.Provider value={handleRemoteDecision}>
     <div className="native-backdrop-page flex h-full min-h-0 flex-col bg-background">
+      {showRemoteBanner && remote && <div className={hasSession && panelLayout !== 'task-only' ? 'pt-12' : ''}><RemoteStateBanner taskId={task.id} state={remote} /></div>}
       <AgentApprovalBanner request={session.pendingApproval} onApprove={handleApprove} onReject={handleReject} />
       <UsageLimitRecoveryBanner taskId={task.id} floatingHeader={hasSession && panelLayout !== 'task-only'} />
       <AgentTranscriptPanel
         embeddedHeader
-        externalHeaderHeight={hasSession && panelLayout !== 'task-only' ? 48 : 0}
+        externalHeaderHeight={hasSession && panelLayout !== 'task-only' && !showRemoteBanner ? 48 : 0}
         searchRequest={transcriptSearchRequest}
         messages={session.messages}
         status={session.status}
@@ -1135,6 +1161,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
         className="native-backdrop-page h-full min-h-0 border-0 bg-background"
       />
     </div>
+    </RemoteDecisionContext.Provider>
+    </RemoteTaskContext.Provider>
   )
 
   const openDetails = () => {
@@ -1162,8 +1190,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
       onToggleRail={() => setRailExpanded(task.id, !artifactUI.railExpanded)}
       details={detailsView}
       subtasks={<SubtasksTab subtasks={subtasks} onNavigateToTask={onNavigateToTask} onOpenSubtaskInWindow={onOpenSubtaskInWindow} />}
-      changes={<ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} onPullRequests={handlePullRequests} />}
-      output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={!isTaskClosed(task.status)} onComplete={handleCompleteTask} taskUpdatedAt={task.updated_at} />}
+      changes={remote ? <RemoteBranchPanel taskId={task.id} state={remote} className="h-full" /> : <ChangesPanel taskId={task.id} repos={task.repos} className="h-full" onSummary={setChangesSummary} onPullRequests={handlePullRequests} />}
+      output={<OutputFieldsDisplay fields={task.output_fields} onChange={onUpdateOutputFields} isActive={!isTaskClosed(task.status)} onComplete={remote ? undefined : handleCompleteTask} taskUpdatedAt={task.updated_at} />}
       className="min-w-[320px] flex-1 border-l border-border/50 pt-12"
       onOpenArtifactInWindow={onOpenArtifactInWindow}
     />
@@ -1195,7 +1223,8 @@ Update existing skills that were helpful or create new ones for patterns worth r
           onAssignAgent={handleAssignAgent}
           action={primaryAction}
           onAction={handlePrimaryAction}
-          onComplete={() => void handleCompleteTask()}
+          onComplete={remote ? undefined : () => void handleCompleteTask()}
+          remote={remote}
           onSearchTranscript={hasSession && panelLayout !== 'task-only' ? () => setTranscriptSearchRequest((request) => request + 1) : undefined}
           onRestartSession={hasSession && session.messages.length > 0 ? handleStartFreshSession : undefined}
           onStopSession={hasSession && (session.status === SessionStatus.WORKING || session.status === SessionStatus.WAITING_APPROVAL) ? handleAbort : undefined}
@@ -1219,6 +1248,7 @@ Update existing skills that were helpful or create new ones for patterns worth r
               <div className="min-h-0 flex-1">{detailsView}</div>
               {!hasSession && panelLayout === 'both' && !isTaskClosed(task.status) && (
                 <div className="sticky bottom-0 z-10 mx-auto w-full max-w-[780px] shrink-0 px-6 py-4">
+                  {task.agent_id && <RunOnPicker taskId={task.id} agentId={task.agent_id} sessionStarted={!!task.session_id} className="mb-2" />}
                   <div className="flex items-end gap-2 glass-composer rounded-[28px] p-2">
                     <textarea
                       value={kickoffMessage}

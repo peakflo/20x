@@ -3,6 +3,7 @@ import type { Artifact } from '@shared/artifacts'
 import { PinnedArtifactTabId } from '@/stores/artifact-store'
 import { cn } from '@/lib/utils'
 import { ARTIFACT_ICONS } from './artifact-icons'
+import { SpacesBadge } from './SpacesBadge'
 
 export interface ArtifactRailProps {
   artifacts: Artifact[]
@@ -33,18 +34,20 @@ export function ArtifactRail({ artifacts, expanded, activeTabId, agentActive, ha
         {hasChanges && <RailItem icon={GitCompareArrows} label={`Changes${changesCount ? ` · ${changesCount}` : ''}`} expanded={expanded} active={activeTabId === PinnedArtifactTabId.CHANGES} onClick={() => onSelectTab(PinnedArtifactTabId.CHANGES)} />}
         {hasOutput && <RailItem icon={FileCheck2} label="Output" expanded={expanded} active={activeTabId === PinnedArtifactTabId.OUTPUT} onClick={() => onSelectTab(PinnedArtifactTabId.OUTPUT)} />}
         {artifacts.map((artifact) => (
-          <RailItem key={artifact.id} icon={ARTIFACT_ICONS[artifact.type]} label={artifact.title} expanded={expanded} active={activeTabId === artifact.id} activity={agentActive} onClick={() => onSelectTab(artifact.id)} />
+          <RailItem key={artifact.id} icon={ARTIFACT_ICONS[artifact.type]} label={artifact.title} badge={artifact.source === 'spaces'} expanded={expanded} active={activeTabId === artifact.id} activity={agentActive} onClick={() => onSelectTab(artifact.id)} />
         ))}
       </div>
     </aside>
   )
 }
 
-function RailItem({ icon: Icon, label, expanded, active, activity, onClick }: { icon: typeof List; label: string; expanded: boolean; active: boolean; activity?: boolean; onClick: () => void }) {
+function RailItem({ icon: Icon, label, expanded, active, activity, badge, onClick }: { icon: typeof List; label: string; expanded: boolean; active: boolean; activity?: boolean; badge?: boolean; onClick: () => void }) {
   return (
     <button type="button" title={label} aria-label={label} onClick={onClick} className={cn('relative flex h-8 w-full items-center rounded-md text-xs transition-colors', expanded ? 'gap-2 px-2' : 'justify-center', active ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground')}>
       <Icon className="h-4 w-4 shrink-0" />
       {expanded && <span className="truncate">{label}</span>}
+      {expanded && badge && <SpacesBadge className="ml-auto" />}
+      {!expanded && badge && <span aria-label="Spaces" className="absolute bottom-1 right-1 h-1.5 w-1.5 rounded-full bg-sky-500" />}
       {activity && <span aria-label="Agent activity" className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-400" />}
     </button>
   )

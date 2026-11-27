@@ -102,6 +102,20 @@ export class EnterpriseAuthInvalidError extends Error {
   }
 }
 
+/**
+ * A non-2xx answer from the Peakflo API. Same message as before; `status` lets
+ * callers tell "not allowed" (403) and "not found" (404) apart without parsing
+ * the text.
+ */
+export class EnterpriseApiError extends Error {
+  readonly status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'EnterpriseApiError'
+    this.status = status
+  }
+}
+
 /** Minimal shape of a Supabase refresh error we inspect for classification. */
 type RefreshErrorLike = { message?: string; status?: number; code?: string; name?: string } | null
 
@@ -639,7 +653,7 @@ export class EnterpriseAuth {
             path,
             status: retryResponse.status
           })
-          throw new Error(retryBody.message || `API request failed (${retryResponse.status})`)
+          throw new EnterpriseApiError(retryBody.message || `API request failed (${retryResponse.status})`, retryResponse.status)
         }
 
         return retryResponse.json().catch(() => null)
@@ -671,14 +685,14 @@ export class EnterpriseAuth {
       // Include diagnostic details from the server so users/developers
       // can understand WHY permission was denied (e.g. missing role)
       const details = errorBody.details ? ` (${JSON.stringify(errorBody.details)})` : ''
-      throw new Error(errorBody.message || errorBody.error || `Permission denied (${response.status})${details}`)
+      throw new EnterpriseApiError(errorBody.message || errorBody.error || `Permission denied (${response.status})${details}`, response.status)
     }
 
     if (!response.ok) {
       const errorBody = await response.json().catch(() => ({}))
       console.error(`[EnterpriseAuth] API error ${response.status} ${method} ${path} (domain: ${this.getDomain()}):`, JSON.stringify(errorBody))
       const detail = errorBody.details ? ` ${JSON.stringify(errorBody.details)}` : ''
-      throw new Error(errorBody.message || errorBody.error || `API request failed (${response.status})${detail}`)
+      throw new EnterpriseApiError(errorBody.message || errorBody.error || `API request failed (${response.status})${detail}`, response.status)
     }
 
     return response.json().catch(() => null)

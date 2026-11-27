@@ -11,6 +11,10 @@ import { agentConfigApi } from '@/lib/ipc-client'
 import { displayMcpServerName } from '@/lib/brand'
 import { useHarnessInstanceStore } from '@/stores/harness-instance-store'
 import { useAcpInstanceStore } from '@/stores/acp-instance-store'
+import { useEnterpriseStore } from '@/stores/enterprise-store'
+import { useAgentStore } from '@/stores/agent-store'
+import { EnterpriseRunnerFields } from './EnterpriseRunnerFields'
+import { ENTERPRISE_RUNNER_AGENT_TYPE, clampPermissionMode, type RunnerPermissionMode } from '@shared/enterprise-runners'
 import { useMcpStore } from '@/stores/mcp-store'
 import { useSkillStore } from '@/stores/skill-store'
 import { SkillSelectorDialog } from '@/components/skills/SkillSelectorDialog'
@@ -70,6 +74,18 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
   const acpInstances = useAcpInstanceStore((s) => s.instances)
   const loadAcpInstances = useAcpInstanceStore((s) => s.load)
   useEffect(() => { void loadAcpInstances() }, [loadAcpInstances])
+  // Enterprise runner: a synced [Workflo] agent that runs on a Spaces runner.
+  const enterpriseSignedIn = useEnterpriseStore((s) => s.isAuthenticated)
+  const allAgents = useAgentStore((s) => s.agents)
+  const syncedAgents = allAgents.filter((a) => a.config?.enterprise_agent_id)
+  const [enterpriseAgentId, setEnterpriseAgentId] = useState<string>(agent?.config.enterprise_agent_id ?? '')
+  const [runnerId, setRunnerId] = useState<string>(agent?.config.runner_id ?? '')
+  const [runnerMode, setRunnerMode] = useState<RunnerPermissionMode | ''>(agent?.config.runner_permission_mode ?? '')
+  const [runnerLimit, setRunnerLimit] = useState<RunnerPermissionMode | null>(null)
+  const isRunnerAgent = codingAgent === CodingAgentType.ENTERPRISE_RUNNER
+  const syncedLocalAgentId = isRunnerAgent
+    ? (syncedAgents.find((a) => a.config.enterprise_agent_id === enterpriseAgentId)?.id ?? agent?.id ?? null)
+    : null
   const [model, setModel] = useState(agent?.config.model ?? '')
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | ''>(agent?.config.reasoning_effort ?? '')
   const [speedMode, setSpeedMode] = useState<SpeedMode | ''>(agent?.config.speed_mode ?? '')
@@ -303,6 +319,11 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
       server_url: serverUrl.trim(),
       config: {
         coding_agent: codingAgent || undefined,
+        enterprise_agent_id: isRunnerAgent ? (enterpriseAgentId || undefined) : undefined,
+        runner_id: isRunnerAgent ? (runnerId || undefined) : undefined,
+        runner_permission_mode: isRunnerAgent && runnerMode
+          ? clampPermissionMode(runnerMode, runnerLimit ?? undefined)
+          : undefined,
         // Only a subscription login has an account of its own. Clears the field otherwise.
         harness_instance_id: harnessInstanceId && (codingAgent === CodingAgentType.CLAUDE_CODE || codingAgent === CodingAgentType.CODEX)
           && !usesApiKeyLogin(codingAgent, authMethod)
@@ -412,7 +433,9 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         <select
           id="coding-agent"
           value={
-            harnessInstanceId
+            isRunnerAgent
+              ? `${ENTERPRISE_RUNNER_AGENT_TYPE}:${enterpriseAgentId}`
+              : harnessInstanceId
               ? `${HARNESS_INSTANCE_PREFIX}${harnessInstanceId}`
               : acpInstanceId
                 ? `${ACP_INSTANCE_PREFIX}${acpInstanceId}`
@@ -420,7 +443,14 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           }
           onChange={(e) => {
             const value = e.target.value
-            if (value.startsWith(HARNESS_INSTANCE_PREFIX)) {
+            if (value.startsWith(`${ENTERPRISE_RUNNER_AGENT_TYPE}:`)) {
+              const id = value.slice(ENTERPRISE_RUNNER_AGENT_TYPE.length + 1)
+              setCodingAgent(CodingAgentType.ENTERPRISE_RUNNER)
+              setEnterpriseAgentId(id)
+              setHarnessInstanceId('')
+              setAcpInstanceId('')
+              if (!name.trim()) setName(syncedAgents.find((a) => a.config.enterprise_agent_id === id)?.name ?? '')
+            } else if (value.startsWith(HARNESS_INSTANCE_PREFIX)) {
               const id = value.slice(HARNESS_INSTANCE_PREFIX.length)
               const instance = harnessInstances.find((i) => i.id === id)
               setCodingAgent((instance?.harness_type as CodingAgentType) ?? '')
@@ -446,14 +476,35 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           {acpInstanceDropdownOptions(acpInstances).map((option) => (
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
+          {enterpriseSignedIn && (
+            <optgroup label="Enterprise runner">
+              {syncedAgents.map((a) => (
+                <option key={a.id} value={`${ENTERPRISE_RUNNER_AGENT_TYPE}:${a.config.enterprise_agent_id}`}>{a.name}</option>
+              ))}
+            </optgroup>
+          )}
         </select>
         {codingAgent === CodingAgentType.ACP && acpInstances.length === 0 && (
           <p className="text-xs text-muted-foreground">
             No ACP agents configured yet. Add one in Settings → Harnesses.
           </p>
         )}
-        {codingAgent && <HarnessVersionWarning codingAgent={codingAgent} />}
+        {codingAgent && !isRunnerAgent && <HarnessVersionWarning codingAgent={codingAgent} />}
+        {enterpriseSignedIn && syncedAgents.length === 0 && (
+          <p className="text-xs text-muted-foreground" data-testid="enterprise-no-agents">No synced agents. Sync from Settings → Enterprise to list them under Enterprise runner.</p>
+        )}
       </div>
+
+      {isRunnerAgent && (
+        <EnterpriseRunnerFields
+          syncedAgentId={syncedLocalAgentId}
+          runnerId={runnerId}
+          onRunnerId={setRunnerId}
+          mode={runnerMode || runnerLimit || 'ask'}
+          onMode={setRunnerMode}
+          onLimit={setRunnerLimit}
+        />
+      )}
 
       {/* Only OpenCode talks to a server; every other harness runs locally. */}
       {codingAgent === CodingAgentType.OPENCODE && (
@@ -768,6 +819,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </>
       )}
 
+      {!isRunnerAgent && (
       <div className="space-y-1.5">
         <Label htmlFor="agent-prompt">System Prompt</Label>
         <Textarea
@@ -778,6 +830,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           rows={3}
         />
       </div>
+      )}
 
       <div className="space-y-1.5">
         <Label htmlFor="max-parallel-sessions">Parallel Task Limit</Label>
@@ -795,6 +848,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </p>
       </div>
 
+      {!isRunnerAgent && (
       <div className="space-y-2">
         <Label>MCP Servers</Label>
         {globalMcpServers.length === 0 ? (
@@ -865,6 +919,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
           </div>
         )}
       </div>
+      )}
 
       <div className="space-y-2">
         <Label>Skills</Label>
@@ -908,7 +963,7 @@ export function AgentForm({ agent, onSubmit, onCancel }: AgentFormProps) {
         </div>
       </div>
 
-      {codingAgent !== CodingAgentType.CURSOR && (
+      {codingAgent !== CodingAgentType.CURSOR && !isRunnerAgent && (
         <div className="space-y-2">
           <Label>Secrets</Label>
           <p className="text-xs text-muted-foreground">

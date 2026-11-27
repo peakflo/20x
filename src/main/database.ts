@@ -44,7 +44,7 @@ export interface AgentMcpServerEntry {
 }
 
 export interface AgentConfigRecord {
-  coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor' | 'pi' | 'acp'
+  coding_agent?: 'opencode' | 'claude-code' | 'codex' | 'cursor' | 'pi' | 'acp' | 'enterprise-runner'
   /**
    * Harness instance (one subscription login of the coding_agent). Unset means
    * the default instance of the coding_agent. Ignored for API-key agents.
@@ -55,6 +55,8 @@ export interface AgentConfigRecord {
    * Required when coding_agent is 'acp'; ignored otherwise.
    */
   acp_instance_id?: string
+  /** Spaces agent id of a synced `[Workflo]` agent; it can run on an enterprise runner. */
+  enterprise_agent_id?: string
   model?: string
   reasoning_effort?: ReasoningEffort
   speed_mode?: SpeedMode

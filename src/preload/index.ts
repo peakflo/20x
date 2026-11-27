@@ -1,6 +1,15 @@
 import type { BrowserRecordingManifest } from '../shared/browser-recording'
 import type { BrowserImportRequest, BrowserImportResult, BrowserImportSource } from '../shared/browser-session-import'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type {
+  ConnectProgress,
+  MachineActionResult,
+  MachinesResult,
+  PreflightResult,
+  StartConnectRequest,
+  StartConnectResult,
+  UninstallPlan
+} from '../shared/enterprise-runners'
 import { createBrandFlagCache } from './brand-cache'
 import type { ArtifactContent, ArtifactCopyFileResult, ArtifactFileEntry, CanvasArtifactPanelRegistration, PullRequestDetails } from '../shared/artifacts'
 import { UI_COMMAND_CHANNEL, UI_COMMAND_RESULT_CHANNEL, type UiCommandAck, type UiCommandEnvelope } from '../shared/ui-commands'
@@ -625,6 +634,46 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = (_: unknown, data: { success: boolean; syncMs?: number; error?: string; syncStats?: { agents: { created: number; updated: number }; skills: { created: number; updated: number; pushed: number }; mcpServers: { created: number; updated: number }; taskSources: { created: number; updated: number }; errors: string[] } }): void => callback(data)
       ipcRenderer.on('enterprise:syncComplete', handler)
       return () => ipcRenderer.removeListener('enterprise:syncComplete', handler)
+    }
+  },
+  enterpriseRunners: {
+    // Running tasks on runners
+    listRunners: () => ipcRenderer.invoke('enterprise-runners:runners'),
+    getAgentInfo: (agentId: string) => ipcRenderer.invoke('enterprise-runners:agent-info', agentId),
+    getTaskRunOn: (taskId: string) => ipcRenderer.invoke('enterprise-runners:get-run-on', taskId),
+    setTaskRunOn: (taskId: string, choice: unknown) => ipcRenderer.invoke('enterprise-runners:set-run-on', taskId, choice),
+    getTaskState: (taskId: string) => ipcRenderer.invoke('enterprise-runners:task-state', taskId),
+    reassign: (taskId: string, runnerId: string) => ipcRenderer.invoke('enterprise-runners:reassign', taskId, runnerId),
+    openLocally: (taskId: string, opts?: { clone?: boolean }) => ipcRenderer.invoke('enterprise-runners:open-locally', taskId, opts),
+    listSpacesArtifacts: (taskId: string, opts?: { refresh?: boolean }) => ipcRenderer.invoke('enterprise-runners:list-artifacts', taskId, opts),
+    readSpacesArtifact: (taskId: string, id: string) => ipcRenderer.invoke('enterprise-runners:read-artifact', taskId, id),
+    onTaskState: (callback: (event: unknown) => void): (() => void) => {
+      const handler = (_: unknown, data: unknown): void => callback(data)
+      ipcRenderer.on('enterprise-runners:task-state', handler)
+      return () => ipcRenderer.removeListener('enterprise-runners:task-state', handler)
+    },
+    list: (): Promise<MachinesResult> => ipcRenderer.invoke('enterprise-runners:list'),
+    rename: (runnerId: string, name: string): Promise<MachineActionResult> =>
+      ipcRenderer.invoke('enterprise-runners:rename', runnerId, name),
+    remove: (runnerId: string): Promise<MachineActionResult & { uninstall?: UninstallPlan }> =>
+      ipcRenderer.invoke('enterprise-runners:remove', runnerId),
+    update: (runnerId: string): Promise<MachineActionResult> => ipcRenderer.invoke('enterprise-runners:update', runnerId),
+    preflight: (): Promise<PreflightResult> => ipcRenderer.invoke('enterprise-runners:preflight'),
+    connectStart: (request: StartConnectRequest): Promise<StartConnectResult> =>
+      ipcRenderer.invoke('enterprise-runners:connect-start', request),
+    connectCancel: (runId?: string): Promise<void> => ipcRenderer.invoke('enterprise-runners:connect-cancel', runId),
+    connectProgress: (runId?: string): Promise<ConnectProgress | null> =>
+      ipcRenderer.invoke('enterprise-runners:connect-progress', runId),
+    openApproval: (runId: string): Promise<boolean> => ipcRenderer.invoke('enterprise-runners:open-approval', runId),
+    onConnectProgress: (callback: (progress: ConnectProgress) => void): (() => void) => {
+      const handler = (_: unknown, progress: ConnectProgress): void => callback(progress)
+      ipcRenderer.on('enterprise-runners:connect-progress', handler)
+      return () => ipcRenderer.removeListener('enterprise-runners:connect-progress', handler)
+    },
+    onMachinesChanged: (callback: () => void): (() => void) => {
+      const handler = (): void => callback()
+      ipcRenderer.on('enterprise-runners:machines-changed', handler)
+      return () => ipcRenderer.removeListener('enterprise-runners:machines-changed', handler)
     }
   },
   updater: {

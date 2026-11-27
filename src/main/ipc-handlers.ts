@@ -1,3 +1,4 @@
+import { assertNotSpacesArtifact, isSpacesArtifactPath, readSpacesArtifact } from './enterprise-runners/spaces-artifacts'
 import { updateTaskFromUser } from './session-feedback'
 import { ipcMain, dialog, shell, Notification, app, session, BrowserWindow, nativeTheme, clipboard as electronClipboard, ClipboardItem } from 'electron'
 import * as childProcess from 'child_process'
@@ -10,7 +11,8 @@ import { brandSpacesEnabled, desktopBrandName, findStoredWorkspaceServer, STORED
 import type { ArtifactMcpCall } from '../shared/artifact-mcp'
 import WebSocket from 'ws'
 import { startTunnel, stopTunnel, getTunnelUrl, isTunnelActive } from './tunnel-manager'
-import { getPendingPin, broadcastToMobileClients } from './mobile-api-server'
+import { getPendingPin, broadcastToMobileClients, setMobileMachinesProvider } from './mobile-api-server'
+import { registerEnterpriseRunnersIpc } from './enterprise-runners'
 import { sendMobilePush } from './mobile-push'
 import { resolveTaskApiUiCommand, setTaskApiUiState } from './task-api-server'
 import { UI_COMMAND_RESULT_CHANNEL, type UiCommandAck } from '../shared/ui-commands'
@@ -406,29 +408,36 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('artifacts:read', async (_, taskId: string, relativePath: string) => {
+    if (isSpacesArtifactPath(relativePath)) return readSpacesArtifact(taskId, relativePath)
     return readTaskArtifact(db.getWorkspaceDir(taskId), relativePath)
   })
 
   ipcMain.handle('artifacts:saveScad', async (_, taskId: string, relativePath: string, content: string, expectedContent: string) => {
+    assertNotSpacesArtifact(relativePath)
     await saveTaskScadArtifact(db.getWorkspaceDir(taskId), taskId, relativePath, content, expectedContent)
   })
 
   ipcMain.handle('artifacts:renderScad', async (_, taskId: string, relativePath: string) => {
+    assertNotSpacesArtifact(relativePath)
     return renderTaskScadArtifact(db.getWorkspaceDir(taskId), taskId, relativePath)
   })
 
   ipcMain.handle('artifact:mcp-call', async (_, input: ArtifactMcpCall) => {
+    // No tool bridge for Spaces HTML: it is read-only content, not a local app.
+    assertNotSpacesArtifact(input?.path)
     if (!mcpToolCaller) throw new Error('Organisation Workspace is not connected')
     return callArtifactMcp(db, mcpToolCaller, input, 'desktop')
   })
 
   ipcMain.handle('artifacts:copyFile', async (_, taskId: string, relativePath: string): Promise<ArtifactCopyFileResult> => {
+    if (isSpacesArtifactPath(relativePath)) return { mode: ArtifactClipboardMode.UNAVAILABLE }
     const filePath = await resolveTaskArtifactFilePath(db.getWorkspaceDir(taskId), relativePath)
     if (!filePath) return { mode: ArtifactClipboardMode.UNAVAILABLE }
     return writeArtifactFileToClipboard(filePath)
   })
 
   ipcMain.handle('artifacts:saveAs', async (_, taskId: string, relativePath: string, suggestedName: string): Promise<boolean> => {
+    assertNotSpacesArtifact(relativePath)
     const filePath = await resolveTaskArtifactFilePath(db.getWorkspaceDir(taskId), relativePath)
     if (!filePath) return false
     const safeName = basename(suggestedName) || basename(filePath)
@@ -1877,6 +1886,10 @@ export function registerIpcHandlers(
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
     return await enterpriseAuth.apiRequest(method, path, body)
   })
+
+  // Settings → Machines and "Connect this computer" (enterprise runners).
+  const enterpriseRunners = registerEnterpriseRunnersIpc(enterpriseAuth)
+  setMobileMachinesProvider(enterpriseRunners ? () => enterpriseRunners.listMachines() : null)
 
   ipcMain.handle('enterprise:getApiUrl', () => {
     if (!enterpriseAuth) throw new Error('Enterprise auth not available')
