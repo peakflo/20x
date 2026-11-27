@@ -3,7 +3,7 @@ import { Search, SquareArrowOutUpRight } from 'lucide-react'
 import type { WorkfloTask } from '@/types'
 import { TaskStatusBadge } from './TaskStatusBadge'
 import { cn } from '@/lib/utils'
-import { filterSubtasks, SUBTASK_FILTERS, type SubtaskFilter } from '@shared/subtask-filter'
+import { countSubtasksByFilter, filterSubtasks, SUBTASK_FILTERS, type SubtaskFilter } from '@shared/subtask-filter'
 
 interface SubtasksTabProps {
   subtasks: WorkfloTask[]
@@ -15,6 +15,7 @@ export function SubtasksTab({ subtasks, onNavigateToTask, onOpenSubtaskInWindow 
   const [filter, setFilter] = useState<SubtaskFilter>('all')
   const [query, setQuery] = useState('')
   const visible = filterSubtasks(subtasks, filter, query)
+  const counts = countSubtasksByFilter(subtasks)
 
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="subtasks-tab-content">
@@ -37,7 +38,7 @@ export function SubtasksTab({ subtasks, onNavigateToTask, onOpenSubtaskInWindow 
         <div className="flex flex-wrap gap-1.5" aria-label="Filter subtasks">
           {SUBTASK_FILTERS.map(({ id, label }) => (
             <button key={id} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)} className={cn('rounded-md px-2.5 py-1 text-xs transition-colors', filter === id ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground')}>
-              {label}
+              {label} <span className="tabular-nums">{counts[id]}</span>
             </button>
           ))}
         </div>

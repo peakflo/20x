@@ -17,19 +17,31 @@ describe('SubtasksTab', () => {
     const onNavigateToTask = vi.fn()
     render(<SubtasksTab subtasks={subtasks} onNavigateToTask={onNavigateToTask} />)
     expect(screen.getAllByRole('button', { name: /^Open subtask/ })).toHaveLength(4)
+    for (const name of ['All 4', 'In progress 1', 'Ready for review 1', 'Completed 1', 'Other 1']) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument()
+    }
 
-    fireEvent.click(screen.getByRole('button', { name: 'Ready for review' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ready for review 1' }))
     expect(screen.getAllByRole('button', { name: /^Open subtask/ })).toHaveLength(1)
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search subtasks' }), { target: { value: 'missing' } })
     expect(screen.getByText('No subtasks match this search.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ready for review 1' })).toBeInTheDocument()
     fireEvent.change(screen.getByRole('searchbox', { name: 'Search subtasks' }), { target: { value: 'CHECK' } })
     fireEvent.click(screen.getByRole('button', { name: 'Open subtask Check the view' }))
     expect(onNavigateToTask).toHaveBeenCalledWith('review')
 
-    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    fireEvent.click(screen.getByRole('button', { name: 'All 4' }))
     expect(within(screen.getByTestId('subtasks-tab-content')).getByText('1 of 4')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Other' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Other 1' }))
     expect(screen.getByText('No subtasks match this search.')).toBeInTheDocument()
+  })
+
+  it('updates status counters when subtask statuses change', () => {
+    const view = render(<SubtasksTab subtasks={subtasks} />)
+    view.rerender(<SubtasksTab subtasks={subtasks.map((subtask) => subtask.id === 'work' ? { ...subtask, status: TaskStatus.ReadyForReview } : subtask)} />)
+    expect(screen.getByRole('button', { name: 'In progress 0' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ready for review 2' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'All 4' })).toBeInTheDocument()
   })
 
   it('opens a subtask beside its parent without navigating the current panel', () => {
