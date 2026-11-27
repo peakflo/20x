@@ -367,7 +367,8 @@ describe('ActivityBlockView', () => {
     const block = firstBlock([
       ...transcript.slice(0, 3),
       msg('n1', { partType: 'text', content: 'Running the **tests**' }, 3),
-      msg('t2', { partType: 'tool', content: 'Bash', tool: { name: 'Bash', status: 'running' } }, 4)
+      msg('t2', { partType: 'tool', content: 'Bash', tool: { name: 'Bash', status: 'running' } }, 4),
+      msg('n2', { partType: 'text', content: 'Tests are still running' }, 5)
     ])
     render(<ActivityBlockView block={block} open={false} onOpenChange={vi.fn()} running />)
     expect(screen.getByRole('button', { name: /Running the tests · 2 steps so far/ })).toBeTruthy()

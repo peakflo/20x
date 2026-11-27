@@ -11,10 +11,20 @@
  * TURN BOUNDARIES: 20x transcripts carry no turn markers, so a turn is
  * everything between two user messages.
  *
- * NOTES: an assistant text part is a note (inside the block) when the same turn
- * does more work after it. Text with nothing after it in its turn is a reply and
- * stays outside, so a streaming answer is never hidden. While a turn runs, the
+ * THE LAST ASSISTANT TEXT OF A TURN IS ALWAYS OUTSIDE, whatever comes after it.
+ * Real transcripts keep writing parts after the answer: Codex adds a synthetic
+ * `tool` part (id `tool-synthetic:…`) at the end of every turn, Claude Code adds
+ * late `task_progress` updates, tool results and system events, and OpenCode
+ * keeps reasoning and tool calls going. So "text with work after it" is not a
+ * safe sign of an intermediate note. While a turn runs, its latest text is the
+ * last text, so it stays visible too.
+ *
+ * NOTES: an earlier assistant text in a turn that has a later assistant text
+ * and at least one technical step folds into the block. While a turn runs, the
  * latest note is its live summary.
+ *
+ * Only clearly technical parts go inside: tool calls and results, thinking, todo
+ * updates and subagent progress. Anything else, known or not, stays visible.
  *
  * Desktop (`AgentTranscriptPanel`) and mobile (`ConversationPage`) both use this
  * module, so the grouping rules are identical on both.
@@ -56,6 +66,17 @@ export type ActivityTranscriptItem<M extends ActivityMessageLike = ActivityMessa
   | { type: 'message'; key: string; message: M }
   | { type: 'activity'; key: string; block: ActivityBlock<M> }
 
+/**
+ * Claude Code writes SDK system events it does not map (`notification`,
+ * `commands_changed`, `vcs_state_changed`, `informational`, `api_retry`, …) as
+ * assistant text parts with id `system-<uuid>` and the bare subtype as content.
+ * They are not answers: they stay where they were, and never count as a turn's
+ * last text.
+ */
+export function isSystemEventText(message: ActivityMessageLike): boolean {
+  return message.id.startsWith('system-') && /^[a-z]+(?:_[a-z]+)*$/.test(message.content.trim())
+}
+
 /** Markers the stores absorb; they render nothing and never form a block. */
 const HIDDEN_PART_TYPES = new Set(['step-start', 'step-finish', 'system-status'])
 
@@ -77,7 +98,10 @@ export function classifyActivityPart(message: ActivityMessageLike): ActivityPart
   if (partType === 'task_progress') return 'activity'
   if (message.tool?.todos && message.tool.todos.length > 0) return 'activity'
   if (message.tool?.name && (partType === 'tool' || partType === 'todowrite')) return 'activity'
-  if (message.role === 'assistant' && (!partType || partType === 'text')) return 'text'
+  if (message.role === 'assistant' && (!partType || partType === 'text')) {
+    if (!message.content?.trim() || isSystemEventText(message)) return 'outside'
+    return 'text'
+  }
   return 'outside'
 }
 
@@ -99,7 +123,8 @@ export function groupActivity<M extends ActivityMessageLike>(
 ): ActivityTranscriptItem<M>[] {
   const keys: string[] = []
   const classes: ActivityPartClass[] = []
-  const lastActivity = new Map<string, number>()
+  const hasActivity = new Set<string>()
+  const lastText = new Map<string, number>()
   const endedAt = new Map<string, number>()
   let turn = 'initial'
 
@@ -108,7 +133,8 @@ export function groupActivity<M extends ActivityMessageLike>(
     const kind = message.role === 'user' ? 'outside' : classify(message)
     keys.push(turn)
     classes.push(kind)
-    if (kind === 'activity') lastActivity.set(turn, index)
+    if (kind === 'activity') hasActivity.add(turn)
+    if (kind === 'text') lastText.set(turn, index)
     // The turn's work ends at its last step or text. A card answered later
     // must not stretch "Worked for".
     if (kind === 'activity' || kind === 'text') {
@@ -122,7 +148,9 @@ export function groupActivity<M extends ActivityMessageLike>(
   messages.forEach((message, index) => {
     const key = keys[index]
     const kind = classes[index]
-    const note = kind === 'text' && Boolean(message.content?.trim()) && index < (lastActivity.get(key) ?? -1)
+    // Only an earlier text of a turn that did real work is a note. The turn's
+    // last text (its answer, or the latest text while it runs) stays outside.
+    const note = kind === 'text' && hasActivity.has(key) && index < (lastText.get(key) ?? -1)
     if (kind !== 'activity' && !note) {
       items.push({ type: 'message', key: message.id, message })
       return
