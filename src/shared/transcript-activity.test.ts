@@ -110,6 +110,15 @@ describe('groupActivity', () => {
     expect(shape(items)).toEqual(['u1', '[t1,t2]', 'q', 'err'])
   })
 
+  it('keeps the latest text of a running turn visible, even with steps after it', () => {
+    const items = groupActivity([user('u1'), tool('t1'), text('live', 'Checking the logs first'), tool('t2'), reasoning('r2')])
+    expect(shape(items)).toEqual(['u1', '[t1,t2,r2]', 'live'])
+  })
+
+  it('does not fold a lone text into a block when the turn did no work', () => {
+    expect(shape(groupActivity([user('u1'), text('a', 'First'), text('b', 'Second')]))).toEqual(['u1', 'a', 'b'])
+  })
+
   it('never hides streaming text that has nothing after it', () => {
     const items = groupActivity([user('u1'), tool('t1'), text('live', 'Partial answ')])
     expect(shape(items)).toEqual(['u1', '[t1]', 'live'])
@@ -205,7 +214,13 @@ describe('summary text', () => {
   })
 
   it('summarises a running block with its latest note and a clock', () => {
-    const [, item] = groupActivity([user('u'), tool('t1', 'Read', 0), text('n', '**Checking** files', 1), tool('t2', 'Bash', 2)])
+    const [, item] = groupActivity([
+      user('u'),
+      tool('t1', 'Read', 0),
+      text('n', '**Checking** files', 1),
+      tool('t2', 'Bash', 2),
+      text('latest', 'Now running the build', 3)
+    ])
     if (item.type !== 'activity') throw new Error('expected block')
     expect(blockSummary(item.block, { running: true, nowMs: T0 + 42_000 })).toEqual({
       title: 'Checking files',
@@ -221,5 +236,92 @@ describe('summary text', () => {
 describe('notePlainText', () => {
   it('removes markdown markers but keeps lines and snake_case', () => {
     expect(notePlainText('## Plan\nRun the **full** `test_suite` now')).toBe('Plan\nRun the full test_suite now')
+  })
+})
+
+/*
+ * Regression: the final answer was folded into the collapsed block because real
+ * adapters write more parts after it. Sequences below are copied (ids, part
+ * types, tool names, order) from stored transcripts in the local 20x DB.
+ */
+describe('final answer stays visible with real adapter shapes', () => {
+  function finalIsVisible(items: ReturnType<typeof groupActivity>, finalId: string) {
+    const visible = items.filter((item) => item.type === 'message').map((item) => item.key)
+    expect(visible).toContain(finalId)
+    for (const item of items) {
+      if (item.type === 'activity') expect(item.block.messages.map((m) => m.id)).not.toContain(finalId)
+    }
+  }
+
+  it('Codex: a synthetic tool part lands after the answer at turn end', () => {
+    const messages: ActivityMessageLike[] = [
+      { id: 'user-message-1795759370531', role: 'user', content: 'use mcp to open, you can', timestamp: at(0), partType: 'text' },
+      text('agent-msg_0b35835ee21b89a0016b091d0ca9a087', 'Let me check the available 20x/task tools and open it.', 2),
+      tool('tool-exec-d7ae794d', 'task-management.open_task', 6),
+      tool('tool-exec-a46fe524', 'task-management.get_ui_state', 12),
+      tool('tool-exec-fc246d88', 'task-management.open_task', 16),
+      text('agent-msg_0b35835ee21b89a0016b091d1b36f487', 'I tried the task MCP’s **open task** action twice. It reported success.', 17),
+      // Codex echoes the turn's userMessage item as a synthetic `tool` part when the turn ends.
+      tool('tool-synthetic:01a21b99-7128-71f2-bf87-1de646dd44a3:item::45h', 'tool', 18)
+    ]
+    const items = groupActivity(messages)
+    finalIsVisible(items, 'agent-msg_0b35835ee21b89a0016b091d1b36f487')
+    expect(shape(items)).toEqual([
+      'user-message-1795759370531',
+      '[agent-msg_0b35835ee21b89a0016b091d0ca9a087,tool-exec-d7ae794d,tool-exec-a46fe524,tool-exec-fc246d88,tool-synthetic:01a21b99-7128-71f2-bf87-1de646dd44a3:item::45h]',
+      'agent-msg_0b35835ee21b89a0016b091d1b36f487'
+    ])
+  })
+
+  it('Claude Code: system events and late subagent progress follow the answer', () => {
+    const system = (id: string, subtype: string, s: number): ActivityMessageLike =>
+      ({ id, role: 'assistant', content: subtype, timestamp: at(s), partType: 'text' })
+    const progress = (id: string, content: string, s: number): ActivityMessageLike =>
+      ({ id, role: 'assistant', content, timestamp: at(s), partType: 'task_progress' })
+    const messages: ActivityMessageLike[] = [
+      { id: 'user-message-1795759493694', role: 'user', content: 'does each PR has before/after comparison ?', timestamp: at(0), partType: 'text' },
+      system('system-ae82a966-ae9a-4fb5-96a9-ef1dad46d0e5', 'commands_changed', 4),
+      text('msg_011ChSvpyV8o9vZmcCMtoW6V-text-0', 'I will verify this from the PR bodies on GitHub.', 19),
+      tool('tool-toolu_01JJRZCcHHD9YGUeHexakj9w', 'Agent', 24, 'success'),
+      system('system-ce6c762c-f16d-4c44-9bfe-80350648a800', 'informational', 24),
+      progress('task-bbw3g3syq', 'Fetch first 10 PR bodies', 34),
+      text('msg_011ChSvzyd79oCh3UXVrLYBe-text-0', 'No. I read all 20 PR bodies on GitHub. **15 PRs have a before/after comparison.**', 161),
+      system('system-4e72a216-166b-4ff0-b3b3-981aa381f7b3', 'notification', 161),
+      progress('task-bgq1ew7z6', 'Save all PR bodies to files', 162),
+      tool('tool-toolu_01Q', 'tool', 163, 'success')
+    ]
+    const items = groupActivity(messages)
+    finalIsVisible(items, 'msg_011ChSvzyd79oCh3UXVrLYBe-text-0')
+    // System events are not answers and stay where they were, outside the block.
+    expect(classifyActivityPart(messages[7])).toBe('outside')
+    expect(shape(items)).toEqual([
+      'user-message-1795759493694',
+      'system-ae82a966-ae9a-4fb5-96a9-ef1dad46d0e5',
+      '[msg_011ChSvpyV8o9vZmcCMtoW6V-text-0,tool-toolu_01JJRZCcHHD9YGUeHexakj9w,task-bbw3g3syq,task-bgq1ew7z6,tool-toolu_01Q]',
+      'system-ce6c762c-f16d-4c44-9bfe-80350648a800',
+      'msg_011ChSvzyd79oCh3UXVrLYBe-text-0',
+      'system-4e72a216-166b-4ff0-b3b3-981aa381f7b3'
+    ])
+  })
+
+  it('OpenCode: reasoning, todo updates and tool calls continue after the last text', () => {
+    const r = (id: string, content: string, s: number): ActivityMessageLike =>
+      ({ id, role: 'assistant', content, timestamp: at(s), partType: 'reasoning' })
+    const messages: ActivityMessageLike[] = [
+      { id: 'user-message-1786863138947', role: 'user', content: 'continue', timestamp: at(0), partType: 'text' },
+      r('msg_00957b938001:prt_009590f1c0015', 'User report: text is not working', 243),
+      tool('msg_0095b693d001:prt_0095cfa58001l', 'read', 345, 'error'),
+      text('msg_0095b693d001:prt_0095cf816001x', 'Let me re-read the current code carefully.', 348),
+      { ...tool('msg_0095d033a001:prt_0095d0e80001v', 'todowrite', 350), partType: 'todowrite', tool: { name: 'todowrite', status: 'completed', todos: [{}] } },
+      tool('msg_0095d19f9001:prt_0095d26b6001d', 'read', 356),
+      r('msg_0095d2bd6001:prt_0095d47bf001J', 'Very interesting! CanvasConnections uses the same pattern', 373),
+      text('msg_0095d2bd6001:prt_0095d64820019', 'CanvasConnections uses the same 0×0 SVG pattern with interactive children.', 373),
+      tool('msg_0095d2bd6001:prt_0095d6808001U', 'read', 373),
+      r('msg_0095d8971001:prt_0095d98bc001c', 'The code looks correct. Let me think about this from a different angle', 550),
+      { id: 'err-1', role: 'system', content: 'Request timed out', timestamp: at(560), partType: 'error' }
+    ]
+    const items = groupActivity(messages)
+    finalIsVisible(items, 'msg_0095d2bd6001:prt_0095d64820019')
+    expect(items.at(-1)?.key).toBe('err-1')
   })
 })
